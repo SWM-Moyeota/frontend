@@ -1,0 +1,35 @@
+# Gradle
+.gradle/
+build/
+/captures
+
+# Local configuration (SDK 경로, 키 등 로컬 전용 설정)
+local.properties
+
+# IDE - Android Studio / IntelliJ
+.idea/
+*.iml
+.kotlin/
+
+# macOS
+.DS_Store
+
+# Native build
+.externalNativeBuild
+.cxx/
+
+# APK / AAB 산출물
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# 서명 키 (절대 커밋 금지)
+*.jks
+*.keystore
+
+# 로그
+*.log
+
+# Profiling
+*.hprof

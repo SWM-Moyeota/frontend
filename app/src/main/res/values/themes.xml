@@ -1,0 +1,4 @@
+<resources>
+    <!-- Compose 단일 Activity 라 테마는 최소한만 유지 -->
+    <style name="Theme.Moyeota" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>
