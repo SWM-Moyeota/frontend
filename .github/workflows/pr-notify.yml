@@ -20,12 +20,10 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            // TODO: Slack 멤버 ID 기입 (Slack 프로필 → 멤버 ID 복사, U로 시작)
-            // 이름-유저네임 매칭이 다르면 함께 수정
             const MEMBERS = {
-              'KII1ua':      { name: '황성윤', slack: '' },
-              'dupong00':    { name: '나성훈', slack: '' },
-              'erase-jeong': { name: '정지우', slack: '' },
+              'KII1ua':      { name: '황성윤', slack: 'U0BJMFMF1DY' },
+              'dupong00':    { name: '나성훈', slack: 'U0BKFRPTRRN' },
+              'erase-jeong': { name: '정지우', slack: 'U0BJKG8347Q' },
             };
             const display = (login) => MEMBERS[login]?.name ?? login;
             const mention = (login) =>
