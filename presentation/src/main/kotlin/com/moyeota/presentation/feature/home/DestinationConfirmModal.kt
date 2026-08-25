@@ -46,6 +46,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.BackArrowIcon
 import com.moyeota.core.designsystem.component.MapPlaceholder
+import com.moyeota.core.designsystem.component.NoticeBanner
 import com.moyeota.core.designsystem.component.PrimaryCtaButton
 import com.moyeota.core.designsystem.component.SheetHandle
 import com.moyeota.core.designsystem.component.StatusBarMock
@@ -60,12 +61,28 @@ private val GrayDeep = Color(0xFF54637D)
 private val GrayMute = Color(0xFF8A93A0)
 private val GrayAsh = Color(0xFF9AA1AC)
 
+// 16 에서 고른 매칭 조건. 반경은 m 단위(서버 OpenPartyRequest 와 같은 단위).
+data class MatchConditions(
+    val capacity: Int,
+    val departureRadiusMeters: Int,
+    val destinationRadiusMeters: Int,
+    val sameGenderOnly: Boolean,
+)
+
+// 칩 라벨 → m. 서버 검증은 100~500m 라 1km·2km 는 그대로 보낼 수 없다(호출부에서 clamp).
+private fun radiusLabelToMeters(label: String): Int = when (label) {
+    "500m" -> 500
+    "1km" -> 1_000
+    else -> 2_000
+}
+
 /**
  * 16 · 도착지 확인 · 매칭 조건 (모달) [신규]
  *
  * 이동(디스크립션):
  * - 닫기·배경 탭 → 15 (onDismiss) — 공통 규칙: 모달은 배경 탭·닫기로만 종료
- * - 「같이 탈 사람 찾기」 → 21 매칭 대기 (onFindCompanions, 디스크립션상 미연결·연결 필요)
+ * - 「같이 탈 사람 찾기」 → 방 생성(POST /matching/rooms) 성공 시 21 매칭 대기 (onFindCompanions)
+ *   선택한 매칭 조건(인원·반경)을 그대로 넘긴다. 반경은 m 단위.
  *
  * 선택 규칙(디스크립션):
  * - 인원 1인/2인/3인 → 예상 1인 요금 재계산 (미터기 추정 ÷ 인원, 10원 단위 반올림)
@@ -84,8 +101,10 @@ fun DestinationConfirmModal(
     routeSummaryLabel: String = "예상 12분 · 6.2km",
     estimatedTotalFare: Int = 7_200, // 미터기 추정 총액 (더미)
     sameGenderAvailable: Boolean = true, // 09 본인 인증 완료 여부
+    creating: Boolean = false, // 방 생성 요청 중 — 중복 제출 차단
+    errorMessage: String? = null,
     onDismiss: () -> Unit = {},
-    onFindCompanions: () -> Unit = {},
+    onFindCompanions: (MatchConditions) -> Unit = {},
 ) {
     // 기본값: 3인 / 1km (디스크립션 유효값 규칙)
     var peopleCount by rememberSaveable { mutableIntStateOf(3) }
@@ -349,10 +368,28 @@ fun DestinationConfirmModal(
                     color = GrayAsh,
                     modifier = Modifier.align(Alignment.CenterHorizontally),
                 )
+                if (errorMessage != null) {
+                    Spacer(Modifier.height(10.dp))
+                    NoticeBanner(
+                        kind = NoticeKind.ERROR,
+                        text = errorMessage,
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                    )
+                }
                 Spacer(Modifier.height(12.dp))
                 PrimaryCtaButton(
                     text = "같이 탈 사람 찾기",
-                    onClick = onFindCompanions,
+                    onClick = {
+                        onFindCompanions(
+                            MatchConditions(
+                                capacity = peopleCount,
+                                departureRadiusMeters = radiusLabelToMeters(originRadius),
+                                destinationRadiusMeters = radiusLabelToMeters(destinationRadius),
+                                sameGenderOnly = sameGenderOnly,
+                            ),
+                        )
+                    },
+                    loading = creating,
                     modifier = Modifier.padding(horizontal = 16.dp),
                 )
                 Box(
