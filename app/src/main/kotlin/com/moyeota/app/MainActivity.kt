@@ -29,7 +29,12 @@ class MainActivity : ComponentActivity() {
         val container = (application as MoyeotaApplication).appContainer
         setContent {
             MoyeotaTheme {
-                MainNavGraph(rideRepository = container.rideRepository)
+                MainNavGraph(
+                    rideRepository = container.rideRepository,
+                    placeRepository = container.placeRepository,
+                    chatRepository = container.chatRepository,
+                    userSession = container.userSession,
+                )
             }
         }
     }
