@@ -38,6 +38,8 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.BackArrowIcon
+import com.moyeota.core.designsystem.component.NoticeBanner
+import com.moyeota.core.designsystem.component.NoticeKind
 import com.moyeota.core.designsystem.component.PrimaryCtaButton
 import com.moyeota.core.designsystem.component.SheetHandle
 import com.moyeota.core.designsystem.component.StatusBarMock
@@ -73,11 +75,14 @@ private val waitingRideDummy = Ride(
  * 21 · 매칭 대기 [S11]
  *
  * 이동(디스크립션):
- * - 「그만 찾기」 → 14 홈, 탐색 취소 (onCancelSearch — 뒤로가기도 동일 처리)
+ * - 「그만 찾기」 → 방 나가기(DELETE /matching/leave) 후 14 홈 (onCancelSearch — 뒤로가기도 동일 처리)
  * - 카드 탭 / 매칭 성사 → 22 탑승 상세 (onCardClick)
+ * - 「준비 완료 / 준비 취소」 → POST·DELETE /matching/ready (onToggleReady)
+ * - 「매칭 시작하기」 → POST /matching/start — 방장에게만 노출 (onStartMatching)
  * - 매칭 조건 「수정」 → 16 또는 15 [미연결] (onEditCondition)
  * - 탐색 반경 「수정」 → 16 [미연결] (onEditRadius)
- * - 「조건 넓혀 찾기」 → 반경·인원 완화 후 재탐색 [미연결] (onWidenSearch)
+ *
+ * 서버 제약: 응답에 멤버별 ready 상태가 없어 "내 준비 상태"만 로컬로 표시한다.
  */
 @Composable
 fun MatchWaitingScreen(
@@ -85,11 +90,16 @@ fun MatchWaitingScreen(
     foundCount: Int = 1,
     conditionLabel: String = "3인 · 동성만",
     radiusLabel: String = "1km",
+    isHost: Boolean = false,
+    isReady: Boolean = false,
+    actionInProgress: Boolean = false,
+    actionErrorMessage: String? = null,
     onCancelSearch: () -> Unit = {},
     onCardClick: () -> Unit = {},
+    onToggleReady: () -> Unit = {},
+    onStartMatching: () -> Unit = {},
     onEditCondition: () -> Unit = {}, // 미연결
     onEditRadius: () -> Unit = {},    // 미연결
-    onWidenSearch: () -> Unit = {},   // 미연결
 ) {
     Column(modifier = Modifier.fillMaxSize().background(CanvasBg)) {
         StatusBarMock()
@@ -133,7 +143,9 @@ fun MatchWaitingScreen(
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    text = "지금 같은 방향 ${foundCount}명을 찾았어요 · 목표 ${ride.capacity}명",
+                    // 타 멤버의 ready 는 서버 응답에 없어 표시하지 않는다 (내 상태만)
+                    text = "지금 같은 방향 ${foundCount}명을 찾았어요 · 목표 ${ride.capacity}명" +
+                        if (isReady) " · 나는 준비 완료" else "",
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Medium,
                     color = GrayMute,
@@ -177,12 +189,41 @@ fun MatchWaitingScreen(
 
             Spacer(Modifier.weight(1f))
 
+            if (actionErrorMessage != null) {
+                NoticeBanner(
+                    kind = NoticeKind.ERROR,
+                    text = actionErrorMessage,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                )
+            }
+
+            // 매칭 시작은 방장만 — 서버가 hostId 로 권한을 검사한다
+            if (isHost) {
+                PrimaryCtaButton(
+                    text = "매칭 시작하기",
+                    onClick = onStartMatching,
+                    loading = actionInProgress,
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
+                Spacer(Modifier.height(10.dp))
+            }
+
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 GrayActionButton(text = "그만 찾기", onClick = onCancelSearch, modifier = Modifier.width(112.dp))
-                PrimaryCtaButton(text = "조건 넓혀 찾기", onClick = onWidenSearch, modifier = Modifier.weight(1f))
+                if (isReady) {
+                    // 준비 해제는 보조 동작이라 회색 버튼으로 낮춘다
+                    GrayActionButton(text = "준비 취소", onClick = onToggleReady, modifier = Modifier.weight(1f))
+                } else {
+                    PrimaryCtaButton(
+                        text = "준비 완료",
+                        onClick = onToggleReady,
+                        loading = actionInProgress && !isHost,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
             }
             Spacer(Modifier.height(12.dp))
         }

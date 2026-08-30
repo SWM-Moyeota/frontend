@@ -1,6 +1,7 @@
 package com.moyeota.presentation.feature.matching
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.ViewModel
@@ -11,6 +12,8 @@ import androidx.lifecycle.viewModelScope
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.User
 import com.moyeota.domain.repository.RideRepository
+import com.moyeota.domain.session.UserSession
+import com.moyeota.presentation.core.BackStateScaffold
 import com.moyeota.presentation.core.ErrorBox
 import com.moyeota.presentation.core.LoadingBox
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -20,6 +23,7 @@ import kotlinx.coroutines.launch
 
 class RideDetailViewModel(
     private val repository: RideRepository,
+    private val userSession: UserSession,
     private val partyId: Long,
 ) : ViewModel() {
 
@@ -31,6 +35,9 @@ class RideDetailViewModel(
 
     private val _uiState = MutableStateFlow<UiState>(UiState.Loading)
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
+
+    private val _left = MutableStateFlow(false)
+    val left: StateFlow<Boolean> = _left.asStateFlow()
 
     init {
         refresh()
@@ -47,9 +54,21 @@ class RideDetailViewModel(
         }
     }
 
+    // 나가기 실패 시 화면을 넘기지 않고 재시도 가능한 에러 상태로 떨어뜨린다.
+    fun leave() {
+        viewModelScope.launch {
+            try {
+                repository.leaveParty(partyId, userSession.currentUserId)
+                _left.value = true
+            } catch (e: Exception) {
+                _uiState.value = UiState.Error("탑승에서 나가지 못했어요")
+            }
+        }
+    }
+
     companion object {
-        fun factory(repository: RideRepository, partyId: Long) = viewModelFactory {
-            initializer { RideDetailViewModel(repository, partyId) }
+        fun factory(repository: RideRepository, userSession: UserSession, partyId: Long) = viewModelFactory {
+            initializer { RideDetailViewModel(repository, userSession, partyId) }
         }
     }
 }
@@ -58,6 +77,7 @@ class RideDetailViewModel(
 @Composable
 fun RideDetailRoute(
     repository: RideRepository,
+    userSession: UserSession,
     partyId: Long?,
     onBack: () -> Unit = {},
     onPartnerClick: (User) -> Unit = {},
@@ -76,20 +96,31 @@ fun RideDetailRoute(
 
     val viewModel: RideDetailViewModel = viewModel(
         key = "party-$partyId",
-        factory = RideDetailViewModel.factory(repository, partyId),
+        factory = RideDetailViewModel.factory(repository, userSession, partyId),
     )
     val state by viewModel.uiState.collectAsState()
+    val left by viewModel.left.collectAsState()
+    val currentUserId = userSession.currentUserId.toString()
 
+    LaunchedEffect(left) {
+        if (left) onLeave()
+    }
+
+    // 탭바가 없는 화면 — 로딩·에러에서도 뒤로가기를 남긴다 (QA F-1 동류)
     when (val current = state) {
-        RideDetailViewModel.UiState.Loading -> LoadingBox()
-        is RideDetailViewModel.UiState.Error -> ErrorBox(message = current.message, onRetry = viewModel::refresh)
+        RideDetailViewModel.UiState.Loading -> BackStateScaffold("탑승 상세", onBack) {
+            LoadingBox()
+        }
+        is RideDetailViewModel.UiState.Error -> BackStateScaffold("탑승 상세", onBack) {
+            ErrorBox(message = current.message, onRetry = viewModel::refresh)
+        }
         is RideDetailViewModel.UiState.Success -> RideDetailScreen(
             ride = current.ride,
-            // 인증 연동 전 임시 사용자 (backend TODO: JWT 에서 memberId 추출)
-            currentUserId = "1",
+            isHost = current.ride.hostId == currentUserId,
+            currentUserId = currentUserId,
             onBack = onBack,
             onPartnerClick = onPartnerClick,
-            onLeave = onLeave,
+            onLeave = viewModel::leave, // 나가기 성공 후 onLeave 로 화면 전환
             onDepart = onDepart,
         )
     }

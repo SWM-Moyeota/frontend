@@ -1,6 +1,7 @@
 package com.moyeota.presentation.feature.explore
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.ViewModel
@@ -13,6 +14,7 @@ import com.moyeota.domain.model.Ride
 import com.moyeota.domain.repository.RideRepository
 import com.moyeota.presentation.core.ErrorBox
 import com.moyeota.presentation.core.LoadingBox
+import com.moyeota.presentation.core.TabStateScaffold
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -28,10 +30,6 @@ class ExploreViewModel(private val repository: RideRepository) : ViewModel() {
 
     private val _uiState = MutableStateFlow<UiState>(UiState.Loading)
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
-
-    init {
-        refresh()
-    }
 
     fun refresh() {
         viewModelScope.launch {
@@ -63,9 +61,18 @@ fun ExploreRoute(
     val viewModel: ExploreViewModel = viewModel(factory = ExploreViewModel.factory(repository))
     val state by viewModel.uiState.collectAsState()
 
+    // 합류·나가기 후 돌아오면 목록이 바뀌어 있다.
+    // ViewModel init 대신 진입 시점 효과로 새로 고쳐 재진입 때도 최신 목록을 본다.
+    LaunchedEffect(Unit) { viewModel.refresh() }
+
+    // 로딩·에러에서도 하단탭은 남긴다 — 조회 실패로 탭 이동이 막히면 안 된다 (QA F-1)
     when (val current = state) {
-        ExploreViewModel.UiState.Loading -> LoadingBox()
-        is ExploreViewModel.UiState.Error -> ErrorBox(message = current.message, onRetry = viewModel::refresh)
+        ExploreViewModel.UiState.Loading -> TabStateScaffold(MoyeotaTab.EXPLORE, onTabSelect) {
+            LoadingBox()
+        }
+        is ExploreViewModel.UiState.Error -> TabStateScaffold(MoyeotaTab.EXPLORE, onTabSelect) {
+            ErrorBox(message = current.message, onRetry = viewModel::refresh)
+        }
         is ExploreViewModel.UiState.Success -> ExploreScreen(
             parties = current.parties,
             waitingCount = current.parties.sumOf { it.members.size },

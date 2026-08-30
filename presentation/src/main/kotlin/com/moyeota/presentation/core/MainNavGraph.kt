@@ -12,7 +12,11 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.dialog
 import androidx.navigation.compose.rememberNavController
 import com.moyeota.core.designsystem.component.MoyeotaTab
+import com.moyeota.domain.model.Place
+import com.moyeota.domain.repository.ChatRepository
+import com.moyeota.domain.repository.PlaceRepository
 import com.moyeota.domain.repository.RideRepository
+import com.moyeota.domain.session.UserSession
 import com.moyeota.presentation.feature.auth.AccountType
 import com.moyeota.presentation.feature.auth.AccountTypeScreen
 import com.moyeota.presentation.feature.auth.EmailCodeScreen
@@ -24,16 +28,16 @@ import com.moyeota.presentation.feature.auth.SafetySettingsScreen
 import com.moyeota.presentation.feature.auth.SchoolEmailScreen
 import com.moyeota.presentation.feature.auth.SignupCompleteScreen
 import com.moyeota.presentation.feature.auth.WorkVerifyScreen
-import com.moyeota.presentation.feature.chat.ChatScreen
+import com.moyeota.presentation.feature.chat.ChatRoute
 import com.moyeota.presentation.feature.chat.EmergencyScreen
 import com.moyeota.presentation.feature.chat.RideOngoingScreen
 import com.moyeota.presentation.feature.explore.ExploreRoute
-import com.moyeota.presentation.feature.explore.JoinConfirmScreen
-import com.moyeota.presentation.feature.home.DestinationConfirmModal
-import com.moyeota.presentation.feature.home.DestinationScreen
-import com.moyeota.presentation.feature.home.HomeScreen
+import com.moyeota.presentation.feature.explore.JoinConfirmRoute
+import com.moyeota.presentation.feature.home.DestinationConfirmRoute
+import com.moyeota.presentation.feature.home.DestinationRoute
+import com.moyeota.presentation.feature.home.HomeRoute
 import com.moyeota.presentation.feature.matching.DispatchStatusScreen
-import com.moyeota.presentation.feature.matching.MatchWaitingScreen
+import com.moyeota.presentation.feature.matching.MatchWaitingRoute
 import com.moyeota.presentation.feature.matching.PartnerProfileScreen
 import com.moyeota.presentation.feature.matching.RideDetailRoute
 import com.moyeota.presentation.feature.mypage.MyPageScreen
@@ -52,15 +56,23 @@ import kotlinx.coroutines.delay
 // v15 와이어프레임 35화면 이동 규칙을 한곳에서 배선한다.
 // 각 화면은 콜백만 노출하는 순수 컴포저블 — 화면 안에는 네비게이션 코드가 없다.
 @Composable
-fun MainNavGraph(rideRepository: RideRepository) {
+fun MainNavGraph(
+    rideRepository: RideRepository,
+    placeRepository: PlaceRepository,
+    chatRepository: ChatRepository,
+    userSession: UserSession,
+) {
     val navController = rememberNavController()
 
     // 화면 사이에 넘겨야 하는 값 (백엔드 없는 와이어프레임 데모용 간이 상태)
     var schoolEmail by remember { mutableStateOf("moyeota@pusan.ac.kr") }
     var workVerifyIsWorker by remember { mutableStateOf(true) }
-    var searchInitialDestination by remember { mutableStateOf("") }
-    var confirmedDestination by remember { mutableStateOf("서면역 1번 출구") }
+    var searchInitialQuery by remember { mutableStateOf("") }
+    // 15 에서 고른 도착지(좌표 포함) — 16 방 생성에 필요하다
+    var confirmedDestination by remember { mutableStateOf<Place?>(null) }
     var selectedPartyId by remember { mutableStateOf<Long?>(null) }
+    // 16 에서 만든 방 — 21 매칭 대기가 이 방을 조회한다
+    var createdPartyId by remember { mutableStateOf<Long?>(null) }
 
     fun back() {
         navController.popBackStack()
@@ -196,17 +208,15 @@ fun MainNavGraph(rideRepository: RideRepository) {
 
         // D · 홈 · 목적지 14–16
         composable(Routes.HOME) {
-            HomeScreen(
+            HomeRoute(
+                repository = placeRepository,
+                userSession = userSession,
                 onSearchClick = {
-                    searchInitialDestination = ""
+                    searchInitialQuery = ""
                     navController.navigate(Routes.DESTINATION)
                 },
-                onFavoritePlaceClick = { place ->
-                    searchInitialDestination = place.address
-                    navController.navigate(Routes.DESTINATION)
-                },
-                onRecentPlaceClick = { place ->
-                    searchInitialDestination = place.name
+                onPlaceQuery = { query ->
+                    searchInitialQuery = query
                     navController.navigate(Routes.DESTINATION)
                 },
                 onDemandBannerClick = { navigateTab(MoyeotaTab.EXPLORE) },
@@ -214,11 +224,13 @@ fun MainNavGraph(rideRepository: RideRepository) {
             )
         }
         composable(Routes.DESTINATION) {
-            DestinationScreen(
-                initialDestination = searchInitialDestination,
+            DestinationRoute(
+                repository = placeRepository,
+                userSession = userSession,
+                initialQuery = searchInitialQuery,
                 onBack = ::back,
-                onConfirmRoute = { destination ->
-                    confirmedDestination = destination
+                onConfirmRoute = { place ->
+                    confirmedDestination = place
                     navController.navigate(Routes.DESTINATION_CONFIRM)
                 },
             )
@@ -228,10 +240,18 @@ fun MainNavGraph(rideRepository: RideRepository) {
             Routes.DESTINATION_CONFIRM,
             dialogProperties = DialogProperties(usePlatformDefaultWidth = false),
         ) {
-            DestinationConfirmModal(
-                destinationName = confirmedDestination,
+            DestinationConfirmRoute(
+                repository = rideRepository,
+                userSession = userSession,
+                destination = confirmedDestination,
                 onDismiss = ::back,
-                onFindCompanions = { navController.navigate(Routes.MATCH_WAITING) },
+                onPartyCreated = { ride ->
+                    createdPartyId = ride.id.toLongOrNull()
+                    // 모달을 닫고 21 매칭 대기로 — 뒤로 눌러 모달로 돌아오지 않게 한다
+                    navController.navigate(Routes.MATCH_WAITING) {
+                        popUpTo(Routes.DESTINATION_CONFIRM) { inclusive = true }
+                    }
+                },
             )
         }
 
@@ -249,23 +269,34 @@ fun MainNavGraph(rideRepository: RideRepository) {
             )
         }
         composable(Routes.JOIN_CONFIRM) {
-            JoinConfirmScreen(
+            JoinConfirmRoute(
+                repository = rideRepository,
+                userSession = userSession,
+                partyId = selectedPartyId,
                 onDismiss = ::back,
-                onConfirmJoin = { navController.navigate(Routes.RIDE_DETAIL) },
+                onJoined = { navController.navigate(Routes.RIDE_DETAIL) },
                 onMemberClick = { navController.navigate(Routes.PARTNER_PROFILE) },
             )
         }
 
         // F · 매칭 · 탑승 21–23 · 25
         composable(Routes.MATCH_WAITING) {
-            MatchWaitingScreen(
-                onCancelSearch = { navigateTab(MoyeotaTab.HOME) },
-                onCardClick = { navController.navigate(Routes.RIDE_DETAIL) },
+            MatchWaitingRoute(
+                repository = rideRepository,
+                userSession = userSession,
+                partyId = createdPartyId,
+                onCancelSearch = { navigateTab(MoyeotaTab.HOME) }, // 나가기 성공 후 14 홈
+                onCardClick = {
+                    selectedPartyId = createdPartyId
+                    navController.navigate(Routes.RIDE_DETAIL)
+                },
+                onMatchingStarted = { navController.navigate(Routes.DISPATCH_STATUS) },
             )
         }
         composable(Routes.RIDE_DETAIL) {
             RideDetailRoute(
                 repository = rideRepository,
+                userSession = userSession,
                 partyId = selectedPartyId,
                 onBack = ::back,
                 onPartnerClick = { navController.navigate(Routes.PARTNER_PROFILE) },
@@ -287,8 +318,9 @@ fun MainNavGraph(rideRepository: RideRepository) {
 
         // G · 채팅 · 안심 24 · 26 · 27
         composable(Routes.CHAT) {
-            ChatScreen(
-                onBack = ::back,
+            ChatRoute(
+                repository = chatRepository,
+                userSession = userSession,
                 onOpenRideOngoing = { navController.navigate(Routes.RIDE_ONGOING) },
                 onStartLocationShare = { navController.navigate(Routes.RIDE_ONGOING) },
                 onLeaveChat = { navigateTab(MoyeotaTab.HOME) },

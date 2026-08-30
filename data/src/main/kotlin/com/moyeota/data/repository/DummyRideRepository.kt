@@ -1,5 +1,6 @@
 package com.moyeota.data.repository
 
+import com.moyeota.domain.model.NewParty
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.model.User
@@ -40,6 +41,34 @@ class DummyRideRepository : RideRepository {
     override suspend fun getParties(): List<Ride> = getNearbyParties()
 
     override suspend fun getPartyDetail(partyId: Long): Ride = getNearbyParties().first()
+
+    // 액션은 더미에서 성공한 척만 한다. 프리뷰/오프라인 확인용이다.
+    override suspend fun createParty(request: NewParty): Ride = Ride(
+        id = "dummy-party",
+        origin = request.departure,
+        destination = request.destination,
+        departureLabel = "지금 출발",
+        capacity = request.capacity,
+        members = listOf(me),
+        farePerPerson = 0,
+        totalFare = 0,
+        status = RideStatus.RECRUITING,
+        hostId = request.hostId.toString(),
+        originLat = request.departureLat,
+        originLng = request.departureLng,
+        destinationLat = request.destinationLat,
+        destinationLng = request.destinationLng,
+    )
+
+    override suspend fun joinParty(partyId: Long, memberId: Long) = Unit
+
+    override suspend fun leaveParty(partyId: Long, memberId: Long) = Unit
+
+    override suspend fun setReady(partyId: Long, memberId: Long) = Unit
+
+    override suspend fun cancelReady(partyId: Long, memberId: Long) = Unit
+
+    override suspend fun startMatching(partyId: Long, memberId: Long) = Unit
 
     override fun getMyRides(): List<Ride> = listOf(
         Ride(

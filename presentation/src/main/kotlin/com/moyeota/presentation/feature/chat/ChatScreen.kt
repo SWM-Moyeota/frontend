@@ -28,7 +28,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.toMutableStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -45,6 +44,8 @@ import com.moyeota.core.designsystem.component.AvatarCircle
 import com.moyeota.core.designsystem.component.BackArrowIcon
 import com.moyeota.core.designsystem.component.MoyeotaBottomBar
 import com.moyeota.core.designsystem.component.MoyeotaTab
+import com.moyeota.core.designsystem.component.NoticeBanner
+import com.moyeota.core.designsystem.component.NoticeKind
 import com.moyeota.core.designsystem.component.StatusBarMock
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.core.designsystem.theme.MoyeotaType
@@ -61,14 +62,22 @@ private val SystemChipBg = Color(0xFFE9EDF3)
 private val InputPillBg = Color(0xFFF1F3F7)
 private val BubbleShadow = Color(0x1A1B2A4A)
 
-// 채팅 메시지 로컬 모델 (더미 대화 + 로컬 전송)
-data class ChatMessage(
+// 채팅 메시지 표시 모델. 서버 도메인 모델(domain.model.ChatMessage)은 Route 에서 이 형태로 옮긴다.
+data class ChatUiMessage(
     val text: String,
     val isMine: Boolean,
     val senderName: String? = null,
     val timeLabel: String? = null,
     val meta: String? = null, // 내 메시지 좌측 메타 (예: "읽음 2 · 6:41")
     val isLocationShare: Boolean = false, // 위치 공유 안내 말풍선
+)
+
+// 서버 연동 전 미리보기용 더미 대화
+private val DummyMessages = listOf(
+    ChatUiMessage(text = "정문 앞 편의점에 있어요", isMine = false, senderName = "김OO", timeLabel = "오후 6:39"),
+    ChatUiMessage(text = "2분 뒤 도착합니다", isMine = true, meta = "읽음 2 · 6:41"),
+    ChatUiMessage(text = "탭하면 지도에서 함께 봐요", isMine = false, senderName = "이OO", timeLabel = "오후 6:42", isLocationShare = true),
+    ChatUiMessage(text = "확인했어요", isMine = true),
 )
 
 /**
@@ -92,27 +101,24 @@ fun ChatScreen(
     roomTitle: String = "서면역 동승",
     roomSubtitle: String = "3명 · 오후 6:45 출발",
     hasOngoingRide: Boolean = true,
+    messages: List<ChatUiMessage> = DummyMessages,
+    input: String = "",
+    sending: Boolean = false,
+    errorMessage: String? = null,
+    onInputChange: (String) -> Unit = {},
+    onSend: () -> Unit = {},
     onBack: () -> Unit = {},
     onOpenRideOngoing: () -> Unit = {},
     onStartLocationShare: () -> Unit = {},
     onLeaveChat: () -> Unit = {},
     onTabSelect: (MoyeotaTab) -> Unit = {},
 ) {
-    val messages = remember {
-        listOf(
-            ChatMessage(text = "정문 앞 편의점에 있어요", isMine = false, senderName = "김OO", timeLabel = "오후 6:39"),
-            ChatMessage(text = "2분 뒤 도착합니다", isMine = true, meta = "읽음 2 · 6:41"),
-            ChatMessage(text = "탭하면 지도에서 함께 봐요", isMine = false, senderName = "이OO", timeLabel = "오후 6:42", isLocationShare = true),
-            ChatMessage(text = "확인했어요", isMine = true),
-        ).toMutableStateList()
-    }
-    var input by remember { mutableStateOf("") }
     var menuOpen by remember { mutableStateOf(false) } // 24a
     var shareSheetOpen by remember { mutableStateOf(false) } // 24b
     var muted by remember { mutableStateOf(false) } // 알림 off
     var leaveConfirmOpen by remember { mutableStateOf(false) }
 
-    val sendEnabled = input.isNotBlank() && input.length <= 500
+    val sendEnabled = input.isNotBlank() && input.length <= 500 && !sending
 
     Box(modifier = Modifier.fillMaxSize().background(CanvasBg)) {
         Column(modifier = Modifier.fillMaxSize()) {
@@ -320,6 +326,14 @@ fun ChatScreen(
             // 입력 바
             Column(modifier = Modifier.fillMaxWidth().background(MoyeotaColor.SurfaceCanvas)) {
                 HorizontalDivider(color = MoyeotaColor.Hairline)
+                // 전송·수신 실패 안내 — 입력한 내용은 지우지 않는다
+                if (errorMessage != null) {
+                    NoticeBanner(
+                        kind = NoticeKind.ERROR,
+                        text = errorMessage,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                    )
+                }
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -347,7 +361,7 @@ fun ChatScreen(
                     ) {
                         BasicTextField(
                             value = input,
-                            onValueChange = { if (it.length <= 500) input = it }, // 1~500자
+                            onValueChange = { if (it.length <= 500) onInputChange(it) }, // 서버 검증 1~1000자, UI 는 500자
                             textStyle = MoyeotaType.BodyMd.copy(color = MoyeotaColor.InkPrimary),
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
@@ -365,10 +379,7 @@ fun ChatScreen(
                                 if (sendEnabled) MoyeotaColor.Primary500 else MoyeotaColor.TextAsh,
                                 CircleShape,
                             )
-                            .clickable(enabled = sendEnabled) {
-                                messages.add(ChatMessage(text = input.trim(), isMine = true))
-                                input = ""
-                            },
+                            .clickable(enabled = sendEnabled) { onSend() },
                         contentAlignment = Alignment.Center,
                     ) {
                         SendArrowIcon()
@@ -450,7 +461,7 @@ fun ChatScreen(
 }
 
 @Composable
-private fun MessageRow(message: ChatMessage) {
+private fun MessageRow(message: ChatUiMessage) {
     if (message.isMine) {
         Row(
             modifier = Modifier.fillMaxWidth(),

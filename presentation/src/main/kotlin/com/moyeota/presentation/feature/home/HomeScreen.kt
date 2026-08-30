@@ -115,17 +115,28 @@ fun HomeScreen(
                 modifier = Modifier.padding(horizontal = 16.dp),
             )
             Spacer(Modifier.height(10.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(9.dp),
-            ) {
-                favoritePlaces.forEachIndexed { index, place ->
-                    FavoritePlaceCard(
-                        place = place,
-                        index = index,
-                        modifier = Modifier.weight(1f),
-                        onClick = { onFavoritePlaceClick(place) },
-                    )
+            if (favoritePlaces.isEmpty()) {
+                // 서버에 등록된 즐겨찾기가 없을 때 (15 목적지 화면에서 ★ 로 등록한다)
+                Text(
+                    text = "자주 가는 곳을 등록하면 여기서 바로 부를 수 있어요",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = GrayAsh,
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(9.dp),
+                ) {
+                    favoritePlaces.take(3).forEachIndexed { index, place ->
+                        FavoritePlaceCard(
+                            place = place,
+                            index = index,
+                            modifier = Modifier.weight(1f),
+                            onClick = { onFavoritePlaceClick(place) },
+                        )
+                    }
                 }
             }
 

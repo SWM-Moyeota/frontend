@@ -19,15 +19,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -49,6 +45,8 @@ import com.moyeota.core.designsystem.component.NoticeKind
 import com.moyeota.core.designsystem.component.PrimaryCtaButton
 import com.moyeota.core.designsystem.component.StatusBarMock
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.domain.model.Place
+import com.moyeota.domain.model.FavoritePlace as SavedPlace
 
 private val CanvasBg = Color(0xFFF5F7FA)
 private val GrayDeep = Color(0xFF54637D)
@@ -61,36 +59,43 @@ private val GrayAsh = Color(0xFF9AA1AC)
  * 이동(디스크립션):
  * - 뒤로 → 14 (onBack)
  * - 출발지 행 탭 → 지도에서 위치 조정 [미연결] (onOriginClick)
- * - 도착지 행 탭 → 자동완성 목록 노출 (같은 화면 내 — 입력 필드)
- * - 자주 가는 곳 / 최근 검색 행 탭 → 도착지 채움 (화면 내 상태)
- * - 「경로 확인하기」 → 16 도착지 확인 모달 (onConfirmRoute, 디스크립션상 미연결·연결 필요)
+ * - 도착지 입력 → 서버 장소 검색(GET /places) 결과 노출 (onQueryChange → searchResults)
+ * - 자주 가는 곳 카드 탭 → 도착지 선택 (좌표까지 확정)
+ * - 최근 검색 행 탭 → 검색어 채움 (서버 검색 재실행) — 최근 검색 API 는 서버에 없어 더미 유지
+ * - 검색 결과 행의 ★ → 자주 가는 곳 등록 (onAddFavorite)
+ * - 「경로 확인하기」 → 16 도착지 확인 모달 (onConfirmRoute)
  *
  * 유효값 검증:
- * - 도착지 미입력 시 CTA 비활성
- * - 출발지 = 도착지이면 「너무 가까워요」 로 차단 (500m 판정은 좌표 미연동으로 동일 문자열 기준)
+ * - 좌표가 있는 장소를 고르기 전에는 CTA 비활성 (방 생성에 좌표가 필수)
+ * - 출발지 = 도착지이면 「너무 가까워요」 로 차단
  */
 @Composable
 fun DestinationScreen(
     origin: String = "부산대학교 정문",
-    initialDestination: String = "",
-    favoritePlaces: List<FavoritePlace> = listOf(
-        FavoritePlace("집", "서면 롯데백화점"),
-        FavoritePlace("학교", "부산대학교 정문"),
-        FavoritePlace("알바", "센텀시티역 3번"),
-    ),
+    query: String = "",
+    onQueryChange: (String) -> Unit = {},
+    searchResults: List<Place> = emptyList(),
+    searchLoading: Boolean = false,
+    searchErrorMessage: String? = null,
+    favoritePlaces: List<SavedPlace> = emptyList(),
+    favoritesLoading: Boolean = false,
+    favoritesErrorMessage: String? = null,
+    selectedPlace: Place? = null,
+    favoriteActionMessage: String? = null,
     recentSearches: List<RecentPlace> = listOf(
         RecentPlace("서면역 1번 출구", "부산진구 부전동", "6.2km"),
         RecentPlace("사상역 환승센터", "사상구 괘법동", "8.4km"),
         RecentPlace("부산역 광장", "동구 초량동", "11.0km"),
         RecentPlace("해운대역", "해운대구 우동", "18.6km"),
     ),
+    onPlaceSelect: (Place) -> Unit = {},
+    onAddFavorite: (Place) -> Unit = {},
     onBack: () -> Unit = {},
     onOriginClick: () -> Unit = {}, // 지도에서 출발지 조정 — 미연결
-    onConfirmRoute: (destination: String) -> Unit = {},
+    onConfirmRoute: (Place) -> Unit = {},
 ) {
-    var destination by rememberSaveable(initialDestination) { mutableStateOf(initialDestination) }
-    val tooClose = destination.trim().isNotEmpty() && destination.trim() == origin.trim()
-    val ctaEnabled = destination.trim().isNotEmpty() && !tooClose
+    val tooClose = selectedPlace != null && selectedPlace.name.trim() == origin.trim()
+    val ctaEnabled = selectedPlace != null && !tooClose
 
     Column(modifier = Modifier.fillMaxSize().background(CanvasBg)) {
         StatusBarMock()
@@ -166,8 +171,8 @@ fun DestinationScreen(
                 Spacer(Modifier.size(14.dp))
                 Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
                     BasicTextField(
-                        value = destination,
-                        onValueChange = { destination = it },
+                        value = query,
+                        onValueChange = onQueryChange,
                         singleLine = true,
                         textStyle = TextStyle(
                             fontSize = 15.sp,
@@ -176,7 +181,7 @@ fun DestinationScreen(
                         ),
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    if (destination.isEmpty()) {
+                    if (query.isEmpty()) {
                         Text(
                             text = "도착지를 입력해 주세요",
                             fontSize = 15.sp,
@@ -185,99 +190,225 @@ fun DestinationScreen(
                         )
                     }
                 }
-            }
-
-            Spacer(Modifier.height(26.dp))
-
-            // 자주 가는 곳
-            Text(
-                text = "자주 가는 곳",
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Medium,
-                color = GrayMute,
-            )
-            Spacer(Modifier.height(10.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(9.dp),
-            ) {
-                favoritePlaces.forEach { place ->
-                    Column(
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(72.dp)
-                            .shadow(4.dp, RoundedCornerShape(16.dp), spotColor = Color(0x1A1B2A4A))
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(MoyeotaColor.SurfaceCanvas)
-                            .clickable { destination = place.address }
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                    ) {
-                        StarIcon()
-                        Spacer(Modifier.weight(1f))
-                        Text(
-                            text = place.label,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MoyeotaColor.InkPrimary,
-                        )
-                        Text(
-                            text = place.address,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = GrayMute,
-                            maxLines = 1,
-                        )
-                    }
+                if (searchLoading) {
+                    Spacer(Modifier.size(8.dp))
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                        color = MoyeotaColor.Primary500,
+                    )
                 }
             }
 
+            // 선택한 장소 확인 — 좌표까지 확정된 상태임을 보여준다
+            if (selectedPlace != null) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = "선택: ${selectedPlace.name} · ${selectedPlace.roadName}",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MoyeotaColor.Primary600,
+                )
+            }
+
             Spacer(Modifier.height(26.dp))
 
-            // 최근 검색
+            // 자주 가는 곳 — 서버(GET /users/me/favorite-places)
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "자주 가는 곳",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = GrayMute,
+                )
+                if (favoritesLoading) {
+                    Spacer(Modifier.size(8.dp))
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(12.dp),
+                        strokeWidth = 1.5.dp,
+                        color = MoyeotaColor.Primary500,
+                    )
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            when {
+                favoritesErrorMessage != null -> Text(
+                    text = favoritesErrorMessage,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MoyeotaColor.Danger600,
+                )
+                favoritePlaces.isEmpty() && !favoritesLoading -> Text(
+                    text = "아직 등록한 장소가 없어요. 검색 결과의 ★ 를 눌러 등록해 보세요",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = GrayAsh,
+                )
+                else -> Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(9.dp),
+                ) {
+                    // 한 줄에 3개까지만 — 서버는 최대 10개를 내려준다
+                    favoritePlaces.take(3).forEach { place ->
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(72.dp)
+                                .shadow(4.dp, RoundedCornerShape(16.dp), spotColor = Color(0x1A1B2A4A))
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(MoyeotaColor.SurfaceCanvas)
+                                .clickable {
+                                    onPlaceSelect(
+                                        Place(place.name, place.roadName, place.latitude, place.longitude),
+                                    )
+                                }
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                        ) {
+                            StarIcon()
+                            Spacer(Modifier.weight(1f))
+                            Text(
+                                text = place.name,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MoyeotaColor.InkPrimary,
+                                maxLines = 1,
+                            )
+                            Text(
+                                text = place.roadName,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = GrayMute,
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                }
+            }
+            if (favoriteActionMessage != null) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = favoriteActionMessage,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = GrayDeep,
+                )
+            }
+
+            Spacer(Modifier.height(26.dp))
+
+            // 검색 결과(서버) / 최근 검색(더미 — 서버 API 없음)
+            val showingSearch = query.isNotBlank()
             Text(
-                text = "최근 검색",
+                text = if (showingSearch) "검색 결과" else "최근 검색",
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Medium,
                 color = GrayMute,
             )
             Spacer(Modifier.height(10.dp))
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .shadow(4.dp, RoundedCornerShape(18.dp), spotColor = Color(0x1A1B2A4A))
-                    .clip(RoundedCornerShape(18.dp))
-                    .background(MoyeotaColor.SurfaceCanvas),
-            ) {
-                recentSearches.forEachIndexed { index, place ->
-                    Row(
+            if (showingSearch) {
+                when {
+                    searchErrorMessage != null -> Text(
+                        text = searchErrorMessage,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MoyeotaColor.Danger600,
+                    )
+                    searchResults.isEmpty() && !searchLoading -> Text(
+                        text = "검색 결과가 없어요",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = GrayAsh,
+                    )
+                    else -> Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { destination = place.name }
-                            .padding(horizontal = 20.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
+                            .shadow(4.dp, RoundedCornerShape(18.dp), spotColor = Color(0x1A1B2A4A))
+                            .clip(RoundedCornerShape(18.dp))
+                            .background(MoyeotaColor.SurfaceCanvas),
                     ) {
-                        ClockIcon()
-                        Spacer(Modifier.size(12.dp))
-                        Column {
-                            Text(
-                                text = place.name,
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MoyeotaColor.InkPrimary,
-                            )
-                            Text(
-                                text = "${place.address} · ${place.distanceLabel}",
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = GrayMute,
-                            )
+                        searchResults.forEachIndexed { index, place ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onPlaceSelect(place) }
+                                    .padding(start = 20.dp, end = 12.dp, top = 12.dp, bottom = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Box(Modifier.size(9.dp).background(MoyeotaColor.MarkerDestination, CircleShape))
+                                Spacer(Modifier.size(12.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = place.name,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MoyeotaColor.InkPrimary,
+                                    )
+                                    Text(
+                                        text = place.roadName,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = GrayMute,
+                                    )
+                                }
+                                // ★ → 자주 가는 곳 등록
+                                Box(
+                                    modifier = Modifier
+                                        .clip(CircleShape)
+                                        .clickable { onAddFavorite(place) }
+                                        .padding(10.dp),
+                                ) {
+                                    StarIcon(color = MoyeotaColor.Primary500)
+                                }
+                            }
+                            if (index != searchResults.lastIndex) {
+                                HorizontalDivider(
+                                    color = MoyeotaColor.Hairline,
+                                    modifier = Modifier.padding(start = 50.dp, end = 20.dp),
+                                )
+                            }
                         }
                     }
-                    if (index != recentSearches.lastIndex) {
-                        HorizontalDivider(
-                            color = MoyeotaColor.Hairline,
-                            modifier = Modifier.padding(start = 50.dp, end = 20.dp),
-                        )
+                }
+            } else {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .shadow(4.dp, RoundedCornerShape(18.dp), spotColor = Color(0x1A1B2A4A))
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(MoyeotaColor.SurfaceCanvas),
+                ) {
+                    recentSearches.forEachIndexed { index, place ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                // 좌표가 없는 더미 항목 — 검색어만 채워 서버 검색을 태운다
+                                .clickable { onQueryChange(place.name) }
+                                .padding(horizontal = 20.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            ClockIcon()
+                            Spacer(Modifier.size(12.dp))
+                            Column {
+                                Text(
+                                    text = place.name,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MoyeotaColor.InkPrimary,
+                                )
+                                Text(
+                                    text = "${place.address} · ${place.distanceLabel}",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = GrayMute,
+                                )
+                            }
+                        }
+                        if (index != recentSearches.lastIndex) {
+                            HorizontalDivider(
+                                color = MoyeotaColor.Hairline,
+                                modifier = Modifier.padding(start = 50.dp, end = 20.dp),
+                            )
+                        }
                     }
                 }
             }
@@ -301,7 +432,7 @@ fun DestinationScreen(
             Spacer(Modifier.height(14.dp))
             PrimaryCtaButton(
                 text = "경로 확인하기",
-                onClick = { onConfirmRoute(destination.trim()) },
+                onClick = { selectedPlace?.let(onConfirmRoute) },
                 enabled = ctaEnabled,
             )
         }
