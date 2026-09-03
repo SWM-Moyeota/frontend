@@ -11,7 +11,6 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.moyeota.core.designsystem.component.MoyeotaTab
 import com.moyeota.domain.repository.PlaceRepository
-import com.moyeota.domain.session.UserSession
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -19,7 +18,6 @@ import kotlinx.coroutines.launch
 
 class HomeViewModel(
     private val repository: PlaceRepository,
-    private val userSession: UserSession,
 ) : ViewModel() {
 
     // 홈의 「자주 가는 곳」은 부가 정보라 실패해도 화면 전체를 막지 않는다 — 빈 목록으로 떨어뜨린다.
@@ -28,15 +26,16 @@ class HomeViewModel(
 
     fun refresh() {
         viewModelScope.launch {
-            _favorites.value = runCatching { repository.getFavoritePlaces(userSession.currentUserId) }
+            // 즐겨찾기 주체는 Bearer 토큰이 정한다 — userId 를 넘기지 않는다 (22 보고서 §2)
+            _favorites.value = runCatching { repository.getFavoritePlaces() }
                 .map { places -> places.sortedBy { it.sequence }.map { FavoritePlace(it.name, it.roadName) } }
                 .getOrDefault(emptyList())
         }
     }
 
     companion object {
-        fun factory(repository: PlaceRepository, userSession: UserSession) = viewModelFactory {
-            initializer { HomeViewModel(repository, userSession) }
+        fun factory(repository: PlaceRepository) = viewModelFactory {
+            initializer { HomeViewModel(repository) }
         }
     }
 }
@@ -45,24 +44,25 @@ class HomeViewModel(
 @Composable
 fun HomeRoute(
     repository: PlaceRepository,
-    userSession: UserSession,
+    // 이름은 NavHost 의 공용 홀더(UserProfileViewModel)가 세션당 한 번 받아 내려보낸다
+    // — 홈 진입마다 다시 조회하지 않는다.
+    userName: String? = null,
     onSearchClick: () -> Unit = {},
     onPlaceQuery: (String) -> Unit = {},
-    onDemandBannerClick: () -> Unit = {},
     onTabSelect: (MoyeotaTab) -> Unit = {},
 ) {
-    val viewModel: HomeViewModel = viewModel(factory = HomeViewModel.factory(repository, userSession))
+    val viewModel: HomeViewModel = viewModel(factory = HomeViewModel.factory(repository))
     val favorites by viewModel.favorites.collectAsState()
 
     // 15 에서 즐겨찾기를 등록하고 돌아오면 반영돼야 해서 진입마다 재조회한다
     LaunchedEffect(Unit) { viewModel.refresh() }
 
     HomeScreen(
+        userName = userName,
         favoritePlaces = favorites,
         onSearchClick = onSearchClick,
         onFavoritePlaceClick = { onPlaceQuery(it.address) },
         onRecentPlaceClick = { onPlaceQuery(it.name) },
-        onDemandBannerClick = onDemandBannerClick,
         onTabSelect = onTabSelect,
     )
 }

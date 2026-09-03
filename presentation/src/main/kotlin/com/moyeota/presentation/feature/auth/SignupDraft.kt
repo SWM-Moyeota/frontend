@@ -1,0 +1,73 @@
+package com.moyeota.presentation.feature.auth
+
+import com.moyeota.domain.model.AuthError
+import com.moyeota.domain.model.AuthException
+import com.moyeota.domain.model.Gender
+import com.moyeota.domain.model.NewUser
+import java.time.LocalDate
+
+/**
+ * 가입 플로우(10 프로필 만들기 → 12 매너 서약)가 모으는 값.
+ *
+ * 서버 `POST /api/v1/users` 가 요구하는 7개 필드가 그대로 이 클래스의 필드다 — 계정 유형이나
+ * 학교·재직 인증 결과는 API 에 자리가 없어 담지 않는다(그 화면들이 가입 경로에서 빠진 이유이기도 하다).
+ *
+ * | 필드 | 수집 화면 |
+ * |---|---|
+ * | [name] · [birthDate] · [gender] · [phoneNumber] | 10 프로필 만들기 (1/3, 「기본 정보」 절) |
+ * | [loginId] · [password] · [email] | 10 프로필 만들기 (1/3, 「로그인 정보」 절) |
+ *
+ * 09 본인 인증이 앞 절반을 받던 시절의 흔적으로 필드가 화면을 넘나드는 구조가 남아 있다.
+ * 지금은 10 이 한 번에 다 채우지만, 실제 본인 인증이 붙으면 다시 나뉠 자리라 그대로 뒀다.
+ *
+ * 제출은 12 매너 서약의 「동의하고 가입 완료」 한 곳에서만 일어난다.
+ */
+data class SignupDraft(
+    val email: String = "",
+    val name: String = "",
+    val phoneNumber: String = "",
+    val birthDate: LocalDate? = null,
+    val gender: Gender? = null,
+    val loginId: String = "",
+    val password: String = "",
+) {
+    /**
+     * 서버 요청 모델로 변환. 아직 못 받은 값이 있으면 null 이다.
+     *
+     * null 은 "플로우를 건너뛰어 필수 값이 비었다"는 뜻 — 화면 순서가 바뀌었을 때
+     * 400 을 맞고 나서야 알아차리는 대신 제출 전에 걸러낸다.
+     */
+    fun toNewUser(): NewUser? {
+        val birth = birthDate ?: return null
+        val genderValue = gender ?: return null
+        if (loginId.isBlank() || password.isBlank()) return null
+        if (name.isBlank() || phoneNumber.isBlank() || email.isBlank()) return null
+        return NewUser(
+            loginId = loginId,
+            password = password,
+            name = name,
+            birthDate = birth,
+            phoneNumber = phoneNumber,
+            gender = genderValue,
+            email = email,
+        )
+    }
+}
+
+/**
+ * [AuthError] → 사용자에게 보여줄 한국어 문구 (21 보고서 §2 권장 문구 표).
+ *
+ * `INVALID_REQUEST` 만 서버 원문을 그대로 쓴다 — 서버가 "필드: 사유" 형태로 주기 때문에
+ * 임의로 뭉뚱그린 문구보다 사용자가 고칠 곳을 정확히 알 수 있다.
+ */
+internal fun Throwable.authUserMessage(): String {
+    val authException = this as? AuthException ?: return "잠시 후 다시 시도해 주세요"
+    return when (authException.error) {
+        AuthError.LOGIN_FAILED -> "아이디 또는 비밀번호가 올바르지 않아요"
+        AuthError.LOGIN_ID_DUPLICATED -> "이미 사용 중인 아이디예요"
+        AuthError.INVALID_REQUEST -> authException.serverMessage ?: "입력한 정보를 다시 확인해 주세요"
+        AuthError.SESSION_EXPIRED -> "다시 로그인해 주세요"
+        AuthError.NETWORK -> "네트워크 연결을 확인해 주세요"
+        AuthError.UNKNOWN -> "잠시 후 다시 시도해 주세요"
+    }
+}

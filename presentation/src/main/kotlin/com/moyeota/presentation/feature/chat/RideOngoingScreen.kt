@@ -40,8 +40,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.BackArrowIcon
 import com.moyeota.core.designsystem.component.MapPlaceholder
+import com.moyeota.core.designsystem.component.NavigationBarSpacer
 import com.moyeota.core.designsystem.component.SheetHandle
-import com.moyeota.core.designsystem.component.StatusBarMock
+import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 
 // 와이어프레임 색 (core token 미정의 — 화면 재현용)
@@ -63,7 +64,13 @@ private val CardShadow = Color(0x1A1B2A4A)
  * - 뒤로 → 25 배차 상태 (onBack)
  * - 「채팅 열기」 → 24 채팅 (onOpenChat)
  * - 「신고」 / 「문제가 생기면 아래에서 바로 신고할 수 있어요」 → 27 긴급 신고 (onReport)
- * - [미연결] 도착 후 자동 전환 → 28 최종 요금 확인 (무동작)
+ * - 경유 순서 카드 탭(=하차) → 28 최종 요금 확인 (onArrived)
+ *
+ * 도착 전이에 관하여: 원래 28 은 기사측 이벤트로 자동 전환되는 화면이다. 그런데 승객이 폴링할 수 있는
+ * 운행 완료 상태가 아직 없어(서버 `startRide`/`completeRide` 미저장, QA D-2) 자동 전환을 걸 곳이 없다.
+ * 이전엔 15초 데모 타이머로 때웠지만 그게 27 신고 진입을 막아버려서(QA D-3) 제거했고,
+ * 그 자리를 **경유 카드 탭**이라는 임시 수동 트리거로 대체했다. 서버가 완료 상태를 내려주면
+ * 이 콜백을 status 관찰로 갈아끼우면 된다.
  *
  * 상태: 보호자 공유 토글은 로컬 상태. 심야(23:00~04:00)는 설정 무관 자동 공유(11 설정 기준).
  * 플로우 진행 화면 — 하단탭 없음 (공통 규칙).
@@ -76,13 +83,14 @@ fun RideOngoingScreen(
     onBack: () -> Unit = {},
     onOpenChat: () -> Unit = {},
     onReport: () -> Unit = {},
+    onArrived: () -> Unit = {}, // 하차 → 28 (서버 완료 상태 생기면 자동 관찰로 대체)
 ) {
     var guardianSharing by remember { mutableStateOf(true) }
 
     Column(modifier = Modifier.fillMaxSize().background(ScreenBg)) {
         // 헤더 (흰 배경)
         Column(modifier = Modifier.fillMaxWidth().background(MoyeotaColor.SurfaceCanvas)) {
-            StatusBarMock()
+            StatusBarSpacer()
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 14.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -140,13 +148,16 @@ fun RideOngoingScreen(
             )
 
             Spacer(Modifier.height(18.dp))
-            // 경유 순서 카드
+            // 경유 순서 카드 — 탭하면 하차 처리로 보고 28 최종 요금으로 넘어간다.
+            // 마지막 단계가 「내린 뒤 현장에서 1/N 정산」이라 카드 자체가 곧 다음 행동이다.
             Box(
                 modifier = Modifier
                     .padding(horizontal = 16.dp)
                     .fillMaxWidth()
                     .height(150.dp)
-                    .background(RouteCardBg, RoundedCornerShape(16.dp)),
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(RouteCardBg)
+                    .clickable { onArrived() },
             ) {
                 // 타임라인 연결선
                 Box(
@@ -265,10 +276,7 @@ fun RideOngoingScreen(
                 }
             }
             Spacer(Modifier.height(14.dp))
-            // 홈 인디케이터
-            Box(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp), contentAlignment = Alignment.Center) {
-                Box(Modifier.size(width = 135.dp, height = 5.dp).background(MoyeotaColor.InkPrimary, CircleShape))
-            }
+            NavigationBarSpacer()
         }
     }
 }

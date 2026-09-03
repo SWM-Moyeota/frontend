@@ -35,11 +35,12 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.BackArrowIcon
+import com.moyeota.core.designsystem.component.NavigationBarSpacer
 import com.moyeota.core.designsystem.component.NoticeBanner
 import com.moyeota.core.designsystem.component.NoticeKind
 import com.moyeota.core.designsystem.component.PrimaryCtaButton
 import com.moyeota.core.designsystem.component.StatusBadge
-import com.moyeota.core.designsystem.component.StatusBarMock
+import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.core.designsystem.theme.MoyeotaType
 
@@ -72,7 +73,7 @@ fun FareFinalScreen(
     val overcharged = expectedFare > 0 && finalFare >= expectedFare * OverchargeThreshold
 
     Column(modifier = Modifier.fillMaxSize().background(MoyeotaColor.SurfaceSoft)) {
-        StatusBarMock()
+        StatusBarSpacer()
         FareFinalHeader(title = "최종 요금 확인", onBack = onBack)
 
         Column(
@@ -208,6 +209,7 @@ fun FareFinalScreen(
                 modifier = Modifier.fillMaxWidth(),
             )
         }
+        NavigationBarSpacer()
     }
 }
 

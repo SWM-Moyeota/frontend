@@ -46,7 +46,7 @@ import com.moyeota.core.designsystem.component.MoyeotaBottomBar
 import com.moyeota.core.designsystem.component.MoyeotaTab
 import com.moyeota.core.designsystem.component.NoticeBanner
 import com.moyeota.core.designsystem.component.NoticeKind
-import com.moyeota.core.designsystem.component.StatusBarMock
+import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.core.designsystem.theme.MoyeotaType
 
@@ -124,7 +124,7 @@ fun ChatScreen(
         Column(modifier = Modifier.fillMaxSize()) {
             // 헤더 (흰 배경)
             Column(modifier = Modifier.fillMaxWidth().background(MoyeotaColor.SurfaceCanvas)) {
-                StatusBarMock()
+                StatusBarSpacer()
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -389,7 +389,6 @@ fun ChatScreen(
 
             // 24는 하단탭 노출 화면 (공통 규칙)
             MoyeotaBottomBar(selected = MoyeotaTab.CHAT, onSelect = onTabSelect)
-            HomeIndicator()
         }
 
         // 채팅방 나가기 재확인 다이얼로그 (진행 중 탑승 존재 시)
@@ -553,20 +552,6 @@ private fun TogglePill(on: Boolean, onColor: Color, modifier: Modifier = Modifie
                 .size(20.dp)
                 .background(MoyeotaColor.SurfaceCanvas, CircleShape),
         )
-    }
-}
-
-// 홈 인디케이터 (와이어프레임 하단 검은 바)
-@Composable
-private fun HomeIndicator() {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(MoyeotaColor.SurfaceCanvas)
-            .padding(vertical = 8.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(Modifier.size(width = 135.dp, height = 5.dp).background(MoyeotaColor.InkPrimary, CircleShape))
     }
 }
 

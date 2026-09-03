@@ -42,7 +42,10 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.MoyeotaTextField
-import com.moyeota.core.designsystem.component.StatusBarMock
+import com.moyeota.core.designsystem.component.NavigationBarSpacer
+import com.moyeota.core.designsystem.component.NoticeBanner
+import com.moyeota.core.designsystem.component.NoticeKind
+import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -68,24 +71,59 @@ enum class EmergencyReason(val title: String, val subtitle: String) {
  * 이동(디스크립션):
  * - 뒤로(X) → 26 운행 중 (onBack)
  * - 사유 선택 (1개 필수 — 미선택 시 신고 버튼 비활성)
- * - 「3초간 길게 눌러 신고」 3초 유지 성공 → 접수 후 26 복귀 (onReportSubmitted)
+ * - 「3초간 길게 눌러 신고」 3초 유지 성공 → `POST /api/v1/reports` 접수 (onReportSubmitted)
  *   · 3초 롱프레스 유지 실패 시 미전송 (오작동 방지)
- *   · 전송 항목: 현재 위치 · 차량번호 · 탑승 ID · 사유 · 시각 (백엔드 미연결 — 콜백만 호출)
+ * - 접수 성공([reportId] 수신) → 「112에 전화하셨나요?」 확인 카드
+ *   → `PATCH /reports/{id}/call-result` (onConfirmCallResult) 후 26 복귀
+ *
+ * 서버 제약: 사유·상세 텍스트를 받는 필드가 백엔드 `ReportRequest` 에 없다
+ * (reporterId · partyId · 좌표뿐). 화면에서 고른 사유는 아직 서버로 가지 않는다.
+ * 신고 자체도 **탑승 중(IN_RIDE)** 일 때만 서버가 받아준다.
  *
  * Safety500/600 색상은 이 화면(신고) 전용.
  */
 @Composable
 fun EmergencyScreen(
     rideSummary: String = "부산대 정문 → 서면역 · 12가 3456",
+    submitting: Boolean = false,
+    submitErrorMessage: String? = null,
+    reportId: Long? = null, // 접수 완료 → 전화 연결 여부 확인 카드 노출
+    confirmingCall: Boolean = false,
     onBack: () -> Unit = {},
     onReportSubmitted: (reason: EmergencyReason, detail: String) -> Unit = { _, _ -> },
+    onConfirmCallResult: (called: Boolean) -> Unit = {},
+) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        EmergencyForm(
+            rideSummary = rideSummary,
+            submitting = submitting,
+            submitErrorMessage = submitErrorMessage,
+            onBack = onBack,
+            onReportSubmitted = onReportSubmitted,
+        )
+        if (reportId != null) {
+            CallResultOverlay(
+                confirming = confirmingCall,
+                onConfirmCallResult = onConfirmCallResult,
+            )
+        }
+    }
+}
+
+@Composable
+private fun EmergencyForm(
+    rideSummary: String,
+    submitting: Boolean,
+    submitErrorMessage: String?,
+    onBack: () -> Unit,
+    onReportSubmitted: (reason: EmergencyReason, detail: String) -> Unit,
 ) {
     var selectedReason by remember { mutableStateOf<EmergencyReason?>(null) }
     var detailText by remember { mutableStateOf("") }
     var holding by remember { mutableStateOf(false) }
 
-    // 사유 1개 필수 + 「직접 설명할게요」는 10~500자 입력 필수
-    val reportEnabled = selectedReason != null &&
+    // 사유 1개 필수 + 「직접 설명할게요」는 10~500자 입력 필수. 접수 중에는 재전송을 막는다.
+    val reportEnabled = !submitting && selectedReason != null &&
         (selectedReason != EmergencyReason.OTHER || detailText.trim().length in 10..500)
 
     val currentSubmit by rememberUpdatedState(onReportSubmitted)
@@ -93,7 +131,7 @@ fun EmergencyScreen(
     val currentDetail by rememberUpdatedState(detailText)
 
     Column(modifier = Modifier.fillMaxSize().background(EmergencyBg)) {
-        StatusBarMock()
+        StatusBarSpacer()
         // 닫기(X) → 26 운행 중
         Box(
             modifier = Modifier
@@ -188,6 +226,11 @@ fun EmergencyScreen(
 
         // 하단 고정: 안내 + 신고 버튼 + 푸터
         Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+            // 공통 규칙: 화면 단위 오류는 CTA 위 NoticeBanner(ERROR)
+            if (submitErrorMessage != null) {
+                NoticeBanner(kind = NoticeKind.ERROR, text = submitErrorMessage)
+                Spacer(Modifier.height(10.dp))
+            }
             Text(
                 text = "신고하면 현재 위치와 운행 정보가 운영팀에 전달돼요",
                 fontSize = 12.sp,
@@ -228,7 +271,11 @@ fun EmergencyScreen(
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    text = if (holding) "계속 누르고 계세요…" else "3초간 길게 눌러 신고",
+                    text = when {
+                        submitting -> "접수 중…"
+                        holding -> "계속 누르고 계세요…"
+                        else -> "3초간 길게 눌러 신고"
+                    },
                     fontSize = 17.sp,
                     fontWeight = FontWeight.Bold,
                     color = if (reportEnabled) MoyeotaColor.TextOnDark else MoyeotaColor.TextAsh,
@@ -244,14 +291,94 @@ fun EmergencyScreen(
             )
             Spacer(Modifier.height(30.dp))
         }
-        // 홈 인디케이터
-        Box(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp), contentAlignment = Alignment.Center) {
-            Box(
-                Modifier
-                    .size(width = 135.dp, height = 5.dp)
-                    .background(MoyeotaColor.InkPrimary, RoundedCornerShape(2.5.dp)),
+        NavigationBarSpacer()
+    }
+}
+
+/**
+ * 접수 직후 뜨는 전화 연결 확인 카드.
+ *
+ * 새 화면을 만들지 않고 신고 화면 위 스크림으로 덮는다 — 접수와 통화 확인은 한 흐름이라
+ * 화면을 갈라놓으면 사용자가 중간에서 이탈했을 때 서버의 신고 레코드가 미확정으로 남는다.
+ * 서버는 신고당 **1회만** 통화 여부를 받으므로 응답 후에는 곧바로 화면을 닫는다.
+ */
+@Composable
+private fun CallResultOverlay(confirming: Boolean, onConfirmCallResult: (Boolean) -> Unit) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MoyeotaColor.Scrim)
+            // 스크림 탭으로는 닫히지 않는다 (통화 여부는 반드시 답해야 하는 질문)
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { },
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            modifier = Modifier
+                .padding(horizontal = 32.dp)
+                .clip(RoundedCornerShape(20.dp))
+                .background(MoyeotaColor.SurfaceCanvas)
+                .padding(24.dp),
+        ) {
+            Text(
+                text = "신고가 접수됐어요",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                color = MoyeotaColor.InkPrimary,
             )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = "위급한 상황이라면 112에 바로 전화해 주세요.\n전화하셨나요?",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+                color = EmTextMute,
+            )
+            Spacer(Modifier.height(20.dp))
+            Row(modifier = Modifier.fillMaxWidth()) {
+                CallResultButton(
+                    text = "아직이요",
+                    enabled = !confirming,
+                    background = MoyeotaColor.SurfaceSoft,
+                    textColor = MoyeotaColor.InkPrimary,
+                    onClick = { onConfirmCallResult(false) },
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(12.dp))
+                CallResultButton(
+                    text = "전화했어요",
+                    enabled = !confirming,
+                    background = MoyeotaColor.Safety500,
+                    textColor = MoyeotaColor.TextOnDark,
+                    onClick = { onConfirmCallResult(true) },
+                    modifier = Modifier.weight(1f),
+                )
+            }
         }
+    }
+}
+
+@Composable
+private fun CallResultButton(
+    text: String,
+    enabled: Boolean,
+    background: Color,
+    textColor: Color,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .height(48.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(background)
+            .clickable(enabled = enabled) { onClick() },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = text,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Bold,
+            color = if (enabled) textColor else MoyeotaColor.TextAsh,
+        )
     }
 }
 

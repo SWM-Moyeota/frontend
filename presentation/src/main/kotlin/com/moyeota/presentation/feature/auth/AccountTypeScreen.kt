@@ -43,8 +43,9 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.BackArrowIcon
+import com.moyeota.core.designsystem.component.NavigationBarSpacer
 import com.moyeota.core.designsystem.component.PrimaryCtaButton
-import com.moyeota.core.designsystem.component.StatusBarMock
+import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 
 private val ScreenBackground = Color(0xFFF5F7FA)
@@ -55,11 +56,15 @@ private val IconBoxIdle = Color(0xFFF6F8FB)
 private val RadioIdleBorder = Color(0xFFD1D5DB)
 private val CardShadow = Color(0x0F1B2A4A)
 
+// ⚠️ 05 는 현재 어떤 그래프에도 등록되어 있지 않다 — 가입 API 에 계정 유형 개념이 없어
+// 가입 필수 경로(09 → 10 → 11 → 12)에서 제외했다. 인증 기능을 마이페이지로 옮길 때
+// 재사용할 수 있도록 파일은 남겨 둔다.
+//
 // 05 화면에서 분기되는 계정 유형 (라디오 1개만 선택 가능, 기본 선택 없음)
 enum class AccountType {
-    STUDENT, // 학생 → 06 학교 이메일
-    WORKER, // 직장인 → 08 직장·일반 신원 인증
-    GENERAL, // 일반 → 08 (본인 인증만 수행)
+    STUDENT, // 학생 → 06 학교 이메일 → 07 코드 → 09
+    WORKER, // 직장인 → 08 재직 인증 → 09
+    GENERAL, // 일반 → 09 본인 인증 직행 (재직 인증 화면을 거치지 않는다)
 }
 
 /**
@@ -68,7 +73,7 @@ enum class AccountType {
  * 진입: 04 로그인 성공
  *
  * @param onBack 뒤로 → 04 시작 — 로그인 방식
- * @param onNext 유형 선택 + 「다음」 → 학생: 06 학교 이메일 / 직장인: 08 직장·일반 신원 인증 / 일반: 08 (본인 인증만 수행)
+ * @param onNext 유형 선택 + 「다음」 → 학생: 06 학교 이메일 / 직장인: 08 재직 인증 / 일반: 09 본인 인증
  * @param onSkipVerification 「나중에 인증할게요」 → 14 홈 (미인증 상태)
  */
 @Composable
@@ -86,7 +91,7 @@ fun AccountTypeScreen(
             .fillMaxSize()
             .background(ScreenBackground),
     ) {
-        StatusBarMock()
+        StatusBarSpacer()
 
         Column(
             modifier = Modifier
@@ -198,7 +203,7 @@ fun AccountTypeScreen(
             Spacer(Modifier.height(28.dp))
         }
 
-        HomeIndicatorMock()
+        NavigationBarSpacer()
     }
 }
 

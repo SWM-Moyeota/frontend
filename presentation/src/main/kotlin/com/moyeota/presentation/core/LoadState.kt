@@ -22,7 +22,7 @@ import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.MoyeotaBottomBar
 import com.moyeota.core.designsystem.component.MoyeotaTab
 import com.moyeota.core.designsystem.component.MoyeotaTopBar
-import com.moyeota.core.designsystem.component.StatusBarMock
+import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 
 // 하단탭 화면(14 홈 · 17 합승 · 24 채팅 · 35 마이)의 로딩·에러 골격.
@@ -38,7 +38,7 @@ fun TabStateScaffold(
     content: @Composable () -> Unit,
 ) {
     Column(modifier = modifier.fillMaxSize().background(MoyeotaColor.SurfaceSoft)) {
-        StatusBarMock()
+        StatusBarSpacer()
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             content()
         }
@@ -57,7 +57,7 @@ fun BackStateScaffold(
 ) {
     Column(modifier = modifier.fillMaxSize().background(MoyeotaColor.SurfaceSoft)) {
         Column(modifier = Modifier.fillMaxWidth().background(MoyeotaColor.SurfaceCanvas)) {
-            StatusBarMock()
+            StatusBarSpacer()
             MoyeotaTopBar(title = title, onBack = onBack)
         }
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {

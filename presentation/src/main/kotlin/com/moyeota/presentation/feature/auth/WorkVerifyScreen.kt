@@ -40,13 +40,17 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.MoyeotaTextField
 import com.moyeota.core.designsystem.component.MoyeotaTopBar
+import com.moyeota.core.designsystem.component.NavigationBarSpacer
 import com.moyeota.core.designsystem.component.PrimaryCtaButton
-import com.moyeota.core.designsystem.component.StatusBarMock
+import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.core.designsystem.theme.MoyeotaType
 
-// 08 · 직장·일반 신원 인증 [S26]
-// 진입: 05에서 「직장인」 또는 「일반」 선택 / 뒤로 → 05 / 「인증 요청 보내기」 → 09 본인 인증
+// 08 · 직장인 재직 인증 [S26]
+//
+// ⚠️ 현재 어떤 그래프에도 등록되어 있지 않다 (06 과 같은 이유 — 인증은 마이페이지로 이동 예정).
+//
+// (원래 배선) 진입: 05에서 「직장인」 선택 / 뒤로 → 05 / 「인증 요청 보내기」 → 09 본인 인증
 // 유효값 검증: 회사 이메일 — RFC 형식 + 무료 메일 도메인(gmail·naver 등) 차단
 private val CompanyEmailRegex = Regex("^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$")
 private val FreeMailDomains = setOf(
@@ -62,9 +66,8 @@ private val DocCardGray = Color(0xFFF6F8FB)
 
 @Composable
 fun WorkVerifyScreen(
-    isWorker: Boolean = true,
     onBack: () -> Unit = {},
-    onSubmit: (companyEmail: String?) -> Unit = {},
+    onSubmit: (companyEmail: String) -> Unit = {},
 ) {
     var email by remember { mutableStateOf("") }
     var submitting by remember { mutableStateOf(false) }
@@ -79,20 +82,20 @@ fun WorkVerifyScreen(
         isFreeMail -> "무료 메일(gmail·naver 등)은 사용할 수 없어요"
         else -> null
     }
-    // 회사 메일과 재직 서류 중 최소 1개 필수 — 서류 업로드는 미연결이므로 직장인은 회사 메일 필수.
-    // 일반 유형은 둘 다 생략 가능 (입력했다면 유효해야 함)
-    val ctaEnabled = if (isWorker) emailValid else email.isEmpty() || emailValid
+    // 회사 메일과 재직 서류 중 최소 1개 필수 — 서류 업로드가 미연결이므로 회사 메일이 사실상 필수다
+    val ctaEnabled = emailValid
 
     Column(modifier = Modifier.fillMaxSize().background(MoyeotaColor.SurfaceSoft)) {
-        StatusBarMock()
+        StatusBarSpacer()
         MoyeotaTopBar(
             title = "",
             onBack = onBack,
             actions = {
-                Text(text = "2 / 5", style = MoyeotaType.BodySm, color = LabelGray)
+                // 08 은 학생 경로의 06·07 과 같은 「인증」 1단계다 — 09 가 2단계이므로 여기는 1/5
+                Text(text = "1 / 5", style = MoyeotaType.BodySm, color = LabelGray)
             },
         )
-        WorkVerifyProgressBar(progress = 2f / 5f)
+        WorkVerifyProgressBar(progress = 1f / 5f)
 
         Column(
             modifier = Modifier
@@ -108,7 +111,7 @@ fun WorkVerifyScreen(
             )
             Spacer(Modifier.height(10.dp))
             Text(
-                text = "직장인은 재직 정보로, 일반 이용자는 본인 인증으로 시작해요",
+                text = "재직 정보로 직장인 인증을 진행해요",
                 style = MoyeotaType.BodySm.copy(fontSize = 14.sp),
                 color = MoyeotaColor.TextMute,
             )
@@ -192,7 +195,7 @@ fun WorkVerifyScreen(
                 text = "인증 요청 보내기",
                 onClick = {
                     submitting = true
-                    onSubmit(email.ifEmpty { null })
+                    onSubmit(email)
                 },
                 enabled = ctaEnabled,
                 loading = submitting,
@@ -206,6 +209,7 @@ fun WorkVerifyScreen(
                 modifier = Modifier.fillMaxWidth(),
             )
         }
+        NavigationBarSpacer()
     }
 }
 

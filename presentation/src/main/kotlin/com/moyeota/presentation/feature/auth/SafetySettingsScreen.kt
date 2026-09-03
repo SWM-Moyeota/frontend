@@ -37,8 +37,9 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.MoyeotaTopBar
+import com.moyeota.core.designsystem.component.NavigationBarSpacer
 import com.moyeota.core.designsystem.component.PrimaryCtaButton
-import com.moyeota.core.designsystem.component.StatusBarMock
+import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.core.designsystem.theme.MoyeotaTheme
 import com.moyeota.core.designsystem.theme.MoyeotaType
@@ -59,20 +60,20 @@ fun SafetySettingsScreen(
     val guardians = remember { mutableStateOf(listOf("어머니 · 010-••••-1234")) }
 
     Column(modifier = modifier.fillMaxSize().background(MoyeotaColor.SurfaceSoft)) {
-        StatusBarMock()
+        StatusBarSpacer()
         MoyeotaTopBar(
             title = "",
             onBack = onBack,
             actions = {
                 Text(
-                    text = "4 / 5",
+                    text = "2 / 3",
                     style = MoyeotaType.BodySm,
                     fontWeight = FontWeight.Medium,
                     color = Color(0xFF8A93A0),
                 )
             },
         )
-        SafetyStepProgressBar(progress = 4f / 5f)
+        SafetyStepProgressBar(progress = 2f / 3f)
 
         Column(
             modifier = Modifier
@@ -212,7 +213,7 @@ fun SafetySettingsScreen(
                     },
             )
         }
-        SafetyHomeIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
+        NavigationBarSpacer()
     }
 }
 
@@ -297,16 +298,6 @@ private fun SafetyStepProgressBar(progress: Float, modifier: Modifier = Modifier
                 .background(MoyeotaColor.Primary500, RoundedCornerShape(2.dp)),
         )
     }
-}
-
-@Composable
-private fun SafetyHomeIndicator(modifier: Modifier = Modifier) {
-    Box(
-        modifier = modifier
-            .padding(top = 12.dp, bottom = 9.dp)
-            .size(width = 135.dp, height = 5.dp)
-            .background(MoyeotaColor.InkPrimary, RoundedCornerShape(2.5.dp)),
-    )
 }
 
 @Preview(showBackground = true, widthDp = 393, heightDp = 852)

@@ -35,11 +35,12 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.BackArrowIcon
+import com.moyeota.core.designsystem.component.NavigationBarSpacer
 import com.moyeota.core.designsystem.component.NoticeBanner
 import com.moyeota.core.designsystem.component.NoticeKind
 import com.moyeota.core.designsystem.component.PrimaryCtaButton
 import com.moyeota.core.designsystem.component.StatusBadge
-import com.moyeota.core.designsystem.component.StatusBarMock
+import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.core.designsystem.theme.MoyeotaType
 import kotlin.math.roundToInt
@@ -83,7 +84,7 @@ fun SettlementScreen(
     val myShare = perPersonShare(totalFare, serviceFee, memberCount)
 
     Column(modifier = Modifier.fillMaxSize().background(MoyeotaColor.SurfaceSoft)) {
-        StatusBarMock()
+        StatusBarSpacer()
         SettlementHeader(title = "정산", onBack = onBack)
 
         Column(
@@ -218,6 +219,7 @@ fun SettlementScreen(
                 modifier = Modifier.fillMaxWidth(),
             )
         }
+        NavigationBarSpacer()
     }
 }
 

@@ -10,20 +10,24 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.moyeota.domain.model.Ride
+import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.repository.RideRepository
-import com.moyeota.domain.session.UserSession
 import com.moyeota.presentation.core.BackStateScaffold
 import com.moyeota.presentation.core.ErrorBox
 import com.moyeota.presentation.core.LoadingBox
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+
+/** 방 상세 폴링 간격. 매칭은 서버가 알아서 시작하므로 앱은 전이만 지켜본다. */
+private const val PARTY_POLL_INTERVAL_MS = 4_000L
 
 class MatchWaitingViewModel(
     private val repository: RideRepository,
-    private val userSession: UserSession,
     private val partyId: Long,
 ) : ViewModel() {
 
@@ -33,13 +37,11 @@ class MatchWaitingViewModel(
         data class Error(val message: String) : UiState
     }
 
-    // ready 는 서버 응답(PartyDetailResult)에 없어 로컬로만 추적한다 (01 보고서 플래그 6).
+    // 남은 액션은 「그만 찾기」 하나뿐 — 준비/매칭 시작은 백엔드에서 삭제됐다.
     data class ActionState(
         val inProgress: Boolean = false,
         val errorMessage: String? = null,
-        val ready: Boolean = false,
         val left: Boolean = false,
-        val matchingStarted: Boolean = false,
     )
 
     private val _uiState = MutableStateFlow<UiState>(UiState.Loading)
@@ -50,6 +52,7 @@ class MatchWaitingViewModel(
 
     init {
         refresh()
+        observeAutoMatching()
     }
 
     fun refresh() {
@@ -63,25 +66,24 @@ class MatchWaitingViewModel(
         }
     }
 
-    fun toggleReady() = runAction(failureMessage = "준비 상태를 바꾸지 못했어요") {
-        val nowReady = !_actionState.value.ready
-        if (nowReady) {
-            repository.setReady(partyId, userSession.currentUserId)
-        } else {
-            repository.cancelReady(partyId, userSession.currentUserId)
+    // 정원이 차면 서버가 스스로 기사 매칭을 시작한다(PartyApplicationService.join 내부).
+    // 앱은 트리거하지 않고 상세를 주기적으로 다시 읽어 인원 현황과 status 전이만 관찰한다.
+    // 폴링 실패는 일시적 네트워크 문제일 뿐이라 화면을 에러로 덮지 않고 다음 주기를 기다린다.
+    private fun observeAutoMatching() {
+        viewModelScope.launch {
+            while (isActive) {
+                delay(PARTY_POLL_INTERVAL_MS)
+                val ride = runCatching { repository.getPartyDetail(partyId) }.getOrNull() ?: continue
+                _uiState.value = UiState.Success(ride)
+                // 배차 이후는 25 배차 현황이 이어받는다 — 대기 화면의 폴링은 여기서 끝낸다
+                if (ride.status !in WAITING_STATUSES) return@launch
+            }
         }
-        _actionState.update { it.copy(ready = nowReady) }
-        reload() // 준비 반영 후 상세 재조회
-    }
-
-    fun startMatching() = runAction(failureMessage = "매칭을 시작하지 못했어요") {
-        repository.startMatching(partyId, userSession.currentUserId)
-        reload() // status → MATCHING
-        _actionState.update { it.copy(matchingStarted = true) }
     }
 
     fun leaveParty() = runAction(failureMessage = "방에서 나가지 못했어요") {
-        repository.leaveParty(partyId, userSession.currentUserId)
+        // 나가는 주체는 Bearer 토큰이 정한다 — memberId 를 넘기지 않는다 (22 보고서 §2)
+        repository.leaveParty(partyId)
         _actionState.update { it.copy(left = true) }
     }
 
@@ -99,24 +101,20 @@ class MatchWaitingViewModel(
         }
     }
 
-    // 액션 성공 후 갱신 — 실패해도 직전 화면 상태를 유지한다
-    private suspend fun reload() {
-        runCatching { repository.getPartyDetail(partyId) }
-            .onSuccess { _uiState.value = UiState.Success(it) }
-    }
-
     companion object {
-        fun factory(repository: RideRepository, userSession: UserSession, partyId: Long) = viewModelFactory {
-            initializer { MatchWaitingViewModel(repository, userSession, partyId) }
+        // 아직 사람을 모으는 중인 상태. 이 밖으로 나가면 배차가 시작된 것이다.
+        private val WAITING_STATUSES = setOf(RideStatus.RECRUITING, RideStatus.MATCHED)
+
+        fun factory(repository: RideRepository, partyId: Long) = viewModelFactory {
+            initializer { MatchWaitingViewModel(repository, partyId) }
         }
     }
 }
 
-// 21 매칭 대기 — 파티 상세 + 준비/나가기/매칭 시작 진입점. partyId 없으면 기존 더미 화면 유지.
+// 21 매칭 대기 — 파티 상세 폴링 + 나가기 진입점. partyId 없으면 기존 더미 화면 유지.
 @Composable
 fun MatchWaitingRoute(
     repository: RideRepository,
-    userSession: UserSession,
     partyId: Long?,
     onCancelSearch: () -> Unit = {},
     onCardClick: () -> Unit = {},
@@ -129,7 +127,7 @@ fun MatchWaitingRoute(
 
     val viewModel: MatchWaitingViewModel = viewModel(
         key = "waiting-$partyId",
-        factory = MatchWaitingViewModel.factory(repository, userSession, partyId),
+        factory = MatchWaitingViewModel.factory(repository, partyId),
     )
     val state by viewModel.uiState.collectAsState()
     val action by viewModel.actionState.collectAsState()
@@ -137,8 +135,11 @@ fun MatchWaitingRoute(
     LaunchedEffect(action.left) {
         if (action.left) onCancelSearch()
     }
-    LaunchedEffect(action.matchingStarted) {
-        if (action.matchingStarted) onMatchingStarted()
+
+    // 매칭 시작 버튼이 없어졌으므로, 25 배차 현황으로의 이동은 서버 status 전이가 유일한 신호다.
+    val status = (state as? MatchWaitingViewModel.UiState.Success)?.ride?.status
+    LaunchedEffect(status) {
+        if (status == RideStatus.DISPATCHING || status == RideStatus.ONGOING) onMatchingStarted()
     }
 
     // 탭바가 없는 화면 — 로딩·에러에서도 뒤로가기(=탐색 취소)를 남긴다 (QA F-1 동류)
@@ -155,14 +156,10 @@ fun MatchWaitingRoute(
                 ride = ride,
                 foundCount = ride.members.size,
                 conditionLabel = "${ride.capacity}인",
-                isHost = ride.hostId != null && ride.hostId == userSession.currentUserId.toString(),
-                isReady = action.ready,
                 actionInProgress = action.inProgress,
                 actionErrorMessage = action.errorMessage,
                 onCancelSearch = viewModel::leaveParty, // 나가기 성공 시 14 홈
                 onCardClick = onCardClick,
-                onToggleReady = viewModel::toggleReady,
-                onStartMatching = viewModel::startMatching,
             )
         }
     }

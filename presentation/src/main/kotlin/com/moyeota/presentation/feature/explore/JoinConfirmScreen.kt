@@ -38,13 +38,14 @@ import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.AvatarCircle
 import com.moyeota.core.designsystem.component.BackArrowIcon
 import com.moyeota.core.designsystem.component.MapPlaceholder
+import com.moyeota.core.designsystem.component.NavigationBarSpacer
 import com.moyeota.core.designsystem.component.NoticeBanner
 import com.moyeota.core.designsystem.component.NoticeKind
 import com.moyeota.core.designsystem.component.PrimaryCtaButton
 import com.moyeota.core.designsystem.component.SecondaryButton
 import com.moyeota.core.designsystem.component.SheetHandle
 import com.moyeota.core.designsystem.component.StatusBadge
-import com.moyeota.core.designsystem.component.StatusBarMock
+import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
@@ -113,7 +114,7 @@ fun JoinConfirmScreen(
     Column(modifier = Modifier.fillMaxSize().background(CanvasBg)) {
         // 상단 헤더 (흰 배경)
         Column(modifier = Modifier.fillMaxWidth().background(MoyeotaColor.SurfaceCanvas)) {
-            StatusBarMock()
+            StatusBarSpacer()
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 14.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -272,7 +273,7 @@ fun JoinConfirmScreen(
                     )
                 }
 
-                HomeIndicatorBar()
+                NavigationBarSpacer()
             }
         }
     }
@@ -572,23 +573,6 @@ private fun ChevronRightIcon(color: Color, modifier: Modifier = Modifier) {
         val stroke = 1.8.dp.toPx()
         drawLine(color, Offset(w * 0.38f, h * 0.22f), Offset(w * 0.66f, h * 0.5f), stroke, StrokeCap.Round)
         drawLine(color, Offset(w * 0.38f, h * 0.78f), Offset(w * 0.66f, h * 0.5f), stroke, StrokeCap.Round)
-    }
-}
-
-// 홈 인디케이터 (와이어프레임 하단 검은 바)
-@Composable
-private fun HomeIndicatorBar() {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 8.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(
-            modifier = Modifier
-                .size(width = 135.dp, height = 5.dp)
-                .background(MoyeotaColor.InkPrimary, CircleShape),
-        )
     }
 }
 
