@@ -19,6 +19,8 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // 네이버 지도 SDK 전용 저장소 (mavenCentral 미배포)
+        maven("https://repository.map.naver.com/archive/maven")
     }
 }
 

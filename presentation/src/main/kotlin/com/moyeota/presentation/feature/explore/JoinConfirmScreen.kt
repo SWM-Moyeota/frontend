@@ -20,10 +20,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -42,13 +38,14 @@ import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.AvatarCircle
 import com.moyeota.core.designsystem.component.BackArrowIcon
 import com.moyeota.core.designsystem.component.MapPlaceholder
+import com.moyeota.core.designsystem.component.NavigationBarSpacer
 import com.moyeota.core.designsystem.component.NoticeBanner
 import com.moyeota.core.designsystem.component.NoticeKind
 import com.moyeota.core.designsystem.component.PrimaryCtaButton
 import com.moyeota.core.designsystem.component.SecondaryButton
 import com.moyeota.core.designsystem.component.SheetHandle
 import com.moyeota.core.designsystem.component.StatusBadge
-import com.moyeota.core.designsystem.component.StatusBarMock
+import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
@@ -94,6 +91,7 @@ private fun won(amount: Int): String = "%,d원".format(amount)
  *
  * 검증·상태:
  * - 합류 시점 정원 재확인 — 이미 찼으면 CTA 위 NoticeBanner(ERROR) 「방금 인원이 찼어요」 + CTA 비활성
+ * - 서버 합류 실패(엔드포인트 부재 포함) 시 joinErrorMessage 를 CTA 위 배너로 그대로 노출
  */
 @Composable
 fun JoinConfirmScreen(
@@ -104,18 +102,19 @@ fun JoinConfirmScreen(
     pickupTimeLabel: String = "오후 6:45",
     walkLabel: String = "도보 2분 · 180m",
     arrivalTimeLabel: String = "오후 6:57 도착",
+    joining: Boolean = false,
+    joinErrorMessage: String? = null,
     onDismiss: () -> Unit = {},
     onConfirmJoin: (Ride) -> Unit = {},
     onMemberClick: (User) -> Unit = {},
 ) {
-    var joining by remember { mutableStateOf(false) }
     val joinedCount = ride.members.size
     val isFull = joinedCount >= ride.capacity
 
     Column(modifier = Modifier.fillMaxSize().background(CanvasBg)) {
         // 상단 헤더 (흰 배경)
         Column(modifier = Modifier.fillMaxWidth().background(MoyeotaColor.SurfaceCanvas)) {
-            StatusBarMock()
+            StatusBarSpacer()
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 14.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -247,6 +246,14 @@ fun JoinConfirmScreen(
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                     )
                 }
+                // 서버 합류 실패 — 원인 메시지를 그대로 보여준다 (엔드포인트 부재 안내 포함)
+                if (joinErrorMessage != null) {
+                    NoticeBanner(
+                        kind = NoticeKind.ERROR,
+                        text = joinErrorMessage,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    )
+                }
 
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
@@ -259,17 +266,14 @@ fun JoinConfirmScreen(
                     )
                     PrimaryCtaButton(
                         text = "이 탑승에 합류하기",
-                        onClick = {
-                            joining = true
-                            onConfirmJoin(ride) // → 22 탑승 상세
-                        },
+                        onClick = { onConfirmJoin(ride) }, // 성공 시 → 22 탑승 상세
                         enabled = !isFull,
                         loading = joining,
                         modifier = Modifier.weight(1f),
                     )
                 }
 
-                HomeIndicatorBar()
+                NavigationBarSpacer()
             }
         }
     }
@@ -569,23 +573,6 @@ private fun ChevronRightIcon(color: Color, modifier: Modifier = Modifier) {
         val stroke = 1.8.dp.toPx()
         drawLine(color, Offset(w * 0.38f, h * 0.22f), Offset(w * 0.66f, h * 0.5f), stroke, StrokeCap.Round)
         drawLine(color, Offset(w * 0.38f, h * 0.78f), Offset(w * 0.66f, h * 0.5f), stroke, StrokeCap.Round)
-    }
-}
-
-// 홈 인디케이터 (와이어프레임 하단 검은 바)
-@Composable
-private fun HomeIndicatorBar() {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 8.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(
-            modifier = Modifier
-                .size(width = 135.dp, height = 5.dp)
-                .background(MoyeotaColor.InkPrimary, CircleShape),
-        )
     }
 }
 

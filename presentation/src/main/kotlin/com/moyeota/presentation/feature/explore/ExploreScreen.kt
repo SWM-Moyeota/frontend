@@ -1,5 +1,8 @@
 package com.moyeota.presentation.feature.explore
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -8,6 +11,7 @@ import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -23,54 +27,135 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.Stable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.AvatarCircle
-import com.moyeota.core.designsystem.component.MapPlaceholder
 import com.moyeota.core.designsystem.component.MoyeotaBottomBar
 import com.moyeota.core.designsystem.component.MoyeotaTab
+import com.moyeota.core.designsystem.component.NaverMapView
 import com.moyeota.core.designsystem.component.SheetHandle
-import com.moyeota.core.designsystem.component.StatusBarMock
+import com.moyeota.core.designsystem.component.StatusBarSpacer
+import com.moyeota.core.designsystem.component.latLngOrNull
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.model.User
+import com.moyeota.presentation.feature.home.DemoOrigin
+import com.naver.maps.geometry.LatLng
+import com.naver.maps.geometry.LatLngBounds
+import com.naver.maps.map.NaverMap
+import com.naver.maps.map.overlay.LocationOverlay
+import com.naver.maps.map.overlay.Marker
+import com.naver.maps.map.util.MarkerIcons
 
 // 와이어프레임 그레이 (core token 미정의 색 — 화면 재현용)
 private val CanvasBg = Color(0xFFF5F7FA)
-private val RoadColor = Color(0xFFC9D4E6)
 private val GrayMute = Color(0xFF8A93A0)
 private val GrayAsh = Color(0xFF9AA1AC)
 private val ChipBorder = Color(0xFFE2E7EE)
 private val BadgeGrayBg = Color(0xFFF3F6FA)
 
-// 필터 칩 라벨
-private const val FilterNearOrigin = "출발지 1km"
-private const val FilterSeomyeon = "서면 방향"
-private const val FilterFemaleOnly = "여성만"
-private const val FilterTrio = "3인"
-private const val FilterSoon = "곧 출발"
-
 /** 바텀시트 3단계 — 17 지도(peek) / 18 지도+리스트(half) / 19 리스트(full) */
 enum class ExploreSheetState { PEEK, HALF, FULL }
+
+/**
+ * 지도에 그릴 기기 실위치 1건.
+ *
+ * 좌표만으로는 「얼마나 믿을 수 있는 위치인지」를 그릴 수 없어 오차 반경·방향을 함께 받는다.
+ * 세 값이 항상 같은 fix 에서 나와야 원과 점이 어긋나지 않으므로 하나로 묶는다.
+ *
+ * @param accuracyMeters 수평 오차 반경(m). null 이면 정확도 원을 그리지 않는다
+ * @param bearingDegrees 진행 방향(도, 0 = 북). null 이면 방향 표시 없이 점만 그린다
+ */
+@Immutable
+data class MyLocationFix(
+    val position: LatLng,
+    val accuracyMeters: Float? = null,
+    val bearingDegrees: Float? = null,
+)
+
+/**
+ * 지도에 지금 보이는 영역 — 방 목록 조회 범위.
+ *
+ * 필드 순서를 서버 파라미터 순서(swLat → swLng → neLat → neLng)와 맞춰 둔다.
+ * 위도·경도가 뒤바뀌어도 서버는 오류가 아니라 **빈 목록**을 돌려주므로,
+ * 순서를 틀리면 「이 근처엔 방이 없네」로 보여 발견이 늦는다.
+ */
+@Immutable
+data class MapBounds(
+    val swLat: Double,
+    val swLng: Double,
+    val neLat: Double,
+    val neLng: Double,
+)
+
+/** 지도 카메라 1건 (중심 + 줌) */
+@Immutable
+private data class MapCamera(val center: LatLng, val zoom: Double)
+
+/**
+ * 지도 카메라 — **화면 레벨**에서 들고 있는다.
+ *
+ * 시트 단계가 바뀌면 지도가 통째로 교체된다(PEEK 전체 화면 ⇄ HALF 320dp = 서로 다른 컴포저블).
+ * 카메라를 지도 안에만 두면 그때마다 기준점으로 되돌아가는데, 목록이 카메라를 따라가는 지금은
+ * 「서면까지 팬 → 리스트 보려고 시트 올림 → 부산대 목록」이 되어 보던 결과가 통째로 사라진다.
+ */
+@Stable
+private class ExploreCameraState(
+    initialCamera: MapCamera?,
+    initialCenteredOnMyLocation: Boolean,
+) {
+    /** 마지막으로 본 카메라. null 이면 아직 지도가 한 번도 뜨지 않은 상태 */
+    var camera by mutableStateOf(initialCamera)
+
+    /** 첫 실위치로 한 번 옮겼는가. 매 fix 마다 따라가면 사용자가 지도를 팬할 수 없다 */
+    var centeredOnMyLocation by mutableStateOf(initialCenteredOnMyLocation)
+}
+
+// 탭 전환·회전에도 보던 위치를 유지한다. 카메라가 아직 없으면 NaN 으로 저장한다
+private val ExploreCameraStateSaver: Saver<ExploreCameraState, Any> =
+    listSaver<ExploreCameraState, Double>(
+        save = { state ->
+            val camera = state.camera
+            listOf(
+                camera?.center?.latitude ?: Double.NaN,
+                camera?.center?.longitude ?: Double.NaN,
+                camera?.zoom ?: Double.NaN,
+                if (state.centeredOnMyLocation) 1.0 else 0.0,
+            )
+        },
+        restore = { saved ->
+            ExploreCameraState(
+                initialCamera = if (saved[0].isNaN()) null else MapCamera(LatLng(saved[0], saved[1]), saved[2]),
+                initialCenteredOnMyLocation = saved[3] == 1.0,
+            )
+        },
+    )
 
 // 더미 파티 (19 와이어프레임 카드 그대로)
 private fun dummyUser(id: String, name: String) = User(id, name, "학교 인증", 4.9, 12)
@@ -83,37 +168,21 @@ private val DefaultParties = listOf(
     Ride("ride-5", "온천장역", "서면역", "12분 후 출발 예정 · 7.3km", 2, listOf(dummyUser("u8", "윤OO")), 4800, 9600, RideStatus.RECRUITING),
 )
 
-// 「여성만」 방 (Ride 도메인 모델에 없는 속성 — 와이어프레임 재현용)
+// 「여성만」 방 (Ride 도메인 모델에 없는 속성 — 카드 배지 재현용)
 private val FemaleOnlyRideIds = setOf("ride-1", "ride-3", "ride-5")
 
-// 조건 필터 — 「여성만」 「3인」 「곧 출발」만 실제 목록을 거른다.
-// 「출발지 1km」 「서면 방향」은 기준 필터로 더미 목록이 이미 적용된 값(스펙 19).
-private fun applyFilters(parties: List<Ride>, filters: Set<String>): List<Ride> =
-    parties.filter { ride ->
-        (FilterFemaleOnly !in filters || ride.id in FemaleOnlyRideIds) &&
-            (FilterTrio !in filters || ride.capacity == 3) &&
-            (FilterSoon !in filters || departureMinutes(ride) <= 5)
-    }
+// 시트가 지도를 덮는 높이 — 지도 contentPadding 으로 넘겨 카메라 중심을 가시 영역에 잡는다
+private val PeekSheetHeight = 96.dp
+private val HalfMapHeight = 320.dp
+private val HalfSheetTop = 300.dp
 
-private fun departureMinutes(ride: Ride): Int =
-    ride.departureLabel.substringBefore("분").filter { it.isDigit() }.toIntOrNull() ?: Int.MAX_VALUE
-
-// 지도 마커 자리 (와이어프레임 좌표)
-private data class MarkerSlot(val x: Dp, val y: Dp, val size: Dp, val count: Int)
-
-private val PeekMarkerSlots = listOf(
-    MarkerSlot(70.dp, 148.dp, 44.dp, 12),
-    MarkerSlot(250.dp, 118.dp, 38.dp, 5),
-    MarkerSlot(300.dp, 238.dp, 34.dp, 3),
-    MarkerSlot(90.dp, 378.dp, 34.dp, 4),
-    MarkerSlot(255.dp, 408.dp, 30.dp, 2),
-)
-
-private val HalfMarkerSlots = listOf(
-    MarkerSlot(70.dp, 58.dp, 40.dp, 12),
-    MarkerSlot(255.dp, 48.dp, 34.dp, 5),
-    MarkerSlot(300.dp, 208.dp, 32.dp, 3),
-)
+/**
+ * 목록 헤더와 첫 카드 사이 간격 — 18·19 공통.
+ *
+ * 필터 칩 행이 빠지면서 두 화면의 헤더-리스트 간격이 서로 다른 여백 조각의 합(12+14 / 10+14)으로
+ * 남았다. 같은 목록을 같은 리듬으로 보여줘야 하므로 한 값으로 묶는다.
+ */
+private val ListHeaderGap = 12.dp
 
 /**
  * 17·18·19 · 합승 — 내 주변 [V07/V07b/V07c]
@@ -130,8 +199,10 @@ private val HalfMarkerSlots = listOf(
  * - 하단탭 홈 / 채팅 / 마이 → 14 / 24 / 35 (onTabSelect)
  *
  * 검증·상태:
- * - 위치 권한 없으면 지도 대신 권한 요청 안내 (locationGranted)
- * - 후보 0건이면 peek 문구 자리에 빈 상태 + 조건 완화 제안
+ * - 방 목록은 **지도에 보이는 범위**로 조회한 결과다([onVisibleBoundsChange]) — 마커와 리스트가 같은 목록
+ * - 지도는 네이버 실지도. 내 위치는 기기 GPS([myLocation]) — 못 받으면 [DemoOrigin] 기준점으로 폴백
+ * - 위치 권한 없으면 지도 대신 권한 요청 안내 + 「위치 권한 허용」 버튼 (locationGranted)
+ * - 후보 0건이면 peek 문구 자리에 빈 상태 + 지도를 움직여 보라는 안내
  * - 진행 중 탑승 없으면 상단 배너 숨김 (hasOngoingRide)
  * - 정원 찬 방(3/3)은 「합류」 비활성 + 「마감」 표기
  */
@@ -141,21 +212,24 @@ fun ExploreScreen(
     waitingCount: Int = 23,
     hasOngoingRide: Boolean = true,
     locationGranted: Boolean = true,
+    // 기기 실위치. null = 권한 없음 · 아직 fix 없음 → 지도는 DemoOrigin 기준점으로 떨어진다
+    myLocation: MyLocationFix? = null,
     initialSheetState: ExploreSheetState = ExploreSheetState.PEEK,
     onJoinParty: (Ride) -> Unit = {},
     onOngoingRideClick: () -> Unit = {},
     onCreateRoomClick: () -> Unit = {}, // 미연결 (→ 15 목적지 입력)
+    onRequestLocationPermission: () -> Unit = {},
+    // 지도 카메라가 멈출 때마다 보이는 영역을 올려보낸다 → 그 범위의 방 목록으로 갱신
+    onVisibleBoundsChange: (MapBounds) -> Unit = {},
     onTabSelect: (MoyeotaTab) -> Unit = {},
 ) {
     var sheetState by remember { mutableStateOf(initialSheetState) }
-    var filters by remember { mutableStateOf(setOf(FilterNearOrigin, FilterSeomyeon)) }
-    val visibleParties = remember(parties, filters) { applyFilters(parties, filters) }
-    val toggleFilter: (String) -> Unit = { label ->
-        filters = if (label in filters) filters - label else filters + label
+    // 시트 단계를 오르내려도 지도가 보던 자리에 그대로 있어야 목록도 그대로다
+    val cameraState = rememberSaveable(saver = ExploreCameraStateSaver) {
+        ExploreCameraState(initialCamera = null, initialCenteredOnMyLocation = false)
     }
-
     Column(modifier = Modifier.fillMaxSize().background(CanvasBg)) {
-        StatusBarMock()
+        StatusBarSpacer()
 
         // 타이틀 행 — FULL에서는 우측에 「🗺 지도」 (→ 18)
         Row(
@@ -193,34 +267,36 @@ fun ExploreScreen(
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             when (sheetState) {
                 ExploreSheetState.PEEK -> PeekContent(
-                    parties = visibleParties,
+                    parties = parties,
                     waitingCount = waitingCount,
                     hasOngoingRide = hasOngoingRide,
                     locationGranted = locationGranted,
-                    filters = filters,
-                    onToggleFilter = toggleFilter,
+                    myLocation = myLocation,
+                    cameraState = cameraState,
                     onOngoingRideClick = onOngoingRideClick,
                     onMarkerClick = onJoinParty,
+                    onRequestLocationPermission = onRequestLocationPermission,
+                    onVisibleBoundsChange = onVisibleBoundsChange,
                     onRaise = { sheetState = ExploreSheetState.HALF },
                 )
 
                 ExploreSheetState.HALF -> HalfContent(
-                    parties = visibleParties,
+                    parties = parties,
                     locationGranted = locationGranted,
-                    filters = filters,
-                    onToggleFilter = toggleFilter,
+                    myLocation = myLocation,
+                    cameraState = cameraState,
                     onJoinParty = onJoinParty,
                     onMarkerClick = onJoinParty,
                     onCreateRoomClick = onCreateRoomClick,
+                    onRequestLocationPermission = onRequestLocationPermission,
+                    onVisibleBoundsChange = onVisibleBoundsChange,
                     onCollapseMap = { sheetState = ExploreSheetState.FULL },
                     onLower = { sheetState = ExploreSheetState.PEEK },
                 )
 
                 ExploreSheetState.FULL -> FullContent(
-                    parties = visibleParties,
+                    parties = parties,
                     waitingCount = waitingCount,
-                    filters = filters,
-                    onToggleFilter = toggleFilter,
                     onJoinParty = onJoinParty,
                     onCreateRoomClick = onCreateRoomClick,
                     onExpandMap = { sheetState = ExploreSheetState.HALF },
@@ -229,7 +305,6 @@ fun ExploreScreen(
         }
 
         MoyeotaBottomBar(selected = MoyeotaTab.EXPLORE, onSelect = onTabSelect)
-        HomeIndicator()
     }
 }
 
@@ -241,42 +316,38 @@ private fun PeekContent(
     waitingCount: Int,
     hasOngoingRide: Boolean,
     locationGranted: Boolean,
-    filters: Set<String>,
-    onToggleFilter: (String) -> Unit,
+    myLocation: MyLocationFix?,
+    cameraState: ExploreCameraState,
     onOngoingRideClick: () -> Unit,
     onMarkerClick: (Ride) -> Unit,
+    onRequestLocationPermission: () -> Unit,
+    onVisibleBoundsChange: (MapBounds) -> Unit,
     onRaise: () -> Unit,
 ) {
     Box(modifier = Modifier.fillMaxSize()) {
         if (locationGranted) {
             ExploreMap(
-                slots = PeekMarkerSlots,
-                myLocationX = 178.dp,
-                myLocationY = 308.dp,
-                horizontalRoadFractions = listOf(0.31f, 0.70f),
                 rides = parties,
+                myLocation = myLocation,
+                cameraState = cameraState,
                 onMarkerClick = onMarkerClick,
+                onVisibleBoundsChange = onVisibleBoundsChange,
+                contentPadding = PaddingValues(bottom = PeekSheetHeight),
                 modifier = Modifier.fillMaxSize(),
             )
         } else {
-            LocationPermissionNotice(modifier = Modifier.fillMaxSize())
+            LocationPermissionNotice(
+                onRequestPermission = onRequestLocationPermission,
+                modifier = Modifier.fillMaxSize(),
+            )
         }
 
-        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp)) {
-            if (hasOngoingRide) {
-                OngoingRideBanner(onClick = onOngoingRideClick)
-                Spacer(Modifier.height(18.dp))
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(FilterSeomyeon, FilterFemaleOnly, FilterTrio, FilterSoon).forEach { label ->
-                    FilterChip(
-                        label = label,
-                        selected = label in filters,
-                        elevated = true,
-                        onClick = { onToggleFilter(label) },
-                    )
-                }
-            }
+        // 지도 위 오버레이는 이제 배너 하나뿐 — 자기 높이(48dp)만 덮고 나머지 팬·줌은 지도로 간다
+        if (hasOngoingRide) {
+            OngoingRideBanner(
+                onClick = onOngoingRideClick,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+            )
         }
 
         PeekSheet(
@@ -298,7 +369,7 @@ private fun PeekSheet(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .height(96.dp)
+            .height(PeekSheetHeight)
             .shadow(14.dp, RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp), spotColor = Color(0x1A000000))
             .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
             .background(MoyeotaColor.SurfaceCanvas)
@@ -318,13 +389,13 @@ private fun PeekSheet(
             }
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = if (isEmpty) "지금 이 방향엔 대기가 없어요" else "이 방향으로 ${waitingCount}명이 대기 중",
+                    text = if (isEmpty) "이 근처엔 대기가 없어요" else "주변에 ${waitingCount}명이 대기 중",
                     fontSize = 19.sp,
                     fontWeight = FontWeight.Bold,
                     color = MoyeotaColor.InkPrimary,
                 )
                 Text(
-                    text = if (isEmpty) "필터를 완화하면 후보가 늘어나요" else "위로 올리면 리스트, 목적지 정하면 바로 자동 매칭",
+                    text = if (isEmpty) "지도를 움직여 보세요" else "위로 올리면 리스트, 목적지 정하면 바로 자동 매칭",
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Medium,
                     color = GrayMute,
@@ -344,33 +415,39 @@ private fun PeekSheet(
 private fun HalfContent(
     parties: List<Ride>,
     locationGranted: Boolean,
-    filters: Set<String>,
-    onToggleFilter: (String) -> Unit,
+    myLocation: MyLocationFix?,
+    cameraState: ExploreCameraState,
     onJoinParty: (Ride) -> Unit,
     onMarkerClick: (Ride) -> Unit,
     onCreateRoomClick: () -> Unit,
+    onRequestLocationPermission: () -> Unit,
+    onVisibleBoundsChange: (MapBounds) -> Unit,
     onCollapseMap: () -> Unit,
     onLower: () -> Unit,
 ) {
     Box(modifier = Modifier.fillMaxSize()) {
         if (locationGranted) {
             ExploreMap(
-                slots = HalfMarkerSlots,
-                myLocationX = 178.dp,
-                myLocationY = 128.dp,
-                horizontalRoadFractions = listOf(0.46f),
                 rides = parties,
+                myLocation = myLocation,
+                cameraState = cameraState,
                 onMarkerClick = onMarkerClick,
-                modifier = Modifier.fillMaxWidth().height(320.dp),
+                onVisibleBoundsChange = onVisibleBoundsChange,
+                // 시트가 지도 하단 20dp 를 덮는다 (지도 320 · 시트 top 300)
+                contentPadding = PaddingValues(bottom = HalfMapHeight - HalfSheetTop),
+                modifier = Modifier.fillMaxWidth().height(HalfMapHeight),
             )
         } else {
-            LocationPermissionNotice(modifier = Modifier.fillMaxWidth().height(320.dp))
+            LocationPermissionNotice(
+                onRequestPermission = onRequestLocationPermission,
+                modifier = Modifier.fillMaxWidth().height(HalfMapHeight),
+            )
         }
 
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(top = 300.dp)
+                .padding(top = HalfSheetTop)
                 .shadow(14.dp, RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp), spotColor = Color(0x1A000000))
                 .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
                 .background(MoyeotaColor.SurfaceCanvas),
@@ -388,7 +465,7 @@ private fun HalfContent(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = "반경 1km 내 · 가까운 순",
+                        text = "주변 합승 · 가까운 순",
                         fontSize = 17.sp,
                         fontWeight = FontWeight.Bold,
                         color = MoyeotaColor.InkPrimary,
@@ -404,20 +481,7 @@ private fun HalfContent(
                 }
             }
 
-            Spacer(Modifier.height(12.dp))
-            Row(
-                modifier = Modifier.padding(horizontal = 24.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                listOf(FilterNearOrigin, FilterSeomyeon, FilterTrio, FilterSoon).forEach { label ->
-                    FilterChip(
-                        label = label,
-                        selected = label in filters,
-                        onClick = { onToggleFilter(label) },
-                    )
-                }
-            }
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(ListHeaderGap))
 
             PartyList(
                 parties = parties,
@@ -440,8 +504,6 @@ private fun HalfContent(
 private fun FullContent(
     parties: List<Ride>,
     waitingCount: Int,
-    filters: Set<String>,
-    onToggleFilter: (String) -> Unit,
     onJoinParty: (Ride) -> Unit,
     onCreateRoomClick: () -> Unit,
     onExpandMap: () -> Unit,
@@ -452,7 +514,7 @@ private fun FullContent(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = "반경 1km 내 ${waitingCount}명 · 가까운 순",
+                text = "주변 ${waitingCount}명 · 가까운 순",
                 fontSize = 17.sp,
                 fontWeight = FontWeight.Bold,
                 color = MoyeotaColor.InkPrimary,
@@ -466,22 +528,9 @@ private fun FullContent(
                 modifier = Modifier.clickable { onExpandMap() },
             )
         }
-        Spacer(Modifier.height(10.dp))
-        Row(
-            modifier = Modifier.padding(horizontal = 24.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            listOf(FilterNearOrigin, FilterSeomyeon, FilterFemaleOnly, FilterSoon).forEach { label ->
-                FilterChip(
-                    label = label,
-                    selected = label in filters,
-                    onClick = { onToggleFilter(label) },
-                )
-            }
-        }
-        Spacer(Modifier.height(14.dp))
+        Spacer(Modifier.height(ListHeaderGap))
         HorizontalDivider(color = ChipBorder)
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(ListHeaderGap))
 
         PartyList(
             parties = parties,
@@ -516,10 +565,10 @@ private fun PartyList(
         if (parties.isEmpty()) {
             item { EmptyListNotice() }
         } else if (showEndOfList) {
-            // 스펙 19: 마지막 페이지면 「이 방향은 여기까지예요」
+            // 스펙 19: 마지막 페이지면 목록의 끝을 알린다 (범위 기준)
             item {
                 Text(
-                    text = "이 방향은 여기까지예요",
+                    text = "이 근처는 여기까지예요",
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Medium,
                     color = GrayAsh,
@@ -653,46 +702,9 @@ private fun CreateRoomButton(onClick: () -> Unit, modifier: Modifier = Modifier)
 }
 
 @Composable
-private fun FilterChip(
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    elevated: Boolean = false,
-) {
-    val base = if (elevated) {
-        modifier.shadow(4.dp, CircleShape, spotColor = Color(0x14000000))
-    } else {
-        modifier
-    }
-    val withBg = base
-        .clip(CircleShape)
-        .background(if (selected) MoyeotaColor.Primary500 else MoyeotaColor.SurfaceCanvas)
-    val withBorder = if (!selected && !elevated) {
-        withBg.border(1.dp, ChipBorder, CircleShape)
-    } else {
-        withBg
-    }
-    Box(
-        modifier = withBorder
-            .clickable { onClick() }
-            .height(if (elevated) 34.dp else 32.dp)
-            .padding(horizontal = 14.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = if (selected) "$label ✓" else label,
-            fontSize = if (elevated) 13.sp else 12.sp,
-            fontWeight = FontWeight.Bold,
-            color = if (selected) MoyeotaColor.TextOnDark else MoyeotaColor.InkPrimary,
-        )
-    }
-}
-
-@Composable
-private fun OngoingRideBanner(onClick: () -> Unit) {
+private fun OngoingRideBanner(onClick: () -> Unit, modifier: Modifier = Modifier) {
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .height(48.dp)
             .shadow(8.dp, RoundedCornerShape(18.dp), spotColor = Color(0x29085AF5))
@@ -718,9 +730,14 @@ private fun OngoingRideBanner(onClick: () -> Unit) {
     }
 }
 
-// 위치 권한 없을 때 지도 대신 안내 (스펙 17)
+// 위치 권한 없을 때 지도 대신 안내 (스펙 17).
+// 자동 요청을 한 번 거부한 뒤에도 여기서 다시 요청할 수 있어야 지도로 돌아올 길이 남는다
+// (영구 거부 상태면 시스템이 다이얼로그 없이 바로 거부를 돌려주고 안내는 그대로 유지된다).
 @Composable
-private fun LocationPermissionNotice(modifier: Modifier = Modifier) {
+private fun LocationPermissionNotice(
+    onRequestPermission: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     Box(
         modifier = modifier.background(MoyeotaColor.SurfaceSoft),
         contentAlignment = Alignment.Center,
@@ -738,6 +755,23 @@ private fun LocationPermissionNotice(modifier: Modifier = Modifier) {
                 fontWeight = FontWeight.Medium,
                 color = GrayMute,
             )
+            Spacer(Modifier.height(4.dp))
+            Box(
+                modifier = Modifier
+                    .height(36.dp)
+                    .clip(CircleShape)
+                    .background(MoyeotaColor.Primary500)
+                    .clickable { onRequestPermission() }
+                    .padding(horizontal = 18.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = "위치 권한 허용",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MoyeotaColor.SurfaceCanvas,
+                )
+            }
         }
     }
 }
@@ -750,13 +784,13 @@ private fun EmptyListNotice() {
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Text(
-            text = "조건에 맞는 합승이 없어요",
+            text = "이 근처엔 합승이 없어요",
             fontSize = 15.sp,
             fontWeight = FontWeight.Bold,
             color = MoyeotaColor.InkPrimary,
         )
         Text(
-            text = "필터를 완화해 보세요",
+            text = "지도를 움직여 보세요",
             fontSize = 13.sp,
             fontWeight = FontWeight.Medium,
             color = GrayMute,
@@ -764,88 +798,321 @@ private fun EmptyListNotice() {
     }
 }
 
-// ─── 지도 (MapPlaceholder + Canvas 도로/마커) ───────────────────────────────
+// ─── 지도 (네이버 실지도 + 내 위치·합승 마커) ────────────────────────────────
 
+/**
+ * 실위치를 못 받았을 때의 기준점.
+ *
+ * 권한 거부·GPS 미취득 상황에서도 지도가 서울 한복판(SDK 기본 카메라)으로 튀지 않게,
+ * 앱 공통 컨벤션인 [DemoOrigin](부산대 정문 · 15 목적지 입력과 동일 좌표)으로 떨어진다.
+ * 실위치가 아니므로 마커 캡션도 「내 위치(기준점)」으로 구분한다.
+ */
+private val FallbackOrigin = LatLng(DemoOrigin.latitude, DemoOrigin.longitude)
+
+/** 내 주변 1km 남짓이 한 화면에 들어오는 줌 — 첫 범위 조회가 이 정도를 훑는다 */
+private const val ExploreZoom = 15.0
+
+/**
+ * 지도가 아직 범위를 알려주지 못할 때 쓰는 기준 범위의 반변(도).
+ *
+ * [ExploreZoom] 의 실제 가시 영역(Pixel 6 실측 위도 ±0.006 · 경도 ±0.004)에 맞춘 값이다.
+ * 지도가 뜨면 곧바로 실제 [NaverMap.getContentBounds] 로 덮어쓰지만, 그 사이에 「지도에 없는
+ * 방」이 리스트에 잠깐 떴다 사라지지 않도록 처음부터 비슷한 크기로 묻는다.
+ */
+private const val DefaultBoundsHalfSpanDeg = 0.006
+
+/**
+ * 기준점 중심의 조회 범위.
+ *
+ * [center] 가 null(위치 권한 거부·아직 fix 없음)이면 [FallbackOrigin](부산대 정문)을 쓴다 —
+ * 첫 조회가 서울 한복판을 훑고 빈 목록을 보여주는 것보다 낫다.
+ */
+fun defaultExploreBounds(center: LatLng?): MapBounds {
+    val origin = center ?: FallbackOrigin
+    return MapBounds(
+        swLat = origin.latitude - DefaultBoundsHalfSpanDeg,
+        swLng = origin.longitude - DefaultBoundsHalfSpanDeg,
+        neLat = origin.latitude + DefaultBoundsHalfSpanDeg,
+        neLng = origin.longitude + DefaultBoundsHalfSpanDeg,
+    )
+}
+
+/**
+ * 합승 탐색 지도 — 내 위치를 중심으로 한 네이버 실지도.
+ *
+ * 지도는 화면의 **바닥 레이어**다. 위에 얹히는 배너·시트는 자기 영역에서만 터치를 소비하므로
+ * 남는 영역의 팬·줌은 그대로 지도로 전달된다 (홈 14 와 동일한 처리).
+ *
+ * 합승 마커는 서버가 좌표를 준 방만 찍는다 — 좌표가 없거나 범위를 벗어난 값은
+ * [latLngOrNull] 이 걸러 렌더를 건너뛴다. 마커가 없어도 리스트의 「합류」로 같은 곳에 갈 수 있다.
+ *
+ * @param myLocation 기기 실위치. null 이면 [FallbackOrigin] 기준점으로 그린다
+ * @param onVisibleBoundsChange 카메라가 멈출 때 보이는 영역. 이 범위로 방 목록을 다시 읽는다
+ * @param contentPadding 시트가 지도를 덮는 영역. 카메라 중심이 시트 뒤로 밀리지 않게 한다
+ */
 @Composable
 private fun ExploreMap(
-    slots: List<MarkerSlot>,
-    myLocationX: Dp,
-    myLocationY: Dp,
-    horizontalRoadFractions: List<Float>,
     rides: List<Ride>,
+    myLocation: MyLocationFix?,
+    cameraState: ExploreCameraState,
     onMarkerClick: (Ride) -> Unit,
+    onVisibleBoundsChange: (MapBounds) -> Unit,
     modifier: Modifier = Modifier,
+    contentPadding: PaddingValues = PaddingValues(),
 ) {
-    Box(modifier = modifier) {
-        MapPlaceholder(modifier = Modifier.fillMaxSize())
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val roadWidth = 14.dp.toPx()
-            val radius = CornerRadius(4.dp.toPx())
-            horizontalRoadFractions.forEach { fraction ->
-                drawRoundRect(
-                    color = RoadColor,
-                    topLeft = Offset(-10.dp.toPx(), size.height * fraction),
-                    size = Size(size.width + 20.dp.toPx(), roadWidth),
-                    cornerRadius = radius,
-                )
-            }
-            listOf(110.dp, 285.dp).forEach { x ->
-                drawRoundRect(
-                    color = RoadColor,
-                    topLeft = Offset(x.toPx(), 0f),
-                    size = Size(roadWidth, size.height),
-                    cornerRadius = radius,
-                )
-            }
+    var map by remember { mutableStateOf<NaverMap?>(null) }
+    val myPosition = myLocation?.position
+
+    // [NaverMapView] 에 넘기는 카메라는 **이 지도 인스턴스를 만들 때 한 번** 정하고 그 뒤로는
+    // 사용자 조작이 주인이다. idle 로 읽은 카메라를 그대로 center 로 돌려주면 안 된다 —
+    // SDK 가 돌려주는 좌표가 우리가 넣은 값과 부동소수점 끝자리만큼 달라
+    // 「적용 → idle → 적용」이 끝없이 돌고, 매 idle 이 조회를 재시작시켜 목록이 영영 갱신되지 않는다.
+    // 사용자가 움직인 카메라는 [cameraState] 에만 적어 두고, 시트 단계가 바뀌어 지도가
+    // 새로 만들어질 때 그 값에서 시작한다.
+    var mapCamera by remember {
+        mutableStateOf(cameraState.camera ?: MapCamera(myPosition ?: FallbackOrigin, ExploreZoom))
+    }
+
+    // 카메라를 **처음 잡힌 실위치로 한 번만** 옮긴다.
+    // 주기 갱신(1초)마다 center 를 바꾸면 그때마다 카메라가 되돌아가 사용자가 지도를 팬·줌할 수
+    // 없다 (RouteMapView 의 driverPosition 과 같은 이유). 파란 점은 계속 최신 좌표를 따라간다.
+    // 플래그는 [cameraState] — 시트 단계가 바뀌어도 이미 옮겼다는 사실이 남아야 한다.
+    LaunchedEffect(myPosition) {
+        val fix = myPosition ?: return@LaunchedEffect
+        if (!cameraState.centeredOnMyLocation) {
+            cameraState.centeredOnMyLocation = true
+            val moved = MapCamera(fix, ExploreZoom)
+            cameraState.camera = moved
+            mapCamera = moved // 이 값의 변경만이 실제로 카메라를 움직인다
         }
-        MyLocationMarker(modifier = Modifier.offset(x = myLocationX, y = myLocationY))
-        slots.forEachIndexed { index, slot ->
-            // 필터로 후보가 줄면 뒤 마커부터 숨김 (지도 마커 필터)
-            val ride = rides.getOrNull(index) ?: return@forEachIndexed
-            CountMarker(
-                count = slot.count,
-                size = slot.size,
-                modifier = Modifier.offset(x = slot.x, y = slot.y),
+    }
+
+    NaverMapView(
+        modifier = modifier,
+        center = mapCamera.center,
+        zoom = mapCamera.zoom,
+        contentPadding = contentPadding,
+        onMapReady = { map = it },
+    )
+
+    MapIdleReporter(
+        map = map,
+        cameraState = cameraState,
+        onVisibleBoundsChange = onVisibleBoundsChange,
+    )
+
+    if (myLocation != null) {
+        // 실위치가 있으면 SDK 내장 위치 오버레이(파란 점 + 오차 원)를 쓴다 —
+        // 일반 마커를 옮겨 찍는 것보다 네이버 지도 앱과 같은 인상을 준다
+        MyLocationOverlay(map = map, fix = myLocation)
+    } else {
+        // 실위치가 아직 없을 때만 기준점 마커. 「내 위치」라고 단정하지 않는다
+        ExploreMarker(
+            map = map,
+            position = FallbackOrigin,
+            tint = MoyeotaColor.MarkerOrigin.toArgb(),
+            caption = "내 위치(기준점)",
+        )
+    }
+    rides.forEach { ride ->
+        // key 로 묶어야 범위 조회로 목록이 바뀔 때 마커 상태가 옆 항목으로 밀리지 않는다
+        key(ride.id) {
+            ExploreMarker(
+                map = map,
+                position = latLngOrNull(ride.originLat, ride.originLng),
+                tint = MoyeotaColor.Primary500.toArgb(),
+                caption = "${ride.members.size}명",
                 onClick = { onMarkerClick(ride) }, // 마커 탭 → 20 합류 확인
             )
         }
     }
 }
 
+/**
+ * 카메라가 멈출 때마다 「지금 보이는 영역」과 카메라 위치를 위로 올려보내는 부분.
+ *
+ * 카메라가 **멈췄을 때**만(`addOnCameraIdleListener`) 보고한다 — 드래그 중 매 프레임 보고하면
+ * 손가락을 떼기도 전에 조회가 수십 번 나간다.
+ *
+ * 범위는 [NaverMap.getContentBounds] 로 읽는다. 뷰 크기 기준이 아니라
+ * **contentPadding 을 뺀 실제로 보이는 영역**이라, 시트에 가린 방이 목록에 섞이지 않는다.
+ *
+ * 지도가 준비된 직후에도 한 번 보고한다. idle 은 「카메라가 움직였다 멈춤」에만 오므로,
+ * 사용자가 지도를 건드리지 않으면 첫 이벤트가 영영 오지 않을 수 있다.
+ */
 @Composable
-private fun CountMarker(
-    count: Int,
-    size: Dp,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit,
+private fun MapIdleReporter(
+    map: NaverMap?,
+    cameraState: ExploreCameraState,
+    onVisibleBoundsChange: (MapBounds) -> Unit,
 ) {
-    Box(
-        modifier = modifier
-            .size(size)
-            .clip(CircleShape)
-            .clickable { onClick() },
-        contentAlignment = Alignment.Center,
-    ) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            drawCircle(color = Color.White)
-            drawCircle(color = MoyeotaColor.Primary500, radius = this.size.minDimension / 2f - 2.dp.toPx())
+    val currentCallback by rememberUpdatedState(onVisibleBoundsChange)
+    DisposableEffect(map) {
+        val naverMap = map
+        if (naverMap == null) {
+            onDispose {}
+        } else {
+            val report = {
+                val position = naverMap.cameraPosition
+                cameraState.camera = MapCamera(position.target, position.zoom)
+                naverMap.contentBounds.toMapBoundsOrNull()?.let { currentCallback(it) }
+                Unit
+            }
+            report()
+            val listener = NaverMap.OnCameraIdleListener { report() }
+            naverMap.addOnCameraIdleListener(listener)
+            onDispose { naverMap.removeOnCameraIdleListener(listener) }
         }
-        Text(
-            text = "$count",
-            fontSize = if (size >= 38.dp) 15.sp else 13.sp,
-            fontWeight = FontWeight.Bold,
-            color = MoyeotaColor.TextOnDark,
-        )
     }
 }
 
+/**
+ * 조회에 쓸 수 있는 범위인지 확인하고 변환한다.
+ *
+ * 지도가 아직 레이아웃되지 않은 순간에는 두 모서리가 같은 점이거나 범위 밖 좌표가 나온다.
+ * 그대로 조회하면 항상 빈 목록이 돌아와 「주변에 방이 없다」로 잘못 보이므로, 거르고
+ * 다음 idle 을 기다린다.
+ */
+private fun LatLngBounds.toMapBoundsOrNull(): MapBounds? {
+    if (!southWest.isValid || !northEast.isValid) return null
+    if (southWest.latitude >= northEast.latitude || southWest.longitude >= northEast.longitude) return null
+    return MapBounds(
+        swLat = southWest.latitude,
+        swLng = southWest.longitude,
+        neLat = northEast.latitude,
+        neLng = northEast.longitude,
+    )
+}
+
+/** 지도 마커 하나. 오버레이는 `map` 프로퍼티로 붙고 떨어지므로 값이 바뀌면 떼었다 다시 붙인다 */
 @Composable
-private fun MyLocationMarker(modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier.size(36.dp)) {
-        drawCircle(color = MoyeotaColor.Primary500.copy(alpha = 0.18f))
-        drawCircle(color = Color.White, radius = 12.dp.toPx())
-        drawCircle(color = MoyeotaColor.Primary500, radius = 10.dp.toPx())
+private fun ExploreMarker(
+    map: NaverMap?,
+    position: LatLng?,
+    tint: Int,
+    caption: String,
+    onClick: (() -> Unit)? = null,
+) {
+    // 콜백은 최신 참조 유지 — 이펙트 key 에 넣으면 람다가 새로 생길 때마다 마커가 재생성된다
+    val currentOnClick by rememberUpdatedState(onClick)
+    DisposableEffect(map, position, tint, caption) {
+        val marker = if (map != null && position != null) {
+            Marker().apply {
+                this.position = position
+                icon = MarkerIcons.BLACK
+                iconTintColor = tint
+                captionText = caption
+                setOnClickListener {
+                    val handler = currentOnClick
+                    handler?.invoke()
+                    handler != null // 처리한 클릭만 소비 (내 위치 마커는 지도로 흘려보낸다)
+                }
+                this.map = map
+            }
+        } else {
+            null
+        }
+        onDispose { marker?.map = null }
     }
+}
+
+// ─── 내 위치 오버레이 (네이버 SDK 내장 파란 점) ────────────────────────────────
+
+/** 새 좌표까지 미끄러져 가는 시간. 갱신 주기(1초)보다 짧아야 다음 fix 전에 도착한다 */
+private const val MyLocationGlideMs = 800
+
+/** 이 이상 튀면 보간하지 않고 순간이동한다 — 지도를 가로질러 기어가는 점이 더 이상하다 */
+private const val MyLocationSnapDistanceM = 200.0
+
+/** 이 이하의 미세 이동은 애니메이션 없이 반영한다 (GPS 지터로 계속 애니메이션이 걸리는 것 방지) */
+private const val MyLocationMinMoveM = 0.5
+
+/** 오차 원이 화면을 통째로 덮어 렌더러를 괴롭히지 않도록 두는 상한(px) */
+private const val MaxAccuracyRadiusPx = 4000
+
+/**
+ * 기기 실위치 — 네이버 SDK 의 [LocationOverlay](파란 점 + 오차 원)로 그린다.
+ *
+ * 일반 [Marker] 를 옮겨 찍지 않는 이유: 위치 표시는 「지도 위의 어떤 지점」이 아니라
+ * 「지금 내가 여기 있다」는 상태 표시라 SDK 가 그리는 모습이 사용자의 기대(네이버 지도 앱)와
+ * 같아야 한다. 오버레이는 [NaverMap] 당 하나뿐이라 [NaverMap.getLocationOverlay] 로 얻어
+ * 보이기/숨기기만 제어한다.
+ *
+ * `LocationTrackingMode`·`FusedLocationSource` 는 쓰지 않는다 — Activity 권한 콜백 포워딩을
+ * 요구해 Compose 권한 런처와 맞지 않는다(07 리포트). 좌표는 `rememberMyLocationState` 가 준다.
+ */
+@Composable
+private fun MyLocationOverlay(map: NaverMap?, fix: MyLocationFix) {
+    // 1초마다 좌표를 그대로 찍으면 점이 뚝뚝 끊겨 「위치가 튄다」로 읽힌다.
+    // 이전 좌표에서 새 좌표까지 보간해 미끄러지듯 이동시킨다.
+    var rendered by remember { mutableStateOf(fix.position) }
+    LaunchedEffect(fix.position) {
+        val from = rendered
+        val to = fix.position
+        val moved = from.distanceTo(to)
+        if (moved < MyLocationMinMoveM || moved > MyLocationSnapDistanceM || !moved.isFinite()) {
+            rendered = to
+            return@LaunchedEffect
+        }
+        // 등속 보간 — 걷는 사람의 이동은 가감속이 없어 보이는 편이 자연스럽다.
+        // 다음 fix 가 오면 이 이펙트가 취소되고 현재 위치에서 새 목표로 다시 출발한다.
+        Animatable(0f).animateTo(1f, tween(MyLocationGlideMs, easing = LinearEasing)) {
+            rendered = LatLng(
+                from.latitude + (to.latitude - from.latitude) * value,
+                from.longitude + (to.longitude - from.longitude) * value,
+            )
+        }
+    }
+
+    // 오버레이는 지도에 붙어 있는 싱글턴이라 화면을 떠날 때 반드시 숨긴다.
+    // 남겨 두면 같은 NaverMap 을 쓰는 다음 화면에 낡은 점이 그대로 뜬다.
+    DisposableEffect(map) {
+        map?.locationOverlay?.isVisible = true
+        onDispose { map?.locationOverlay?.isVisible = false }
+    }
+
+    LaunchedEffect(map, rendered, fix.bearingDegrees) {
+        val overlay = map?.locationOverlay ?: return@LaunchedEffect
+        overlay.position = rendered
+        // 방향을 모르는 fix 는 0도로 두고 화살표도 띄우지 않는다 — 없는 방향을 북쪽이라고
+        // 그리면 사용자가 반대로 걸어간다
+        overlay.bearing = fix.bearingDegrees ?: 0f
+        overlay.subIcon =
+            if (fix.bearingDegrees != null) LocationOverlay.DEFAULT_SUB_ICON_ARROW else null
+    }
+
+    // 오차 원 — 반경 단위가 픽셀이라 같은 오차(m)라도 줌에 따라 화면 크기가 달라진다.
+    // 카메라가 움직일 때마다 다시 환산해야 원이 지면에 붙어 있는 것처럼 보인다.
+    val accuracyMeters = fix.accuracyMeters
+    DisposableEffect(map, accuracyMeters) {
+        val naverMap = map
+        if (naverMap == null) {
+            onDispose {}
+        } else {
+            val overlay = naverMap.locationOverlay
+            val applyRadius = {
+                overlay.circleRadius = accuracyRadiusPx(naverMap, accuracyMeters)
+            }
+            applyRadius()
+            val listener = NaverMap.OnCameraChangeListener { _, _ -> applyRadius() }
+            naverMap.addOnCameraChangeListener(listener)
+            onDispose { naverMap.removeOnCameraChangeListener(listener) }
+        }
+    }
+}
+
+/**
+ * 오차 반경(m)을 현재 줌의 화면 픽셀로 환산한다.
+ *
+ * 정확도를 모르면 [LocationOverlay.SIZE_AUTO](=0)를 돌려 원을 그리지 않는다 —
+ * 모르는 오차를 임의의 크기로 그리면 실제보다 정확하거나 부정확해 보인다.
+ */
+private fun accuracyRadiusPx(map: NaverMap, accuracyMeters: Float?): Int {
+    if (accuracyMeters == null || accuracyMeters <= 0f) return LocationOverlay.SIZE_AUTO
+    val metersPerPixel = map.projection.metersPerPixel
+    // 지도가 아직 레이아웃되지 않으면 0·NaN 이 나온다 — 다음 카메라 변화 때 다시 계산된다
+    if (!metersPerPixel.isFinite() || metersPerPixel <= 0.0) return LocationOverlay.SIZE_AUTO
+    return (accuracyMeters / metersPerPixel).toInt().coerceIn(0, MaxAccuracyRadiusPx)
 }
 
 @Composable
@@ -859,23 +1126,6 @@ private fun ChevronUpIcon(color: Color, modifier: Modifier = Modifier) {
     }
 }
 
-// 홈 인디케이터 (와이어프레임 하단 검은 바)
-@Composable
-private fun HomeIndicator() {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(MoyeotaColor.SurfaceCanvas)
-            .padding(vertical = 8.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(
-            modifier = Modifier
-                .size(width = 135.dp, height = 5.dp)
-                .background(MoyeotaColor.InkPrimary, CircleShape),
-        )
-    }
-}
 
 // 시트 핸들 드래그 → 상태 전환 (위: PEEK→HALF · 아래: HALF→PEEK)
 private fun Modifier.dragToTransition(

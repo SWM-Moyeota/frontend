@@ -8,7 +8,6 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -34,13 +33,17 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.BackArrowIcon
-import com.moyeota.core.designsystem.component.PrimaryCtaButton
+import com.moyeota.core.designsystem.component.NavigationBarSpacer
+import com.moyeota.core.designsystem.component.NoticeBanner
+import com.moyeota.core.designsystem.component.NoticeKind
 import com.moyeota.core.designsystem.component.SheetHandle
-import com.moyeota.core.designsystem.component.StatusBarMock
+import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
@@ -73,11 +76,15 @@ private val waitingRideDummy = Ride(
  * 21 · 매칭 대기 [S11]
  *
  * 이동(디스크립션):
- * - 「그만 찾기」 → 14 홈, 탐색 취소 (onCancelSearch — 뒤로가기도 동일 처리)
- * - 카드 탭 / 매칭 성사 → 22 탑승 상세 (onCardClick)
+ * - 「그만 찾기」 → 방 나가기(DELETE /matching/leave) 후 14 홈 (onCancelSearch — 뒤로가기도 동일 처리)
+ * - 카드 탭 → 22 탑승 상세 (onCardClick)
+ * - 매칭 성사(서버 status 전이) → 25 배차 현황 — 화면이 아니라 Route 가 관찰해 넘긴다
  * - 매칭 조건 「수정」 → 16 또는 15 [미연결] (onEditCondition)
  * - 탐색 반경 「수정」 → 16 [미연결] (onEditRadius)
- * - 「조건 넓혀 찾기」 → 반경·인원 완화 후 재탐색 [미연결] (onWidenSearch)
+ *
+ * 도메인 변경(2026-08-30): 「전원 준비 → 방장이 출발」 흐름이 백엔드에서 사라졌다.
+ * `/matching/ready`, `/matching/start` 가 삭제되고 **정원이 차면 서버가 스스로 기사 매칭을 시작**한다.
+ * 그래서 이 화면에는 준비/매칭 시작 버튼이 없고, 인원 현황과 자동 매칭 안내만 남는다.
  */
 @Composable
 fun MatchWaitingScreen(
@@ -85,14 +92,23 @@ fun MatchWaitingScreen(
     foundCount: Int = 1,
     conditionLabel: String = "3인 · 동성만",
     radiusLabel: String = "1km",
+    actionInProgress: Boolean = false,
+    actionErrorMessage: String? = null,
     onCancelSearch: () -> Unit = {},
     onCardClick: () -> Unit = {},
     onEditCondition: () -> Unit = {}, // 미연결
     onEditRadius: () -> Unit = {},    // 미연결
-    onWidenSearch: () -> Unit = {},   // 미연결
 ) {
+    // 정원 도달 = 서버가 기사 매칭을 시작하는 시점. 문구·진행바가 이 경계로 갈린다.
+    val isFull = foundCount >= ride.capacity
+    val progress = if (ride.capacity > 0) {
+        (foundCount.toFloat() / ride.capacity).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+
     Column(modifier = Modifier.fillMaxSize().background(CanvasBg)) {
-        StatusBarMock()
+        StatusBarSpacer()
 
         // 헤더 — 뒤로가기는 탐색 취소와 동일 (진행 화면 이탈 = 14 홈)
         Row(
@@ -126,34 +142,47 @@ fun MatchWaitingScreen(
             Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
                 Spacer(Modifier.height(10.dp))
                 Text(
-                    text = "보통 2분 안에 찾아요",
+                    text = if (isFull) "정원이 다 찼어요" else "보통 2분 안에 찾아요",
                     fontSize = 22.sp,
                     fontWeight = FontWeight.Bold,
                     color = MoyeotaColor.InkPrimary,
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    text = "지금 같은 방향 ${foundCount}명을 찾았어요 · 목표 ${ride.capacity}명",
+                    text = "지금 같은 방향 ${foundCount}명 · 목표 ${ride.capacity}명",
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Medium,
                     color = GrayMute,
                 )
                 Spacer(Modifier.height(14.dp))
 
-                // 진행 바
+                // 진행 바 — 서버가 내려준 실제 인원/정원 비율
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(6.dp)
                         .background(ProgressTrack, CircleShape),
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth(150f / 361f)
-                            .height(6.dp)
-                            .background(MoyeotaColor.Primary500, CircleShape),
-                    )
+                    if (progress > 0f) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth(progress)
+                                .height(6.dp)
+                                .background(MoyeotaColor.Primary500, CircleShape),
+                        )
+                    }
                 }
+                Spacer(Modifier.height(14.dp))
+
+                // 앱이 매칭을 트리거하지 않는다는 사실을 사용자에게 알려주는 유일한 지점
+                NoticeBanner(
+                    kind = if (isFull) NoticeKind.WAITING else NoticeKind.INFO,
+                    text = if (isFull) {
+                        "기사님을 찾고 있어요. 배차되면 바로 알려드릴게요"
+                    } else {
+                        "정원이 차면 기사님이 자동으로 배차돼요"
+                    },
+                )
                 Spacer(Modifier.height(16.dp))
 
                 // 조건 카드 — 탭 시 22 탑승 상세
@@ -177,16 +206,24 @@ fun MatchWaitingScreen(
 
             Spacer(Modifier.weight(1f))
 
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                GrayActionButton(text = "그만 찾기", onClick = onCancelSearch, modifier = Modifier.width(112.dp))
-                PrimaryCtaButton(text = "조건 넓혀 찾기", onClick = onWidenSearch, modifier = Modifier.weight(1f))
+            if (actionErrorMessage != null) {
+                NoticeBanner(
+                    kind = NoticeKind.ERROR,
+                    text = actionErrorMessage,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                )
             }
+
+            // 남은 액션은 나가기 하나뿐 — 매칭 시작·준비 버튼은 도메인에서 사라졌다
+            GrayActionButton(
+                text = if (actionInProgress) "나가는 중…" else "그만 찾기",
+                onClick = onCancelSearch,
+                enabled = !actionInProgress,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            )
             Spacer(Modifier.height(12.dp))
         }
-        HomeIndicator()
+        NavigationBarSpacer(Modifier.background(MoyeotaColor.SurfaceCanvas))
     }
 }
 
@@ -197,8 +234,19 @@ private fun ConditionRow(label: String, value: String, onEdit: (() -> Unit)? = n
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(text = label, fontSize = 14.sp, fontWeight = FontWeight.Medium, color = MoyeotaColor.TextMute)
-        Spacer(Modifier.weight(1f))
-        Text(text = value, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = MoyeotaColor.InkPrimary)
+        Spacer(Modifier.width(12.dp))
+        // 출발지·도착지 이름은 16 에서 역지오코딩된 전체 주소일 수 있다(「부산광역시 …63번길 2 …」).
+        // 남는 폭을 다 쓰되 라벨을 밀어내지 않도록 weight 로 잡고, 넘치면 말줄임한다.
+        Text(
+            text = value,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Bold,
+            color = MoyeotaColor.InkPrimary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.End,
+            modifier = Modifier.weight(1f),
+        )
         if (onEdit != null) {
             Spacer(Modifier.width(8.dp))
             Box(
@@ -246,33 +294,25 @@ private fun RadarSearchArea(modifier: Modifier = Modifier) {
 
 // 와이어프레임의 회색 보조 버튼 (그만 찾기)
 @Composable
-private fun GrayActionButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
+private fun GrayActionButton(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+) {
     Box(
         modifier = modifier
             .height(52.dp)
             .clip(RoundedCornerShape(16.dp))
             .background(GrayButtonBg)
-            .clickable { onClick() },
+            .clickable(enabled = enabled) { onClick() },
         contentAlignment = Alignment.Center,
     ) {
-        Text(text = text, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = GraySlate)
-    }
-}
-
-// 홈 인디케이터 (와이어프레임 하단 검은 바)
-@Composable
-private fun HomeIndicator() {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(MoyeotaColor.SurfaceCanvas)
-            .padding(vertical = 8.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(
-            modifier = Modifier
-                .size(width = 135.dp, height = 5.dp)
-                .background(MoyeotaColor.InkPrimary, CircleShape),
+        Text(
+            text = text,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Bold,
+            color = if (enabled) GraySlate else MoyeotaColor.TextAsh,
         )
     }
 }

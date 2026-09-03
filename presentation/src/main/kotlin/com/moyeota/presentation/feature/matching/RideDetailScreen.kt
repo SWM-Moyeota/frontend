@@ -44,11 +44,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.AvatarCircle
 import com.moyeota.core.designsystem.component.BackArrowIcon
+import com.moyeota.core.designsystem.component.NavigationBarSpacer
 import com.moyeota.core.designsystem.component.NoticeKind
 import com.moyeota.core.designsystem.component.PrimaryCtaButton
 import com.moyeota.core.designsystem.component.SheetHandle
 import com.moyeota.core.designsystem.component.StatusBadge
-import com.moyeota.core.designsystem.component.StatusBarMock
+import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
@@ -119,7 +120,7 @@ fun RideDetailScreen(
     Column(modifier = Modifier.fillMaxSize().background(CanvasBg)) {
         // 상단 흰색 헤더
         Column(modifier = Modifier.fillMaxWidth().background(MoyeotaColor.SurfaceCanvas)) {
-            StatusBarMock()
+            StatusBarSpacer()
             Row(
                 modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -377,7 +378,7 @@ fun RideDetailScreen(
             }
             Spacer(Modifier.height(12.dp))
         }
-        HomeIndicator()
+        NavigationBarSpacer(Modifier.background(MoyeotaColor.SurfaceCanvas))
     }
 }
 
@@ -514,24 +515,6 @@ private fun GrayActionButton(text: String, onClick: () -> Unit, modifier: Modifi
         contentAlignment = Alignment.Center,
     ) {
         Text(text = text, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = GraySlate)
-    }
-}
-
-// 홈 인디케이터 (와이어프레임 하단 검은 바)
-@Composable
-private fun HomeIndicator() {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(MoyeotaColor.SurfaceCanvas)
-            .padding(vertical = 8.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(
-            modifier = Modifier
-                .size(width = 135.dp, height = 5.dp)
-                .background(MoyeotaColor.InkPrimary, CircleShape),
-        )
     }
 }
 

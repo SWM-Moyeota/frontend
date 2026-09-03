@@ -37,7 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.MoyeotaBottomBar
 import com.moyeota.core.designsystem.component.MoyeotaTab
-import com.moyeota.core.designsystem.component.StatusBarMock
+import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
@@ -110,7 +110,7 @@ fun MyRidesScreen(
     var segment by remember { mutableStateOf(RideSegment.ONGOING) }
 
     Column(modifier = Modifier.fillMaxSize().background(CanvasBg)) {
-        StatusBarMock()
+        StatusBarSpacer()
 
         Column(
             modifier = Modifier
@@ -255,7 +255,6 @@ fun MyRidesScreen(
 
         // 하단탭 홈 / 합승 / 채팅 / 마이 → 14 / 17 / 24 / 35
         MoyeotaBottomBar(selected = MoyeotaTab.EXPLORE, onSelect = onTabSelect)
-        HomeIndicatorOnBar()
     }
 }
 
@@ -392,23 +391,6 @@ private fun FilterIcon(modifier: Modifier = Modifier, color: Color = GraySlate) 
     }
 }
 
-// 홈 인디케이터 (하단탭 아래 흰 배경)
-@Composable
-private fun HomeIndicatorOnBar() {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(MoyeotaColor.SurfaceCanvas)
-            .padding(top = 8.dp, bottom = 8.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(
-            modifier = Modifier
-                .size(width = 135.dp, height = 5.dp)
-                .background(MoyeotaColor.InkPrimary, CircleShape),
-        )
-    }
-}
 
 @Preview(showBackground = true, widthDp = 393, heightDp = 852)
 @Composable

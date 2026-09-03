@@ -38,7 +38,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.AvatarCircle
 import com.moyeota.core.designsystem.component.BackArrowIcon
-import com.moyeota.core.designsystem.component.StatusBarMock
+import com.moyeota.core.designsystem.component.NavigationBarSpacer
+import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.domain.model.User
 
@@ -87,7 +88,7 @@ fun PartnerProfileScreen(
     onReport: () -> Unit = {}, // 미연결
 ) {
     Column(modifier = Modifier.fillMaxSize().background(CanvasBg)) {
-        StatusBarMock()
+        StatusBarSpacer()
 
         // 헤더
         Row(
@@ -265,7 +266,7 @@ fun PartnerProfileScreen(
             )
         }
         Spacer(Modifier.height(12.dp))
-        HomeIndicator()
+        NavigationBarSpacer(Modifier.background(CanvasBg))
     }
 }
 
@@ -307,24 +308,6 @@ private fun ChatBubbleIcon(modifier: Modifier = Modifier, tint: Color = MoyeotaC
         // 말풍선 꼬리
         drawLine(tint, Offset(w * 0.3f, h * 0.72f), Offset(w * 0.3f, h * 0.92f), stroke.width, StrokeCap.Round)
         drawLine(tint, Offset(w * 0.3f, h * 0.92f), Offset(w * 0.5f, h * 0.72f), stroke.width, StrokeCap.Round)
-    }
-}
-
-// 홈 인디케이터 (와이어프레임 하단 검은 바)
-@Composable
-private fun HomeIndicator() {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(CanvasBg)
-            .padding(vertical = 8.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(
-            modifier = Modifier
-                .size(width = 135.dp, height = 5.dp)
-                .background(MoyeotaColor.InkPrimary, CircleShape),
-        )
     }
 }
 
