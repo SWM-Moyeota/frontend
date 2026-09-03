@@ -14,6 +14,8 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
+        // domain 과 동일 — 매퍼가 LocalDate → Instant 변환에 java.time 을 쓴다.
+        isCoreLibraryDesugaringEnabled = true
     }
 }
 
@@ -24,5 +26,9 @@ dependencies {
     implementation(libs.okhttp.logging.interceptor)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.core)
+    // 토큰 영속화(access/refresh/userUuid).
+    implementation(libs.androidx.datastore.preferences)
+    coreLibraryDesugaring(libs.desugar.jdk.libs)
     testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
 }
