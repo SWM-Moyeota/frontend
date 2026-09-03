@@ -35,6 +35,8 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Build and test
+        env:
+          NAVER_MAPS_CLIENT_ID: ${{ secrets.NAVER_MAPS_CLIENT_ID }}
         run: ./gradlew :app:assembleDebug :data:testDebugUnitTest --no-daemon
 
       - name: Upload test report

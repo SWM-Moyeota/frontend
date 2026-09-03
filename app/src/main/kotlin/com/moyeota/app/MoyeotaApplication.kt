@@ -14,15 +14,14 @@ class MoyeotaApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        appContainer = AppContainer(debugLogging = isDebuggableBuild())
+        appContainer = AppContainer(context = this, debugLogging = isDebuggableBuild())
         createNotificationChannel()
         fetchFcmToken()
     }
 
     // HTTP 본문 로깅을 디버그 빌드로 제한하는 판단 근거.
-    // 이 프로젝트는 buildFeatures.buildConfig 를 켜지 않아 BuildConfig.DEBUG 가 생성되지 않고,
-    // data 는 라이브러리 모듈이라 자체 BuildConfig.DEBUG 가 app 의 빌드 타입과 일치하지도 않는다.
-    // manifest 의 debuggable 플래그가 "이 빌드가 디버그인가"를 그대로 알려준다.
+    // data 는 라이브러리 모듈이라 자체 BuildConfig.DEBUG 가 app 의 빌드 타입과 일치하지 않고,
+    // manifest 의 debuggable 플래그는 빌드 타입과 무관하게 "이 빌드가 디버그인가"를 그대로 알려준다.
     private fun isDebuggableBuild(): Boolean =
         applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
 

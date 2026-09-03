@@ -30,9 +30,12 @@ class MainActivity : ComponentActivity() {
         setContent {
             MoyeotaTheme {
                 MainNavGraph(
+                    authRepository = container.authRepository,
                     rideRepository = container.rideRepository,
                     placeRepository = container.placeRepository,
                     chatRepository = container.chatRepository,
+                    dispatchRepository = container.dispatchRepository,
+                    reportRepository = container.reportRepository,
                     userSession = container.userSession,
                 )
             }
