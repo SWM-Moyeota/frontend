@@ -29,7 +29,7 @@ import com.moyeota.presentation.feature.auth.SchoolEmailScreen
 import com.moyeota.presentation.feature.auth.SignupCompleteScreen
 import com.moyeota.presentation.feature.auth.WorkVerifyScreen
 import com.moyeota.presentation.feature.chat.ChatRoute
-import com.moyeota.presentation.feature.chat.EmergencyScreen
+import com.moyeota.presentation.feature.chat.EmergencyRoute
 import com.moyeota.presentation.feature.chat.RideOngoingScreen
 import com.moyeota.presentation.feature.explore.ExploreRoute
 import com.moyeota.presentation.feature.explore.JoinConfirmRoute
@@ -340,9 +340,11 @@ fun MainNavGraph(
             )
         }
         composable(Routes.EMERGENCY) {
-            EmergencyScreen(
+            EmergencyRoute(
+                repository = rideRepository,
+                partyId = selectedPartyId ?: createdPartyId,
                 onBack = ::back,
-                onReportSubmitted = { _, _ -> back() },
+                onReportSubmitted = ::back,
             )
         }
 
