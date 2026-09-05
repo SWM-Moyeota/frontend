@@ -1,7 +1,9 @@
 package com.moyeota.data.repository
 
+import com.moyeota.data.push.FcmTokenRegistrar
 import com.moyeota.data.remote.AuthApi
 import com.moyeota.data.remote.UserApi
+import com.moyeota.data.remote.dto.FcmTokenRequest
 import com.moyeota.data.remote.dto.LoginRequestDto
 import com.moyeota.data.remote.dto.RefreshTokenRequestDto
 import com.moyeota.data.remote.dto.RegisterRequestDto
@@ -51,7 +53,8 @@ class RemoteAuthRepositoryTest {
         api: AuthApi,
         session: SessionManager,
         userApi: UserApi = FakeUserApi(),
-    ) = RemoteAuthRepository(api, userApi, session)
+        registrar: FcmTokenRegistrar = FcmTokenRegistrar(userApi, session),
+    ) = RemoteAuthRepository(api, userApi, session, registrar)
 
     @Test
     fun `내 정보는 uuid 와 이름을 그대로 도메인으로 넘긴다`() = runBlocking {
@@ -172,6 +175,77 @@ class RemoteAuthRepositoryTest {
         assertEquals(AuthError.LOGIN_ID_DUPLICATED, (thrown as AuthException).error)
     }
 
+    /**
+     * FCM 토큰은 로그인 전에 도착해 보류돼 있는 게 정상이다(앱 최초 실행·로그인 화면에서의 회전).
+     * 세션이 열리는 이 순간이 서버에 실어 보낼 수 있는 첫 시점이라, 로그인 경로가 직접 이어 준다.
+     */
+    @Test
+    fun `로그인 성공 시 보류된 푸시 토큰을 서버에 등록한다`() = runBlocking {
+        val userApi = FakeUserApi()
+        val session = session()
+        val registrar = FcmTokenRegistrar(userApi, session)
+        registrar.onTokenAvailable("device-token")
+        assertTrue("로그인 전인데 보냈다", userApi.fcmCalls.isEmpty())
+
+        repository(FakeAuthApi(), session, userApi, registrar).login("moyeota_test", "Passw0rd!")
+
+        assertEquals(listOf("PUT:device-token"), userApi.fcmCalls)
+    }
+
+    /** 등록 실패로 로그인이 실패한 것처럼 보이면 안 된다 — 잃는 건 도착 알림 하나뿐이다. */
+    @Test
+    fun `푸시 등록이 실패해도 로그인은 성공한다`() = runBlocking {
+        val userApi = FakeUserApi(fcmFailure = IOException("offline"))
+        val session = session()
+        val registrar = FcmTokenRegistrar(userApi, session)
+        registrar.onTokenAvailable("device-token")
+
+        val uuid = repository(FakeAuthApi(), session, userApi, registrar).login("moyeota_test", "Passw0rd!")
+
+        assertEquals("uuid-1", uuid)
+        assertEquals(AuthState.Authenticated("uuid-1"), session.authState.value)
+    }
+
+    /**
+     * **순서가 이 테스트의 전부다.** 서버는 `@CurrentUser` 로 대상을 찾으므로 세션을 먼저 비우면
+     * Bearer 가 사라져 401 이 나고, 서버에는 죽은 토큰이 남아 다음 사용자의 도착 알림이
+     * 이 기기로 온다. 그래서 해제 시점에 액세스 토큰이 아직 살아 있는지를 직접 붙잡아 확인한다.
+     */
+    @Test
+    fun `로그아웃은 세션을 비우기 전에 푸시 토큰을 해제한다`() = runBlocking {
+        val session = session(StoredSession("uuid-1", "access.jwt", "refresh.jwt"))
+        val userApi = TokenProbingUserApi { session.currentAccessToken() }
+
+        repository(FakeAuthApi(), session, userApi, FcmTokenRegistrar(userApi, session)).logout()
+
+        assertEquals(1, userApi.deleteCount)
+        assertEquals("access.jwt", userApi.accessTokenAtDelete)
+        assertEquals(AuthState.Unauthenticated, session.authState.value)
+    }
+
+    /** 보낼 Bearer 가 없으니 401 만 받는다. 로그아웃 경로에 헛된 왕복을 끼워 넣지 않는다. */
+    @Test
+    fun `미로그인 상태의 로그아웃은 푸시 해제도 부르지 않는다`() = runBlocking {
+        val userApi = FakeUserApi()
+        val session = session()
+
+        repository(FakeAuthApi(), session, userApi, FcmTokenRegistrar(userApi, session)).logout()
+
+        assertTrue(userApi.fcmCalls.isEmpty())
+    }
+
+    /** 오프라인에서 해제가 실패해도 로그아웃은 그대로 끝나야 한다 — "절대 실패 안 함" 계약. */
+    @Test
+    fun `푸시 해제가 실패해도 로그아웃은 완료된다`() = runBlocking {
+        val userApi = FakeUserApi(fcmFailure = IOException("offline"))
+        val session = session(StoredSession("uuid-1", "access.jwt", "refresh.jwt"))
+
+        repository(FakeAuthApi(), session, userApi, FcmTokenRegistrar(userApi, session)).logout()
+
+        assertEquals(AuthState.Unauthenticated, session.authState.value)
+        assertNull(session.currentAccessToken())
+    }
+
     @Test
     fun `로그아웃은 서버에 리프레시 무효화를 요청한다`() = runBlocking {
         val api = FakeAuthApi()
@@ -257,9 +331,44 @@ private class FakeUserApi(
     private val uuid: String = "01a06145-3caf-7614-a3bd-cee6e25316b1",
     private val name: String? = "김성윤",
     private val failure: Throwable? = null,
+    private val fcmFailure: Throwable? = null,
 ) : UserApi {
+    /** 푸시 토큰 호출이 **일어난 순서**. 어떤 호출이 실제로 나갔는지를 그대로 남긴다. */
+    val fcmCalls = mutableListOf<String>()
+
     override suspend fun getMyProfile(): UserProfileResponse {
         failure?.let { throw it }
         return UserProfileResponse(uuid = uuid, name = name)
+    }
+
+    override suspend fun registerFcmToken(request: FcmTokenRequest) {
+        fcmFailure?.let { throw it }
+        fcmCalls += "PUT:${request.token}"
+    }
+
+    override suspend fun deleteFcmToken() {
+        fcmFailure?.let { throw it }
+        fcmCalls += "DELETE"
+    }
+}
+
+/**
+ * 해제가 불린 **그 순간의** 액세스 토큰을 붙잡아 둔다.
+ * "세션 정리보다 먼저 해제했는가"는 호출 횟수로는 알 수 없고, 이렇게 시점을 찍어야만 드러난다.
+ */
+private class TokenProbingUserApi(private val accessToken: () -> String?) : UserApi {
+    var accessTokenAtDelete: String? = null
+        private set
+    var deleteCount = 0
+        private set
+
+    override suspend fun getMyProfile(): UserProfileResponse =
+        throw UnsupportedOperationException("푸시 해제 순서 검증 전용 페이크다")
+
+    override suspend fun registerFcmToken(request: FcmTokenRequest) = Unit
+
+    override suspend fun deleteFcmToken() {
+        accessTokenAtDelete = accessToken()
+        deleteCount++
     }
 }

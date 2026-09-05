@@ -18,9 +18,9 @@ interface UserSession {
      * (서버가 여전히 `@RequestHeader("X-User-Id") Long userId` 를 받는다).
      * **로그인한 사용자와 무관하다** — 누가 로그인해도 채팅 서버에는 memberId=1 로 보인다.
      *
-     * 방 생성은 이 값을 더 이상 서버로 보내지 않는다([com.moyeota.domain.model.NewParty.hostId] 참조).
-     * 화면 쪽에서는 `RideDetail` 의 방장 배지 판정에도 쓰이는데, 로그인 계정의 실제 서버 id 가
-     * 1 이 아니면 그 판정이 어긋난다 — 채팅이 `@CurrentUser` 로 넘어가 이 프로퍼티가
+     * 매칭(방 생성·합류·나가기)은 이 값을 쓰지 않는다 — 전부 토큰 주체 기준이다.
+     * 화면에서 "이 멤버가 나인가"를 이 값으로 비교하는 곳이 남아 있다면, 로그인 계정의 실제
+     * 서버 id 가 1 이 아닌 순간 어긋난다 — 채팅이 `@CurrentUser` 로 넘어가 이 프로퍼티가
      * 사라지기 전까지 남는 제약이다.
      */
     val currentUserId: Long
