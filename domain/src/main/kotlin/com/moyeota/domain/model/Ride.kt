@@ -13,9 +13,8 @@ data class Ride(
     val totalFare: Int,
     val status: RideStatus,
     // 아래는 서버 연동으로 채워지는 값. 더미/목록 응답에는 없어 기본값을 둔다.
-    // hostId 는 "내가 방장인가" 판단에 쓴다. 백엔드에 host 개념이 사라져(PartyDetailResult 에
-    // hostId/isHost 필드 없음) 가장 먼저 참여한(joinedAt 최소) 멤버 = 방 생성자로 추정한 값이다.
-    val hostId: String? = null,
+    // 방장(host) 필드는 없다 — 백엔드가 자동 기사 매칭으로 바뀌며 방장 개념 자체를 없앴다
+    // (PartyDetailResult 에 host 관련 필드 없음, 방 생성자도 토큰 주체로만 기록된다).
     val originLat: Double? = null,
     val originLng: Double? = null,
     val destinationLat: Double? = null,

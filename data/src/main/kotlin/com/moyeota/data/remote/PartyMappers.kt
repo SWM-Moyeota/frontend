@@ -33,13 +33,10 @@ fun partyStatusToRideStatus(status: String): RideStatus = when (status) {
 internal fun farePerPerson(estimateFare: Int?, capacity: Int): Int =
     if (estimateFare == null || capacity <= 0) 0 else estimateFare / capacity
 
-/**
- * 백엔드가 방장(host)을 더 이상 내려주지 않아, **가장 먼저 참여한 멤버 = 방 생성자**로 추정한다.
- * joinedAt 은 ISO-8601 UTC 문자열이라 사전순 비교가 곧 시간순 비교다.
- * joinedAt 이 전부 없으면 서버가 준 목록 순서의 첫 멤버를 쓴다.
- */
-internal fun List<PartyDetailResponse.MemberInfo>.inferHost(): PartyDetailResponse.MemberInfo? =
-    minWithOrNull(compareBy(nullsLast<String>()) { it.joinedAt })
+/** 멤버 식별자가 없는 응답(목록·생성)에서 인원 수만큼 자리 표시용 멤버를 만든다. */
+private fun placeholderMembers(count: Int): List<User> = List(count.coerceAtLeast(0)) { index ->
+    User(id = "m$index", nickname = "멤버 ${index + 1}", verifiedLabel = "", rating = 0.0, rideCount = 0)
+}
 
 fun PartyListResponse.PartyItem.toRide(): Ride = Ride(
     id = partyId.toString(),
@@ -48,9 +45,7 @@ fun PartyListResponse.PartyItem.toRide(): Ride = Ride(
     departureLabel = "",
     capacity = capacity,
     // 목록 응답에는 멤버 식별자가 없고 인원 수만 온다 — 자리 표시용 멤버를 만든다.
-    members = List(currentMembers) { index ->
-        User(id = "m$index", nickname = "멤버 ${index + 1}", verifiedLabel = "", rating = 0.0, rideCount = 0)
-    },
+    members = placeholderMembers(currentMembers),
     farePerPerson = 0,
     totalFare = 0,
     status = partyStatusToRideStatus(status),
@@ -60,17 +55,17 @@ fun PartyListResponse.PartyItem.toRide(): Ride = Ride(
 )
 
 fun PartyDetailResponse.toRide(): Ride {
-    val host = members.inferHost()
     return Ride(
         id = id.toString(),
         origin = departure,
         destination = destination,
         departureLabel = "",
         capacity = capacity,
+        // 멤버는 전부 동등하다 — 서버가 방장을 구분하지 않는다.
         members = members.map { member ->
             User(
                 id = member.memberId.toString(),
-                nickname = if (member.memberId == host?.memberId) "방장" else "멤버 ${member.memberId}",
+                nickname = "멤버 ${member.memberId}",
                 verifiedLabel = "",
                 rating = 0.0,
                 rideCount = 0,
@@ -79,7 +74,6 @@ fun PartyDetailResponse.toRide(): Ride {
         farePerPerson = farePerPerson(estimateFare, capacity),
         totalFare = estimateFare ?: 0,
         status = partyStatusToRideStatus(status),
-        hostId = host?.memberId?.toString(),
         originLat = departureLat,
         originLng = departureLng,
         destinationLat = destinationLat,
@@ -91,21 +85,18 @@ fun PartyDetailResponse.toRide(): Ride {
     )
 }
 
-// 생성 응답에는 members 목록도 생성자 id 도 없다(currentMembers 개수만 있음).
-// 요청한 쪽이 방장이므로 [toRide] 에 creatorId 를 넘겨 멤버 1명과 hostId 를 구성한다.
-fun OpenPartyResponse.toRide(creatorId: Long? = null): Ride = Ride(
+// 생성 응답에는 members 목록이 없고 currentMembers 개수만 있다(생성 직후엔 보통 1 = 생성자).
+// 목록 응답과 같은 방식으로 자리 표시용 멤버를 만든다 — 식별자는 상세 조회에서 채워진다.
+fun OpenPartyResponse.toRide(): Ride = Ride(
     id = id.toString(),
     origin = departure,
     destination = destination,
     departureLabel = "",
     capacity = capacity,
-    members = creatorId?.let {
-        listOf(User(id = it.toString(), nickname = "방장", verifiedLabel = "", rating = 0.0, rideCount = 0))
-    } ?: emptyList(),
+    members = placeholderMembers(currentMembers),
     farePerPerson = farePerPerson(estimateFare, capacity),
     totalFare = estimateFare ?: 0,
     status = partyStatusToRideStatus(status),
-    hostId = creatorId?.toString(),
     originLat = departureLat,
     originLng = departureLng,
     destinationLat = destinationLat,
@@ -116,8 +107,7 @@ fun OpenPartyResponse.toRide(creatorId: Long? = null): Ride = Ride(
     driverId = taxiDriverId,
 )
 
-// [NewParty.hostId] 는 여기서 **의도적으로 버려진다** — 방장은 서버가 토큰에서 정한다.
-// 필드 자체는 하위호환으로 남아 있다(자세한 근거는 NewParty KDoc).
+// 방장 id 는 요청에도 도메인 모델에도 없다 — 방 생성자는 서버가 토큰에서 정한다(NewParty KDoc 참고).
 fun NewParty.toRequestDto(): OpenPartyRequestDto = OpenPartyRequestDto(
     departureLat = departureLat,
     departureLng = departureLng,

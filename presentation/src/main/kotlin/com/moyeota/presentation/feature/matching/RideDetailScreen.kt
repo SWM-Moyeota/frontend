@@ -3,7 +3,6 @@ package com.moyeota.presentation.feature.matching
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -21,10 +20,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -46,7 +41,6 @@ import com.moyeota.core.designsystem.component.AvatarCircle
 import com.moyeota.core.designsystem.component.BackArrowIcon
 import com.moyeota.core.designsystem.component.NavigationBarSpacer
 import com.moyeota.core.designsystem.component.NoticeKind
-import com.moyeota.core.designsystem.component.PrimaryCtaButton
 import com.moyeota.core.designsystem.component.SheetHandle
 import com.moyeota.core.designsystem.component.StatusBadge
 import com.moyeota.core.designsystem.component.StatusBarSpacer
@@ -90,13 +84,16 @@ private val recruitingRideDummy = Ride(
  * - 뒤로 → 21 매칭 대기 (onBack)
  * - 동승자 「김OO」 탭 → 23 동승자 프로필 (onPartnerClick)
  * - 「나가기」 → 14 홈, 탑승 이탈 (onLeave)
- * - 「이 인원으로 출발 (2/3)」 → 25 배차 상태 (onDepart) — 방장에게만 노출, 최소 2명 이상일 때만 활성
  * - [미연결] 없음
+ *
+ * 도메인 변경(2026-08-30): 백엔드가 자동 기사 매칭으로 전환하며 방장 개념이 사라졌다.
+ * 수동 출발(「이 인원으로 출발」)이라는 행위 자체가 없어져 CTA 를 화면에서 제거했고,
+ * 21 매칭 대기와 같은 결정이다. 멤버는 전부 동등하게 표시한다(방장 배지 없음).
+ * 25 배차 현황으로는 서버 status 전이를 관찰하는 21 이 넘긴다 — 이 화면은 넘기지 않는다.
  */
 @Composable
 fun RideDetailScreen(
     ride: Ride = recruitingRideDummy,
-    isHost: Boolean = true,
     currentUserId: String = "me",
     genderLabel: String = "여성만",
     etaLabel: String = "예상 12분 · 6.2km",
@@ -106,9 +103,7 @@ fun RideDetailScreen(
     onBack: () -> Unit = {},
     onPartnerClick: (User) -> Unit = {},
     onLeave: () -> Unit = {},
-    onDepart: () -> Unit = {},
 ) {
-    var departing by remember { mutableStateOf(false) }
     val partners = ride.members.filter { it.id != currentUserId }
     // 인원 변동 시 1인 부담 즉시 재계산 — 수수료 포함 10원 단위
     val perPersonFare = if (ride.members.isNotEmpty()) {
@@ -295,7 +290,7 @@ fun RideDetailScreen(
                     color = GrayMute,
                 )
                 Spacer(Modifier.height(8.dp))
-                partners.forEachIndexed { index, partner ->
+                partners.forEach { partner ->
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -307,24 +302,13 @@ fun RideDetailScreen(
                         AvatarCircle(size = 40.dp)
                         Spacer(Modifier.width(10.dp))
                         Column(modifier = Modifier.weight(1f)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = partner.nickname,
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MoyeotaColor.InkPrimary,
-                                )
-                                if (index == 0) {
-                                    Spacer(Modifier.width(5.dp))
-                                    Box(
-                                        modifier = Modifier
-                                            .background(ChipBg, CircleShape)
-                                            .padding(horizontal = 10.dp, vertical = 3.dp),
-                                    ) {
-                                        Text(text = "방장", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = GrayDeep)
-                                    }
-                                }
-                            }
+                            // 멤버는 전부 동등하다 — 서버에 방장 표식이 없으므로 배지를 달지 않는다
+                            Text(
+                                text = partner.nickname,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MoyeotaColor.InkPrimary,
+                            )
                             Text(
                                 text = "탑승 ${partner.rideCount}회 · 매너 98%",
                                 fontSize = 13.sp,
@@ -337,8 +321,13 @@ fun RideDetailScreen(
                 }
                 Spacer(Modifier.height(14.dp))
 
+                // 앱이 출발을 트리거하지 않는다는 사실을 알려주는 지점 (21 매칭 대기와 같은 문구)
                 Text(
-                    text = "인원이 안 차도 방장이 시작하면 지금 인원으로 출발해요",
+                    text = if (ride.members.size >= ride.capacity) {
+                        "기사님을 찾고 있어요. 배차되면 바로 알려드릴게요"
+                    } else {
+                        "정원이 차면 기사님이 자동으로 배차돼요"
+                    },
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Medium,
                     color = GrayAsh,
@@ -347,35 +336,12 @@ fun RideDetailScreen(
                 Spacer(Modifier.height(12.dp))
             }
 
-            Row(
+            // 남은 액션은 나가기 하나뿐 — 수동 출발 버튼은 도메인에서 사라졌다
+            GrayActionButton(
+                text = "나가기",
+                onClick = onLeave,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                GrayActionButton(text = "나가기", onClick = onLeave, modifier = Modifier.width(112.dp))
-                if (isHost) {
-                    // 최소 2명 이상일 때만 출발 가능
-                    PrimaryCtaButton(
-                        text = "이 인원으로 출발 (${ride.members.size}/${ride.capacity})",
-                        onClick = {
-                            departing = true
-                            onDepart()
-                        },
-                        modifier = Modifier.weight(1f),
-                        enabled = ride.members.size >= 2,
-                        loading = departing,
-                    )
-                } else {
-                    // 참여자에게는 대기 문구
-                    Text(
-                        text = "방장이 출발을 결정하면 시작돼요",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = GrayMute,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-            }
+            )
             Spacer(Modifier.height(12.dp))
         }
         NavigationBarSpacer(Modifier.background(MoyeotaColor.SurfaceCanvas))

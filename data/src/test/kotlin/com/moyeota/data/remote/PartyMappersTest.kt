@@ -137,9 +137,12 @@ class PartyMappersTest {
         assertEquals(3200, ride.farePerPerson)
     }
 
+    /**
+     * 백엔드가 자동 기사 매칭으로 바뀌며 방장 개념이 사라졌다. 예전엔 joinedAt 이 가장 이른 멤버를
+     * 방장으로 추정해 "방장" 닉네임을 붙였는데, 그 추정이 되살아나지 않는지 못박는다.
+     */
     @Test
-    fun `백엔드에 host 필드가 없어 가장 먼저 참여한 멤버를 방장으로 추정한다`() {
-        // 목록 순서를 일부러 뒤집어 joinedAt 기준으로 고르는지 확인한다.
+    fun `멤버는 전부 동등하게 매핑된다 — 방장 추정이 없다`() {
         val detail = detailResponse(
             members = listOf(
                 PartyDetailResponse.MemberInfo(memberId = 3, joinedAt = "2026-08-17T09:01:00Z"),
@@ -149,21 +152,9 @@ class PartyMappersTest {
 
         val ride = detail.toRide()
 
-        assertEquals("1", ride.hostId)
-        assertEquals("멤버 3", ride.members[0].nickname)
-        assertEquals("방장", ride.members[1].nickname)
-    }
-
-    @Test
-    fun `joinedAt 이 없는 멤버는 방장 추정에서 뒤로 밀린다`() {
-        val detail = detailResponse(
-            members = listOf(
-                PartyDetailResponse.MemberInfo(memberId = 5, joinedAt = null),
-                PartyDetailResponse.MemberInfo(memberId = 9, joinedAt = "2026-08-17T09:02:00Z"),
-            ),
-        )
-
-        assertEquals("9", detail.toRide().hostId)
+        // 서버가 준 순서 그대로, joinedAt 으로 재정렬하거나 특별 취급하지 않는다.
+        assertEquals(listOf("3", "1"), ride.members.map { it.id })
+        assertEquals(listOf("멤버 3", "멤버 1"), ride.members.map { it.nickname })
     }
 
     @Test
@@ -173,7 +164,7 @@ class PartyMappersTest {
     }
 
     @Test
-    fun `방 생성 응답에는 생성자 id 가 없어 요청에 쓴 값으로 방장을 채운다`() {
+    fun `방 생성 응답은 멤버 목록 없이 인원 수만 주므로 자리 표시용 멤버를 만든다`() {
         val response = OpenPartyResponse(
             id = 12,
             departureLat = 37.5665,
@@ -194,34 +185,31 @@ class PartyMappersTest {
             taxiDriverId = null,
         )
 
-        val ride = response.toRide(creatorId = 1)
+        val ride = response.toRide()
 
         assertEquals("12", ride.id)
-        assertEquals("1", ride.hostId)
         assertEquals(RideStatus.RECRUITING, ride.status)
         assertEquals(1, ride.members.size)
-        assertEquals("방장", ride.members[0].nickname)
+        assertEquals("멤버 1", ride.members[0].nickname)
         assertEquals("_p~iF~ps|U", ride.routePolyline)
         assertNull(ride.driverId)
     }
 
     @Test
-    fun `생성자 id 없이 매핑하면 멤버가 비고 방장도 없다`() {
+    fun `생성 응답 인원 수가 0 이면 멤버가 빈다`() {
         val ride = OpenPartyResponse(id = 12, capacity = 3, status = "ACTIVE").toRide()
 
-        assertNull(ride.hostId)
         assertTrue(ride.members.isEmpty())
     }
 
     /**
-     * 방장은 이제 서버가 토큰에서 정한다. [NewParty.hostId] 는 하위호환으로 남아 있을 뿐이라
-     * **본문에 실려서는 안 된다** — 실려도 서버는 조용히 무시하므로(테스트가 없으면) 되살아난 걸
-     * 아무도 눈치채지 못하고, "앱이 보낸 방장"이 유효하다는 착각만 남는다.
+     * 방 생성자는 서버가 토큰에서 정한다. 사용자 id 가 **본문에 실려서는 안 된다** — 실려도 서버는
+     * 조용히 무시하므로(테스트가 없으면) 되살아난 걸 아무도 눈치채지 못하고,
+     * "앱이 보낸 생성자"가 유효하다는 착각만 남는다.
      */
     @Test
-    fun `생성 요청 본문에 방장 id 를 싣지 않는다`() {
+    fun `생성 요청 본문에 사용자 id 를 싣지 않는다`() {
         val dto: OpenPartyRequestDto = NewParty(
-            hostId = 1,
             departureLat = 37.5665,
             departureLng = 126.9780,
             destinationLat = 37.4979,
@@ -238,8 +226,8 @@ class PartyMappersTest {
         assertEquals(500, dto.destinationRadius)
 
         val encoded = json.encodeToString(dto)
-        assertFalse("방장 id 가 본문에 되살아났다: $encoded", encoded.contains("creatorId"))
-        assertFalse("방장 id 가 본문에 되살아났다: $encoded", encoded.contains("hostId"))
+        assertFalse("생성자 id 가 본문에 되살아났다: $encoded", encoded.contains("creatorId"))
+        assertFalse("생성자 id 가 본문에 되살아났다: $encoded", encoded.contains("hostId"))
     }
 
     @Test
@@ -251,7 +239,6 @@ class PartyMappersTest {
         val ride = decoded.toRide()
 
         assertEquals("9", ride.id)
-        assertNull(ride.hostId)
         assertNull(ride.originLat)
         assertNull(ride.estimatedFare)
         assertNull(ride.routePolyline)
@@ -277,7 +264,7 @@ class PartyMappersTest {
 
         assertEquals("7", ride.id)
         assertEquals(RideStatus.DISPATCHING, ride.status)
-        assertEquals("1", ride.hostId)
+        assertEquals(listOf("1", "3"), ride.members.map { it.id })
         assertEquals(42L, ride.driverId)
         assertEquals(9600, ride.estimatedFare)
     }

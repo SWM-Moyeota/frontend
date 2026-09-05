@@ -28,8 +28,8 @@ data class PartyListResponse(
 
 // PartyDetailResult — GET /matching/rooms/{partyId} 및 POST /matching/rooms/{partyId}/{memberId}/join 의 응답
 //
-// 서버 record 에 hostId 도, MemberInfo.isHost 도 **없다**. 방장 개념이 매칭 도메인에서 빠졌기 때문에
-// 앱은 joinedAt 이 가장 이른 멤버를 생성자로 추정한다(PartyMappers 참고).
+// 서버 record 에 hostId 도, MemberInfo.isHost 도 **없다** — 방장 개념이 매칭 도메인에서 빠졌다.
+// 앱도 방장을 추정하지 않는다: 멤버는 전부 동등하게 매핑된다(PartyMappers 참고).
 // Party 도메인에는 matchingStartedAt 필드가 추가됐지만 PartyDetailResult 가 노출하지 않으므로 DTO 에도 없다.
 @Serializable
 data class PartyDetailResponse(
@@ -64,9 +64,9 @@ data class PartyDetailResponse(
 /**
  * POST /api/v1/matching/rooms 요청 본문 (백엔드 `OpenPartyRequest`).
  *
- * **방장 id 필드는 없다.** 서버 record 에 `creatorId` 가 남아 있지만 `toCommand()` 가 그 값을 버리고
- * `@CurrentUser` 로 받은 토큰 주체를 쓴다 — 보내 봐야 무시되는 값이라 아예 싣지 않는다.
- * 되살리면 "앱이 보낸 방장"과 "서버가 기록한 방장"이 다를 수 있다는 착각을 부른다.
+ * **생성자 id 필드는 없다.** 서버 record 에 `creatorId` 가 구버전 호환으로 남아 있지만
+ * `toCommand()` 가 그 값을 버리고 `@CurrentUser` 로 받은 토큰 주체를 쓴다 — 보내 봐야 무시되는
+ * 값이라 아예 싣지 않는다. 되살리면 "앱이 보낸 생성자"가 유효하다는 착각을 부른다.
  */
 @Serializable
 data class OpenPartyRequestDto(

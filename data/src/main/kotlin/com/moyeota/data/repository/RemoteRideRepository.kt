@@ -34,9 +34,9 @@ class RemoteRideRepository(
 
     override suspend fun getPartyDetail(partyId: Long): Ride = api.getPartyDetail(partyId).toRide()
 
-    // 생성 응답에 생성자 id 가 없어 요청에 쓴 hostId 를 그대로 넘겨 멤버/방장을 채운다.
+    // 생성자는 서버가 토큰에서 정한다 — 요청 본문에도 응답에도 id 가 없다.
     override suspend fun createParty(request: NewParty): Ride =
-        api.openParty(request.toRequestDto()).toRide(creatorId = request.hostId)
+        api.openParty(request.toRequestDto()).toRide()
 
     // 합류 응답이 곧 방 상세라 재조회 없이 그대로 반환한다. 합류자는 Bearer 토큰이 정한다.
     override suspend fun joinParty(partyId: Long): Ride = api.joinParty(partyId).toRide()
