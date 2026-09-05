@@ -19,7 +19,7 @@ class AppContainer(debugLogging: Boolean) {
     // 인증 미구현 — 화면이 memberId/userId/X-User-Id 를 얻는 단일 출처.
     val userSession: UserSession = FixedUserSession()
 
-    val rideRepository: RideRepository = RemoteRideRepository(apis.matching)
+    val rideRepository: RideRepository = RemoteRideRepository(apis.matching, reportApi = apis.report)
     val placeRepository: PlaceRepository = RemotePlaceRepository(apis.place)
     val chatRepository: ChatRepository = RemoteChatRepository(apis.chat)
 }

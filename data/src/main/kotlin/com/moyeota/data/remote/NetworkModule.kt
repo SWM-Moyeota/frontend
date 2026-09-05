@@ -27,6 +27,7 @@ object NetworkModule {
             matching = retrofit.create(MatchingApi::class.java),
             place = retrofit.create(PlaceApi::class.java),
             chat = retrofit.create(ChatApi::class.java),
+            report = retrofit.create(ReportApi::class.java),
         )
     }
 
@@ -48,5 +49,6 @@ object NetworkModule {
         val matching: MatchingApi,
         val place: PlaceApi,
         val chat: ChatApi,
+        val report: ReportApi,
     )
 }

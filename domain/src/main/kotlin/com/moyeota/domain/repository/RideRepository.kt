@@ -32,4 +32,24 @@ interface RideRepository {
 
     /** POST /api/v1/matching/start/{partyId}/{memberId}. 방장만 가능. 성공 시 상태가 MATCHING 으로 바뀐다. */
     suspend fun startMatching(partyId: Long, memberId: Long)
+
+    // 긴급 신고 — POST /api/v1/reports, PATCH /api/v1/reports/call-result
+
+    /**
+     * 긴급 신고 접수 — 서버가 파티·위치를 저장하고 신고 id 를 반환한다.
+     * 위치는 데이터 계층이 채운다 (측위 소스가 아직 없어 현재는 고정 좌표 — TODO).
+     * 저장 실패 시 한국어 메시지의 [IllegalStateException] 을 던진다 —
+     * 화면은 실패 여부와 무관하게 112 다이얼을 먼저 열어야 한다 (통화 최우선).
+     *
+     * @param partyId 신고 대상 파티. 화면에서 알 수 없으면 null (서버는 REPORT_NOT_ALLOWED
+     *   응답 — 저장 실패로 처리된다)
+     * @return 서버가 발급한 신고 id (reportId)
+     */
+    suspend fun reportEmergency(partyId: Long?): Long
+
+    /**
+     * 112 다이얼에서 앱 복귀 후 "실제로 통화했는지" 결과를 저장한다.
+     * 실패 시 한국어 메시지의 [IllegalStateException] 을 던진다.
+     */
+    suspend fun confirmEmergencyCall(called: Boolean)
 }
