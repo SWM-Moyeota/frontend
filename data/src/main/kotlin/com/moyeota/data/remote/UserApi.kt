@@ -1,7 +1,11 @@
 package com.moyeota.data.remote
 
+import com.moyeota.data.remote.dto.FcmTokenRequest
 import com.moyeota.data.remote.dto.UserProfileResponse
+import retrofit2.http.Body
+import retrofit2.http.DELETE
 import retrofit2.http.GET
+import retrofit2.http.PUT
 
 /**
  * 경로 기준: user/interfaces/LocalUserController.java (`@RequestMapping("/api/v1/local")`).
@@ -26,4 +30,26 @@ interface UserApi {
      */
     @GET("api/v1/local/users/info")
     suspend fun getMyProfile(): UserProfileResponse
+
+    /**
+     * 푸시 토큰 등록. 204 No Content, 멱등(같은 토큰을 다시 보내도 덮어쓰기만 한다).
+     * 기준: `user/interfaces/UserController.java` — 이쪽만 프리픽스가 `/api/v1/users` 다
+     * ([getMyProfile] 의 `/api/v1/local` 과 다르다. 둘을 바꿔 쓰면 401 로 떨어져 세션 만료로 오인한다).
+     *
+     * 이 토큰이 있어야 기사 도착 시 `FcmPassengerNotifier` 가 이 사용자를 멀티캐스트 대상에 넣는다
+     * — 등록이 없으면 서버는 조용히 `"FCM 토큰이 등록된 승객이 없음"` 을 로그로 남기고 끝낸다.
+     */
+    @PUT("api/v1/users/me/fcm-token")
+    suspend fun registerFcmToken(@Body request: FcmTokenRequest)
+
+    /**
+     * 푸시 토큰 해제. 204 No Content.
+     *
+     * **로그아웃 API 가 대신 해 주지 않는다** — 서버 `UserFcmTokenService` KDoc 이 명시하듯
+     * 로그아웃은 리프레시 토큰만 받으므로, 앱이 로그아웃 **직전에** 따로 불러야 한다.
+     * 순서가 뒤집혀 세션을 먼저 비우면 Bearer 가 사라져 401 이 나고, 서버에는 죽은 토큰이 남아
+     * 다음 사용자가 이 기기로 로그인할 때까지 남의 도착 알림이 이 기기로 온다.
+     */
+    @DELETE("api/v1/users/me/fcm-token")
+    suspend fun deleteFcmToken()
 }

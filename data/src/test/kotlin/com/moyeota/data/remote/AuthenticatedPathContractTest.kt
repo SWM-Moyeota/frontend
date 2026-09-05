@@ -7,6 +7,7 @@ import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.PATCH
 import retrofit2.http.POST
+import retrofit2.http.PUT
 import retrofit2.http.Path
 import retrofit2.http.Query
 import java.lang.reflect.Method
@@ -41,6 +42,30 @@ class AuthenticatedPathContractTest {
     @Test
     fun `내 정보 조회는 local 프리픽스를 쓴다`() {
         assertEquals("api/v1/local/users/info", UserApi::class.java.path("getMyProfile"))
+    }
+
+    /**
+     * 반대로 푸시 토큰만 `/api/v1/users` 다 — 같은 [UserApi] 안에서 내 정보 조회(`/api/v1/local`)와
+     * 프리픽스가 갈린다. 백엔드 컨트롤러가 실제로 둘로 나뉘어 있어서 생긴 비대칭이고
+     * (`LocalUserController` vs `UserController`), 한쪽에 맞춰 통일하면 401 이 난다.
+     */
+    @Test
+    fun `푸시 토큰 등록과 해제는 users me 경로를 쓴다`() {
+        assertEquals("api/v1/users/me/fcm-token", UserApi::class.java.path("registerFcmToken"))
+        assertEquals("api/v1/users/me/fcm-token", UserApi::class.java.path("deleteFcmToken"))
+    }
+
+    /**
+     * 경로가 같고 동사만 다른 쌍이라 [path] 검사만으로는 POST 오타를 못 잡는다.
+     * 서버는 `@PutMapping`/`@DeleteMapping` 만 매핑하므로 POST 로 보내면 405 가 난다.
+     */
+    @Test
+    fun `푸시 토큰 등록은 PUT 해제는 DELETE 다`() {
+        val register = UserApi::class.java.declaredMethods.single { it.name == "registerFcmToken" }
+        val delete = UserApi::class.java.declaredMethods.single { it.name == "deleteFcmToken" }
+
+        assertTrue("등록이 PUT 이 아니다", register.isAnnotationPresent(PUT::class.java))
+        assertTrue("해제가 DELETE 가 아니다", delete.isAnnotationPresent(DELETE::class.java))
     }
 
     @Test
@@ -102,6 +127,7 @@ class AuthenticatedPathContractTest {
             ?: error("$simpleName 에 $methodName 이 없거나 오버로드가 여러 개다")
         return method.getAnnotation(GET::class.java)?.value
             ?: method.getAnnotation(POST::class.java)?.value
+            ?: method.getAnnotation(PUT::class.java)?.value
             ?: method.getAnnotation(DELETE::class.java)?.value
             ?: method.getAnnotation(PATCH::class.java)?.value
             ?: error("$simpleName.$methodName 에 HTTP 애노테이션이 없다")

@@ -62,7 +62,8 @@ private val RouteCardBg = Color(0xFFF1F5FD)
 private val FareCardBg = Color(0xFFF6F8FB)
 private val PillBg = Color(0xFFF1F5FD)
 
-private val JoinHost = User("u-host", "김OO", "학교 인증", 4.9, 12)
+// 목록에 대표로 한 명만 보여 주는 동승자 — 방장 개념은 도메인에 없다
+private val FirstJoinedMember = User("u-1", "김OO", "학교 인증", 4.9, 12)
 
 private val DefaultJoinRide = Ride(
     id = "ride-1",
@@ -70,7 +71,7 @@ private val DefaultJoinRide = Ride(
     destination = "서면역 1번 출구",
     departureLabel = "3분 후 출발 예정 · 6.2km",
     capacity = 3,
-    members = listOf(JoinHost, User("u-2", "이OO", "직장 인증", 4.8, 7)),
+    members = listOf(FirstJoinedMember, User("u-2", "이OO", "직장 인증", 4.8, 7)),
     farePerPerson = 3600,
     totalFare = 9600,
     status = RideStatus.RECRUITING,
@@ -218,12 +219,13 @@ fun JoinConfirmScreen(
                         color = GrayMute,
                     )
                     Spacer(Modifier.height(8.dp))
-                    val host = ride.members.firstOrNull()
-                    if (host != null) {
+                    // 대표로 한 명만 노출한다 — 첫 멤버라는 것 외에 특별한 지위는 없다
+                    val representative = ride.members.firstOrNull()
+                    if (representative != null) {
                         MemberRow(
-                            host = host,
+                            member = representative,
                             othersCount = joinedCount - 1,
-                            onClick = { onMemberClick(host) }, // → 23 동승자 프로필
+                            onClick = { onMemberClick(representative) }, // → 23 동승자 프로필
                         )
                     }
 
@@ -439,11 +441,11 @@ private fun FareRow(label: String, value: String) {
 
 @Composable
 private fun MemberRow(
-    host: User,
+    member: User,
     othersCount: Int,
     onClick: () -> Unit,
 ) {
-    val mannerPercent = (host.rating * 20).roundToInt()
+    val mannerPercent = (member.rating * 20).roundToInt()
     val othersLabel = if (othersCount > 0) " · 외 ${othersCount}명" else ""
     Row(
         modifier = Modifier
@@ -458,16 +460,16 @@ private fun MemberRow(
         Column(modifier = Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = host.nickname,
+                    text = member.nickname,
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Bold,
                     color = MoyeotaColor.InkPrimary,
                 )
                 Spacer(Modifier.width(8.dp))
-                GrayPill(text = "방장")
+                GrayPill(text = "동승자")
             }
             Text(
-                text = "탑승 ${host.rideCount}회 · 매너 ${mannerPercent}%$othersLabel",
+                text = "탑승 ${member.rideCount}회 · 매너 ${mannerPercent}%$othersLabel",
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Medium,
                 color = GrayMute,

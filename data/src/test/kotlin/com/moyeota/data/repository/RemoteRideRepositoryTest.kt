@@ -42,12 +42,11 @@ class RemoteRideRepositoryTest {
     }
 
     @Test
-    fun `방 생성은 hostId 를 서버로 보내지 않고 로컬 표시용 방장에만 쓴다`() = runBlocking {
+    fun `방 생성 요청 본문에는 좌표 라벨 정원만 실린다 — 생성자는 토큰이 정한다`() = runBlocking {
         val api = FakeMatchingApi()
 
         val ride = RemoteRideRepository(api).createParty(
             NewParty(
-                hostId = 42,
                 departureLat = 37.5665,
                 departureLng = 126.9780,
                 destinationLat = 37.4979,
@@ -58,10 +57,11 @@ class RemoteRideRepositoryTest {
             ),
         )
 
-        // 서버는 방장을 토큰에서 정한다 — 본문에는 좌표·라벨·정원만 실린다.
+        // 서버는 생성자를 토큰에서 정한다 — 본문에는 좌표·라벨·정원만 실린다.
         assertEquals("서울시청", api.openRequest?.departure)
-        // 생성 응답에 members 가 없어 로컬에서 방장 한 명을 만들어 보여 준다. 이 값만이 hostId 의 쓰임이다.
-        assertEquals("42", ride.hostId)
+        assertEquals("12", ride.id)
+        // 생성 응답에 members 목록이 없어 currentMembers 만큼 자리 표시용 멤버를 만든다.
+        assertEquals(1, ride.members.size)
     }
 
     @Test
