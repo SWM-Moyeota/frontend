@@ -7,10 +7,20 @@ import android.content.pm.ApplicationInfo
 import android.os.Build
 import android.util.Log
 import com.google.firebase.messaging.FirebaseMessaging
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 class MoyeotaApplication : Application() {
     lateinit var appContainer: AppContainer
         private set
+
+    /**
+     * 화면 수명과 무관하게 살아야 하는 앱 차원의 백그라운드 작업(FCM 토큰 서버 등록) 전용 스코프.
+     * SupervisorJob: 등록 실패 하나가 이후 등록까지 막지 않게 한다.
+     */
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onCreate() {
         super.onCreate()
@@ -41,8 +51,21 @@ class MoyeotaApplication : Application() {
                     Log.w(TAG, "FCM 토큰 조회 실패", task.exception)
                     return@addOnCompleteListener
                 }
-                MoyeotaFirebaseMessagingService.handleToken(token)
+                onFcmTokenAvailable(token)
             }
+    }
+
+    /**
+     * 기기 FCM 토큰이 확인됐을 때의 단일 진입점. 앱 시작 시 명시 조회와
+     * [MoyeotaFirebaseMessagingService] 의 회전 콜백이 모두 여기로 들어온다.
+     *
+     * 서버 등록은 정의상 실패해도 좋은 작업이라 결과를 기다리지 않는다 — 여기서 붙잡으면
+     * 앱 시작이나 FCM 콜백이 네트워크를 기다리게 된다. 로그인 상태가 아직 확정되지 않았다면
+     * 등록은 [com.moyeota.data.push.FcmTokenRegistrar] 안에서 보류됐다가 로그인 직후 이어진다.
+     */
+    fun onFcmTokenAvailable(token: String) {
+        Log.d(TAG, "FCM 토큰 확인, 서버 등록 시도")
+        appScope.launch { appContainer.fcmTokenRegistrar.onTokenAvailable(token) }
     }
 
     // FCM 알림 표시에 필요한 기본 채널. O 미만은 채널 개념이 없어 생략한다.
