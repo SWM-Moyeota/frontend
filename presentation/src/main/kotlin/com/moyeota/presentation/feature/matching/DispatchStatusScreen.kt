@@ -2,7 +2,6 @@ package com.moyeota.presentation.feature.matching
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -81,7 +80,10 @@ private val dispatchRideDummy = Ride(
  * — 공통 규칙상 배차 이후 스택 초기화, 화면은 콜백만 노출
  *
  * 이동(디스크립션):
- * - 화면 탭 / 탑승 시작 → 26 운행 중 (onStartRide). 지도는 자체 제스처를 소비하므로 팬·줌과 충돌하지 않는다
+ * - 26 운행 중으로의 전이는 **이 화면이 하지 않는다**. 기사측 탑승 처리(서버 status IN_RIDE)를
+ *   [DispatchStatusRoute] 의 폴링이 잡아 자동으로 넘긴다. 임시 트리거였던 화면 전체 탭은
+ *   폴링이 실동작하게 되면서 걷어냈다(오탭하면 탑승 전에 26 으로 넘어갔다 — 결함 D-9 수정).
+ *   26 의 「경유 카드 탭」을 걷어낸 것과 같은 이유다(35 보고서).
  * - 차량 번호 롱프레스 → 복사 [미연결]
  * - 뒤로 → [미연결] 배차 후 되돌리기 차단 권장 (onBack — 무동작 기본값)
  * - 배차 실패 시 21 매칭 대기로 되돌리고 재탐색 (호출부 처리)
@@ -94,7 +96,6 @@ fun DispatchStatusScreen(
     ride: Ride = dispatchRideDummy,
     driver: AssignedDriver? = null,
     driverLocation: DriverLocation? = null,
-    onStartRide: () -> Unit = {},
     onBack: () -> Unit = {}, // 미연결 (배차 후 되돌리기 차단 권장)
 ) {
     val pickupSpot = ride.origin
@@ -108,12 +109,10 @@ fun DispatchStatusScreen(
         else -> driver.vehicleType
     }
 
-    // 화면 탭 → 26 운행 중
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(CanvasBg)
-            .clickable { onStartRide() },
+            .background(CanvasBg),
     ) {
         // 상단 흰색 헤더
         Column(modifier = Modifier.fillMaxWidth().background(MoyeotaColor.SurfaceCanvas)) {

@@ -33,7 +33,7 @@ import com.moyeota.presentation.feature.auth.SignupCompleteScreen
 import com.moyeota.presentation.feature.auth.SignupDraft
 import com.moyeota.presentation.feature.chat.ChatRoute
 import com.moyeota.presentation.feature.chat.EmergencyRoute
-import com.moyeota.presentation.feature.chat.RideOngoingScreen
+import com.moyeota.presentation.feature.chat.RideOngoingRoute
 import com.moyeota.presentation.feature.explore.ExploreRoute
 import com.moyeota.presentation.feature.explore.JoinConfirmRoute
 import com.moyeota.presentation.feature.home.DemoOrigin
@@ -317,7 +317,6 @@ private fun MainNavHost(
                 repository = rideRepository,
                 // 핀 조정·GPS 출발지의 좌표를 실주소로 되짚는다 (GET /places/reverse)
                 placeRepository = placeRepository,
-                userSession = userSession,
                 origin = confirmedOrigin ?: DemoOrigin,
                 destination = confirmedDestination,
                 onDismiss = ::back,
@@ -391,11 +390,9 @@ private fun MainNavHost(
                 partyId = selectedPartyId,
                 onBack = ::back,
                 onPartnerClick = { navController.navigate(Routes.PARTNER_PROFILE) },
+                // 25 배차 현황으로 넘기는 건 status 전이를 관찰하는 21 매칭 대기뿐이다 —
+                // 자동 기사 매칭 전환으로 이 화면에는 수동 출발 CTA 가 없다.
                 onLeave = { navigateTab(MoyeotaTab.HOME) },
-                onDepart = {
-                    activePartyId = selectedPartyId
-                    navController.navigate(Routes.DISPATCH_STATUS)
-                },
             )
         }
         composable(Routes.PARTNER_PROFILE) {
@@ -426,19 +423,23 @@ private fun MainNavHost(
             )
         }
         composable(Routes.RIDE_ONGOING) {
-            // 데모용 15초 자동 전환 타이머를 제거했다 (QA D-3).
-            // 26 은 신고 진입점인데 15초 뒤 28 로 넘어가버려, 급할 때 눌러야 할 「신고」 자리에
-            // 28 의 확인 버튼이 놓이면서 정산으로 새는 사고가 났다(재현 3/3).
-            //
-            // 28 은 원래 기사측 이벤트로 전이되는 화면이지만, 승객이 폴링할 수 있는 운행 완료 상태가
-            // 아직 없다 — 서버 `startRide`/`completeRide` 가 저장되지 않아 파티가 DRIVER_ASSIGNED 를
-            // 벗어나지 못한다(QA D-2). status==COMPLETED 폴링으로 바꾸면 28~32 가 통째로 도달 불가가 된다.
-            // 그래서 그때까지는 경유 카드 탭(=하차)을 임시 수동 트리거로 쓴다.
-            RideOngoingScreen(
+            // 28 로의 전이는 기사측 운행 종료(FINISHED)를 폴링으로 잡아 자동으로 넘어간다.
+            // 임시 수동 트리거였던 경유 카드 탭은 서버가 IN_RIDE→FINISHED 를 실제로 저장하게 되면서(D-2 해소) 걷어냈다.
+            // 데모용 15초 자동 전환 타이머도 이전에 제거된 상태다 — 26 은 27 신고 진입점이라
+            // 사용자가 머무는 동안 화면이 제멋대로 바뀌면 안 된다(QA D-3).
+            RideOngoingRoute(
+                repository = rideRepository,
+                partyId = activePartyId,
                 onBack = ::back,
                 onOpenChat = { navController.navigate(Routes.CHAT) },
                 onReport = { navController.navigate(Routes.EMERGENCY) },
-                onArrived = { navController.navigate(Routes.FARE_FINAL) },
+                // 운행이 끝났으니 26 은 스택에서 지운다. 남겨두면 28 에서 뒤로 왔을 때
+                // status 가 여전히 FINISHED 라 폴링이 다시 28 로 튕겨내는 루프가 된다(21→25 와 같은 이유).
+                onRideFinished = {
+                    navController.navigate(Routes.FARE_FINAL) {
+                        popUpTo(Routes.RIDE_ONGOING) { inclusive = true }
+                    }
+                },
             )
         }
         composable(Routes.EMERGENCY) {
