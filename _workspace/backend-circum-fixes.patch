@@ -1,0 +1,44 @@
+diff --git a/src/main/java/team/codingforest/moyeota/matching/application/dto/PartyListResponse.java b/src/main/java/team/codingforest/moyeota/matching/application/dto/PartyListResponse.java
+index 7e68e06..090357b 100644
+--- a/src/main/java/team/codingforest/moyeota/matching/application/dto/PartyListResponse.java
++++ b/src/main/java/team/codingforest/moyeota/matching/application/dto/PartyListResponse.java
+@@ -5,9 +5,10 @@ import java.util.List;
+ public record PartyListResponse(List<PartyItem> list) {
+ 
+     public record PartyItem(Long partyId, String departure, String destination, Integer currentMembers, Integer capacity,
+-                            String status) {
++                            String status, Double departureLat, Double departureLng) {
+         static PartyItem from(PartyResult r) {
+-            return new PartyItem(r.id(), r.departure(), r.destination(), r.currentMembers(), r.capacity(), r.status());
++            return new PartyItem(r.id(), r.departure(), r.destination(), r.currentMembers(), r.capacity(), r.status(),
++                    r.departureLat(), r.departureLng());
+         }
+     }
+ 
+diff --git a/src/main/java/team/codingforest/moyeota/matching/infrastructure/PartyJpaRepository.java b/src/main/java/team/codingforest/moyeota/matching/infrastructure/PartyJpaRepository.java
+index 8a3ede2..5038e27 100644
+--- a/src/main/java/team/codingforest/moyeota/matching/infrastructure/PartyJpaRepository.java
++++ b/src/main/java/team/codingforest/moyeota/matching/infrastructure/PartyJpaRepository.java
+@@ -31,7 +31,7 @@ public interface PartyJpaRepository extends JpaRepository<PartyEntity, Long> {
+     @Query("""
+         select p from PartyEntity p left join fetch p.members where p.status = :status
+             and p.departureLat between :swLat and :neLat
+-            and p.destinationLng between :swLng and :neLng
++            and p.departureLng between :swLng and :neLng
+ """)
+     List<PartyEntity> findAllByStatusWithinBounds(@Param("status") PartyStatus status, @Param("swLat") double swLat, @Param("neLat") double neLat,
+                                                   @Param("swLng") double swLng, @Param("neLng") double neLng);
+diff --git a/src/main/java/team/codingforest/moyeota/matching/interfaces/PartyController.java b/src/main/java/team/codingforest/moyeota/matching/interfaces/PartyController.java
+index 85b262e..5f46c00 100644
+--- a/src/main/java/team/codingforest/moyeota/matching/interfaces/PartyController.java
++++ b/src/main/java/team/codingforest/moyeota/matching/interfaces/PartyController.java
+@@ -58,7 +58,8 @@ public class PartyController {
+         return ResponseEntity.ok(service.getAssignDriver(partyId));
+     }
+ 
+-    @GetMapping("/matching/rooms")
++    // 같은 경로의 전체 목록 조회와 쿼리 파라미터 유무로 구분한다 (params 없이 두 개면 Ambiguous mapping으로 기동 실패)
++    @GetMapping(value = "/matching/rooms", params = {"swLat", "swLng", "neLat", "neLng"})
+     public ResponseEntity<PartyListResponse> listWithin(@RequestParam Double swLat,
+                                                         @RequestParam Double swLng,
+                                                         @RequestParam Double neLat,

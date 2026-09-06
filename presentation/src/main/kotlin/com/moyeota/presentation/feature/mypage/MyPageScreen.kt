@@ -2,7 +2,6 @@ package com.moyeota.presentation.feature.mypage
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,16 +10,21 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -40,8 +44,9 @@ import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.AvatarCircle
 import com.moyeota.core.designsystem.component.MoyeotaBottomBar
 import com.moyeota.core.designsystem.component.MoyeotaTab
-import com.moyeota.core.designsystem.component.StatusBarMock
+import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.presentation.core.UserNameState
 
 // 와이어프레임 그레이 (core token 미정의 색 — 화면 재현용)
 private val CanvasBg = Color(0xFFF5F7FA)
@@ -60,16 +65,18 @@ private val CardShadow = Color(0x0F1B2A4A)
  * 이동(디스크립션):
  * - 「탑승 기록」 → 34 내 탑승 (onRideHistoryClick — 현재 연결값, 지난 기록 화면 별도 필요)
  * - 하단탭 홈 / 합승 / 채팅 → 14 / 17 / 24 (onTabSelect)
+ * - 「로그아웃」 → 확인 시트 후 04a 로그인 (onLogout)
  * - [미연결 — 무동작] 「안심 설정」(→11) · 「결제 수단」(→30) · 「알림 설정」 ·
- *   「고객센터 · 신고 내역」 · 「로그아웃」(→04, 확인 다이얼로그 후) · 「탈퇴하기」
+ *   「고객센터 · 신고 내역」 · 「탈퇴하기」
  *
  * 상태(디스크립션):
  * - 「2차」 배지 항목(마일리지 · 안심 설정 · 결제 수단 · 알림)은 1차 MVP 미적용
+ * - 이름만 서버 값이다. 매너 점수 · 탑승 횟수 · 마일리지는 서버에 아직 데이터가 없어 더미다.
  */
 @Composable
 fun MyPageScreen(
-    userName: String = "김OO",
-    verifiedLine: String = "부산대학교 · 2026년 3월 인증",
+    // 로그인 사용자의 실명. 조회 전에는 Loading(자리만 비움), 서버에 이름이 없으면 Resolved(null).
+    userName: UserNameState = UserNameState.Loading,
     mannerScoreLabel: String = "98%",
     rideCountLabel: String = "42회",
     mileageLabel: String = "0P",
@@ -77,10 +84,14 @@ fun MyPageScreen(
     paymentValue: String = "카카오페이",
     versionLabel: String = "v1.0.0",
     onRideHistoryClick: () -> Unit = {},     // → 34 내 탑승
+    onLogout: () -> Unit = {},               // → 04a 로그인 (세션 정리 후)
     onTabSelect: (MoyeotaTab) -> Unit = {},  // → 14 / 17 / 24
 ) {
+    // 오탭 한 번으로 세션이 날아가지 않도록 확인을 한 단계 둔다 (와이어프레임의 확인 다이얼로그)
+    var logoutConfirming by remember { mutableStateOf(false) }
+
     Column(modifier = Modifier.fillMaxSize().background(CanvasBg)) {
-        StatusBarMock()
+        StatusBarSpacer()
 
         Column(
             modifier = Modifier
@@ -110,48 +121,41 @@ fun MyPageScreen(
                     .padding(horizontal = 20.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Box(modifier = Modifier.size(56.dp)) {
-                    AvatarCircle(size = 56.dp)
-                    // 인증 체크 배지
-                    Box(
-                        modifier = Modifier
-                            .size(20.dp)
-                            .offset(x = 40.dp, y = 40.dp)
-                            .background(MoyeotaColor.Primary500, CircleShape)
-                            .border(2.dp, MoyeotaColor.SurfaceCanvas, CircleShape),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        SmallCheckIcon(color = MoyeotaColor.TextOnDark)
-                    }
-                }
+                // 아바타의 인증 체크 배지는 뺐다 — 아래 인증 라벨과 같은 이유로,
+                // 서버가 인증 여부를 주지 않는 지금은 체크 표시 자체가 거짓 신호다.
+                AvatarCircle(size = 56.dp)
                 Spacer(Modifier.size(14.dp))
                 Column {
-                    Text(
-                        text = userName,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MoyeotaColor.InkPrimary,
-                    )
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        text = verifiedLine,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = GrayMute,
-                    )
-                    Spacer(Modifier.height(4.dp))
+                    when (userName) {
+                        // 조회 전 — 폴백 문구가 스쳐 보이지 않게 자리만 잡아 둔다
+                        UserNameState.Loading -> Box(
+                            modifier = Modifier
+                                .size(width = 88.dp, height = 18.dp)
+                                .background(SoftDivider, RoundedCornerShape(6.dp)),
+                        )
+                        is UserNameState.Resolved -> Text(
+                            text = userName.name ?: "이름 미설정",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (userName.name != null) MoyeotaColor.InkPrimary else GrayMute,
+                        )
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    // 학교·인증일·「학생 인증 완료」는 서버가 주지 않는 값이었다. 하드코딩해 두면
+                    // 방금 가입한 계정에도 인증 완료로 보여 — 앱이 사용자에게 거짓말을 한다.
+                    // 인증 기능이 붙기 전까지는 중립 문구로 둔다.
                     Box(
                         modifier = Modifier
                             .height(22.dp)
-                            .background(MoyeotaColor.Primary50, CircleShape)
+                            .background(SoftBg, CircleShape)
                             .padding(horizontal = 13.dp),
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(
-                            text = "학생 인증 완료",
+                            text = "인증 정보 준비 중",
                             fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MoyeotaColor.Primary600,
+                            fontWeight = FontWeight.Medium,
+                            color = GrayMute,
                         )
                     }
                 }
@@ -229,13 +233,16 @@ fun MyPageScreen(
             }
 
             Spacer(Modifier.height(24.dp))
-            // 로그아웃 → 04 (확인 다이얼로그 후, 미연결 — 무동작)
+            // 로그아웃 → 04a (확인 후). logout() 은 실패하지 않는다 — 로컬 세션을 먼저 비우고
+            // 서버 무효화는 최선 노력이라, 오프라인에서도 사용자가 갇히지 않는다.
             Text(
                 text = "로그아웃",
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Medium,
                 color = GrayMute,
-                modifier = Modifier.padding(horizontal = 16.dp),
+                modifier = Modifier
+                    .padding(horizontal = 16.dp)
+                    .clickable { logoutConfirming = true },
             )
             Spacer(Modifier.height(11.dp))
             Row(
@@ -262,7 +269,28 @@ fun MyPageScreen(
 
         // 하단탭 홈 / 합승 / 채팅 → 14 / 17 / 24
         MoyeotaBottomBar(selected = MoyeotaTab.MYPAGE, onSelect = onTabSelect)
-        HomeIndicatorMyPage()
+    }
+
+    if (logoutConfirming) {
+        AlertDialog(
+            onDismissRequest = { logoutConfirming = false },
+            title = { Text(text = "로그아웃할까요?", fontSize = 17.sp, fontWeight = FontWeight.Bold) },
+            text = { Text(text = "다시 이용하려면 아이디로 로그인해야 해요", fontSize = 14.sp) },
+            confirmButton = {
+                TextButton(onClick = {
+                    logoutConfirming = false
+                    onLogout()
+                }) {
+                    Text(text = "로그아웃", fontWeight = FontWeight.Bold, color = MoyeotaColor.Danger500)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { logoutConfirming = false }) {
+                    Text(text = "취소", color = GrayMute)
+                }
+            },
+            containerColor = MoyeotaColor.SurfaceCanvas,
+        )
     }
 }
 
@@ -339,17 +367,6 @@ private fun SettingDivider() {
 }
 
 // ─── 아이콘 (material-icons 미사용 — Canvas 직접 드로잉) ─────────────────────
-
-@Composable
-private fun SmallCheckIcon(color: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier.size(10.dp)) {
-        val w = size.width
-        val h = size.height
-        val stroke = 1.8.dp.toPx()
-        drawLine(color, Offset(w * 0.12f, h * 0.55f), Offset(w * 0.4f, h * 0.82f), stroke, StrokeCap.Round)
-        drawLine(color, Offset(w * 0.4f, h * 0.82f), Offset(w * 0.88f, h * 0.22f), stroke, StrokeCap.Round)
-    }
-}
 
 @Composable
 private fun ChevronRightIcon(size: androidx.compose.ui.unit.Dp, color: Color, modifier: Modifier = Modifier) {
@@ -463,26 +480,9 @@ private fun QuestionIcon(color: Color, modifier: Modifier = Modifier) {
     }
 }
 
-// 홈 인디케이터 (하단탭 아래 흰 배경)
-@Composable
-private fun HomeIndicatorMyPage() {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(MoyeotaColor.SurfaceCanvas)
-            .padding(top = 8.dp, bottom = 8.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(
-            modifier = Modifier
-                .size(width = 135.dp, height = 5.dp)
-                .background(MoyeotaColor.InkPrimary, CircleShape),
-        )
-    }
-}
 
 @Preview(showBackground = true, widthDp = 393, heightDp = 852)
 @Composable
 private fun MyPageScreenPreview() {
-    MyPageScreen()
+    MyPageScreen(userName = UserNameState.Resolved("김성윤"))
 }

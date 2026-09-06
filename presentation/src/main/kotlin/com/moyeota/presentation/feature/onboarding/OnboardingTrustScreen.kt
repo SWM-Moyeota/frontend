@@ -31,9 +31,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.moyeota.core.designsystem.component.NavigationBarSpacer
 import com.moyeota.core.designsystem.component.PageDots
 import com.moyeota.core.designsystem.component.PrimaryCtaButton
-import com.moyeota.core.designsystem.component.StatusBarMock
+import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.core.designsystem.theme.MoyeotaType
 
@@ -61,7 +62,7 @@ fun OnboardingTrustScreen(
             .fillMaxSize()
             .background(MoyeotaColor.SurfaceSoft),
     ) {
-        StatusBarMock()
+        StatusBarSpacer()
 
         // 건너뛰기 (우상단)
         Row(
@@ -127,14 +128,7 @@ fun OnboardingTrustScreen(
 
         Spacer(Modifier.weight(1f))
 
-        // 홈 인디케이터 목업
-        Box(
-            modifier = Modifier
-                .align(Alignment.CenterHorizontally)
-                .padding(bottom = 9.dp)
-                .size(width = 135.dp, height = 5.dp)
-                .background(MoyeotaColor.InkPrimary, CircleShape),
-        )
+        NavigationBarSpacer()
     }
 }
 

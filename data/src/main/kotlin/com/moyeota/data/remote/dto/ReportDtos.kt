@@ -7,6 +7,7 @@ import kotlinx.serialization.Serializable
 
 /**
  * POST /api/v1/reports 요청 본문 (백엔드 ReportRequest — 세 필드 모두 박싱 타입이라 null 허용).
+ * 신고자는 Bearer 토큰에서 나온다(@CurrentUser) — reporterId 를 싣지 않는다.
  * 사유(reason) 필드는 서버에 없다 — 임의로 추가하지 말 것.
  */
 @Serializable
@@ -22,7 +23,7 @@ data class ReportResponse(
     val reportId: Long,
 )
 
-/** PATCH /api/v1/reports/call-result 요청 본문 (백엔드 CallResultRequest — @NotNull) */
+/** PATCH /api/v1/reports/call-result 요청 본문 (백엔드 CallResultRequest — @NotNull). 응답은 204(본문 없음). */
 @Serializable
 data class CallResultRequestDto(
     val called: Boolean,

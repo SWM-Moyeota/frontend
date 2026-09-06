@@ -7,15 +7,25 @@ object Routes {
     const val ONBOARDING_TRUST = "onboarding/trust"          // 02 O02
     const val ONBOARDING_SAFETY = "onboarding/safety"        // 03 O03
 
-    // B · 로그인 · 계정 유형
+    // B · 로그인
     const val LOGIN = "auth/login"                           // 04 S01
-    const val ACCOUNT_TYPE = "auth/account-type"             // 05 S25
+    const val LOGIN_FORM = "auth/login-form"                 // 04a 신규 (아이디 로그인)
 
-    // C · 인증 · 가입
-    const val SCHOOL_EMAIL = "auth/school-email"             // 06 S02
-    const val EMAIL_CODE = "auth/email-code"                 // 07 S03
-    const val WORK_VERIFY = "auth/work-verify"               // 08 S26
-    const val IDENTITY_VERIFY = "auth/identity"              // 09 S04
+    // B' · 부가 인증 05~09 — **가입 그래프에 등록하지 않는다**
+    //
+    // 서버 가입(POST /api/v1/users)에는 계정 유형 개념이 없고(loginId·password·name·birthDate·
+    // phone·gender·email 뿐), 학교/재직 인증은 「마이페이지에서 나중에 추가」하는 컨셉이다.
+    // 09 휴대폰 본인 인증은 MVP 범위 밖이라 인증 없이 값만 묻는 화면이 되어 있었다
+    // — 받던 값(실명·생년월일·성별·휴대폰)은 10 프로필의 「기본 정보」 절이 이어받았다.
+    // 가입 필수 경로에 세워두면 아무 데도 쓰이지 않는 값을 4~5화면 더 묻게 된다.
+    // 화면 파일과 라우트 상수는 남겨둔다 — 인증을 붙일 때 그대로 재사용한다.
+    const val ACCOUNT_TYPE = "auth/account-type"             // 05 S25 (미연결)
+    const val SCHOOL_EMAIL = "auth/school-email"             // 06 S02 (미연결)
+    const val EMAIL_CODE = "auth/email-code"                 // 07 S03 (미연결)
+    const val WORK_VERIFY = "auth/work-verify"               // 08 S26 (미연결)
+    const val IDENTITY_VERIFY = "auth/identity"              // 09 S04 (미연결)
+
+    // C · 가입 (3단계: 10 → 11 → 12 → 13 완료)
     const val PROFILE_SETUP = "auth/profile"                 // 10 S05
     const val SAFETY_SETTINGS = "auth/safety-settings"       // 11 S06
     const val MANNER_PLEDGE = "auth/manner-pledge"           // 12 S07

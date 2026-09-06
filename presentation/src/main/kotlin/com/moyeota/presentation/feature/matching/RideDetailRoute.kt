@@ -58,7 +58,8 @@ class RideDetailViewModel(
     fun leave() {
         viewModelScope.launch {
             try {
-                repository.leaveParty(partyId, userSession.currentUserId)
+                // 나가는 주체는 Bearer 토큰이 정한다 — memberId 를 넘기지 않는다 (22 보고서 §2)
+                repository.leaveParty(partyId)
                 _left.value = true
             } catch (e: Exception) {
                 _uiState.value = UiState.Error("탑승에서 나가지 못했어요")
@@ -100,6 +101,9 @@ fun RideDetailRoute(
     )
     val state by viewModel.uiState.collectAsState()
     val left by viewModel.left.collectAsState()
+    // 알려진 한계(22 보고서 D-5): 이 값은 고정 "1" 이다. 앱은 자기 내부 Long id 를 모르고
+    // (로그인으로 받는 건 UUID 뿐), 방 상세 응답에도 "내 멤버십/방장 여부"가 없다.
+    // 서버가 그 정보를 주기 전까지는 id 1 이 아닌 계정에서 방장 배지·「나 제외」 필터가 어긋난다.
     val currentUserId = userSession.currentUserId.toString()
 
     LaunchedEffect(left) {

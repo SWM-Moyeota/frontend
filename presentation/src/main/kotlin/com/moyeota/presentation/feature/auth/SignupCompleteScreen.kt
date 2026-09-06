@@ -31,8 +31,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.moyeota.core.designsystem.component.NavigationBarSpacer
 import com.moyeota.core.designsystem.component.PrimaryCtaButton
-import com.moyeota.core.designsystem.component.StatusBarMock
+import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.core.designsystem.theme.MoyeotaTheme
 import com.moyeota.core.designsystem.theme.MoyeotaType
@@ -48,7 +49,7 @@ fun SignupCompleteScreen(
     couponIssued: Boolean = true, // 쿠폰 발급 실패해도 화면 진행은 막지 않음 (배너만 숨김)
 ) {
     Column(modifier = modifier.fillMaxSize().background(MoyeotaColor.SurfaceSoft)) {
-        StatusBarMock()
+        StatusBarSpacer()
 
         Column(
             modifier = Modifier
@@ -155,7 +156,7 @@ fun SignupCompleteScreen(
                     ),
             )
         }
-        CompleteHomeIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
+        NavigationBarSpacer()
     }
 }
 
@@ -192,16 +193,6 @@ private fun CompleteCheckBadge(modifier: Modifier = Modifier) {
             )
         }
     }
-}
-
-@Composable
-private fun CompleteHomeIndicator(modifier: Modifier = Modifier) {
-    Box(
-        modifier = modifier
-            .padding(top = 12.dp, bottom = 9.dp)
-            .size(width = 135.dp, height = 5.dp)
-            .background(MoyeotaColor.InkPrimary, RoundedCornerShape(2.5.dp)),
-    )
 }
 
 @Preview(showBackground = true, widthDp = 393, heightDp = 852)

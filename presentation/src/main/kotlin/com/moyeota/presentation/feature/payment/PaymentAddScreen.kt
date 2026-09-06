@@ -38,10 +38,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.BackArrowIcon
 import com.moyeota.core.designsystem.component.MoyeotaTextField
+import com.moyeota.core.designsystem.component.NavigationBarSpacer
 import com.moyeota.core.designsystem.component.PrimaryCtaButton
-import com.moyeota.core.designsystem.component.StatusBarMock
+import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.core.designsystem.theme.MoyeotaType
+import com.moyeota.presentation.core.CardExpiryTransformation
+import com.moyeota.presentation.core.CardNumberTransformation
 import java.util.Calendar
 
 // 31 · 결제 수단 추가 [신규]
@@ -98,9 +101,8 @@ internal fun expiryValid(digits: String, nowYear: Int, nowMonth: Int): Boolean {
     return yy > curYY || (yy == curYY && mm >= nowMonth)
 }
 
-// 4자리씩 자동 하이픈
-internal fun formatCardNumber(digits: String): String =
-    digits.chunked(4).joinToString("-")
+// 표시용 구분자 삽입은 CardNumberTransformation / CardExpiryTransformation 이 맡는다
+// (표시 문자열을 value 로 넘기던 옛 방식은 커서가 밀려 입력 순서가 뒤집혔다 — D-7)
 
 @Composable
 fun PaymentAddScreen(
@@ -137,7 +139,7 @@ fun PaymentAddScreen(
     }
 
     Column(modifier = Modifier.fillMaxSize().background(MoyeotaColor.SurfaceSoft)) {
-        StatusBarMock()
+        StatusBarSpacer()
         PaymentAddHeader(title = "결제 수단 추가", onBack = onBack)
 
         Column(
@@ -178,8 +180,10 @@ fun PaymentAddScreen(
                 Text(text = "카드 정보", style = MoyeotaType.BodySm, color = AddLabelGray)
                 Spacer(Modifier.height(8.dp))
 
+                // value 는 원시 숫자만. 구분자는 VisualTransformation 이 그린다 — 표시 문자열을 value 로
+                // 넘기면 구분자가 새로 끼는 순간 커서가 옛 인덱스에 남아 입력 순서가 뒤집힌다(D-7 계열).
                 MoyeotaTextField(
-                    value = formatCardNumber(cardDigits),
+                    value = cardDigits,
                     onValueChange = { new ->
                         cardDigits = new.filter { it.isDigit() }.take(maxCardDigits)
                     },
@@ -187,12 +191,13 @@ fun PaymentAddScreen(
                     errorText = cardError,
                     enabled = !submitting,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    visualTransformation = CardNumberTransformation,
                 )
                 Spacer(Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(15.dp)) {
                     Box(modifier = Modifier.weight(1f)) {
                         MoyeotaTextField(
-                            value = formatExpiry(expiryDigits),
+                            value = expiryDigits,
                             onValueChange = { new ->
                                 expiryDigits = new.filter { it.isDigit() }.take(4)
                             },
@@ -200,6 +205,7 @@ fun PaymentAddScreen(
                             errorText = expiryError,
                             enabled = !submitting,
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            visualTransformation = CardExpiryTransformation,
                         )
                     }
                     Box(modifier = Modifier.weight(1f)) {
@@ -268,12 +274,9 @@ fun PaymentAddScreen(
                 loading = submitting,
             )
         }
+        NavigationBarSpacer()
     }
 }
-
-// 유효기간 MM/YY — 2자리 뒤 자동 「/」
-private fun formatExpiry(digits: String): String =
-    if (digits.length <= 2) digits else digits.take(2) + "/" + digits.drop(2)
 
 @Composable
 private fun PaymentAddOptionRow(

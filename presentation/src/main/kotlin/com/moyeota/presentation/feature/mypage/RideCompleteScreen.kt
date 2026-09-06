@@ -42,8 +42,9 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.AvatarCircle
+import com.moyeota.core.designsystem.component.NavigationBarSpacer
 import com.moyeota.core.designsystem.component.PrimaryCtaButton
-import com.moyeota.core.designsystem.component.StatusBarMock
+import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 
 // 와이어프레임 그레이 (core token 미정의 색 — 화면 재현용)
@@ -88,7 +89,7 @@ fun RideCompleteScreen(
     var selectedTags by remember { mutableStateOf(setOf<String>()) }
 
     Column(modifier = Modifier.fillMaxSize().background(MoyeotaColor.SurfaceCanvas)) {
-        StatusBarMock()
+        StatusBarSpacer()
 
         Column(
             modifier = Modifier
@@ -238,7 +239,7 @@ fun RideCompleteScreen(
                 .padding(horizontal = 8.dp, vertical = 2.dp),
         )
         Spacer(Modifier.height(6.dp))
-        HomeIndicatorBar()
+        NavigationBarSpacer()
     }
 }
 
@@ -355,23 +356,6 @@ private fun ThumbIcon(up: Boolean, color: Color, modifier: Modifier = Modifier) 
             drawPath(path, color, style = stroke)
         }
         if (up) draw() else scale(scaleX = 1f, scaleY = -1f) { draw() }
-    }
-}
-
-// 홈 인디케이터 (와이어프레임 하단 검은 바)
-@Composable
-private fun HomeIndicatorBar() {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 8.dp, bottom = 8.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(
-            modifier = Modifier
-                .size(width = 135.dp, height = 5.dp)
-                .background(MoyeotaColor.InkPrimary, CircleShape),
-        )
     }
 }
 

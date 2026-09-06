@@ -19,6 +19,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -35,9 +36,15 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.BackArrowIcon
+import com.moyeota.core.designsystem.component.NavigationBarSpacer
+import com.moyeota.core.designsystem.component.RouteMapView
 import com.moyeota.core.designsystem.component.SheetHandle
-import com.moyeota.core.designsystem.component.StatusBarMock
+import com.moyeota.core.designsystem.component.StatusBarSpacer
+import com.moyeota.core.designsystem.component.decodePolyline
+import com.moyeota.core.designsystem.component.latLngOrNull
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.domain.model.AssignedDriver
+import com.moyeota.domain.model.DriverLocation
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.model.User
@@ -50,8 +57,6 @@ private val GrayAsh = Color(0xFF9AA1AC)
 private val ChipBg = Color(0xFFF1F5FD)
 private val CardSoft = Color(0xFFF6F8FB)
 private val DividerGray = Color(0xFFE7EAF0)
-private val MapBg = Color(0xFFE9EDF3)
-private val MapBlock = Color(0xFFDDE3EC)
 
 private val dispatchRideDummy = Ride(
     id = "ride-25",
@@ -72,25 +77,37 @@ private val dispatchRideDummy = Ride(
 /**
  * 25 · 배차 상태 [S14]
  *
- * 진입: 22 「이 인원으로 출발」 — 공통 규칙상 배차 이후 스택 초기화, 화면은 콜백만 노출
+ * 진입: 22 「이 인원으로 출발」 또는 21 매칭 대기의 status 전이(DISPATCHING)
+ * — 공통 규칙상 배차 이후 스택 초기화, 화면은 콜백만 노출
  *
  * 이동(디스크립션):
- * - 화면 탭 / 탑승 시작 → 26 운행 중 (onStartRide)
- * - 차량 번호 「12가 3456」 롱프레스 → 복사 [미연결]
+ * - 화면 탭 / 탑승 시작 → 26 운행 중 (onStartRide). 지도는 자체 제스처를 소비하므로 팬·줌과 충돌하지 않는다
+ * - 차량 번호 롱프레스 → 복사 [미연결]
  * - 뒤로 → [미연결] 배차 후 되돌리기 차단 권장 (onBack — 무동작 기본값)
  * - 배차 실패 시 21 매칭 대기로 되돌리고 재탐색 (호출부 처리)
+ *
+ * 서버 제약: 백엔드 `DriverSummary` 는 (좌석수 · 번호판 · 차종) 뿐이라
+ * **기사 이름·별점을 내려주지 않는다**. 그 자리는 하드코딩 대신 플레이스홀더로 둔다(백엔드 요청 대기).
  */
 @Composable
 fun DispatchStatusScreen(
     ride: Ride = dispatchRideDummy,
-    arrivalMinutes: Int = 3,
-    pickupSpot: String = "정문 버스정류장",
-    vehicleNumber: String = "12가 3456",
-    vehicleModel: String = "쏘나타 · 흰색",
-    driverLabel: String = "김OO 기사 · 별점 4.9",
+    driver: AssignedDriver? = null,
+    driverLocation: DriverLocation? = null,
     onStartRide: () -> Unit = {},
     onBack: () -> Unit = {}, // 미연결 (배차 후 되돌리기 차단 권장)
 ) {
+    val pickupSpot = ride.origin
+    // 기사 위치는 값이 있어도 좌표로 못 쓸 수 있다(서버 위경도 전치 — QA D-1).
+    // 지도 마커와 아래 안내 문구가 **같은 판정**을 쓰도록 여기서 한 번만 검증한다.
+    val driverPosition = latLngOrNull(driverLocation?.latitude, driverLocation?.longitude)
+    val vehicleNumber = driver?.plateNumber ?: "차량 번호 확인 중"
+    val vehicleModel = when {
+        driver == null -> "차량 정보를 불러오는 중이에요"
+        driver.seats != null -> "${driver.vehicleType} · ${driver.seats}인승"
+        else -> driver.vehicleType
+    }
+
     // 화면 탭 → 26 운행 중
     Column(
         modifier = Modifier
@@ -100,7 +117,7 @@ fun DispatchStatusScreen(
     ) {
         // 상단 흰색 헤더
         Column(modifier = Modifier.fillMaxWidth().background(MoyeotaColor.SurfaceCanvas)) {
-            StatusBarMock()
+            StatusBarSpacer()
             Row(
                 modifier = Modifier.fillMaxWidth().padding(start = 12.dp, top = 8.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -115,8 +132,19 @@ fun DispatchStatusScreen(
             }
         }
 
-        // 지도 — 기사 위치와 경로
-        DriverMapArea(modifier = Modifier.fillMaxWidth().height(176.dp))
+        // 지도 — 서버 경로 폴리라인 + 폴링으로 갱신되는 기사 위치 마커.
+        // 경로는 방 상세의 routePolyline 을 쓴다. 방이 이미 만들어진 뒤라 서버가 확정한 경로가
+        // 있으므로, 좌표만으로 추정하는 previewRoute(16 도착지 확인에서 쓴다)를 부를 이유가 없다.
+        val routePath = remember(ride.routePolyline) {
+            ride.routePolyline?.let(::decodePolyline).orEmpty()
+        }
+        RouteMapView(
+            modifier = Modifier.fillMaxWidth().height(176.dp),
+            routePath = routePath,
+            driverPosition = driverPosition, // 범위를 벗어난 좌표면 null → 마커 미표시
+            originPosition = latLngOrNull(ride.originLat, ride.originLng),
+            destinationPosition = latLngOrNull(ride.destinationLat, ride.destinationLng),
+        )
 
         // 바텀시트
         Column(
@@ -133,14 +161,20 @@ fun DispatchStatusScreen(
             Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
                 Spacer(Modifier.height(10.dp))
                 Text(
-                    text = "${arrivalMinutes}분 뒤 도착해요",
+                    text = if (driver == null) "기사님을 배정하고 있어요" else "기사님이 오고 있어요",
                     fontSize = 22.sp,
                     fontWeight = FontWeight.Bold,
                     color = MoyeotaColor.InkPrimary,
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    text = "$pickupSpot 앞에서 만나요",
+                    // 기사가 아직 위치를 보고하지 않았을 수 있다 — 정상 상황이라 에러로 다루지 않는다.
+                    // 좌표가 못 쓸 값이어도(D-1) 마커를 못 그리므로 「받아오는 중」을 유지한다.
+                    text = if (driverPosition == null) {
+                        "$pickupSpot 앞에서 만나요 · 기사님 위치를 받아오는 중"
+                    } else {
+                        "$pickupSpot 앞에서 만나요"
+                    },
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Medium,
                     color = GrayMute,
@@ -172,7 +206,13 @@ fun DispatchStatusScreen(
                             color = MoyeotaColor.InkPrimary,
                         )
                         Text(text = vehicleModel, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = GraySlate)
-                        Text(text = driverLabel, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = GrayMute)
+                        // 기사명·별점은 백엔드 DriverSummary 에 필드가 없다 (백엔드 요청 2번)
+                        Text(
+                            text = "기사 정보 준비 중",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = GrayMute,
+                        )
                     }
                     // 기사 전화 (미연결 — 무동작)
                     Box(
@@ -193,8 +233,14 @@ fun DispatchStatusScreen(
                 ) {
                     DispatchInfoRow(label = "탑승 위치", value = pickupSpot)
                     HorizontalDivider(color = DividerGray)
+                    DispatchInfoRow(label = "도착지", value = ride.destination)
+                    HorizontalDivider(color = DividerGray)
                     DispatchInfoRow(label = "동승자", value = "나 포함 ${ride.members.size}명")
                     HorizontalDivider(color = DividerGray)
+                    if (ride.estimatedMinutes != null) {
+                        DispatchInfoRow(label = "예상 소요", value = "${ride.estimatedMinutes}분")
+                        HorizontalDivider(color = DividerGray)
+                    }
                     DispatchInfoRow(
                         label = "1인 부담",
                         value = "%,d원".format(ride.farePerPerson),
@@ -214,7 +260,7 @@ fun DispatchStatusScreen(
             }
             Spacer(Modifier.weight(1f))
         }
-        HomeIndicator()
+        NavigationBarSpacer(Modifier.background(MoyeotaColor.SurfaceCanvas))
     }
 }
 
@@ -227,49 +273,6 @@ private fun DispatchInfoRow(label: String, value: String, valueColor: Color = Mo
         Text(text = label, fontSize = 14.sp, fontWeight = FontWeight.Medium, color = MoyeotaColor.TextMute)
         Spacer(Modifier.weight(1f))
         Text(text = value, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = valueColor)
-    }
-}
-
-// 지도 자리표시 — 블록 + 경로 + 접근 중인 차량 마커 (와이어프레임 재현)
-@Composable
-private fun DriverMapArea(modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier.background(MapBg)) {
-        val w = size.width
-        val h = size.height
-        listOf(
-            Offset(w * 0.04f, h * 0.14f) to Size(w * 0.24f, h * 0.26f),
-            Offset(w * 0.34f, h * 0.06f) to Size(w * 0.3f, h * 0.22f),
-            Offset(w * 0.7f, h * 0.14f) to Size(w * 0.25f, h * 0.3f),
-            Offset(w * 0.04f, h * 0.56f) to Size(w * 0.28f, h * 0.3f),
-            Offset(w * 0.38f, h * 0.54f) to Size(w * 0.24f, h * 0.3f),
-            Offset(w * 0.76f, h * 0.62f) to Size(w * 0.2f, h * 0.26f),
-        ).forEach { (topLeft, blockSize) ->
-            drawRoundRect(MapBlock, topLeft, blockSize, CornerRadius(6.dp.toPx()))
-        }
-        // 내 위치 → 차량 경로
-        val me = Offset(w * 0.24f, h * 0.78f)
-        val car = Offset(w * 0.78f, h * 0.3f)
-        drawLine(MoyeotaColor.RouteShared, me, car, 3.5.dp.toPx(), StrokeCap.Round)
-        drawCircle(MoyeotaColor.RouteShared, 6.dp.toPx(), me)
-        // 차량 마커 (검정 라운드 박스 + 흰색 창)
-        drawRoundRect(
-            color = MoyeotaColor.InkPrimary,
-            topLeft = Offset(car.x - 22.dp.toPx(), car.y - 11.dp.toPx()),
-            size = Size(44.dp.toPx(), 22.dp.toPx()),
-            cornerRadius = CornerRadius(7.dp.toPx()),
-        )
-        drawRoundRect(
-            color = MoyeotaColor.TextOnDark,
-            topLeft = Offset(car.x - 12.dp.toPx(), car.y - 1.5.dp.toPx()),
-            size = Size(8.dp.toPx(), 3.dp.toPx()),
-            cornerRadius = CornerRadius(1.5.dp.toPx()),
-        )
-        drawRoundRect(
-            color = MoyeotaColor.TextOnDark,
-            topLeft = Offset(car.x + 4.dp.toPx(), car.y - 1.5.dp.toPx()),
-            size = Size(8.dp.toPx(), 3.dp.toPx()),
-            cornerRadius = CornerRadius(1.5.dp.toPx()),
-        )
     }
 }
 
@@ -317,24 +320,6 @@ private fun PhoneIcon(modifier: Modifier = Modifier, tint: Color = MoyeotaColor.
             end = Offset(w * 0.58f, h * 0.76f),
             strokeWidth = 1.8.dp.toPx(),
             cap = StrokeCap.Round,
-        )
-    }
-}
-
-// 홈 인디케이터 (와이어프레임 하단 검은 바)
-@Composable
-private fun HomeIndicator() {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(MoyeotaColor.SurfaceCanvas)
-            .padding(vertical = 8.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(
-            modifier = Modifier
-                .size(width = 135.dp, height = 5.dp)
-                .background(MoyeotaColor.InkPrimary, CircleShape),
         )
     }
 }

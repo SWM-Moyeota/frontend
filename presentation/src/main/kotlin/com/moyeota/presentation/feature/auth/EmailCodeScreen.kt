@@ -45,14 +45,18 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.MoyeotaTopBar
+import com.moyeota.core.designsystem.component.NavigationBarSpacer
 import com.moyeota.core.designsystem.component.PrimaryCtaButton
-import com.moyeota.core.designsystem.component.StatusBarMock
+import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.core.designsystem.theme.MoyeotaType
 import kotlinx.coroutines.delay
 
 // 07 · 인증 코드 [S03]
-// 진입: 06 인증 메일 보내기 / 뒤로 → 06 / 「인증하기」 → 09 본인 인증
+//
+// ⚠️ 현재 어떤 그래프에도 등록되어 있지 않다 (06 과 같은 이유 — 인증은 마이페이지로 이동 예정).
+//
+// (원래 배선) 진입: 06 인증 메일 보내기 / 뒤로 → 06 / 「인증하기」 → 09 본인 인증
 // 「코드 다시 받기」 → 화면 유지, 타이머 4:31 리셋 / 「메일 주소 다시 입력하기」 → 06
 private const val CODE_LENGTH = 6
 private const val RESEND_COOLDOWN_SECONDS = 4 * 60 + 31 // 재발송 쿨다운 4:31
@@ -110,7 +114,7 @@ fun EmailCodeScreen(
     }
 
     Column(modifier = Modifier.fillMaxSize().background(MoyeotaColor.SurfaceSoft)) {
-        StatusBarMock()
+        StatusBarSpacer()
         MoyeotaTopBar(
             title = "",
             onBack = onBack,
@@ -227,6 +231,7 @@ fun EmailCodeScreen(
                 modifier = Modifier.fillMaxWidth(),
             )
         }
+        NavigationBarSpacer()
     }
 }
 
