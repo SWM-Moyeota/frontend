@@ -11,9 +11,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.User
-import com.moyeota.domain.repository.ApiNotAvailableException
 import com.moyeota.domain.repository.RideRepository
-import com.moyeota.domain.session.UserSession
 import com.moyeota.presentation.core.BackStateScaffold
 import com.moyeota.presentation.core.ErrorBox
 import com.moyeota.presentation.core.LoadingBox
@@ -25,7 +23,6 @@ import kotlinx.coroutines.launch
 
 class JoinConfirmViewModel(
     private val repository: RideRepository,
-    private val userSession: UserSession,
     private val partyId: Long,
 ) : ViewModel() {
 
@@ -35,11 +32,12 @@ class JoinConfirmViewModel(
         data class Error(val message: String) : UiState
     }
 
-    // 합류 제출 상태. joined 가 true 가 되면 Route 가 22 탑승 상세로 넘긴다.
+    // 합류 제출 상태. joinedRide 가 채워지면 Route 가 21 매칭 대기로 넘긴다.
+    // 서버 합류 응답이 곧 최신 방 상세라 별도 재조회가 필요 없다.
     data class JoinState(
         val joining: Boolean = false,
         val errorMessage: String? = null,
-        val joined: Boolean = false,
+        val joinedRide: Ride? = null,
     )
 
     private val _uiState = MutableStateFlow<UiState>(UiState.Loading)
@@ -68,11 +66,11 @@ class JoinConfirmViewModel(
         viewModelScope.launch {
             _joinState.update { it.copy(joining = true, errorMessage = null) }
             try {
-                repository.joinParty(partyId, userSession.currentUserId)
-                _joinState.update { it.copy(joining = false, joined = true) }
-            } catch (e: ApiNotAvailableException) {
-                // 서버에 합류 엔드포인트가 아직 없다 — 원인 메시지를 그대로 노출한다.
-                _joinState.update { it.copy(joining = false, errorMessage = e.message) }
+                // 합류 주체는 Bearer 토큰이 정한다 — memberId 를 넘기지 않는다 (22 보고서 §2).
+                // 합류 응답(PartyDetailResponse)이 곧 갱신된 방 상세 — 화면 상태를 이걸로 덮는다
+                val joined = repository.joinParty(partyId)
+                _uiState.value = UiState.Success(joined)
+                _joinState.update { it.copy(joining = false, joinedRide = joined) }
             } catch (e: Exception) {
                 _joinState.update { it.copy(joining = false, errorMessage = "합류하지 못했어요. 잠시 후 다시 시도해 주세요") }
             }
@@ -80,26 +78,26 @@ class JoinConfirmViewModel(
     }
 
     companion object {
-        fun factory(repository: RideRepository, userSession: UserSession, partyId: Long) = viewModelFactory {
-            initializer { JoinConfirmViewModel(repository, userSession, partyId) }
+        fun factory(repository: RideRepository, partyId: Long) = viewModelFactory {
+            initializer { JoinConfirmViewModel(repository, partyId) }
         }
     }
 }
 
 // 20 합류 확인 — 서버 상세 조회 + 합류 액션 진입점. partyId 없으면 기존 더미 화면 유지.
+// 합류 성공 시 서버가 돌려준 최신 [Ride] 를 그대로 넘겨, 다음 화면(21 매칭 대기)이 재조회 없이 이어받는다.
 @Composable
 fun JoinConfirmRoute(
     repository: RideRepository,
-    userSession: UserSession,
     partyId: Long?,
     onDismiss: () -> Unit = {},
-    onJoined: () -> Unit = {},
+    onJoined: (Ride) -> Unit = {},
     onMemberClick: (User) -> Unit = {},
 ) {
     if (partyId == null) {
         JoinConfirmScreen(
             onDismiss = onDismiss,
-            onConfirmJoin = { onJoined() },
+            onConfirmJoin = onJoined,
             onMemberClick = onMemberClick,
         )
         return
@@ -107,13 +105,13 @@ fun JoinConfirmRoute(
 
     val viewModel: JoinConfirmViewModel = viewModel(
         key = "join-$partyId",
-        factory = JoinConfirmViewModel.factory(repository, userSession, partyId),
+        factory = JoinConfirmViewModel.factory(repository, partyId),
     )
     val state by viewModel.uiState.collectAsState()
     val join by viewModel.joinState.collectAsState()
 
-    LaunchedEffect(join.joined) {
-        if (join.joined) onJoined()
+    LaunchedEffect(join.joinedRide) {
+        join.joinedRide?.let(onJoined)
     }
 
     // 탭바가 없는 화면이라 뒤로가기가 유일한 이동 수단 — 로딩·에러에서도 남긴다 (QA F-1 동류)

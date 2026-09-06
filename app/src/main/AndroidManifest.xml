@@ -5,6 +5,11 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- 현재 위치: 합승 탭(17~19) 지도 중심·내 위치 마커, 15 목적지 입력의 출발지 기본값.
+         둘 중 하나만 허용돼도 동작한다 (대략 위치로도 지도 중심은 잡힌다). -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
     <application
         android:name=".MoyeotaApplication"
         android:allowBackup="true"
@@ -16,6 +21,11 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.Moyeota">
+
+        <!-- 네이버 지도 NCP 키 (신규 키 체계는 NCP_KEY_ID, 구 CLIENT_ID 아님) -->
+        <meta-data
+            android:name="com.naver.maps.map.NCP_KEY_ID"
+            android:value="${naverMapsClientId}" />
 
         <activity
             android:name=".MainActivity"

@@ -29,7 +29,7 @@ import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.AvatarCircle
 import com.moyeota.core.designsystem.component.MoyeotaBottomBar
 import com.moyeota.core.designsystem.component.MoyeotaTab
-import com.moyeota.core.designsystem.component.StatusBarMock
+import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.domain.model.ChatRoomStatus
 import com.moyeota.domain.model.MyChatRoom
@@ -53,7 +53,7 @@ fun ChatListScreen(
 ) {
     Column(modifier = Modifier.fillMaxSize().background(CanvasBg)) {
         Column(modifier = Modifier.fillMaxWidth().background(MoyeotaColor.SurfaceCanvas)) {
-            StatusBarMock()
+            StatusBarSpacer()
             Text(
                 text = "채팅",
                 fontSize = 18.sp,

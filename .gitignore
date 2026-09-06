@@ -33,3 +33,7 @@ local.properties
 
 # Profiling
 *.hprof
+
+# 에이전트 작업 스크린샷 (용량 큼 — 리포트 md만 추적)
+_workspace/screenshots/
+_workspace_*/

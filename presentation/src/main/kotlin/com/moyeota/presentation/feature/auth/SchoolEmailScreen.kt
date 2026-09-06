@@ -40,13 +40,19 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.MoyeotaTextField
 import com.moyeota.core.designsystem.component.MoyeotaTopBar
+import com.moyeota.core.designsystem.component.NavigationBarSpacer
 import com.moyeota.core.designsystem.component.PrimaryCtaButton
-import com.moyeota.core.designsystem.component.StatusBarMock
+import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.core.designsystem.theme.MoyeotaType
 
 // 06 · 학교 이메일 [S02]
-// 진입: 05에서 「학생」 선택 / 뒤로 → 05 / 「인증 메일 보내기」 → 07 인증 코드
+//
+// ⚠️ 현재 어떤 그래프에도 등록되어 있지 않다 — 가입 필수 경로에서 05~08 을 걷어냈다.
+// 가입 API 에 학교 인증 개념이 없고, 인증은 마이페이지에서 나중에 붙이는 컨셉이다.
+// 그때 이 화면을 그대로 재사용하기 위해 파일은 남겨 둔다(MainNavGraph 의 C 절 주석 참고).
+//
+// (원래 배선) 진입: 05에서 「학생」 선택 / 뒤로 → 05 / 「인증 메일 보내기」 → 07 인증 코드
 private val SupportedDomains = listOf("@pusan.ac.kr", "@pukyong.ac.kr", "@donga.ac.kr")
 
 // 유효값 검증: 로컬파트 — 영문·숫자·. _ - 만 허용, 2~64자, 공백 불가
@@ -75,7 +81,7 @@ fun SchoolEmailScreen(
     }
 
     Column(modifier = Modifier.fillMaxSize().background(MoyeotaColor.SurfaceSoft)) {
-        StatusBarMock()
+        StatusBarSpacer()
         MoyeotaTopBar(
             title = "",
             onBack = onBack,
@@ -221,6 +227,7 @@ fun SchoolEmailScreen(
                 modifier = Modifier.fillMaxWidth(),
             )
         }
+        NavigationBarSpacer()
     }
 }
 

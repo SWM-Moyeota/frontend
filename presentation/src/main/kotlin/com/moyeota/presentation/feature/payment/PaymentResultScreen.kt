@@ -33,8 +33,9 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.BackArrowIcon
+import com.moyeota.core.designsystem.component.NavigationBarSpacer
 import com.moyeota.core.designsystem.component.PrimaryCtaButton
-import com.moyeota.core.designsystem.component.StatusBarMock
+import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.core.designsystem.theme.MoyeotaType
 
@@ -66,7 +67,7 @@ fun PaymentResultScreen(
     val feePerPerson = if (memberCount > 0) serviceFee / memberCount else 0
 
     Column(modifier = Modifier.fillMaxSize().background(MoyeotaColor.SurfaceSoft)) {
-        StatusBarMock()
+        StatusBarSpacer()
         PaymentResultHeader(title = "결제 완료", onBack = onBack)
 
         Column(
@@ -195,6 +196,7 @@ fun PaymentResultScreen(
                 PrimaryCtaButton(text = "확인", onClick = onConfirm)
             }
         }
+        NavigationBarSpacer()
     }
 }
 

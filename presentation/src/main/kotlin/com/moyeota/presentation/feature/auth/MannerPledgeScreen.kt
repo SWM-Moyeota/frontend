@@ -22,12 +22,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
@@ -39,43 +35,47 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.MoyeotaTopBar
+import com.moyeota.core.designsystem.component.NavigationBarSpacer
+import com.moyeota.core.designsystem.component.NoticeBanner
+import com.moyeota.core.designsystem.component.NoticeKind
 import com.moyeota.core.designsystem.component.PrimaryCtaButton
-import com.moyeota.core.designsystem.component.StatusBarMock
+import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.core.designsystem.theme.MoyeotaTheme
 import com.moyeota.core.designsystem.theme.MoyeotaType
-import kotlinx.coroutines.delay
 
-// 12 · 매너 서약 [S07]
-// 진입: 11 안심 설정 / 뒤로 → 11 / 「동의하고 가입 완료」 → 13 가입 완료
-// 개별 항목 탭 → 해당 정책 상세 (미연결)
+/**
+ * 12 · 매너 서약 [S07]
+ *
+ * 진입: 11 안심 설정 / 뒤로 → 11 / 「동의하고 가입 완료」 → 13 가입 완료
+ * 개별 항목 탭 → 해당 정책 상세 (미연결)
+ *
+ * **가입 플로우의 유일한 서버 제출 지점**이다 — [onComplete] 가 회원가입 + 자동 로그인을
+ * 실행하고, 성공했을 때만 호출부가 13 으로 넘긴다. 그래서 진행 상태와 실패 사유를
+ * 화면이 직접 만들지 않고 [submitting] · [errorMessage] 로 받는다
+ * (예전엔 500ms 딜레이 후 무조건 다음 화면으로 넘어갔다).
+ */
 @Composable
 fun MannerPledgeScreen(
     onBack: () -> Unit,
     onComplete: () -> Unit,
     modifier: Modifier = Modifier,
+    submitting: Boolean = false,
+    errorMessage: String? = null,
 ) {
-    // 4개 항목 전체 동의 필수 → 하나라도 미체크면 CTA 비활성
-    val checks = remember { mutableStateListOf(false, false, false, false) }
+    // 전체 항목 동의 필수 → 하나라도 미체크면 CTA 비활성.
+    // 개수를 [pledgeItems] 에서 끌어온다 — 항목을 늘렸을 때 체크 배열이 짧아 터지는 일이 없도록.
+    val checks = remember { mutableStateListOf(*Array(pledgeItems.size) { false }) }
     val allChecked = checks.all { it }
-    var submitting by remember { mutableStateOf(false) }
-
-    // 제출 중 loading 후 13 가입 완료로 이동 (동의 시각·버전 기록은 서버 연동 시점에 처리)
-    LaunchedEffect(submitting) {
-        if (submitting) {
-            delay(500)
-            onComplete()
-        }
-    }
 
     Column(modifier = modifier.fillMaxSize().background(MoyeotaColor.SurfaceSoft)) {
-        StatusBarMock()
+        StatusBarSpacer()
         MoyeotaTopBar(
             title = "",
             onBack = onBack,
             actions = {
                 Text(
-                    text = "5 / 5",
+                    text = "3 / 3",
                     style = MoyeotaType.BodySm,
                     fontWeight = FontWeight.Medium,
                     color = Color(0xFF8A93A0),
@@ -164,20 +164,29 @@ fun MannerPledgeScreen(
         }
 
         Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+            // 실패는 화면을 갈아엎지 않고 CTA 바로 위에 남긴다 — 다시 누를 곳이 아래 있기 때문
+            if (errorMessage != null) {
+                NoticeBanner(kind = NoticeKind.ERROR, text = errorMessage)
+                Spacer(Modifier.height(12.dp))
+            }
             PrimaryCtaButton(
                 text = "동의하고 가입 완료",
-                onClick = { submitting = true },
-                enabled = allChecked,
+                onClick = onComplete,
+                enabled = allChecked && !submitting,
                 loading = submitting,
             )
         }
-        PledgeHomeIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
+        NavigationBarSpacer()
     }
 }
 
 private data class PledgeItem(val title: String, val description: String)
 
 private val pledgeItems = listOf(
+    // 09 본인 인증에 있던 「이용약관 · 개인정보 수집에 동의해요」 체크를 여기로 합쳤다.
+    // 09 가 가입 경로에서 빠지기도 했지만, 그 전에도 동의를 두 화면이 나눠 받고 있었다
+    // — 무엇에 동의했는지는 제출 버튼이 있는 이 화면에 모여 있어야 한다.
+    PledgeItem("이용약관 · 개인정보 수집에 동의해요", "실명·생년월일·연락처는 본인 확인과 매칭 안전에만 써요"),
     PledgeItem("약속한 시간과 장소를 지킬게요", "무단 취소가 반복되면 이용이 제한돼요"),
     PledgeItem("요금은 내릴 때 바로 정산할게요", "미정산이 쌓이면 매칭이 막혀요"),
     PledgeItem("불쾌한 말과 행동을 하지 않을게요", "신고가 들어오면 24시간 안에 확인해요"),
@@ -290,16 +299,6 @@ private fun PledgeStepProgressBar(progress: Float, modifier: Modifier = Modifier
                 .background(MoyeotaColor.Primary500, RoundedCornerShape(2.dp)),
         )
     }
-}
-
-@Composable
-private fun PledgeHomeIndicator(modifier: Modifier = Modifier) {
-    Box(
-        modifier = modifier
-            .padding(top = 12.dp, bottom = 9.dp)
-            .size(width = 135.dp, height = 5.dp)
-            .background(MoyeotaColor.InkPrimary, RoundedCornerShape(2.5.dp)),
-    )
 }
 
 @Preview(showBackground = true, widthDp = 393, heightDp = 852)

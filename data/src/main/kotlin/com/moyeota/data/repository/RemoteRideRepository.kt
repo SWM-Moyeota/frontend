@@ -4,22 +4,28 @@ import com.moyeota.data.remote.MatchingApi
 import com.moyeota.data.remote.ReportApi
 import com.moyeota.data.remote.dto.CallResultRequestDto
 import com.moyeota.data.remote.dto.ReportRequestDto
+import com.moyeota.data.remote.routeRequestDto
+import com.moyeota.data.remote.toAssignedDriver
 import com.moyeota.data.remote.toRequestDto
 import com.moyeota.data.remote.toRide
+import com.moyeota.data.remote.toRouteEstimate
+import com.moyeota.domain.model.AssignedDriver
 import com.moyeota.domain.model.NewParty
 import com.moyeota.domain.model.Ride
-import com.moyeota.domain.repository.ApiNotAvailableException
+import com.moyeota.domain.model.RouteEstimate
 import com.moyeota.domain.repository.RideRepository
 import kotlin.coroutines.cancellation.CancellationException
 
 // 매칭·신고 도메인만 서버 연동 — 나머지는 더미로 위임한다.
-// reportApi 기본값 null: AppContainer 배선(app 모듈)은 이번 범위 밖이라 기존 생성 호출
-// `RemoteRideRepository(apis.matching)` 을 깨지 않기 위함. 배선 전 신고 호출은
-// 한국어 IllegalStateException 으로 실패한다 (화면은 다이얼을 우선 연다).
+// reportApi 기본값 null: 신고 배선이 없는 생성 호출(테스트 등)을 깨지 않기 위함.
+// 배선 전 신고 호출은 한국어 IllegalStateException 으로 실패한다 (화면은 다이얼을 우선 연다).
+// currentLocation: 신고 시점의 실측 좌표 공급자(app 모듈이 FusedLocation 으로 주입).
+// 못 얻으면 null — 서버 ReportRequest 는 좌표 null 을 허용하므로 가짜 좌표를 지어내지 않는다.
 class RemoteRideRepository(
     private val api: MatchingApi,
     private val local: RideRepository = DummyRideRepository(),
     private val reportApi: ReportApi? = null,
+    private val currentLocation: suspend () -> Pair<Double, Double>? = { null },
 ) : RideRepository {
 
     override fun getNearbyParties(): List<Ride> = local.getNearbyParties()
@@ -28,36 +34,45 @@ class RemoteRideRepository(
 
     override suspend fun getParties(): List<Ride> = api.getParties().list.map { it.toRide() }
 
+    // 전체 목록과 같은 경로 + 쿼리 파라미터 4개. 매퍼가 departureLat/Lng 를 originLat/Lng 로 옮긴다.
+    override suspend fun getPartiesWithin(
+        swLat: Double,
+        swLng: Double,
+        neLat: Double,
+        neLng: Double,
+    ): List<Ride> = api.getPartiesWithin(swLat, swLng, neLat, neLng).list.map { it.toRide() }
+
     override suspend fun getPartyDetail(partyId: Long): Ride = api.getPartyDetail(partyId).toRide()
 
+    // 생성 응답에 생성자 id 가 없어 요청에 쓴 hostId 를 그대로 넘겨 멤버/방장을 채운다.
     override suspend fun createParty(request: NewParty): Ride =
-        api.openParty(request.toRequestDto()).toRide()
+        api.openParty(request.toRequestDto()).toRide(creatorId = request.hostId)
 
-    // 백엔드 PartyApplicationService.join 은 있으나 PartyController 에 매핑이 없다(origin/develop 확인).
-    // 경로를 추측해 호출하면 404 로 원인이 흐려지므로, 계약은 유지하되 명시적으로 실패시킨다.
-    override suspend fun joinParty(partyId: Long, memberId: Long) {
-        throw ApiNotAvailableException("합류 API가 아직 서버에 없어요")
-    }
+    // 합류 응답이 곧 방 상세라 재조회 없이 그대로 반환한다. 합류자는 Bearer 토큰이 정한다.
+    override suspend fun joinParty(partyId: Long): Ride = api.joinParty(partyId).toRide()
 
-    override suspend fun leaveParty(partyId: Long, memberId: Long) = api.leaveParty(partyId, memberId)
+    override suspend fun leaveParty(partyId: Long) = api.leaveParty(partyId)
 
-    override suspend fun setReady(partyId: Long, memberId: Long) = api.ready(partyId, memberId)
-
-    override suspend fun cancelReady(partyId: Long, memberId: Long) = api.cancelReady(partyId, memberId)
-
-    override suspend fun startMatching(partyId: Long, memberId: Long) = api.startMatching(partyId, memberId)
+    override suspend fun getAssignedDriver(partyId: Long): AssignedDriver =
+        api.getAssignedDriver(partyId).toAssignedDriver()
 
     override suspend fun reportEmergency(partyId: Long?): Long {
         val report = reportApi
             ?: throw IllegalStateException("신고 API가 아직 연결되지 않았어요 (AppContainer 배선 필요)")
+        // 실측 좌표. 측위 실패(권한 없음·타임아웃)는 신고를 막지 않는다 — 좌표만 null 로 보낸다.
+        val location = try {
+            currentLocation()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        }
         return runReportCall("긴급 신고 저장에 실패했어요") {
-            // TODO(측위 연동): 승객 앱에 측위 소스가 아직 없어 고정 좌표(서울시청)를 보낸다.
-            //  위치 소스 도입 시 이 상수만 실제 좌표로 교체하면 된다.
             report.report(
                 ReportRequestDto(
                     partyId = partyId,
-                    latitude = FALLBACK_LATITUDE,
-                    longitude = FALLBACK_LONGITUDE,
+                    latitude = location?.first,
+                    longitude = location?.second,
                 ),
             ).reportId
         }
@@ -82,9 +97,13 @@ class RemoteRideRepository(
         throw IllegalStateException(message, e)
     }
 
-    private companion object {
-        // TODO(측위 연동): 임시 기준점 — 서울시청 좌표
-        const val FALLBACK_LATITUDE = 37.5665
-        const val FALLBACK_LONGITUDE = 126.9780
-    }
+    // 백엔드가 POST 로 바뀌어 열린 엔드포인트. 응답 폴리라인 필드는 route 가 아니라 path 다.
+    override suspend fun previewRoute(
+        departureLat: Double,
+        departureLng: Double,
+        destinationLat: Double,
+        destinationLng: Double,
+    ): RouteEstimate = api.previewRoute(
+        routeRequestDto(departureLat, departureLng, destinationLat, destinationLng),
+    ).toRouteEstimate()
 }

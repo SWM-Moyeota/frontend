@@ -53,7 +53,8 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
-import com.moyeota.core.designsystem.component.StatusBarMock
+import com.moyeota.core.designsystem.component.NavigationBarSpacer
+import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.domain.repository.RideRepository
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -226,7 +227,7 @@ fun EmergencyScreen(
     val currentHoldCompleted by rememberUpdatedState(onHoldCompleted)
 
     Column(modifier = Modifier.fillMaxSize().background(EmergencyBg)) {
-        StatusBarMock()
+        StatusBarSpacer()
         // 닫기(X) → 26 운행 중
         Box(
             modifier = Modifier
@@ -352,14 +353,8 @@ fun EmergencyScreen(
             )
             Spacer(Modifier.height(30.dp))
         }
-        // 홈 인디케이터
-        Box(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp), contentAlignment = Alignment.Center) {
-            Box(
-                Modifier
-                    .size(width = 135.dp, height = 5.dp)
-                    .background(MoyeotaColor.InkPrimary, RoundedCornerShape(2.5.dp)),
-            )
-        }
+        // 홈 인디케이터 목업 대신 실제 제스처 인셋 여백 (main 병합 — Bars.kt 정리 참조)
+        NavigationBarSpacer()
     }
 }
 
