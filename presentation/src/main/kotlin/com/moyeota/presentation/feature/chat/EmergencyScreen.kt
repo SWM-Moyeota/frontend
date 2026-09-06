@@ -1,8 +1,9 @@
 package com.moyeota.presentation.feature.chat
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -21,6 +22,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -32,103 +36,195 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.moyeota.core.designsystem.component.MoyeotaTextField
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
 import com.moyeota.core.designsystem.component.NavigationBarSpacer
-import com.moyeota.core.designsystem.component.NoticeBanner
-import com.moyeota.core.designsystem.component.NoticeKind
 import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.domain.repository.RideRepository
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
 // 와이어프레임 색 (core token 미정의 — 화면 재현용)
 private val EmergencyBg = Color(0xFFF5F7FA)
-private val ReasonIconBg = Color(0xFFFDECEE) // Danger50 동일값
 private val EmMuteGray = Color(0xFF8A93A0)
 private val EmAshGray = Color(0xFF9AA1AC)
 private val EmTextMute = Color(0xFF6B7280)
 private val EmCardShadow = Color(0x1A1B2A4A)
 
-// 신고 사유 (디스크립션: 경로 이탈 / 불쾌한 언행 / 위급 / 기타)
-enum class EmergencyReason(val title: String, val subtitle: String) {
-    ROUTE_DEVIATION("길이 이상해요", "정해진 경로를 벗어났어요"),
-    UNPLEASANT_SPEECH("불쾌한 말을 들었어요", "언행이 불편했어요"),
-    DANGEROUS("무서운 상황이에요", "즉시 도움이 필요해요"), // 즉시 대응 큐로 분리
-    OTHER("그 밖의 위급 상황", "직접 설명할게요"), // 선택 시 텍스트 입력 필수 (10~500자)
+/**
+ * 27 · 긴급 신고 ViewModel [S17]
+ *
+ * 새 흐름 (사유 선택 없음 — 서버 ReportRequest 는 partyId/위치뿐):
+ * 3초 홀드 완료 → ①신고 저장 발사(reportEmergency — 실패해도 플래그만, 통화가 최우선)
+ * ②UI 가 즉시 112 다이얼(ACTION_DIAL) → 앱 복귀(ON_RESUME) → "실제로 통화하셨나요?" 다이얼로그
+ * → confirmEmergencyCall(called) 저장 성공 시 done → 26 복귀
+ */
+class EmergencyViewModel(
+    private val repository: RideRepository,
+    private val partyId: Long?,
+) : ViewModel() {
+
+    data class UiState(
+        val dialLaunched: Boolean = false,      // 3초 홀드 완료 — 112 다이얼 발사됨
+        val reportSaveFailed: Boolean = false,  // 신고 저장 실패 (플래그만 — 통화 흐름은 계속)
+        val showCallConfirm: Boolean = false,   // 다이얼 복귀 후 통화 여부 다이얼로그
+        val confirmSaving: Boolean = false,
+        val confirmError: String? = null,       // call-result 저장 실패 안내 (재선택 가능)
+        val done: Boolean = false,              // call-result 저장 완료 → 26 복귀
+    )
+
+    private val _uiState = MutableStateFlow(UiState())
+    val uiState: StateFlow<UiState> = _uiState.asStateFlow()
+
+    /** 3초 홀드 완료 — 신고 저장을 발사한다. 실패해도 다이얼은 이미 열리므로 플래그만 남긴다. */
+    fun onEmergencyHold() {
+        if (_uiState.value.dialLaunched) return
+        _uiState.value = _uiState.value.copy(dialLaunched = true)
+        viewModelScope.launch {
+            try {
+                repository.reportEmergency(partyId)
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(reportSaveFailed = true)
+            }
+        }
+    }
+
+    /** 다이얼에서 앱 복귀(ON_RESUME) — 홀드 이후라면 통화 여부 다이얼로그를 띄운다 */
+    fun onResumedFromDial() {
+        val current = _uiState.value
+        if (current.dialLaunched && !current.done && !current.showCallConfirm) {
+            _uiState.value = current.copy(showCallConfirm = true)
+        }
+    }
+
+    /** 「통화했어요」/「통화 안 했어요」 선택 — 저장 성공 시 done, 실패 시 안내 후 재선택 */
+    fun onCallConfirm(called: Boolean) {
+        if (_uiState.value.confirmSaving) return
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(confirmSaving = true, confirmError = null)
+            try {
+                repository.confirmEmergencyCall(called)
+                _uiState.value = _uiState.value.copy(
+                    confirmSaving = false,
+                    showCallConfirm = false,
+                    done = true,
+                )
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    confirmSaving = false,
+                    confirmError = "통화 여부 저장에 실패했어요. 다시 선택해 주세요",
+                )
+            }
+        }
+    }
+
+    companion object {
+        fun factory(repository: RideRepository, partyId: Long?) = viewModelFactory {
+            initializer { EmergencyViewModel(repository, partyId) }
+        }
+    }
 }
 
 /**
- * 27 · 긴급 신고 [S17]
+ * 27 · 긴급 신고 진입점 — 서버 연동(신고 저장 + 통화 여부)
  *
- * 이동(디스크립션):
+ * 이동:
  * - 뒤로(X) → 26 운행 중 (onBack)
- * - 사유 선택 (1개 필수 — 미선택 시 신고 버튼 비활성)
- * - 「3초간 길게 눌러 신고」 3초 유지 성공 → `POST /api/v1/reports` 접수 (onReportSubmitted)
- *   · 3초 롱프레스 유지 실패 시 미전송 (오작동 방지)
- * - 접수 성공([reportId] 수신) → 「112에 전화하셨나요?」 확인 카드
- *   → `PATCH /reports/{id}/call-result` (onConfirmCallResult) 후 26 복귀
+ * - 3초 홀드 완료 → 신고 저장 발사 + 즉시 112 다이얼(ACTION_DIAL — 발신은 사용자)
+ * - 다이얼 복귀 → 통화 여부 다이얼로그 → 저장 성공 시 26 복귀 (onReportSubmitted)
+ */
+@Composable
+fun EmergencyRoute(
+    repository: RideRepository,
+    partyId: Long?,
+    rideSummary: String = "부산대 정문 → 서면역 · 12가 3456",
+    onBack: () -> Unit = {},
+    onReportSubmitted: () -> Unit = {},
+) {
+    val viewModel: EmergencyViewModel =
+        viewModel(factory = EmergencyViewModel.factory(repository, partyId))
+    val state by viewModel.uiState.collectAsState()
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    // 112 다이얼에서 앱 복귀(ON_RESUME) 감지 — 홀드 이후 첫 복귀에 통화 여부 다이얼로그
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) viewModel.onResumedFromDial()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    // call-result 저장 완료 → 26 운행 중 복귀
+    LaunchedEffect(state.done) {
+        if (state.done) onReportSubmitted()
+    }
+
+    EmergencyScreen(
+        rideSummary = rideSummary,
+        dialLaunched = state.dialLaunched,
+        onBack = onBack,
+        onHoldCompleted = {
+            // ①신고 저장 발사 (실패해도 플래그만) ②즉시 112 다이얼 — 통화가 최우선
+            viewModel.onEmergencyHold()
+            runCatching {
+                context.startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:112")))
+            }
+        },
+    )
+
+    if (state.showCallConfirm) {
+        CallConfirmDialog(
+            saving = state.confirmSaving,
+            errorText = state.confirmError,
+            onCalled = { viewModel.onCallConfirm(true) },
+            onNotCalled = { viewModel.onCallConfirm(false) },
+        )
+    }
+}
+
+/**
+ * 27 · 긴급 신고 [S17] — 순수 UI
  *
- * 서버 제약: 사유·상세 텍스트를 받는 필드가 백엔드 `ReportRequest` 에 없다
- * (reporterId · partyId · 좌표뿐). 화면에서 고른 사유는 아직 서버로 가지 않는다.
- * 신고 자체도 **탑승 중(IN_RIDE)** 일 때만 서버가 받아준다.
+ * - 뒤로(X) → 26 운행 중 (onBack)
+ * - 「3초간 길게 눌러 신고」 3초 유지 성공 → onHoldCompleted (신고 발사 + 112 다이얼)
+ *   · 3초 롱프레스 유지 실패 시 미전송 (오작동 방지)
+ * - 사유 선택 없음 — 서버가 사유를 받지 않는다 (partyId/위치만 전송)
  *
  * Safety500/600 색상은 이 화면(신고) 전용.
  */
 @Composable
 fun EmergencyScreen(
     rideSummary: String = "부산대 정문 → 서면역 · 12가 3456",
-    submitting: Boolean = false,
-    submitErrorMessage: String? = null,
-    reportId: Long? = null, // 접수 완료 → 전화 연결 여부 확인 카드 노출
-    confirmingCall: Boolean = false,
+    dialLaunched: Boolean = false,
     onBack: () -> Unit = {},
-    onReportSubmitted: (reason: EmergencyReason, detail: String) -> Unit = { _, _ -> },
-    onConfirmCallResult: (called: Boolean) -> Unit = {},
+    onHoldCompleted: () -> Unit = {},
 ) {
-    Box(modifier = Modifier.fillMaxSize()) {
-        EmergencyForm(
-            rideSummary = rideSummary,
-            submitting = submitting,
-            submitErrorMessage = submitErrorMessage,
-            onBack = onBack,
-            onReportSubmitted = onReportSubmitted,
-        )
-        if (reportId != null) {
-            CallResultOverlay(
-                confirming = confirmingCall,
-                onConfirmCallResult = onConfirmCallResult,
-            )
-        }
-    }
-}
-
-@Composable
-private fun EmergencyForm(
-    rideSummary: String,
-    submitting: Boolean,
-    submitErrorMessage: String?,
-    onBack: () -> Unit,
-    onReportSubmitted: (reason: EmergencyReason, detail: String) -> Unit,
-) {
-    var selectedReason by remember { mutableStateOf<EmergencyReason?>(null) }
-    var detailText by remember { mutableStateOf("") }
     var holding by remember { mutableStateOf(false) }
 
-    // 사유 1개 필수 + 「직접 설명할게요」는 10~500자 입력 필수. 접수 중에는 재전송을 막는다.
-    val reportEnabled = !submitting && selectedReason != null &&
-        (selectedReason != EmergencyReason.OTHER || detailText.trim().length in 10..500)
-
-    val currentSubmit by rememberUpdatedState(onReportSubmitted)
-    val currentReason by rememberUpdatedState(selectedReason)
-    val currentDetail by rememberUpdatedState(detailText)
+    // 다이얼 발사 후에는 중복 홀드 방지
+    val holdEnabled = !dialLaunched
+    val currentHoldCompleted by rememberUpdatedState(onHoldCompleted)
 
     Column(modifier = Modifier.fillMaxSize().background(EmergencyBg)) {
         StatusBarSpacer()
@@ -162,7 +258,7 @@ private fun EmergencyForm(
             )
             Spacer(Modifier.height(10.dp))
             Text(
-                text = "무슨 일인지 알려주시면 바로 도와드릴게요",
+                text = "신고하면 현재 위치와 운행 정보가 운영팀에 전달되고,\n바로 112 통화 화면으로 연결돼요",
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Normal,
                 color = EmTextMute,
@@ -192,47 +288,13 @@ private fun EmergencyForm(
                     color = MoyeotaColor.InkPrimary,
                 )
             }
-
-            Spacer(Modifier.height(24.dp))
-            Text(
-                text = "무슨 일이 있었나요?",
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Medium,
-                color = EmMuteGray,
-            )
-            Spacer(Modifier.height(10.dp))
-            EmergencyReason.entries.forEachIndexed { index, reason ->
-                ReasonCard(
-                    reason = reason,
-                    selected = selectedReason == reason,
-                    onClick = { selectedReason = reason },
-                )
-                if (index != EmergencyReason.entries.lastIndex) Spacer(Modifier.height(12.dp))
-            }
-
-            // 「직접 설명할게요」 선택 시 텍스트 입력 필수 (10~500자)
-            if (selectedReason == EmergencyReason.OTHER) {
-                Spacer(Modifier.height(12.dp))
-                MoyeotaTextField(
-                    value = detailText,
-                    onValueChange = { if (it.length <= 500) detailText = it },
-                    placeholder = "상황을 설명해 주세요 (10~500자)",
-                    errorText = if (detailText.isNotEmpty() && detailText.trim().length < 10) "10자 이상 입력해 주세요" else null,
-                    helperText = if (detailText.isEmpty()) "10자 이상 입력해야 신고할 수 있어요" else null,
-                )
-            }
             Spacer(Modifier.height(16.dp))
         }
 
         // 하단 고정: 안내 + 신고 버튼 + 푸터
         Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-            // 공통 규칙: 화면 단위 오류는 CTA 위 NoticeBanner(ERROR)
-            if (submitErrorMessage != null) {
-                NoticeBanner(kind = NoticeKind.ERROR, text = submitErrorMessage)
-                Spacer(Modifier.height(10.dp))
-            }
             Text(
-                text = "신고하면 현재 위치와 운행 정보가 운영팀에 전달돼요",
+                text = "3초를 채우면 즉시 112 통화 화면이 열려요",
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Medium,
                 color = EmAshGray,
@@ -247,13 +309,13 @@ private fun EmergencyForm(
                     .clip(RoundedCornerShape(16.dp))
                     .background(
                         when {
-                            !reportEnabled -> MoyeotaColor.SurfaceSoft
+                            !holdEnabled -> MoyeotaColor.SurfaceSoft
                             holding -> MoyeotaColor.Safety600
                             else -> MoyeotaColor.Safety500
                         },
                     )
-                    .pointerInput(reportEnabled) {
-                        if (reportEnabled) {
+                    .pointerInput(holdEnabled) {
+                        if (holdEnabled) {
                             detectTapGestures(
                                 onPress = {
                                     holding = true
@@ -261,7 +323,7 @@ private fun EmergencyForm(
                                     val releasedEarly = withTimeoutOrNull(3_000L) { tryAwaitRelease() }
                                     holding = false
                                     if (releasedEarly == null) {
-                                        currentReason?.let { currentSubmit(it, currentDetail.trim()) } // 접수 후 → 26 복귀
+                                        currentHoldCompleted() // 신고 발사 + 112 다이얼
                                         tryAwaitRelease()
                                     }
                                 },
@@ -272,13 +334,13 @@ private fun EmergencyForm(
             ) {
                 Text(
                     text = when {
-                        submitting -> "접수 중…"
+                        !holdEnabled -> "112 통화 화면으로 연결했어요"
                         holding -> "계속 누르고 계세요…"
                         else -> "3초간 길게 눌러 신고"
                     },
                     fontSize = 17.sp,
                     fontWeight = FontWeight.Bold,
-                    color = if (reportEnabled) MoyeotaColor.TextOnDark else MoyeotaColor.TextAsh,
+                    color = if (holdEnabled) MoyeotaColor.TextOnDark else MoyeotaColor.TextAsh,
                 )
             }
             Spacer(Modifier.height(14.dp))
@@ -291,144 +353,97 @@ private fun EmergencyForm(
             )
             Spacer(Modifier.height(30.dp))
         }
+        // 홈 인디케이터 목업 대신 실제 제스처 인셋 여백 (main 병합 — Bars.kt 정리 참조)
         NavigationBarSpacer()
     }
 }
 
 /**
- * 접수 직후 뜨는 전화 연결 확인 카드.
- *
- * 새 화면을 만들지 않고 신고 화면 위 스크림으로 덮는다 — 접수와 통화 확인은 한 흐름이라
- * 화면을 갈라놓으면 사용자가 중간에서 이탈했을 때 서버의 신고 레코드가 미확정으로 남는다.
- * 서버는 신고당 **1회만** 통화 여부를 받으므로 응답 후에는 곧바로 화면을 닫는다.
+ * "112와 실제로 통화하셨나요?" — 다이얼 복귀 후 통화 여부 확인.
+ * 바깥 탭·back 으로 닫히지 않는다 — 반드시 둘 중 하나를 선택해야 26 으로 복귀.
  */
 @Composable
-private fun CallResultOverlay(confirming: Boolean, onConfirmCallResult: (Boolean) -> Unit) {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MoyeotaColor.Scrim)
-            // 스크림 탭으로는 닫히지 않는다 (통화 여부는 반드시 답해야 하는 질문)
-            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { },
-        contentAlignment = Alignment.Center,
+private fun CallConfirmDialog(
+    saving: Boolean,
+    errorText: String?,
+    onCalled: () -> Unit,
+    onNotCalled: () -> Unit,
+) {
+    Dialog(
+        onDismissRequest = { /* 선택 전에는 닫을 수 없다 */ },
+        properties = DialogProperties(
+            dismissOnBackPress = false,
+            dismissOnClickOutside = false,
+        ),
     ) {
         Column(
             modifier = Modifier
-                .padding(horizontal = 32.dp)
+                .fillMaxWidth()
                 .clip(RoundedCornerShape(20.dp))
                 .background(MoyeotaColor.SurfaceCanvas)
-                .padding(24.dp),
+                .padding(horizontal = 22.dp, vertical = 24.dp),
         ) {
             Text(
-                text = "신고가 접수됐어요",
+                text = "112와 실제로 통화하셨나요?",
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
                 color = MoyeotaColor.InkPrimary,
             )
             Spacer(Modifier.height(8.dp))
             Text(
-                text = "위급한 상황이라면 112에 바로 전화해 주세요.\n전화하셨나요?",
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Medium,
+                text = "실제 통화 여부는 운영팀 대응에 사용돼요",
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Normal,
                 color = EmTextMute,
             )
+            if (errorText != null) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = errorText,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MoyeotaColor.Safety500,
+                )
+            }
             Spacer(Modifier.height(20.dp))
             Row(modifier = Modifier.fillMaxWidth()) {
-                CallResultButton(
-                    text = "아직이요",
-                    enabled = !confirming,
-                    background = MoyeotaColor.SurfaceSoft,
-                    textColor = MoyeotaColor.InkPrimary,
-                    onClick = { onConfirmCallResult(false) },
-                    modifier = Modifier.weight(1f),
-                )
-                Spacer(Modifier.width(12.dp))
-                CallResultButton(
-                    text = "전화했어요",
-                    enabled = !confirming,
-                    background = MoyeotaColor.Safety500,
-                    textColor = MoyeotaColor.TextOnDark,
-                    onClick = { onConfirmCallResult(true) },
-                    modifier = Modifier.weight(1f),
-                )
+                // 「통화 안 했어요」 — 보조
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(50.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(MoyeotaColor.SurfaceSoft)
+                        .clickable(enabled = !saving) { onNotCalled() },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "통화 안 했어요",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (saving) MoyeotaColor.TextAsh else MoyeotaColor.InkPrimary,
+                    )
+                }
+                Spacer(Modifier.width(10.dp))
+                // 「통화했어요」 — 주 액션 (Safety500 — 신고 화면 전용색)
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(50.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(if (saving) MoyeotaColor.SurfaceSoft else MoyeotaColor.Safety500)
+                        .clickable(enabled = !saving) { onCalled() },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = if (saving) "저장 중…" else "통화했어요",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (saving) MoyeotaColor.TextAsh else MoyeotaColor.TextOnDark,
+                    )
+                }
             }
         }
-    }
-}
-
-@Composable
-private fun CallResultButton(
-    text: String,
-    enabled: Boolean,
-    background: Color,
-    textColor: Color,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Box(
-        modifier = modifier
-            .height(48.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(background)
-            .clickable(enabled = enabled) { onClick() },
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = text,
-            fontSize = 15.sp,
-            fontWeight = FontWeight.Bold,
-            color = if (enabled) textColor else MoyeotaColor.TextAsh,
-        )
-    }
-}
-
-@Composable
-private fun ReasonCard(reason: EmergencyReason, selected: Boolean, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(64.dp)
-            .shadow(4.dp, RoundedCornerShape(16.dp), spotColor = EmCardShadow)
-            .clip(RoundedCornerShape(16.dp))
-            .background(MoyeotaColor.SurfaceCanvas)
-            .then(
-                if (selected) {
-                    Modifier.border(1.5.dp, MoyeotaColor.Safety500, RoundedCornerShape(16.dp))
-                } else {
-                    Modifier
-                },
-            )
-            .clickable { onClick() }
-            .padding(horizontal = 16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(
-            modifier = Modifier.size(32.dp).background(ReasonIconBg, RoundedCornerShape(10.dp)),
-            contentAlignment = Alignment.Center,
-        ) {
-            when (reason) {
-                EmergencyReason.ROUTE_DEVIATION -> RouteDeviationIcon()
-                EmergencyReason.UNPLEASANT_SPEECH -> SpeechIcon()
-                EmergencyReason.DANGEROUS -> DangerXIcon()
-                EmergencyReason.OTHER -> DotsIcon()
-            }
-        }
-        Spacer(Modifier.width(14.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = reason.title,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Bold,
-                color = MoyeotaColor.InkPrimary,
-            )
-            Text(
-                text = reason.subtitle,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                color = EmMuteGray,
-            )
-        }
-        ChevronRightIcon()
     }
 }
 
@@ -442,80 +457,6 @@ private fun CloseIcon(modifier: Modifier = Modifier) {
         val stroke = 2.2.dp.toPx()
         drawLine(MoyeotaColor.InkPrimary, Offset(w * 0.18f, h * 0.18f), Offset(w * 0.82f, h * 0.82f), stroke, StrokeCap.Round)
         drawLine(MoyeotaColor.InkPrimary, Offset(w * 0.82f, h * 0.18f), Offset(w * 0.18f, h * 0.82f), stroke, StrokeCap.Round)
-    }
-}
-
-@Composable
-private fun RouteDeviationIcon(modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier.size(16.dp)) {
-        val w = size.width
-        val h = size.height
-        val stroke = 1.7.dp.toPx()
-        val path = Path().apply {
-            moveTo(w * 0.2f, h * 0.9f)
-            lineTo(w * 0.2f, h * 0.45f)
-            quadraticTo(w * 0.2f, h * 0.25f, w * 0.45f, h * 0.25f)
-            lineTo(w * 0.8f, h * 0.25f)
-        }
-        drawPath(path, MoyeotaColor.Safety500, style = Stroke(stroke, cap = StrokeCap.Round, join = StrokeJoin.Round))
-        drawLine(MoyeotaColor.Safety500, Offset(w * 0.8f, h * 0.25f), Offset(w * 0.58f, h * 0.08f), stroke, StrokeCap.Round)
-        drawLine(MoyeotaColor.Safety500, Offset(w * 0.8f, h * 0.25f), Offset(w * 0.58f, h * 0.42f), stroke, StrokeCap.Round)
-    }
-}
-
-@Composable
-private fun SpeechIcon(modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier.size(16.dp)) {
-        val w = size.width
-        val h = size.height
-        val stroke = 1.7.dp.toPx()
-        drawRoundRect(
-            color = MoyeotaColor.Safety500,
-            topLeft = Offset(w * 0.08f, h * 0.12f),
-            size = androidx.compose.ui.geometry.Size(w * 0.84f, h * 0.6f),
-            cornerRadius = androidx.compose.ui.geometry.CornerRadius(3.dp.toPx()),
-            style = Stroke(stroke),
-        )
-        val tail = Path().apply {
-            moveTo(w * 0.3f, h * 0.72f)
-            lineTo(w * 0.3f, h * 0.92f)
-            lineTo(w * 0.5f, h * 0.72f)
-        }
-        drawPath(tail, MoyeotaColor.Safety500, style = Stroke(stroke, join = StrokeJoin.Round))
-    }
-}
-
-@Composable
-private fun DangerXIcon(modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier.size(16.dp)) {
-        val w = size.width
-        val h = size.height
-        val stroke = 2.dp.toPx()
-        drawLine(MoyeotaColor.Safety500, Offset(w * 0.2f, h * 0.2f), Offset(w * 0.8f, h * 0.8f), stroke, StrokeCap.Round)
-        drawLine(MoyeotaColor.Safety500, Offset(w * 0.8f, h * 0.2f), Offset(w * 0.2f, h * 0.8f), stroke, StrokeCap.Round)
-    }
-}
-
-@Composable
-private fun DotsIcon(modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier.size(16.dp)) {
-        val w = size.width
-        val h = size.height
-        val r = 1.5.dp.toPx()
-        drawCircle(MoyeotaColor.Safety500, r, Offset(w * 0.2f, h * 0.5f))
-        drawCircle(MoyeotaColor.Safety500, r, Offset(w * 0.5f, h * 0.5f))
-        drawCircle(MoyeotaColor.Safety500, r, Offset(w * 0.8f, h * 0.5f))
-    }
-}
-
-@Composable
-private fun ChevronRightIcon(modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier.size(16.dp)) {
-        val w = size.width
-        val h = size.height
-        val stroke = 1.8.dp.toPx()
-        drawLine(Color(0xFFC3CCDA), Offset(w * 0.38f, h * 0.22f), Offset(w * 0.66f, h * 0.5f), stroke, StrokeCap.Round)
-        drawLine(Color(0xFFC3CCDA), Offset(w * 0.38f, h * 0.78f), Offset(w * 0.66f, h * 0.5f), stroke, StrokeCap.Round)
     }
 }
 

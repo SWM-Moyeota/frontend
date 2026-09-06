@@ -147,6 +147,11 @@ class DummyRideRepository : RideRepository {
         out.append((v + 63).toChar())
     }
 
+    // 신고도 성공한 척만 한다 — 프리뷰/오프라인에서 UI 흐름(다이얼→복귀 다이얼로그) 확인용.
+    override suspend fun reportEmergency(partyId: Long?): Long = 1L
+
+    override suspend fun confirmEmergencyCall(called: Boolean) = Unit
+
     override fun getMyRides(): List<Ride> = listOf(
         Ride(
             id = "r3",

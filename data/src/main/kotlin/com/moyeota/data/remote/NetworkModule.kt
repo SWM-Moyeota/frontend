@@ -57,6 +57,7 @@ object NetworkModule {
             place = retrofit.create(PlaceApi::class.java),
             chat = retrofit.create(ChatApi::class.java),
             dispatch = retrofit.create(DispatchApi::class.java),
+            // 신고 두 엔드포인트 모두 @CurrentUser — 반드시 Bearer 가 붙는 apiClient 로 만든다.
             report = retrofit.create(ReportApi::class.java),
             // 인증 API 와 이름이 비슷하지만 반드시 이쪽(apiClient) 이다 — 내 정보 조회는 토큰 필수다.
             user = retrofit.create(UserApi::class.java),

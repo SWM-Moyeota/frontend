@@ -69,10 +69,12 @@ class AuthenticatedPathContractTest {
         assertEquals("api/v1/users/me/favorite-places", PlaceApi::class.java.path("getFavoritePlaces"))
     }
 
-    // 백엔드가 한 번 `/reports/call-result` 로 옮겼다가 되돌린 자리다 — reportId 가 경로에 남아 있어야 한다.
+    // 백엔드가 이 경로를 `{reportId}` 유무로 오간 이력이 있다. 현행 컨트롤러
+    // (report/interfaces/ReportController.java)는 reportId 없이 @CurrentUser 의 신고에 기록한다 —
+    // 컨트롤러 소스 기준(실서버 미검증)이며, 다시 바뀌면 이 테스트부터 깨지는 게 정상이다.
     @Test
-    fun `통화 결과 확정은 reportId 를 경로에 유지한다`() {
-        assertEquals("api/v1/reports/{reportId}/call-result", ReportApi::class.java.path("confirmCallResult"))
+    fun `통화 결과 확정은 reportId 없는 경로를 쓴다`() {
+        assertEquals("api/v1/reports/call-result", ReportApi::class.java.path("confirmCallResult"))
     }
 
     /**

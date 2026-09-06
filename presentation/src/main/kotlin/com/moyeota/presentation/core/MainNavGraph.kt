@@ -21,7 +21,6 @@ import com.moyeota.domain.repository.AuthRepository
 import com.moyeota.domain.repository.ChatRepository
 import com.moyeota.domain.repository.DispatchRepository
 import com.moyeota.domain.repository.PlaceRepository
-import com.moyeota.domain.repository.ReportRepository
 import com.moyeota.domain.repository.RideRepository
 import com.moyeota.domain.session.UserSession
 import com.moyeota.presentation.feature.auth.LoginFormRoute
@@ -71,7 +70,6 @@ fun MainNavGraph(
     placeRepository: PlaceRepository,
     chatRepository: ChatRepository,
     dispatchRepository: DispatchRepository,
-    reportRepository: ReportRepository,
     userSession: UserSession,
 ) {
     val authState by authRepository.authState.collectAsState()
@@ -88,7 +86,6 @@ fun MainNavGraph(
         placeRepository = placeRepository,
         chatRepository = chatRepository,
         dispatchRepository = dispatchRepository,
-        reportRepository = reportRepository,
         userSession = userSession,
     )
 }
@@ -103,7 +100,6 @@ private fun MainNavHost(
     placeRepository: PlaceRepository,
     chatRepository: ChatRepository,
     dispatchRepository: DispatchRepository,
-    reportRepository: ReportRepository,
     userSession: UserSession,
 ) {
     val navController = rememberNavController()
@@ -442,11 +438,14 @@ private fun MainNavHost(
             )
         }
         composable(Routes.EMERGENCY) {
-            // 접수 → 통화 확인까지 마치면 EmergencyRoute 가 onBack 으로 26 운행 중에 되돌린다
+            // 확정 흐름(3초 홀드 → 신고 저장 + 즉시 112 다이얼 → 복귀 후 통화 확인 → 26 복귀).
+            // partyId 는 내 운행(activePartyId)이 우선 — 없으면 탐색/생성 값으로 폴백한다
+            // (서버가 IN_RIDE 멤버가 아니면 REPORT_NOT_ALLOWED 로 거절하므로 안전하다).
             EmergencyRoute(
-                repository = reportRepository,
-                partyId = activePartyId,
+                repository = rideRepository,
+                partyId = activePartyId ?: selectedPartyId ?: createdPartyId,
                 onBack = ::back,
+                onReportSubmitted = ::back,
             )
         }
 

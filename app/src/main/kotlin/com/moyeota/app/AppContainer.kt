@@ -6,7 +6,6 @@ import com.moyeota.data.repository.RemoteAuthRepository
 import com.moyeota.data.repository.RemoteChatRepository
 import com.moyeota.data.repository.RemoteDispatchRepository
 import com.moyeota.data.repository.RemotePlaceRepository
-import com.moyeota.data.repository.RemoteReportRepository
 import com.moyeota.data.repository.RemoteRideRepository
 import com.moyeota.data.session.DataStoreTokenStorage
 import com.moyeota.data.session.SessionManager
@@ -14,7 +13,6 @@ import com.moyeota.domain.repository.AuthRepository
 import com.moyeota.domain.repository.ChatRepository
 import com.moyeota.domain.repository.DispatchRepository
 import com.moyeota.domain.repository.PlaceRepository
-import com.moyeota.domain.repository.ReportRepository
 import com.moyeota.domain.repository.RideRepository
 import com.moyeota.domain.session.UserSession
 import kotlinx.coroutines.CoroutineScope
@@ -43,10 +41,16 @@ class AppContainer(context: Context, debugLogging: Boolean) {
     // 화면이 memberId(고정 1L)와 로그인 상태를 얻는 단일 출처.
     val userSession: UserSession = sessionManager
 
+    // 긴급 신고에 싣는 실측 좌표 — 권한 없음/타임아웃이면 null 을 돌려주고 신고는 계속된다.
+    private val reportLocationProvider = ReportLocationProvider(context.applicationContext)
+
     val authRepository: AuthRepository = RemoteAuthRepository(apis.auth, apis.user, sessionManager)
-    val rideRepository: RideRepository = RemoteRideRepository(apis.matching)
+    val rideRepository: RideRepository = RemoteRideRepository(
+        apis.matching,
+        reportApi = apis.report,
+        currentLocation = reportLocationProvider::current,
+    )
     val placeRepository: PlaceRepository = RemotePlaceRepository(apis.place)
     val chatRepository: ChatRepository = RemoteChatRepository(apis.chat)
     val dispatchRepository: DispatchRepository = RemoteDispatchRepository(apis.dispatch)
-    val reportRepository: ReportRepository = RemoteReportRepository(apis.report)
 }

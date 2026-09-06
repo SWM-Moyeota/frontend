@@ -12,7 +12,9 @@ concurrency:
 jobs:
   claude-review:
     # 드래프트 PR은 리뷰하지 않음
-    if: ${{ !github.event.pull_request.draft }}
+    # 봇 작성 PR(develop→main 릴리즈 PR 등)은 리뷰 생략 — claude-code-action이 비인간 액터를 거부하고,
+    # 내용도 develop 유입 시 이미 리뷰됨. 사람이 만든 feature 리뷰는 그대로 동작한다.
+    if: ${{ !github.event.pull_request.draft && github.event.pull_request.user.type != 'Bot' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

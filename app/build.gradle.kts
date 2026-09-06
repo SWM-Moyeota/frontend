@@ -85,6 +85,8 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+    // 긴급 신고에 싣는 실측 좌표(ReportLocationProvider) — FusedLocationProviderClient
+    implementation(libs.play.services.location)
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.messaging)
     testImplementation(libs.junit)

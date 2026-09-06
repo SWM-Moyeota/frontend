@@ -66,6 +66,27 @@ interface RideRepository {
      */
     suspend fun getAssignedDriver(partyId: Long): AssignedDriver
 
+    // 긴급 신고 — POST /api/v1/reports, PATCH /api/v1/reports/call-result
+
+    /**
+     * 긴급 신고 접수 — 서버가 파티·위치를 저장하고 신고 id 를 반환한다.
+     * 위치는 데이터 계층이 채운다 (주입된 측위 소스에서 실측 — 실패 시 null 전송, 서버가 허용).
+     * 저장 실패 시 한국어 메시지의 [IllegalStateException] 을 던진다 —
+     * 화면은 실패 여부와 무관하게 112 다이얼을 먼저 열어야 한다 (통화 최우선).
+     *
+     * @param partyId 신고 대상 파티. 화면에서 알 수 없으면 null (서버는 REPORT_NOT_ALLOWED
+     *   응답 — 저장 실패로 처리된다)
+     * @return 서버가 발급한 신고 id (reportId)
+     */
+    suspend fun reportEmergency(partyId: Long?): Long
+
+    /**
+     * 112 다이얼에서 앱 복귀 후 "실제로 통화했는지" 결과를 저장한다.
+     * reportId 는 보내지 않는다 — 서버가 토큰 주체(@CurrentUser)의 신고에 기록한다.
+     * 실패 시 한국어 메시지의 [IllegalStateException] 을 던진다.
+     */
+    suspend fun confirmEmergencyCall(called: Boolean)
+
     /**
      * POST /api/v1/matching/routes — 방을 만들기 전 좌표만으로 보는 경로 미리보기.
      *
