@@ -28,13 +28,13 @@ fun buildSetting(key: String, default: String): String = providers
 val naverMapsClientId: String = buildSetting("NAVER_MAPS_CLIENT_ID", default = "")
 
 /**
- * 백엔드 base URL. 기본값 10.0.2.2 는 에뮬레이터에서 호스트 로컬 백엔드를 가리키는 주소라
- * 실기기에서는 통하지 않는다. 실기기 테스트는 local.properties 나 환경변수에
- * MOYEOTA_BASE_URL=http://<개발PC LAN IP>:8080/ 을 지정해 오버라이드한다.
+ * 백엔드 base URL. 기본값은 배포 서버(api.moyeota.p-e.kr, CloudFront/HTTPS).
+ * 로컬 백엔드로 붙일 때는 local.properties 나 환경변수에
+ * MOYEOTA_BASE_URL=http://10.0.2.2:8080/ (에뮬레이터) 또는 http://<개발PC LAN IP>:8080/ (실기기) 을 지정해 오버라이드한다.
  * Retrofit baseUrl 규약상 반드시 '/' 로 끝나야 하므로 보정해 둔다.
  */
 val moyeotaBaseUrl: String =
-    buildSetting("MOYEOTA_BASE_URL", default = "http://10.0.2.2:8080/")
+    buildSetting("MOYEOTA_BASE_URL", default = "https://api.moyeota.p-e.kr/")
         .let { if (it.endsWith("/")) it else "$it/" }
 
 android {
@@ -87,6 +87,9 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.ktx)
     // 긴급 신고에 싣는 실측 좌표(ReportLocationProvider) — FusedLocationProviderClient
     implementation(libs.play.services.location)
+    // MoyeotaApplication 이 FCM 토큰 서버 등록을 앱 수명 스코프에서 fire-and-forget 으로 띄운다.
+    // data 가 코루틴을 implementation 으로 쓰고 있어 여기까지 전이되지 않으므로 직접 건다.
+    implementation(libs.kotlinx.coroutines.android)
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.messaging)
     testImplementation(libs.junit)

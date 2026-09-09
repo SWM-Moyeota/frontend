@@ -35,7 +35,6 @@ class MainActivity : ComponentActivity() {
                     placeRepository = container.placeRepository,
                     chatRepository = container.chatRepository,
                     dispatchRepository = container.dispatchRepository,
-                    userSession = container.userSession,
                 )
             }
         }

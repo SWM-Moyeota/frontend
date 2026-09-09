@@ -3,7 +3,6 @@ package com.moyeota.presentation.feature.matching
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -21,10 +20,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -39,14 +34,13 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.moyeota.core.designsystem.component.AvatarCircle
 import com.moyeota.core.designsystem.component.BackArrowIcon
 import com.moyeota.core.designsystem.component.NavigationBarSpacer
 import com.moyeota.core.designsystem.component.NoticeKind
-import com.moyeota.core.designsystem.component.PrimaryCtaButton
 import com.moyeota.core.designsystem.component.SheetHandle
 import com.moyeota.core.designsystem.component.StatusBadge
 import com.moyeota.core.designsystem.component.StatusBarSpacer
@@ -54,6 +48,11 @@ import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.model.User
+import com.moyeota.presentation.core.MeBadge
+import com.moyeota.presentation.core.MemberAvatar
+import com.moyeota.presentation.core.displayNickname
+import com.moyeota.presentation.core.isWithdrawn
+import com.moyeota.presentation.core.rideCountLabel
 
 // 와이어프레임 그레이 (core token 미정의 색 — 화면 재현용)
 private val CanvasBg = Color(0xFFF5F7FA)
@@ -75,8 +74,8 @@ private val recruitingRideDummy = Ride(
     departureLabel = "오후 6:45",
     capacity = 3,
     members = listOf(
-        User("partner-1", "김OO", "부산대 인증", 4.9, 12),
-        User("me", "나", "부산대 인증", 4.8, 5),
+        User("partner-1", "부산불곰", "", 0.0, 12),
+        User("me", "부산가자", "", 0.0, 0, isMe = true),
     ),
     farePerPerson = 5100,
     totalFare = 9600,
@@ -88,16 +87,24 @@ private val recruitingRideDummy = Ride(
  *
  * 이동(디스크립션):
  * - 뒤로 → 21 매칭 대기 (onBack)
- * - 동승자 「김OO」 탭 → 23 동승자 프로필 (onPartnerClick)
- * - 「나가기」 → 14 홈, 탑승 이탈 (onLeave)
- * - 「이 인원으로 출발 (2/3)」 → 25 배차 상태 (onDepart) — 방장에게만 노출, 최소 2명 이상일 때만 활성
+ * - 동승자 행 탭 → 23 동승자 프로필 (onPartnerClick)
+ * - 「나가기」 → 14 홈, 탑승 이탈 (onLeave). **모집 중([RideStatus.RECRUITING])일 때만 보인다** —
+ *   서버 `Party.leave` 가 `ensureRecruiting()` 으로 ACTIVE 에서만 허용해, 기사 매칭이 시작된 뒤
+ *   누르면 409 PARTY_CLOSED 가 온다. 눌리는 버튼을 두고 실패하게 두는 대신 아예 내린다.
  * - [미연결] 없음
+ *
+ * 도메인 변경(2026-08-30): 백엔드가 자동 기사 매칭으로 전환하며 방장 개념이 사라졌다.
+ * 수동 출발(「이 인원으로 출발」)이라는 행위 자체가 없어져 CTA 를 화면에서 제거했고,
+ * 21 매칭 대기와 같은 결정이다. 멤버는 전부 동등하게 표시한다(방장 배지 없음).
+ * 25 배차 현황으로는 서버 status 전이를 관찰하는 21 이 넘긴다 — 이 화면은 넘기지 않는다.
+ *
+ * 서버 계약(2026-09): 멤버가 publicId·nickname·rideCount 를 함께 준다. 「나」 판정은 [User.isMe]
+ * 하나로 끝난다 — 예전에는 앱이 자기 내부 Long id 를 몰라 고정값 1 과 비교하던 자리였다.
+ * 평가(별점·매너 점수) API 는 아직 없어 그 줄은 표시하지 않는다.
  */
 @Composable
 fun RideDetailScreen(
     ride: Ride = recruitingRideDummy,
-    isHost: Boolean = true,
-    currentUserId: String = "me",
     genderLabel: String = "여성만",
     etaLabel: String = "예상 12분 · 6.2km",
     walkLabel: String = "도보 2분 · 180m",
@@ -106,10 +113,8 @@ fun RideDetailScreen(
     onBack: () -> Unit = {},
     onPartnerClick: (User) -> Unit = {},
     onLeave: () -> Unit = {},
-    onDepart: () -> Unit = {},
 ) {
-    var departing by remember { mutableStateOf(false) }
-    val partners = ride.members.filter { it.id != currentUserId }
+    val partners = ride.members.filter { !it.isMe }
     // 인원 변동 시 1인 부담 즉시 재계산 — 수수료 포함 10원 단위
     val perPersonFare = if (ride.members.isNotEmpty()) {
         (ride.totalFare + serviceFee) / ride.members.size / 10 * 10
@@ -295,50 +300,64 @@ fun RideDetailScreen(
                     color = GrayMute,
                 )
                 Spacer(Modifier.height(8.dp))
-                partners.forEachIndexed { index, partner ->
+                // 나까지 포함해 전원을 보여준다 — 위 개수는 나를 뺀 값이라 목록에 내 줄이 없으면
+                // "나는 이 방에 있나"를 확인할 곳이 사라진다. 대신 내 줄은 배지로 구분하고 탭을 막는다.
+                ride.members.forEach { member ->
+                    // 방장 배지는 없다 — 서버에 방장 표식 자체가 없다.
+                    // 탈퇴 회원과 나는 열어 볼 프로필이 없어 탭을 막는다.
+                    val clickable = !member.isMe && !member.isWithdrawn
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(12.dp))
-                            .clickable { onPartnerClick(partner) }
+                            .then(
+                                if (clickable) {
+                                    Modifier.clickable { onPartnerClick(member) }
+                                } else {
+                                    Modifier
+                                },
+                            )
                             .padding(vertical = 4.dp, horizontal = 2.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        AvatarCircle(size = 40.dp)
+                        MemberAvatar(user = member, size = 40.dp)
                         Spacer(Modifier.width(10.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
-                                    text = partner.nickname,
+                                    text = member.displayNickname,
                                     fontSize = 15.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = MoyeotaColor.InkPrimary,
+                                    color = if (member.isWithdrawn) GrayMute else MoyeotaColor.InkPrimary,
                                 )
-                                if (index == 0) {
-                                    Spacer(Modifier.width(5.dp))
-                                    Box(
-                                        modifier = Modifier
-                                            .background(ChipBg, CircleShape)
-                                            .padding(horizontal = 10.dp, vertical = 3.dp),
-                                    ) {
-                                        Text(text = "방장", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = GrayDeep)
-                                    }
+                                if (member.isMe) {
+                                    Spacer(Modifier.width(6.dp))
+                                    MeBadge()
                                 }
                             }
+                            // 매너 점수는 평가 API 가 생길 때까지 쓰지 않는다 — 없는 수치를 지어내면
+                            // 사용자가 그걸 근거로 사람을 고른다
                             Text(
-                                text = "탑승 ${partner.rideCount}회 · 매너 98%",
+                                text = if (member.isWithdrawn) "탈퇴한 회원" else member.rideCountLabel,
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Medium,
                                 color = GrayMute,
                             )
                         }
-                        ChevronRightIcon()
+                        if (clickable) {
+                            ChevronRightIcon()
+                        }
                     }
                 }
                 Spacer(Modifier.height(14.dp))
 
+                // 앱이 출발을 트리거하지 않는다는 사실을 알려주는 지점 (21 매칭 대기와 같은 문구)
                 Text(
-                    text = "인원이 안 차도 방장이 시작하면 지금 인원으로 출발해요",
+                    text = if (ride.members.size >= ride.capacity) {
+                        "기사님을 찾고 있어요. 배차되면 바로 알려드릴게요"
+                    } else {
+                        "정원이 차면 기사님이 자동으로 배차돼요"
+                    },
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Medium,
                     color = GrayAsh,
@@ -347,34 +366,23 @@ fun RideDetailScreen(
                 Spacer(Modifier.height(12.dp))
             }
 
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                GrayActionButton(text = "나가기", onClick = onLeave, modifier = Modifier.width(112.dp))
-                if (isHost) {
-                    // 최소 2명 이상일 때만 출발 가능
-                    PrimaryCtaButton(
-                        text = "이 인원으로 출발 (${ride.members.size}/${ride.capacity})",
-                        onClick = {
-                            departing = true
-                            onDepart()
-                        },
-                        modifier = Modifier.weight(1f),
-                        enabled = ride.members.size >= 2,
-                        loading = departing,
-                    )
-                } else {
-                    // 참여자에게는 대기 문구
-                    Text(
-                        text = "방장이 출발을 결정하면 시작돼요",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = GrayMute,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
+            // 남은 액션은 나가기 하나뿐 — 수동 출발 버튼은 도메인에서 사라졌다.
+            // 매칭이 시작된 뒤에는 서버가 나가기를 막으므로 버튼 대신 현재 단계를 적는다.
+            if (ride.status == RideStatus.RECRUITING) {
+                GrayActionButton(
+                    text = "나가기",
+                    onClick = onLeave,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                )
+            } else {
+                Text(
+                    text = stageNotice(ride.status),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = GrayMute,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                )
             }
             Spacer(Modifier.height(12.dp))
         }
@@ -522,4 +530,20 @@ private fun GrayActionButton(text: String, onClick: () -> Unit, modifier: Modifi
 @Composable
 private fun RideDetailScreenPreview() {
     RideDetailScreen()
+}
+
+/**
+ * 나가기 버튼 자리에 대신 적는 현재 단계.
+ *
+ * 「왜 나갈 수 없는지」를 사용자가 알 수 있어야 한다 — 버튼만 사라지면 앱이 고장 난 것처럼 보인다.
+ * 배정 여부(DISPATCHING 안의 MATCHING/DRIVER_ASSIGNED 구분)는 이 화면이 알 필요가 없어
+ * 「기사님 찾는 중」 하나로 묶는다.
+ */
+private fun stageNotice(status: RideStatus): String = when (status) {
+    RideStatus.DISPATCHING -> "기사님을 찾는 중이라 나갈 수 없어요"
+    RideStatus.ONGOING -> "운행 중이에요"
+    RideStatus.CANCELED -> "취소된 탑승이에요"
+    RideStatus.COMPLETED -> "완료된 탑승이에요"
+    // RECRUITING·MATCHED 는 버튼이 보이는 경로라 여기 오지 않는다(방어값)
+    else -> "지금은 나갈 수 없어요"
 }

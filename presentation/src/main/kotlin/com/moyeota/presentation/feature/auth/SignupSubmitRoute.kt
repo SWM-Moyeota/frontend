@@ -9,6 +9,8 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import com.moyeota.domain.model.AuthError
+import com.moyeota.domain.model.AuthException
 import com.moyeota.domain.repository.AuthRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -28,6 +30,11 @@ class SignupViewModel(private val repository: AuthRepository) : ViewModel() {
         val submitting: Boolean = false,
         val errorMessage: String? = null,
         val done: Boolean = false,
+        /**
+         * 409 USER108 — 닉네임이 그 사이 선점됐다.
+         * 이 화면에서는 고칠 수 없는 값이라 12 는 배너에 "닉네임 바꾸기" 를 함께 띄우고 10 으로 되돌린다.
+         */
+        val nicknameDuplicated: Boolean = false,
     )
 
     private val _uiState = MutableStateFlow(UiState())
@@ -49,7 +56,7 @@ class SignupViewModel(private val repository: AuthRepository) : ViewModel() {
             return
         }
         viewModelScope.launch {
-            _uiState.update { it.copy(submitting = true, errorMessage = null) }
+            _uiState.update { it.copy(submitting = true, errorMessage = null, nicknameDuplicated = false) }
             try {
                 if (!registered) {
                     repository.register(newUser)
@@ -59,7 +66,15 @@ class SignupViewModel(private val repository: AuthRepository) : ViewModel() {
                 repository.login(newUser.loginId, newUser.password)
                 _uiState.update { it.copy(submitting = false, done = true) }
             } catch (e: Exception) {
-                _uiState.update { it.copy(submitting = false, errorMessage = e.authUserMessage()) }
+                // 닉네임 중복만 따로 표시한다 — 이 화면에 없는 필드라 되돌아갈 경로를 함께 줘야 한다
+                val duplicated = (e as? AuthException)?.error == AuthError.NICKNAME_DUPLICATED
+                _uiState.update {
+                    it.copy(
+                        submitting = false,
+                        errorMessage = e.authUserMessage(),
+                        nicknameDuplicated = duplicated,
+                    )
+                }
             }
         }
     }
@@ -78,6 +93,7 @@ fun MannerPledgeRoute(
     draft: SignupDraft,
     onBack: () -> Unit = {},
     onCompleted: () -> Unit = {},
+    onEditNickname: () -> Unit = {},
 ) {
     val viewModel: SignupViewModel = viewModel(factory = SignupViewModel.factory(repository))
     val state by viewModel.uiState.collectAsState()
@@ -91,5 +107,7 @@ fun MannerPledgeRoute(
         onComplete = { viewModel.submit(draft) },
         submitting = state.submitting,
         errorMessage = state.errorMessage,
+        // 닉네임 중복일 때만 10 으로 돌아가는 길을 준다 — 다른 실패는 여기서 재시도하면 된다
+        onEditNickname = if (state.nicknameDuplicated) onEditNickname else null,
     )
 }

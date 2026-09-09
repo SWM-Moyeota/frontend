@@ -1,6 +1,8 @@
 package com.moyeota.data.remote
 
 import com.moyeota.data.remote.dto.LoginRequestDto
+import com.moyeota.data.remote.dto.NicknameCheckRequestDto
+import com.moyeota.data.remote.dto.NicknameCheckResponse
 import com.moyeota.data.remote.dto.RefreshTokenRequestDto
 import com.moyeota.data.remote.dto.RegisterRequestDto
 import com.moyeota.data.remote.dto.RegisterResponse
@@ -11,7 +13,7 @@ import retrofit2.http.POST
 
 /**
  * 경로 기준: user/interfaces/AuthController.java (@RequestMapping("/api/v1/auth")).
- * 네 엔드포인트가 **전부 이 한 컨트롤러로 모였다** — 가입·로그인이 `/api/v1/users*` 에 있던
+ * 앱이 쓰는 인증 엔드포인트가 **전부 이 한 컨트롤러로 모였다** — 가입·로그인이 `/api/v1/users*` 에 있던
  * 이전 배치는 사라졌다(실측: `POST /api/v1/users/login` → 401, Security 가 보호 경로로 잡는다).
  *
  * 이 프리픽스가 Security 의 사실상 유일한 permitAll 구간이기도 하다 — `SecurityConfig` 가 열어 두는 건
@@ -50,4 +52,17 @@ interface AuthApi {
     /** 204 No Content, 멱등. 이미 무효화된 리프레시를 보내도 성공한다. */
     @POST("api/v1/auth/logout")
     suspend fun logout(@Body request: RefreshTokenRequestDto)
+
+    /**
+     * 가입 폼의 닉네임 중복 확인. 200 `{"exists":boolean}`.
+     *
+     * **`/api/v1/users` 가 아니라 여기(auth 프리픽스)에 있는 게 핵심이다.** 이 호출은 가입 도중,
+     * 즉 로그인 전에 일어나므로 토큰이 없다. auth 구간만 permitAll 이라 경로도 이쪽이어야 하고,
+     * 클라이언트도 Bearer 가 붙지 않는 이 API 여야 한다 — 만료된 토큰이 세션에 남아 있는 상태에서
+     * 인증 클라이언트로 보내면 permitAll 경로인데도 JWT 필터에 걸려 401 이 날 수 있다.
+     *
+     * 형식이 틀리면 exists 판정 전에 400 `USER107` 이다(서버가 `Nickname` VO 를 먼저 만든다).
+     */
+    @POST("api/v1/auth/nickname/check")
+    suspend fun checkNickname(@Body request: NicknameCheckRequestDto): NicknameCheckResponse
 }

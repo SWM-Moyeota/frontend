@@ -34,6 +34,10 @@ object NetworkModule {
      */
     fun create(baseUrl: String, debugLogging: Boolean, tokenHolder: TokenHolder): Apis {
         val baseClient = OkHttpClient.Builder()
+            // 배포 서버(CloudFront 뒤 오리진)는 콜드 상태에서 첫 응답이 7~8초까지 걸려 기본 10초가 빠듯하다
+            .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+            .writeTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
             .apply {
                 if (debugLogging) {
                     addInterceptor(

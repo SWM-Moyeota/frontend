@@ -1,7 +1,6 @@
 package com.moyeota.data.session
 
 import com.moyeota.domain.model.AuthState
-import com.moyeota.domain.session.UserSession
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
@@ -40,14 +39,16 @@ class SessionManagerTest {
         assertNull(session.currentAccessToken())
     }
 
+    /**
+     * 세션이 아는 식별자는 UUID 하나뿐이다. 예전에는 채팅 헤더용 고정 memberId(1L)가 여기 있었지만
+     * 채팅도 `@CurrentUser` 로 넘어가면서 서버로 나가는 내부 PK 가 앱에서 완전히 사라졌다 —
+     * 되살리면 "누가 로그인해도 1번 사용자로 보이는" 버그가 그대로 돌아온다.
+     */
     @Test
-    fun `memberId 는 로그인과 무관하게 고정값을 유지한다`() {
-        // 매칭·배차·신고·즐겨찾기는 @LoginUser 로 넘어가 이 값을 더 이상 쓰지 않는다.
-        // 남은 사용처는 채팅의 X-User-Id 헤더와 방 생성 본문의 creatorId 둘뿐이다.
+    fun `세션은 내부 사용자 PK 를 들지 않고 UUID 만 복원한다`() {
         val session = manager(FakeTokenStorage(StoredSession("uuid-1", "a", "r")))
 
-        assertEquals(UserSession.FIXED_MEMBER_ID, session.currentUserId)
-        assertEquals(1L, session.currentUserId)
+        assertEquals("uuid-1", session.currentUserUuid)
     }
 
     @Test

@@ -33,9 +33,9 @@ interface RideRepository {
     /**
      * POST /api/v1/matching/rooms. 생성된 방을 그대로 돌려주므로 MatchWaiting 으로 바로 넘길 수 있다.
      *
-     * **여기만 아직 토큰 기준이 아니다.** 서버가 본문의 `creatorId`(= [NewParty.hostId]) 로 방장을 정한다.
-     * 합류·나가기는 토큰 주체를 쓰므로, hostId 가 로그인 사용자와 다르면
-     * "내가 만든 방인데 나는 멤버가 아닌" 상태가 된다. 백엔드 전환 대기 중.
+     * 생성자는 **로그인 토큰이 정한다**(@CurrentUser) — 합류·나가기와 같다. 요청 본문에 사용자 id 를
+     * 싣지 않는다. 생성 응답에는 멤버 목록이 없어 인원 수만큼 자리 표시용 멤버가 채워지므로,
+     * 실제 멤버 식별자가 필요하면 [getPartyDetail] 로 다시 읽는다.
      */
     suspend fun createParty(request: NewParty): Ride
 

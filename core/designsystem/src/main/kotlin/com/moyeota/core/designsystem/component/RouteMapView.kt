@@ -18,6 +18,7 @@ import androidx.compose.ui.unit.dp
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.naver.maps.geometry.LatLng
 import com.naver.maps.map.NaverMap
+import com.naver.maps.map.overlay.CircleOverlay
 import com.naver.maps.map.overlay.Marker
 import com.naver.maps.map.overlay.PathOverlay
 import com.naver.maps.map.util.MarkerIcons
@@ -93,6 +94,9 @@ fun latLngOrNull(latitude: Double?, longitude: Double?): LatLng? {
  *
  * @param routePath 경로 좌표. [decodePolyline] 결과를 그대로 넣는다. 2점 미만이면 그리지 않는다
  * @param driverPosition 기사 현재 위치. 아직 못 받았으면 null (마커 미표시)
+ * @param radiusCircle 반경 원(21 매칭 대기의 탐색 반경). null 이면 그리지 않는다
+ * @param myPosition 내 위치 파란 점. **null 이면 SDK 의 locationOverlay 를 아예 건드리지 않는다** —
+ *   26 운행중처럼 화면이 오버레이를 직접 관리하는 경우와 충돌하지 않기 위해서다
  * @param useTextureView 다이얼로그 위에 올라가는 화면에서만 true — [NaverMapView] 설명 참고
  * @param onMapReady 지도 인스턴스가 필요할 때만 쓴다(카메라 이동 구독 등). 마커·경로는 이
  *   컴포저블이 이미 관리하므로, 여기서 또 붙이면 생명주기가 이원화된다
@@ -104,6 +108,8 @@ fun RouteMapView(
     driverPosition: LatLng? = null,
     originPosition: LatLng? = null,
     destinationPosition: LatLng? = null,
+    radiusCircle: MapRadiusCircle? = null,
+    myPosition: LatLng? = null,
     center: LatLng = originPosition ?: routePath.firstOrNull() ?: MoyeotaDefaultCamera,
     zoom: Double = 14.0,
     contentPadding: PaddingValues = PaddingValues(),
@@ -149,10 +155,49 @@ fun RouteMapView(
         onDispose { overlay?.map = null }
     }
 
+    // 반경 원 — 경로·마커보다 먼저 붙여 마커가 원 위로 오게 한다
+    DisposableEffect(map, radiusCircle, density) {
+        val naverMap = map
+        val circle = if (naverMap != null && radiusCircle != null && radiusCircle.radiusMeters > 0.0) {
+            CircleOverlay().apply {
+                this.center = radiusCircle.center
+                this.radius = radiusCircle.radiusMeters
+                this.color = MoyeotaColor.Primary500.copy(alpha = RadiusFillAlpha).toArgb()
+                this.outlineColor = MoyeotaColor.Primary500.toArgb()
+                this.outlineWidth = with(density) { 2.dp.roundToPx() }
+                this.map = naverMap
+            }
+        } else {
+            null
+        }
+        onDispose { circle?.map = null }
+    }
+
+    // 내 위치 파란 점. locationOverlay 는 지도에 붙어 있는 **싱글턴**이라, 쓰지 않는 화면에서는
+    // 손대지 않고(overlay = null) 떠날 때만 숨긴다 — 남겨 두면 다음 화면에 낡은 점이 그대로 뜬다.
+    DisposableEffect(map, myPosition) {
+        val naverMap = map
+        val overlay = if (naverMap != null && myPosition != null) {
+            naverMap.locationOverlay.apply {
+                this.position = myPosition
+                this.isVisible = true
+            }
+        } else {
+            null
+        }
+        onDispose { overlay?.isVisible = false }
+    }
+
     MapMarker(map, originPosition, MoyeotaColor.MarkerOrigin.toArgb(), "출발")
     MapMarker(map, destinationPosition, MoyeotaColor.MarkerDestination.toArgb(), "도착")
     MapMarker(map, driverPosition, MoyeotaColor.InkPrimary.toArgb(), "기사님")
 }
+
+/** 지도에 그리는 반경 원. 중심과 반경(m)만 있으면 된다 — 색은 디자인 토큰으로 고정한다. */
+data class MapRadiusCircle(val center: LatLng, val radiusMeters: Double)
+
+// 원 안쪽 채우기 투명도. 지도의 도로·지명이 비쳐야 「이 범위」로 읽히지 덮개로 보이지 않는다.
+private const val RadiusFillAlpha = 0.12f
 
 @Composable
 private fun MapMarker(map: NaverMap?, position: LatLng?, tint: Int, caption: String) {

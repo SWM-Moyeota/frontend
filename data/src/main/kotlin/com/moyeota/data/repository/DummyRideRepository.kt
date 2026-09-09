@@ -77,7 +77,6 @@ class DummyRideRepository : RideRepository {
         farePerPerson = 0,
         totalFare = 0,
         status = RideStatus.RECRUITING,
-        hostId = request.hostId.toString(),
         originLat = request.departureLat,
         originLng = request.departureLng,
         destinationLat = request.destinationLat,
