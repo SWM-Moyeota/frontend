@@ -15,6 +15,7 @@ import com.moyeota.domain.repository.RideRepository
 import com.moyeota.presentation.core.BackStateScaffold
 import com.moyeota.presentation.core.ErrorBox
 import com.moyeota.presentation.core.LoadingBox
+import com.moyeota.presentation.core.location.rememberMyLocationState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -117,11 +118,17 @@ fun MatchWaitingRoute(
     repository: RideRepository,
     partyId: Long?,
     onCancelSearch: () -> Unit = {},
+    /** 방을 유지한 채 화면만 벗어난다(나가기가 막힌 단계의 뒤로가기) */
+    onExitKeepingParty: () -> Unit = {},
     onCardClick: () -> Unit = {},
     onMatchingStarted: () -> Unit = {},
 ) {
     if (partyId == null) {
-        MatchWaitingScreen(onCancelSearch = onCancelSearch, onCardClick = onCardClick)
+        MatchWaitingScreen(
+            onCancelSearch = onCancelSearch,
+            onExitKeepingParty = onExitKeepingParty,
+            onCardClick = onCardClick,
+        )
         return
     }
 
@@ -131,6 +138,10 @@ fun MatchWaitingRoute(
     )
     val state by viewModel.uiState.collectAsState()
     val action by viewModel.actionState.collectAsState()
+
+    // 지도의 파란 점. 권한을 자동 요청하지 않는다 — 대기 화면의 본질은 지도가 아니라 「기다림」이라,
+    // 여기서 다이얼로그를 띄우면 흐름을 끊는다. 이미 허용돼 있으면(14·17 에서 받았을 것) 점이 뜬다.
+    val myLocation = rememberMyLocationState(autoRequestPermission = false)
 
     LaunchedEffect(action.left) {
         if (action.left) onCancelSearch()
@@ -144,10 +155,12 @@ fun MatchWaitingRoute(
 
     // 탭바가 없는 화면 — 로딩·에러에서도 뒤로가기(=탐색 취소)를 남긴다 (QA F-1 동류)
     when (val current = state) {
-        MatchWaitingViewModel.UiState.Loading -> BackStateScaffold("같이 탈 사람 찾는 중", onCancelSearch) {
+        // 로딩·에러에서는 방 상태를 모른다. 나가기를 걸면 매칭 중인 방에 409 를 쏘게 되므로
+        // 여기서의 뒤로가기는 **방을 유지한 채** 화면만 벗어난다.
+        MatchWaitingViewModel.UiState.Loading -> BackStateScaffold("같이 탈 사람 찾는 중", onExitKeepingParty) {
             LoadingBox()
         }
-        is MatchWaitingViewModel.UiState.Error -> BackStateScaffold("같이 탈 사람 찾는 중", onCancelSearch) {
+        is MatchWaitingViewModel.UiState.Error -> BackStateScaffold("같이 탈 사람 찾는 중", onExitKeepingParty) {
             ErrorBox(message = current.message, onRetry = viewModel::refresh)
         }
         is MatchWaitingViewModel.UiState.Success -> {
@@ -156,11 +169,33 @@ fun MatchWaitingRoute(
                 ride = ride,
                 foundCount = ride.members.size,
                 conditionLabel = "${ride.capacity}인",
+                radiusLabel = radiusLabel(ride),
+                myLocation = myLocation.coordinates,
                 actionInProgress = action.inProgress,
                 actionErrorMessage = action.errorMessage,
                 onCancelSearch = viewModel::leaveParty, // 나가기 성공 시 14 홈
+                onExitKeepingParty = onExitKeepingParty,
                 onCardClick = onCardClick,
             )
         }
     }
 }
+
+/**
+ * 21 「탐색 반경」 라벨. 방 생성 시 고른 값을 그대로 보여 준다 — 예전에는 화면 기본값 "1km" 가
+ * 서버 값과 무관하게 늘 떠 있었다(QA D-3).
+ *
+ * 출발지·도착지 반경은 16 에서 따로 고를 수 있어 다를 수 있다. 같으면 한 값으로, 다르면 둘 다 적는다.
+ * 목록 응답으로 만든 [Ride] 에는 반경이 없어 null 이며 그때는 "—" 다(값을 지어내지 않는다).
+ */
+private fun radiusLabel(ride: Ride): String {
+    val departure = ride.departureRadiusMeters
+    val destination = ride.destinationRadiusMeters
+    return when {
+        departure == null && destination == null -> "—"
+        departure == destination -> "${departure}m"
+        else -> "출발 ${meters(departure)} · 도착 ${meters(destination)}"
+    }
+}
+
+private fun meters(value: Int?): String = if (value == null) "—" else "${value}m"

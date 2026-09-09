@@ -25,7 +25,6 @@ import java.util.concurrent.TimeUnit
 class SessionManager(
     private val storage: TokenStorage,
     private val scope: CoroutineScope,
-    override val currentUserId: Long = UserSession.FIXED_MEMBER_ID,
 ) : UserSession, TokenHolder {
 
     private val _authState = MutableStateFlow<AuthState>(AuthState.Unknown)
