@@ -107,9 +107,12 @@ class DispatchStatusViewModel(
                 if (latest != null) _uiState.value = UiState.Success(latest)
                 loadDriverIfAssigned(latest ?: previous)
                 if (markStartedIfInRide(latest)) return
-                // 조회 주체는 Bearer 토큰이 정한다 — memberId 를 넘기지 않는다 (22 보고서 §2)
-                runCatching { dispatchRepository.getDriverLocation(partyId) }
-                    .onSuccess { _driverLocation.value = it }
+                // 기사 위치는 배정된 뒤에만 묻는다 — 배정 전 호출은 서버가 DRIVER_NOT_ASSIGNED 로 거절하며
+                // 폴링 주기마다 서버 WARN 로그만 쌓는다. 조회 주체는 Bearer 토큰이 정한다(22 보고서 §2).
+                if ((latest ?: previous)?.driverId != null) {
+                    runCatching { dispatchRepository.getDriverLocation(partyId) }
+                        .onSuccess { _driverLocation.value = it }
+                }
                 delay(DRIVER_POLL_INTERVAL_MS)
             }
         } finally {
@@ -183,9 +186,11 @@ fun DispatchStatusRoute(
     onStartRide: () -> Unit = {},
     onRetryMatching: () -> Unit = {},
     onBack: () -> Unit = {},
+    /** 이 방의 채팅방을 여는 길. 채팅방이 아직 없으면 null — 화면이 버튼을 그리지 않는다 */
+    onOpenChat: (() -> Unit)? = null,
 ) {
     if (partyId == null) {
-        DispatchStatusScreen(onBack = onBack)
+        DispatchStatusScreen(onOpenChat = onOpenChat, onBack = onBack)
         return
     }
 
@@ -232,7 +237,7 @@ fun DispatchStatusRoute(
                     onRetry = onRetryMatching,
                     onBack = onBack,
                 )
-                !assigned -> DriverSearchScreen(ride = ride, onBack = onBack)
+                !assigned -> DriverSearchScreen(ride = ride, onOpenChat = onOpenChat, onBack = onBack)
                 !assignedSeen -> DriverAssignedScreen(
                     ride = ride,
                     driver = driver,
@@ -240,12 +245,14 @@ fun DispatchStatusRoute(
                         pickupDistanceMeters(ride, driverLocation),
                     ),
                     onSeeDispatch = { assignedSeen = true },
+                    onOpenChat = onOpenChat,
                     onBack = onBack,
                 )
                 else -> DispatchStatusScreen(
                     ride = current.ride,
                     driver = driver,
                     driverLocation = driverLocation,
+                    onOpenChat = onOpenChat,
                     onBack = onBack,
                 )
             }

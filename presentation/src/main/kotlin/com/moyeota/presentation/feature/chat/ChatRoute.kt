@@ -1,10 +1,13 @@
 package com.moyeota.presentation.feature.chat
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -16,6 +19,7 @@ import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.moyeota.core.designsystem.component.MoyeotaTab
 import com.moyeota.domain.model.ChatException
+import com.moyeota.domain.model.ChatMember
 import com.moyeota.domain.model.ChatRoom
 import com.moyeota.domain.model.ChatRoomStatus
 import com.moyeota.domain.model.MyChatRoom
@@ -25,6 +29,9 @@ import com.moyeota.presentation.core.ErrorBox
 import com.moyeota.presentation.core.LoadingBox
 import com.moyeota.presentation.core.TabStateScaffold
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -42,13 +49,56 @@ private const val POLL_INTERVAL_MS = 3_000L
 // 발신자 닉네임이 없을 때 상대 말풍선에 붙이는 표기.
 private const val PEER_FALLBACK_NAME = "동승자"
 
+/**
+ * 목록 한 줄. 서버 `GET /chat-rooms/me` 가 주지 않는 것(참여자)을 방별로 덧붙인 형태다.
+ *
+ * @param peerTitle 나를 뺀 참여자 닉네임으로 지은 제목. **참여자 조회에 실패하면 null** —
+ *   그때 화면은 예전처럼 「출발지 → 도착지」를 제목으로 쓴다(방 한 칸이 통째로 깨지지 않게).
+ */
+data class ChatRoomListItem(
+    val room: MyChatRoom,
+    val peerTitle: String?,
+)
+
+/**
+ * 채팅방 표시 이름 — **나를 뺀 참여자 닉네임**.
+ *
+ * 서버는 방에 이름을 붙여 주지 않아 앱이 짓는다. 예전 이름이었던 「출발지 → 도착지」는
+ * 역지오코딩된 전체 주소가 그대로 들어와("부산광역시 부산진구 중앙대로 730 서면역 → …")
+ * 목록에서 어느 방인지 가려내는 데 쓸 수가 없었다 — 사람 이름이 그 일을 한다.
+ * 경로는 부제로 내려간다(사라지지 않는다).
+ *
+ * 방을 나간 사람(active=false)은 제외하되, 그래서 아무도 안 남으면 **나간 사람이라도 쓴다** —
+ * 대화 상대가 분명히 있었던 방을 「동승자 없음」으로 부르는 것보다 낫다.
+ */
+internal fun chatRoomPeerTitle(members: List<ChatMember>): String {
+    val peers = members.filter { !it.isMe }
+    val visible = peers.filter { it.active }.ifEmpty { peers }
+    val names = visible.map { it.nickname.ifBlank { PEER_FALLBACK_NAME } }
+    return when {
+        names.isEmpty() -> "동승자 없음"
+        names.size <= 2 -> names.joinToString(" · ")
+        // 셋 이상은 다 적으면 한 줄을 넘긴다 — 첫 사람 + 나머지 수
+        else -> "${names.first()} 외 ${names.size - 1}명"
+    }
+}
+
+/**
+ * 목록 정렬 키(**내림차순** = 최근 방이 위).
+ *
+ * 서버가 **마지막 메시지 시각을 주지 않아** 방 id 로 대신한다 — id 는 개설 순서라 「최근에 열린 방」
+ * 까지는 맞지만 「최근에 대화한 방」은 아니다. `GET /chat-rooms/me` 에 `lastMessageAt` 이 생기면
+ * **이 함수 하나만** 바꾸면 목록 전체가 따라온다(정렬 키를 호출부에 흩어 놓지 않은 이유).
+ */
+internal fun chatRoomSortKey(item: MyChatRoom): Long = item.room.id
+
 class ChatListViewModel(
     private val repository: ChatRepository,
 ) : ViewModel() {
 
     sealed interface UiState {
         data object Loading : UiState
-        data class Success(val rooms: List<MyChatRoom>) : UiState
+        data class Success(val rooms: List<ChatRoomListItem>) : UiState
         data class Error(val message: String) : UiState
     }
 
@@ -59,10 +109,30 @@ class ChatListViewModel(
         viewModelScope.launch {
             _uiState.value = UiState.Loading
             _uiState.value = try {
-                UiState.Success(repository.getMyChatRooms())
+                UiState.Success(loadRooms())
             } catch (e: Exception) {
                 UiState.Error(e.toChatMessage("채팅방 목록을 불러오지 못했어요"))
             }
+        }
+    }
+
+    /**
+     * 목록 + 방마다 참여자 1회. **N+1 이지만 병렬로 돈다** — 방은 사람당 많아야 몇 개고,
+     * 순차로 돌면 방 수만큼 왕복이 쌓여 목록이 눈에 띄게 늦게 뜬다.
+     *
+     * 참여자 조회 실패는 **그 방만** null 로 떨어뜨린다(목록 전체를 에러로 만들지 않는다).
+     */
+    private suspend fun loadRooms(): List<ChatRoomListItem> {
+        val rooms = repository.getMyChatRooms().sortedByDescending(::chatRoomSortKey)
+        return coroutineScope {
+            rooms.map { room ->
+                async {
+                    val title = runCatching { repository.getChatRoomMembers(room.room.id) }
+                        .getOrNull()
+                        ?.let(::chatRoomPeerTitle)
+                    ChatRoomListItem(room = room, peerTitle = title)
+                }
+            }.awaitAll()
         }
     }
 
@@ -105,6 +175,13 @@ class ChatRoomViewModel(
     private val _leftRoom = MutableStateFlow(false)
     val leftRoom: StateFlow<Boolean> = _leftRoom.asStateFlow()
 
+    /**
+     * 헤더 제목 — 나를 뺀 참여자 닉네임([chatRoomPeerTitle], 목록과 같은 규칙).
+     * 아직 못 받았거나 조회에 실패하면 null 이고, 그때 화면은 「출발지 → 도착지」로 떨어진다.
+     */
+    private val _peerTitle = MutableStateFlow<String?>(null)
+    val peerTitle: StateFlow<String?> = _peerTitle.asStateFlow()
+
     private var lastMessageId: Long? = null
     private var chatRoomId: Long? = null
     private var pollingJob: Job? = null
@@ -122,6 +199,7 @@ class ChatRoomViewModel(
             loadJob?.cancel()
             chatRoomId = roomId
             lastMessageId = null
+            _peerTitle.value = null
             _uiState.value = UiState.Loading
             _inputState.value = InputState()
         }
@@ -129,11 +207,25 @@ class ChatRoomViewModel(
         _leftRoom.value = false
         // 이미 대화를 그리고 있으면 스피너로 되돌리지 않는다(깜빡임 방지)
         load(showLoading = roomChanged || _uiState.value !is UiState.Success)
+        loadPeerTitle(roomId)
         startPolling()
     }
 
     fun retryLoad() {
         load(showLoading = true)
+    }
+
+    /**
+     * 참여자를 읽어 헤더 제목을 짓는다. 실패는 삼킨다 — 제목이 경로로 남을 뿐 대화는 멀쩡하다.
+     * 방이 열려 있는 동안 참여자는 거의 바뀌지 않아 재진입마다 한 번이면 충분하다(폴링하지 않는다).
+     */
+    private fun loadPeerTitle(roomId: Long) {
+        viewModelScope.launch {
+            val members = runCatching { repository.getChatRoomMembers(roomId) }.getOrNull()
+            // 늦게 온 응답이 그 사이 바뀐 방의 제목을 덮어쓰지 않게 한다
+            if (chatRoomId != roomId) return@launch
+            _peerTitle.value = members?.let(::chatRoomPeerTitle)
+        }
     }
 
     private fun load(showLoading: Boolean) {
@@ -242,16 +334,28 @@ class ChatRoomViewModel(
     }
 }
 
-// 24 채팅 — 방 목록에서 고르면 같은 라우트 안에서 방으로 전환한다.
+/**
+ * 24 채팅 **탭** — 방 목록에서 고르면 같은 라우트 안에서 방으로 전환한다.
+ *
+ * 21·25·26 의 「채팅 열기」는 이 경로로 오지 않는다 — 탭으로 보내면 매칭 화면이 스택에서 빠진다.
+ * 그쪽은 [ChatRoomDestinationRoute] 를 독립 목적지로 쌓아 뒤로가기가 원래 화면으로 돌아가게 한다.
+ *
+ * @param activePartyId 진행 중인 방의 id([com.moyeota.domain.model.Ride.id]). 열린 채팅방이 그 방의
+ *   것이면 헤더에 「매칭 화면으로 →」를 띄운다. 진행 중인 방이 없으면 null.
+ */
 @Composable
 fun ChatRoute(
     repository: ChatRepository,
+    activePartyId: String? = null,
+    onOpenMatching: () -> Unit = {},
     onOpenRideOngoing: () -> Unit = {},
     onStartLocationShare: () -> Unit = {},
     onLeaveChat: () -> Unit = {},
     onTabSelect: (MoyeotaTab) -> Unit = {},
 ) {
     var openedRoom by rememberSaveable(stateSaver = ChatRoomSaver) { mutableStateOf<ChatRoom?>(null) }
+    // 방이 열린 상태의 시스템 뒤로가기는 탭을 빠져나가지 않고 목록으로 돌아간다 (화면 ← 와 동일)
+    BackHandler(enabled = openedRoom != null) { openedRoom = null }
 
     val room = openedRoom
     if (room == null) {
@@ -265,6 +369,7 @@ fun ChatRoute(
             repository = repository,
             room = room,
             onBack = { openedRoom = null },
+            onOpenMatching = onOpenMatching.takeIf { room.isActiveParty(activePartyId) },
             onOpenRideOngoing = onOpenRideOngoing,
             onStartLocationShare = onStartLocationShare,
             // 나간 방을 열어둔 채로 홈에 보내면, 채팅 탭에 돌아왔을 때 참여자가 아닌 방을 다시 연다.
@@ -310,6 +415,7 @@ private fun ChatRoomRoute(
     repository: ChatRepository,
     room: ChatRoom,
     onBack: () -> Unit,
+    onOpenMatching: (() -> Unit)?,
     onOpenRideOngoing: () -> Unit,
     onStartLocationShare: () -> Unit,
     onLeaveChat: () -> Unit,
@@ -323,6 +429,7 @@ private fun ChatRoomRoute(
     val state by viewModel.uiState.collectAsState()
     val input by viewModel.inputState.collectAsState()
     val leftRoom by viewModel.leftRoom.collectAsState()
+    val peerTitle by viewModel.peerTitle.collectAsState()
 
     // 화면이 보이는 동안만 조회·폴링한다. 탭을 옮기거나 앱이 백그라운드로 가면 즉시 멈춘다.
     LifecycleStartEffect(room.id) {
@@ -336,8 +443,12 @@ private fun ChatRoomRoute(
 
     // 방 화면의 이동 수단은 뒤로가기(목록 복귀) + 하단탭 둘 다다.
     // 대화를 못 불러와도 둘 다 남긴다 — Success 일 때의 골격과 같게 (QA F-1)
-    // 제목·부제는 서버 ChatRoom 실값(출발지 → 목적지)이다. ChatScreen 의 기본값("서면역 동승")은 Preview 전용.
-    val roomTitle = "${room.departure} → ${room.destination}"
+    //
+    // 제목은 **참여자 닉네임**이고 경로는 부제로 내려간다(목록과 같은 규칙 — chatRoomPeerTitle KDoc).
+    // 참여자를 아직/끝내 못 받았으면 예전처럼 경로가 제목이고, 그때 부제는 메시지 수다
+    // (제목과 부제에 같은 문장을 두 번 적지 않는다). ChatScreen 의 기본값은 Preview 전용.
+    val routeLabel = "${room.departure} → ${room.destination}"
+    val roomTitle = peerTitle ?: routeLabel
     when (val current = state) {
         ChatRoomViewModel.UiState.Loading -> TabStateScaffold(MoyeotaTab.CHAT, onTabSelect) {
             BackStateScaffold(title = roomTitle, onBack = onBack) { LoadingBox() }
@@ -349,7 +460,7 @@ private fun ChatRoomRoute(
         }
         is ChatRoomViewModel.UiState.Success -> ChatScreen(
             roomTitle = roomTitle,
-            roomSubtitle = "메시지 ${current.messages.size}개",
+            roomSubtitle = if (peerTitle != null) routeLabel else "메시지 ${current.messages.size}개",
             hasOngoingRide = false,
             messages = current.messages.map { it.toUiMessage() },
             input = input.text,
@@ -358,6 +469,7 @@ private fun ChatRoomRoute(
             onInputChange = viewModel::onInputChange,
             onSend = viewModel::send,
             onBack = onBack,
+            onOpenMatching = onOpenMatching,
             onOpenRideOngoing = onOpenRideOngoing,
             onStartLocationShare = onStartLocationShare,
             onLeaveChat = viewModel::leaveRoom, // 서버에서 빠진 뒤 14 홈으로
@@ -365,6 +477,67 @@ private fun ChatRoomRoute(
         )
     }
 }
+
+/**
+ * 24 채팅방 — **독립 목적지**(`Routes.CHAT_ROOM`). 21·25·26 의 「채팅 열기」가 이걸 스택에 쌓는다.
+ *
+ * 대화 자체는 탭 안의 방 화면과 **완전히 같은 것**을 쓴다([ChatRoomRoute]) — 방 하나에 화면이 둘이면
+ * 폴링·읽음 처리·나가기 규칙이 두 벌이 된다. 여기서 더 하는 일은 하나뿐이다: 라우트 인자로 받은
+ * roomId 로 방 이름(출발지 → 목적지)을 한 번 조회하는 것. 탭 경로는 목록에서 이미 [ChatRoom] 을
+ * 통째로 들고 오지만, 진행 화면에서는 id 밖에 없다.
+ *
+ * @param activePartyId 진행 중인 방 id. 이 채팅방이 그 방의 것이면 헤더에 「매칭 화면으로 →」가 뜬다.
+ *   뒤로가기로도 돌아갈 수 있지만, 채팅방에 오래 머문 뒤에는 「어디로 돌아가는 뒤로가기인지」가
+ *   사라진다 — 이름 붙은 길을 함께 둔다.
+ */
+@Composable
+fun ChatRoomDestinationRoute(
+    repository: ChatRepository,
+    roomId: Long,
+    activePartyId: String? = null,
+    onBack: () -> Unit = {},
+    onOpenMatching: () -> Unit = {},
+    onOpenRideOngoing: () -> Unit = {},
+    onStartLocationShare: () -> Unit = {},
+    onLeaveChat: () -> Unit = {},
+    onTabSelect: (MoyeotaTab) -> Unit = {},
+) {
+    var room by rememberSaveable(stateSaver = ChatRoomSaver) { mutableStateOf<ChatRoom?>(null) }
+    var failure by remember { mutableStateOf<String?>(null) }
+    // 「다시 시도」로 같은 roomId 를 한 번 더 읽기 위한 손잡이 — key 가 같으면 LaunchedEffect 가 다시 돌지 않는다
+    var retryKey by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(roomId, retryKey) {
+        if (room?.id == roomId) return@LaunchedEffect
+        failure = null
+        runCatching { repository.getChatRoom(roomId) }
+            .onSuccess { room = it }
+            .onFailure { failure = it.toChatMessage("채팅방을 불러오지 못했어요") }
+    }
+
+    val current = room
+    when {
+        current != null -> ChatRoomRoute(
+            repository = repository,
+            room = current,
+            onBack = onBack,
+            onOpenMatching = onOpenMatching.takeIf { current.isActiveParty(activePartyId) },
+            onOpenRideOngoing = onOpenRideOngoing,
+            onStartLocationShare = onStartLocationShare,
+            onLeaveChat = onLeaveChat,
+            onTabSelect = onTabSelect,
+        )
+        // 탭바가 아니라 뒤로가기가 이 화면의 이동 수단이다 — 어느 상태에서도 원래 화면으로 돌아갈 수 있어야 한다
+        failure != null -> BackStateScaffold(title = "채팅", onBack = onBack) {
+            ErrorBox(message = failure.orEmpty(), onRetry = { retryKey++ })
+        }
+        else -> BackStateScaffold(title = "채팅", onBack = onBack) { LoadingBox() }
+    }
+}
+
+// 이 채팅방이 지금 진행 중인 방의 것인가. 진행 중인 방이 없으면(null) 언제나 false.
+private fun ChatRoom.isActiveParty(activePartyId: String?): Boolean =
+    activePartyId != null && partyId.toString() == activePartyId
 
 // 서버 메시지 → 화면 표시 모델.
 // "내 메시지" 판정은 Repository 가 계산한 isMine 을 그대로 믿는다(토큰 주체 기준).

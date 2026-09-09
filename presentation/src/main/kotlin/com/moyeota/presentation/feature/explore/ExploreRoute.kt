@@ -130,6 +130,8 @@ class ExploreViewModel(private val repository: RideRepository) : ViewModel() {
 @Composable
 fun ExploreRoute(
     repository: RideRepository,
+    /** 지금 진행 중인 내 방(ActivePartyViewModel.resolve 결과). null 이면 상단 배너를 그리지 않는다 */
+    activeRide: Ride? = null,
     onJoinParty: (Ride) -> Unit = {},
     onOngoingRideClick: () -> Unit = {},
     onCreateRoomClick: () -> Unit = {},
@@ -171,6 +173,7 @@ fun ExploreRoute(
         is ExploreViewModel.UiState.Success -> ExploreScreen(
             parties = current.parties,
             waitingCount = current.parties.sumOf { it.members.size },
+            activeRide = activeRide,
             locationGranted = myLocation.isGranted,
             myLocation = myFix,
             onJoinParty = onJoinParty,

@@ -38,8 +38,9 @@ interface ChatRepository {
     suspend fun leaveChatRoom(chatRoomId: Long)
 
     // GET /api/v1/chat-rooms/{chatRoomId}/users — 방 참여자 목록(나간 사람은 active=false 로 포함).
-    // 저장소는 이 목록을 방별로 캐시해 메시지의 senderId → 닉네임/내 메시지 여부를 푼다. 화면이
-    // 직접 부를 일은 아직 없지만(참여자 N명 표시 등), 판정의 근거를 계약으로 드러내 둔다.
+    // 저장소는 이 목록을 방별로 캐시해 메시지의 발신자 publicId → 닉네임을 푼다("내 메시지" 판정은
+    // 메시지 자체의 publicId 로 끝나므로 이 목록이 없어도 정확하다). 화면이 직접 부를 일은 아직
+    // 없지만(참여자 N명 표시 등), 판정의 근거를 계약으로 드러내 둔다.
     // 참여자가 아니면 403 CHAT_NOT_PARTICIPANT.
     suspend fun getChatRoomMembers(chatRoomId: Long): List<ChatMember>
 
@@ -69,8 +70,8 @@ interface ChatRepository {
     /**
      * POST /api/v1/chat-rooms/{chatRoomId}/messages (201). 내용은 1~1000자, 빈 문자열이면 400.
      *
-     * 부수효과가 하나 있다: 응답의 내부 userId 를 "나"로 학습해, 참여자 목록을 쓸 수 없는 서버에서도
-     * 이후 [ChatMessage.isMine] 판정이 맞아 들어간다([RemoteChatRepository][com.moyeota.data.repository.RemoteChatRepository]).
+     * 응답은 다른 조회와 같은 메시지 shape 이며 발신자 publicId 가 실려 있으므로
+     * 방금 보낸 메시지부터 [ChatMessage.isMine] 이 참이다(예전의 "내 id 학습" 부수효과는 사라졌다).
      */
     suspend fun sendMessage(chatRoomId: Long, content: String): ChatMessage
 

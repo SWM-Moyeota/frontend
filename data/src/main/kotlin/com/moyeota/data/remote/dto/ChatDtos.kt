@@ -41,27 +41,34 @@ data class SendMessageRequestDto(
 )
 
 // 메시지 1건 (ChatMessageResult). 삭제된 메시지는 서버가 content 를 "삭제된 메시지입니다" 로 치환해 내려준다.
+//
+// 배포 서버 실측(2026-09-09, GET /chat-rooms/1/messages · POST .../messages):
+//   {"id","chatRoomId","publicId","content","type","createdAt","deleted"}
+// 즉 **userId 는 더 이상 오지 않고 publicId(발신자 공개 UUID)가 그 자리를 대신한다.**
 @Serializable
 data class ChatMessageResponse(
     val id: Long,
     val chatRoomId: Long = 0,
     /**
-     * 보낸 사람의 **서버 내부 PK**. 앱은 이 값을 다른 어떤 API 에서도 받지 못해 그 자체로는
-     * 누구인지 알 수 없다 — 내가 보낸 메시지의 응답에서 학습해야 비교가 가능해진다
-     * (RemoteChatRepository).
+     * 보낸 사람의 **공개 UUID**(JWT `sub` 와 같은 값). 현행 서버가 실어 주는 발신자 신원이며,
+     * 세션 uuid 와 비교하는 것만으로 내 메시지를 가릴 수 있다 — 학습도 사전도 필요 없다.
+     */
+    val publicId: String? = null,
+    /**
+     * 같은 값의 옛 이름. 앱이 백엔드에 요청했던 필드명이 `senderPublicId` 였고 서버는 `publicId` 로
+     * 냈다 — 어느 쪽이 와도 읽도록 둘 다 받는다([publicId] 보다 이쪽이 우선).
+     */
+    val senderPublicId: String? = null,
+    /**
+     * 보낸 사람의 서버 내부 PK. **현행 서버는 주지 않는다**(기본값 0 이 그대로 남는다).
+     * 앱은 이 값을 더 이상 쓰지 않으며, 필드는 구버전 서버 응답을 파싱 에러 없이 받기 위해서만 남겼다.
      */
     val userId: Long = 0,
     val content: String = "",
     val type: String = "",
     val createdAt: String? = null,
     val deleted: Boolean = false,
-    /**
-     * 보낸 사람의 공개 UUID. **아직 서버가 내려주지 않는다** — 백엔드에 추가를 요청해 둔 필드이며,
-     * 들어오는 순간 학습 없이도 세션 uuid 와의 비교만으로 내 메시지를 정확히 가릴 수 있다.
-     * 파티 members 가 이미 publicId 로 같은 문제를 푼다.
-     */
-    val senderPublicId: String? = null,
-    /** 보낸 사람 닉네임. 역시 서버 추가 대기 중 — 없으면 화면이 "동승자"로 폴백한다. */
+    /** 보낸 사람 닉네임. 서버가 주지 않아 참여자 목록에서 채운다 — 오면 쓰는 관용 필드. */
     val senderNickname: String? = null,
 )
 
@@ -74,14 +81,14 @@ data class ChatMessageSliceResponse(
 )
 
 // GET /api/v1/chat-rooms/{chatRoomId}/users → List<ChatRoomMemberResult>
-// 메시지의 userId(내부 PK)와 공개 식별자(publicId)를 잇는 유일한 다리다 —
-// 이 목록이 있어야 "누가 보냈는가"를 학습 없이 알 수 있다.
+// 배포 서버 실측(2026-09-09): {"publicId","nickname","imageUrl","active"} — userId 는 없다.
 //
-// userId 는 백엔드 패치로 뒤늦게 추가된 필드라 nullable 이다: 패치 전 서버는 이 값을 주지 않고,
-// 그때는 메시지와 이을 키가 없어 저장소가 기존 학습 폴백으로 되돌아간다.
+// 메시지도 publicId 로 발신자를 밝히므로 이 목록은 **publicId → 닉네임/프로필 사전**으로만 쓰인다
+// (예전처럼 내부 PK 를 공개 신원으로 번역하는 다리 역할은 끝났다).
 // active=false 는 방을 나간 사람이며, 그 사람이 남긴 메시지의 이름을 지우지 않기 위해 목록에 남는다.
 @Serializable
 data class ChatMemberResponse(
+    /** 현행 서버는 주지 않는다(항상 null). 구버전 응답 호환으로만 남긴 필드. */
     val userId: Long? = null,
     val publicId: String = "",
     val nickname: String = "",

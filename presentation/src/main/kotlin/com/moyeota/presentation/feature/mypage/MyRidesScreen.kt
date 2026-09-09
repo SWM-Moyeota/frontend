@@ -42,6 +42,7 @@ import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.model.User
+import com.moyeota.presentation.core.activeStageLabel
 
 // 와이어프레임 그레이 (core token 미정의 색 — 화면 재현용)
 private val CanvasBg = Color(0xFFF5F7FA)
@@ -50,7 +51,9 @@ private val GrayMute = Color(0xFF8A93A0)
 private val GrayAsh = Color(0xFF9AA1AC)
 private val CardShadow = Color(0x0F1B2A4A)
 
-// 화면 34 기본 더미 데이터 (파라미터 기본값)
+// 화면 34 **Preview 전용** 더미. 실제 진입(MainNavGraph)은 언제나 resolve() 결과를 넘긴다 —
+// 예전에는 이 값들이 파라미터 기본값이라, 탑승이 하나도 없는 계정에도 「7월 25일 · 3,200원」이
+// 늘 떠 있었다(눌러도 갈 곳 없는 카드).
 private val DummyMembers = listOf(
     User(id = "u1", nickname = "김OO", verifiedLabel = "부산대 인증", rating = 4.9, rideCount = 12),
     User(id = "u2", nickname = "이OO", verifiedLabel = "부산대 인증", rating = 4.8, rideCount = 8),
@@ -87,8 +90,8 @@ private val DummyUpcomingRide = Ride(
  * 진입: 하단탭 「마이」 아님 — 17 배너 · 35 탑승 기록
  *
  * 이동(디스크립션):
- * - 「실시간 위치 보기 ›」 → 26 운행 중 (onLiveLocationClick)
- * - 진행 중 카드 탭 → 22 탑승 상세 (onRideClick, 미연결)
+ * - 「진행 상황 보기 ›」 → 지금 단계 화면 21/25/26 (onOpenStage) — 방 status·기사 배정 여부로 갈린다
+ * - 진행 중 카드 탭 → 22 탑승 상세 (onRideClick)
  * - 예정 카드 탭 → 22 (onRideClick, 미연결)
  * - 하단탭 홈 / 합승 / 채팅 / 마이 → 14 / 17 / 24 / 35 (onTabSelect)
  * - 「지난 탑승 기록」 안내 → 35 마이페이지 (onHistoryClick)
@@ -96,15 +99,17 @@ private val DummyUpcomingRide = Ride(
  * 검증(디스크립션):
  * - 지난 탑승은 이 탭에 표시하지 않음 (35 마이 > 탑승 기록)
  * - 진행 중 0건이면 「진행 중」 섹션 숨기고 예정만 표시, 둘 다 없으면 빈 상태 + 홈 유도
+ * - 「예정 탑승」은 아직 서버에 개념이 없다(방은 만들자마자 진행 중이다) — 언제나 빈 목록이다
  */
 @Composable
 fun MyRidesScreen(
-    ongoingRide: Ride? = DummyOngoingRide,
-    upcomingRides: List<Ride> = listOf(DummyUpcomingRide),
-    onRideClick: (Ride) -> Unit = {},          // → 22 탑승 상세 (미연결)
-    onLiveLocationClick: (Ride) -> Unit = {},  // → 26 운행 중
-    onHistoryClick: () -> Unit = {},           // → 35 마이페이지
-    onTabSelect: (MoyeotaTab) -> Unit = {},    // → 14 / 17 / 24 / 35
+    /** 지금 진행 중인 내 방(ActivePartyViewModel.resolve 결과). 없으면 빈 상태를 그린다 */
+    ongoingRide: Ride? = null,
+    upcomingRides: List<Ride> = emptyList(),
+    onRideClick: (Ride) -> Unit = {},      // → 22 탑승 상세
+    onOpenStage: (Ride) -> Unit = {},      // → 21 / 25 / 26 (지금 단계)
+    onHistoryClick: () -> Unit = {},       // → 35 마이페이지
+    onTabSelect: (MoyeotaTab) -> Unit = {}, // → 14 / 17 / 24 / 35
 ) {
     // 내부 상태: 세그먼트 (진행 중 / 예정)
     var segment by remember { mutableStateOf(RideSegment.ONGOING) }
@@ -190,7 +195,7 @@ fun MyRidesScreen(
                     OngoingRideCard(
                         ride = ongoingRide,
                         onClick = { onRideClick(ongoingRide) },
-                        onLiveLocationClick = { onLiveLocationClick(ongoingRide) },
+                        onOpenStage = { onOpenStage(ongoingRide) },
                     )
                 }
 
@@ -281,11 +286,17 @@ private fun SegmentPill(text: String, selected: Boolean, onClick: () -> Unit) {
     }
 }
 
+/**
+ * 진행 중 카드 — 값은 전부 서버 방 상세([Ride])에서 온다.
+ *
+ * 「실시간 위치 보기」였던 자리가 「진행 상황 보기」가 됐다. 예전엔 무슨 단계든 26 운행 중으로만
+ * 보냈는데, 아직 사람을 모으는 방에서 그리로 가면 빈 지도가 뜬다 — 지금 단계로 보낸다.
+ */
 @Composable
 private fun OngoingRideCard(
     ride: Ride,
     onClick: () -> Unit,
-    onLiveLocationClick: () -> Unit,
+    onOpenStage: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -298,31 +309,46 @@ private fun OngoingRideCard(
             .padding(horizontal = 20.dp, vertical = 18.dp),
     ) {
         Text(
+            text = ride.activeStageLabel,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+            color = MoyeotaColor.Primary600,
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
             text = ride.destination,
-            fontSize = 28.sp,
+            fontSize = 26.sp,
             fontWeight = FontWeight.Bold,
             color = MoyeotaColor.InkPrimary,
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = "출발 ${ride.origin}",
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+            color = GrayMute,
         )
         Spacer(Modifier.height(12.dp))
         HorizontalDivider(color = MoyeotaColor.Hairline)
         Spacer(Modifier.height(10.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                text = "${ride.departureLabel} 출발 · ${ride.members.size}명",
+                // 서버 members[] 그대로 — 나를 포함한 수다. 방이 「몇 명으로 굴러가는지」가 이 자리의 값이다
+                text = "동승자 나 포함 ${ride.members.size}명 · 정원 ${ride.capacity}명",
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Medium,
                 color = GraySlate,
             )
             Spacer(Modifier.weight(1f))
-            // 「실시간 위치 보기 ›」 → 26 운행 중
+            // 「진행 상황 보기 ›」 → 21 / 25 / 26
             Text(
-                text = "실시간 위치 보기 ›",
+                text = "진행 상황 보기 ›",
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Bold,
-                color = MoyeotaColor.Success600,
+                color = MoyeotaColor.Primary600,
                 modifier = Modifier
                     .clip(RoundedCornerShape(8.dp))
-                    .clickable { onLiveLocationClick() },
+                    .clickable { onOpenStage() },
             )
         }
     }
@@ -395,5 +421,5 @@ private fun FilterIcon(modifier: Modifier = Modifier, color: Color = GraySlate) 
 @Preview(showBackground = true, widthDp = 393, heightDp = 852)
 @Composable
 private fun MyRidesScreenPreview() {
-    MyRidesScreen()
+    MyRidesScreen(ongoingRide = DummyOngoingRide, upcomingRides = listOf(DummyUpcomingRide))
 }
