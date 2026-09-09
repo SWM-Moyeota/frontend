@@ -1,11 +1,31 @@
 package com.moyeota.domain.model
 
+/**
+ * 파티 참여자를 화면에 그리기 위한 표시용 모델. 서버 `PartyDetailResult.MemberInfo` 가 출처다.
+ *
+ * [id] 는 서버 `publicId`(UUID v7, JWT `sub` 와 같은 값)다. **탈퇴 등으로 유저 요약이 없으면
+ * 서버가 publicId·nickname·imageUrl 을 전부 null 로 내리므로 그때는 빈 문자열이다**
+ * — 화면은 빈 id 를 "탭 불가"로 다뤄야 한다(프로필로 넘어갈 대상이 없다).
+ *
+ * [rating] 은 지금 항상 0.0 이다. 평가 API 자체가 서버에 없다 —
+ * 화면은 0.0 을 "평가 없음"으로 표시해야 하며, 4.9·매너 98% 같은 가짜 값을 지어내면 안 된다.
+ * [verifiedLabel] 도 같은 처지다: 서버 `badgeId` 가 TODO 라 항상 null 이므로 빈 문자열이 온다.
+ */
 data class User(
     val id: String,
     val nickname: String,
     val verifiedLabel: String, // 예: "성결대 인증", "직장 인증"
     val rating: Double,
     val rideCount: Int,
+    /** 프로필 이미지 URL. 서버가 주지 않으면 null — 화면은 이니셜 원 같은 대체 표현을 쓴다. */
+    val imageUrl: String? = null,
+    /**
+     * 이 멤버가 로그인한 본인인가. `publicId == UserSession.currentUserUuid` 로 판정한다.
+     *
+     * 기본값이 false 인 건 **식별자가 없는 응답**(목록·방 생성) 때문이다 — 그쪽 자리 표시용 멤버는
+     * 누가 나인지 알 방법이 없다. 상세/합류 응답에서만 실제로 채워진다.
+     */
+    val isMe: Boolean = false,
 )
 
 /**

@@ -18,11 +18,18 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -34,16 +41,26 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.BackArrowIcon
-import com.moyeota.core.designsystem.component.MapPlaceholder
+import com.moyeota.core.designsystem.component.MoyeotaDefaultCamera
 import com.moyeota.core.designsystem.component.NavigationBarSpacer
+import com.moyeota.core.designsystem.component.RouteMapView
 import com.moyeota.core.designsystem.component.SheetHandle
 import com.moyeota.core.designsystem.component.StatusBarSpacer
+import com.moyeota.core.designsystem.component.latLngOrNull
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.presentation.core.location.UserCoordinates
+import com.naver.maps.geometry.LatLng
+import com.naver.maps.geometry.LatLngBounds
+import com.naver.maps.map.CameraAnimation
+import com.naver.maps.map.CameraUpdate
+import com.naver.maps.map.NaverMap
+import com.naver.maps.map.overlay.LocationOverlay
 
 // 와이어프레임 색 (core token 미정의 — 화면 재현용)
 private val ScreenBg = Color(0xFFF5F7FA)
@@ -64,26 +81,28 @@ private val CardShadow = Color(0x1A1B2A4A)
  * - 뒤로 → 25 배차 상태 (onBack)
  * - 「채팅 열기」 → 24 채팅 (onOpenChat)
  * - 「신고」 / 「문제가 생기면 아래에서 바로 신고할 수 있어요」 → 27 긴급 신고 (onReport)
- * - 경유 순서 카드 탭(=하차) → 28 최종 요금 확인 (onArrived)
  *
- * 도착 전이에 관하여: 원래 28 은 기사측 이벤트로 자동 전환되는 화면이다. 그런데 승객이 폴링할 수 있는
- * 운행 완료 상태가 아직 없어(서버 `startRide`/`completeRide` 미저장, QA D-2) 자동 전환을 걸 곳이 없다.
- * 이전엔 15초 데모 타이머로 때웠지만 그게 27 신고 진입을 막아버려서(QA D-3) 제거했고,
- * 그 자리를 **경유 카드 탭**이라는 임시 수동 트리거로 대체했다. 서버가 완료 상태를 내려주면
- * 이 콜백을 status 관찰로 갈아끼우면 된다.
+ * 28 최종 요금으로의 전이는 이 화면에 없다. 기사측 운행 종료를 서버 status 로 관찰하는
+ * [RideOngoingRoute] 가 넘긴다 — 화면은 수동 트리거를 두지 않는다(승객이 하차를 선언하는 개념이 아니다).
  *
  * 상태: 보호자 공유 토글은 로컬 상태. 심야(23:00~04:00)는 설정 무관 자동 공유(11 설정 기준).
  * 플로우 진행 화면 — 하단탭 없음 (공통 규칙).
+ *
+ * 지도: 출발·도착 마커 + 서버 확정 경로([routePath]) + 내 현재 위치(파란 점, [myLocation]).
+ * 좌표는 [RideOngoingRoute] 의 방 상세 폴링·위치 구독이 내려준다 — null 이면 그 요소만 빠진 지도를 그린다.
  */
 @Composable
 fun RideOngoingScreen(
     remainingLabel: String = "서면역까지 8분 남음",
     arrivalLabel: String = "오후 6:57 도착 예정 · 위치가 실시간으로 반영돼요",
     guardianLabel: String = "어머니 · 010-••••-1234 · 도착하면 자동으로 알려드려요",
+    originPosition: LatLng? = null,
+    destinationPosition: LatLng? = null,
+    routePath: List<LatLng> = emptyList(),
+    myLocation: UserCoordinates? = null,
     onBack: () -> Unit = {},
     onOpenChat: () -> Unit = {},
     onReport: () -> Unit = {},
-    onArrived: () -> Unit = {}, // 하차 → 28 (서버 완료 상태 생기면 자동 관찰로 대체)
 ) {
     var guardianSharing by remember { mutableStateOf(true) }
 
@@ -115,8 +134,14 @@ fun RideOngoingScreen(
             }
         }
 
-        // 지도 영역
-        MapPlaceholder(modifier = Modifier.fillMaxWidth().height(190.dp))
+        // 지도 — 출발·도착 마커 + 경로 + 내 위치. 크기는 기존 플레이스홀더(190dp)를 그대로 유지한다
+        RideOngoingMap(
+            modifier = Modifier.fillMaxWidth().height(190.dp),
+            originPosition = originPosition,
+            destinationPosition = destinationPosition,
+            routePath = routePath,
+            myLocation = myLocation,
+        )
 
         // 바텀 시트
         Column(
@@ -148,16 +173,14 @@ fun RideOngoingScreen(
             )
 
             Spacer(Modifier.height(18.dp))
-            // 경유 순서 카드 — 탭하면 하차 처리로 보고 28 최종 요금으로 넘어간다.
-            // 마지막 단계가 「내린 뒤 현장에서 1/N 정산」이라 카드 자체가 곧 다음 행동이다.
+            // 경유 순서 카드 — 진행 상황 표시 전용. 탭 동작 없음(하차는 기사가 서버에 알린다).
             Box(
                 modifier = Modifier
                     .padding(horizontal = 16.dp)
                     .fillMaxWidth()
                     .height(150.dp)
                     .clip(RoundedCornerShape(16.dp))
-                    .background(RouteCardBg)
-                    .clickable { onArrived() },
+                    .background(RouteCardBg),
             ) {
                 // 타임라인 연결선
                 Box(
@@ -317,6 +340,138 @@ private fun RouteStepRow(label: String, time: String?, state: RouteStepState) {
                 color = if (state == RouteStepState.CURRENT) MoyeotaColor.InkPrimary else MuteGray,
             )
         }
+    }
+}
+
+// ─── 지도 ────────────────────────────────────────────────────────────────────
+
+/** 출발·도착이 모두 보이게 맞출 때 마커가 지도 가장자리에 붙지 않도록 두는 여백 */
+private val FitBoundsPadding = 40.dp
+
+/** 서버 좌표가 오기 전, 내 위치만으로 카메라를 잡을 때의 줌 — 동네 단위가 보이는 수준 */
+private const val MyLocationZoom = 15.0
+
+/**
+ * 운행 중 지도. [RouteMapView] 가 출발·도착 마커와 경로를 그리고, 이 컴포저블은
+ * 내 위치 파란 점과 **초기 카메라**(세 지점이 다 보이는 fitBounds)만 얹는다.
+ *
+ * 카메라는 딱 두 번만 움직인다 — ① 첫 실위치가 잡히면 내 위치 중심(서버 좌표 대기 중 폴백),
+ * ② 출발·도착 좌표가 도착하면 내 위치까지 포함한 fitBounds. 그 뒤로는 사용자 팬·줌이 주인이다.
+ * 폴링(4초)·위치 갱신(1초)마다 카메라를 다시 맞추면 지도를 볼 수가 없다
+ * (RouteMapView 의 driverPosition 을 center 로 쓰지 않는 것과 같은 이유).
+ * 그래서 [RouteMapView] 의 center 도 **상수**로 고정한다 — 기본값(originPosition)을 쓰면
+ * 폴링으로 좌표가 도착하는 순간 NaverMapView 가 카메라를 되돌려 fitBounds 를 덮어쓴다.
+ */
+@Composable
+private fun RideOngoingMap(
+    modifier: Modifier = Modifier,
+    originPosition: LatLng?,
+    destinationPosition: LatLng?,
+    routePath: List<LatLng>,
+    myLocation: UserCoordinates?,
+) {
+    var map by remember { mutableStateOf<NaverMap?>(null) }
+    val density = LocalDensity.current
+    val myPosition = latLngOrNull(myLocation?.latitude, myLocation?.longitude)
+    // fitBounds 는 마커 좌표가 "도착한 순간" 1회만 도는 이펙트라, 그 시점의 내 위치는
+    // key 가 아니라 최신 참조로 읽는다 — key 로 넣으면 1초마다 카메라가 다시 맞춰진다
+    val currentMyPosition by rememberUpdatedState(myPosition)
+
+    // 화면 회전·재진입 후에는 NaverMapView 가 사용자가 보던 카메라를 복원한다 —
+    // 그 위에 fitBounds 를 또 걸면 보던 위치가 날아가므로 두 플래그 모두 rememberSaveable 로 남긴다
+    var boundsFitted by rememberSaveable { mutableStateOf(false) }
+    var centeredOnMe by rememberSaveable { mutableStateOf(false) }
+
+    RouteMapView(
+        modifier = modifier,
+        routePath = routePath,
+        originPosition = originPosition,
+        destinationPosition = destinationPosition,
+        center = MoyeotaDefaultCamera, // 상수 — 카메라는 아래 이펙트가 움직인다 (KDoc 참고)
+        onMapReady = { map = it },
+    )
+
+    // ② 출발·도착 좌표가 갖춰지면 세 지점이 다 보이게 1회 fitBounds.
+    // 좌표는 서버가 방 생성 시 확정한 값이라 폴링 주기마다 같은 값이 온다 — key 재실행 없음.
+    LaunchedEffect(map, originPosition, destinationPosition) {
+        val naverMap = map ?: return@LaunchedEffect
+        if (boundsFitted || originPosition == null || destinationPosition == null) return@LaunchedEffect
+        val bounds = LatLngBounds.Builder()
+            .include(originPosition)
+            .include(destinationPosition)
+            .apply { currentMyPosition?.let(::include) }
+            .build()
+        val padding = with(density) { FitBoundsPadding.roundToPx() }
+        naverMap.moveCamera(CameraUpdate.fitBounds(bounds, padding).animate(CameraAnimation.Easing))
+        boundsFitted = true
+    }
+
+    // ① 폴백 — 서버 좌표보다 실위치가 먼저 잡히면 우선 내 위치 중심으로. 1회만(이후 갱신은 점만 따라간다)
+    LaunchedEffect(map, myPosition) {
+        val naverMap = map ?: return@LaunchedEffect
+        val fix = myPosition ?: return@LaunchedEffect
+        if (boundsFitted || centeredOnMe) return@LaunchedEffect
+        naverMap.moveCamera(CameraUpdate.scrollAndZoomTo(fix, MyLocationZoom))
+        centeredOnMe = true
+    }
+
+    if (myPosition != null) {
+        RideMyLocationOverlay(
+            map = map,
+            position = myPosition,
+            bearingDegrees = myLocation?.bearingDegrees,
+        )
+    }
+}
+
+// 내 위치 보간 파라미터 — 합승 탭(ExploreScreen)의 MyLocationOverlay 와 같은 값
+/** 새 좌표까지 미끄러져 가는 시간. 갱신 주기(1초)보다 짧아야 다음 fix 전에 도착한다 */
+private const val MyLocationGlideMs = 800
+
+/** 이 이상 튀면 보간하지 않고 순간이동한다 — 지도를 가로질러 기어가는 점이 더 이상하다 */
+private const val MyLocationSnapDistanceM = 200.0
+
+/** 이 이하의 미세 이동은 애니메이션 없이 반영한다 (GPS 지터로 계속 애니메이션이 걸리는 것 방지) */
+private const val MyLocationMinMoveM = 0.5
+
+/**
+ * 내 위치 파란 점 — 네이버 SDK 의 [LocationOverlay]. 합승 탭의 MyLocationOverlay(비공개)와
+ * 같은 패턴의 화면 전용 축약판이다: 1초 주기 좌표를 등속 보간으로 미끄러뜨리고, 방향을 아는
+ * fix 에만 화살표를 띄운다. 오차 원은 그리지 않는다 — 차량 이동 속도에서는 반경이 정보가
+ * 아니라 잡음이고, 줌마다 픽셀 환산을 다시 해야 해 카메라 리스너까지 필요해진다.
+ * (공용 승격은 세 번째 지도 화면 정리 때 함께 — 지금은 explore·home 조정·여기 모두 각자 든다)
+ */
+@Composable
+private fun RideMyLocationOverlay(map: NaverMap?, position: LatLng, bearingDegrees: Float?) {
+    var rendered by remember { mutableStateOf(position) }
+    LaunchedEffect(position) {
+        val from = rendered
+        val moved = from.distanceTo(position)
+        if (moved < MyLocationMinMoveM || moved > MyLocationSnapDistanceM || !moved.isFinite()) {
+            rendered = position
+            return@LaunchedEffect
+        }
+        // 다음 fix 가 오면 이 이펙트가 취소되고 현재 위치에서 새 목표로 다시 출발한다
+        Animatable(0f).animateTo(1f, tween(MyLocationGlideMs, easing = LinearEasing)) {
+            rendered = LatLng(
+                from.latitude + (position.latitude - from.latitude) * value,
+                from.longitude + (position.longitude - from.longitude) * value,
+            )
+        }
+    }
+
+    // 오버레이는 NaverMap 당 하나뿐인 싱글턴 — 화면을 떠날 때 반드시 숨긴다
+    DisposableEffect(map) {
+        map?.locationOverlay?.isVisible = true
+        onDispose { map?.locationOverlay?.isVisible = false }
+    }
+
+    LaunchedEffect(map, rendered, bearingDegrees) {
+        val overlay = map?.locationOverlay ?: return@LaunchedEffect
+        overlay.position = rendered
+        // 방향을 모르는 fix 는 화살표를 띄우지 않는다 — 없는 방향을 북쪽이라고 그리면 안 된다
+        overlay.bearing = bearingDegrees ?: 0f
+        overlay.subIcon = if (bearingDegrees != null) LocationOverlay.DEFAULT_SUB_ICON_ARROW else null
     }
 }
 

@@ -21,10 +21,12 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -67,46 +69,63 @@ private val TrackGray = Color(0xFFE6EAF0)
  * 휴대폰 인증이 MVP 범위에서 빠지면서 인증 없이 값만 묻는 화면이 됐다. 그래서 09 를 경로에서
  * 들어내고 입력만 여기로 옮겼다 — 물어보는 값의 개수는 그대로고, 화면 하나가 줄었다.
  *
- * 필드가 7개라 세 절로 끊어 읽게 했다:
- * - **프로필** — 아바타 톤 · 표시 이름 (상대에게 보이는 이름)
+ * 필드가 8개라 세 절로 끊어 읽게 했다:
+ * - **프로필** — 아바타 톤 · 닉네임 (상대에게 보이는 유일한 이름)
  * - **기본 정보** — 이름(실명) · 생년월일 · 성별 · 휴대폰 번호 (서버 가입 필수값)
  * - **로그인 정보** — 아이디 · 비밀번호 · 이메일 (계정 자격증명)
  *
  * 이용약관·개인정보 동의 체크는 여기 두지 않는다 — 12 매너 서약의 동의 묶음으로 합쳤다.
  * 한 가입에서 동의를 두 화면이 나눠 받으면 무엇에 동의했는지가 흩어진다.
  *
- * @param onNext 「다음」 → 11 안심 설정. [SignupDraft] 는 서버로 갈 7개 값 그대로이고,
- *   표시 이름은 가입 API 에 자리가 없어 따로 넘긴다(호출부에서 아직 쓰지 않는다).
+ * 2026-09 서버 변경으로 **닉네임이 가입 필수 필드**가 됐다. 예전 「표시 이름」은 가입 API 에
+ * 자리가 없어 어디로도 가지 않는 값이었지만, 이제 [SignupDraft.nickname] 으로 그대로 서버에 간다.
+ * 규칙도 서버 VO 와 같은 [NicknamePolicy] 로 맞췄다(2~10자 한글·영문·숫자).
+ *
+ * @param nicknameCheck 중복 확인 결과. 입력이 멈춘 뒤 [ProfileSetupRoute] 가 서버에 물어 갱신한다.
+ * @param onNicknameChange 입력이 바뀔 때마다 호출 — 디바운스는 Route 가 한다.
+ * @param onNext 「다음」 → 11 안심 설정. [SignupDraft] 가 서버로 갈 8개 값 전부다.
  */
 @Composable
 fun ProfileSetupScreen(
     onBack: () -> Unit,
-    onNext: (displayName: String, info: SignupDraft) -> Unit,
+    onNext: (SignupDraft) -> Unit,
     modifier: Modifier = Modifier,
+    nicknameCheck: NicknameCheckState = NicknameCheckState.Idle,
+    onNicknameChange: (String) -> Unit = {},
 ) {
-    var name by remember { mutableStateOf("") }
-    var selectedColor by remember { mutableIntStateOf(0) }
+    // rememberSaveable 이어야 하는 이유: 12 매너 서약에서 가입이 409(닉네임 중복)로 실패하면
+    // 「닉네임 바꾸기」가 이 화면으로 popBackStack 한다. 그 사이 이 엔트리는 컴포지션에서 빠져 있어
+    // 평범한 remember 였다면 여기 여덟 값이 전부 날아가고 사용자는 가입 폼을 처음부터 다시 채워야 한다.
+    var nickname by rememberSaveable { mutableStateOf("") }
+    var selectedColor by rememberSaveable { mutableIntStateOf(0) }
 
-    var realName by remember { mutableStateOf("") }
-    var birthDigits by remember { mutableStateOf("") }
-    var gender by remember { mutableStateOf<Gender?>(null) }
-    var phoneDigits by remember { mutableStateOf("") }
+    var realName by rememberSaveable { mutableStateOf("") }
+    var birthDigits by rememberSaveable { mutableStateOf("") }
+    var gender by rememberSaveable { mutableStateOf<Gender?>(null) }
+    var phoneDigits by rememberSaveable { mutableStateOf("") }
 
-    var loginId by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    var email by remember { mutableStateOf("") }
+    var loginId by rememberSaveable { mutableStateOf("") }
+    var password by rememberSaveable { mutableStateOf("") }
+    var email by rememberSaveable { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
 
+    // 복원되어 돌아온 닉네임은 중복 확인을 다시 받아야 한다. ViewModel 은 살아남아 직전 결과
+    // (예: Available)를 그대로 들고 있는데, 되돌아온 이유가 바로 그 닉네임이 이미 선점됐다는
+    // 409 이기 때문이다 — 다시 묻지 않으면 선점된 닉네임에 초록 「사용 가능」이 남는다.
+    LaunchedEffect(Unit) {
+        if (nickname.isNotBlank()) onNicknameChange(nickname)
+    }
+
     // [유효값 검증 · 프로필]
-    // · 표시 이름 3~8자 (카운터 「n / 8」 실시간 갱신)
+    // · 닉네임 2~10자 (카운터 「n / 10」 실시간 갱신) — 서버 Nickname VO 와 같은 규칙
     // · 한글·영문·숫자 허용, 공백·특수문자·이모지 불가
-    // · 금칙어·욕설 필터, 운영자 사칭어(모여타·관리자) 차단
-    // · 중복 허용 (고유 식별자 아님) — 별도 중복 검사 없음
-    val nameError: String? = when {
-        name.isEmpty() -> null
-        !profileNameCharRegex.matches(name) -> "한글·영문·숫자만 쓸 수 있어요 (공백·특수문자·이모지 불가)"
-        name.length < 3 -> "표시 이름은 3~8자로 입력해 주세요"
-        profileBannedWords.any { name.contains(it) } -> "사용할 수 없는 표시 이름이에요"
+    // · 금칙어·욕설 필터, 운영자 사칭어(모여타·관리자) 차단 — 앱 자체 정책
+    // · 중복은 서버가 판정한다: 입력이 멈추면 Route 가 조회해 [nicknameCheck] 로 돌려준다
+    val nicknameFormatError = if (nickname.isEmpty()) null else NicknamePolicy.validate(nickname)
+    val nicknameError: String? = nicknameFormatError ?: when (nicknameCheck) {
+        // 서버가 형식으로 400 을 준 경우 — 앱 규칙과 어긋난 문자가 있다는 뜻이라 같은 문구로 안내한다
+        NicknameCheckState.InvalidFormat -> "닉네임은 한글·영문·숫자 2~10자로 입력해 주세요"
+        NicknameCheckState.Taken -> "이미 사용 중인 닉네임이에요"
         else -> null
     }
 
@@ -155,7 +174,9 @@ fun ProfileSetupScreen(
     val accountValid = loginId.isNotEmpty() && loginIdError == null &&
         password.isNotEmpty() && passwordError == null &&
         email.isNotEmpty() && emailError == null
-    val isValid = name.isNotEmpty() && nameError == null && basicValid && accountValid
+    // 중복 확인이 아직 진행 중이거나 네트워크로 실패했어도 다음 단계는 막지 않는다
+    // — 서버가 가입 시점에 409 로 최종 판정하고, 12 화면이 그 실패를 배너로 되돌려 준다.
+    val isValid = NicknamePolicy.isValid(nickname) && nicknameError == null && basicValid && accountValid
 
     Column(modifier = modifier.fillMaxSize().background(MoyeotaColor.SurfaceSoft)) {
         StatusBarSpacer()
@@ -217,29 +238,45 @@ fun ProfileSetupScreen(
             Spacer(Modifier.height(28.dp))
             ProfileSectionHeader(
                 title = "프로필",
-                description = "탑승 상대에게는 실명 대신 표시 이름으로 보여요",
+                description = "탑승 상대에게는 실명 대신 닉네임으로 보여요",
             )
             Spacer(Modifier.height(16.dp))
             MoyeotaTextField(
-                value = name,
-                onValueChange = { name = it.take(8) },
-                label = "표시 이름",
-                placeholder = "예) 김OO",
-                errorText = nameError,
-                helperText = if (nameError == null && name.isNotEmpty()) {
-                    "탑승 상대에게는 「$name」 으로 보여요"
-                } else {
-                    null
+                value = nickname,
+                // 공백은 규칙상 못 쓰는 문자다 — 오류로 튕기기보다 조용히 걸러 받는다
+                onValueChange = { new ->
+                    nickname = new.filter { !it.isWhitespace() }.take(NicknamePolicy.MAX_LENGTH)
+                    onNicknameChange(nickname)
+                },
+                label = "닉네임",
+                placeholder = "2~10자 한글·영문·숫자",
+                errorText = nicknameError,
+                helperText = when {
+                    nicknameError != null -> null
+                    nicknameCheck == NicknameCheckState.Checking -> "사용할 수 있는지 확인하고 있어요"
+                    nickname.isNotEmpty() -> "탑승 상대에게는 「$nickname」 으로 보여요"
+                    else -> null
                 },
                 trailing = {
                     Text(
-                        text = "${name.length} / 8",
+                        text = "${nickname.length} / ${NicknamePolicy.MAX_LENGTH}",
                         style = MoyeotaType.CaptionMd,
                         fontWeight = FontWeight.Medium,
                         color = CounterGray,
                     )
                 },
             )
+            // 사용 가능 확인만 초록으로 따로 세운다 — 나머지 상태는 필드가 자기 색으로 그린다.
+            // 확인에 실패한 경우(네트워크)는 아무 말도 하지 않는다: 사용자가 고칠 수 있는 게 없다.
+            if (nicknameError == null && nicknameCheck == NicknameCheckState.Available) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = "사용 가능한 닉네임이에요",
+                    style = MoyeotaType.CaptionMd,
+                    fontWeight = FontWeight.Medium,
+                    color = MoyeotaColor.Success500,
+                )
+            }
 
             Spacer(Modifier.height(28.dp))
             ProfileSectionHeader(
@@ -396,9 +433,9 @@ fun ProfileSetupScreen(
                     val birth = birthDate ?: return@PrimaryCtaButton
                     val genderValue = gender ?: return@PrimaryCtaButton
                     onNext(
-                        name,
                         SignupDraft(
                             email = email,
+                            nickname = nickname.trim(),
                             name = realName.trim(),
                             // 서버에는 하이픈이 든 형식으로 보낸다 — 표시용 포매터를 그대로 재사용
                             phoneNumber = PhoneNumberTransformation.format(phoneDigits),
@@ -413,7 +450,7 @@ fun ProfileSetupScreen(
             )
             Spacer(Modifier.height(16.dp))
             Text(
-                text = "표시 이름은 나중에 바꿀 수 있어요",
+                text = "닉네임은 나중에 바꿀 수 있어요",
                 style = MoyeotaType.CaptionMd,
                 fontWeight = FontWeight.Medium,
                 color = CounterGray,
@@ -424,15 +461,7 @@ fun ProfileSetupScreen(
     }
 }
 
-private val profileNameCharRegex = Regex("^[가-힣a-zA-Z0-9]+$")
-
-// 금칙어·욕설 + 운영자 사칭어(모여타·관리자)
-private val profileBannedWords = listOf(
-    "모여타", "관리자", "운영자", "admin",
-    "시발", "씨발", "병신", "새끼", "지랄", "미친", "좆", "썅",
-)
-
-/** 필드 묶음의 머리말 — 7개 필드를 세 덩어리로 끊어 읽게 한다 */
+/** 필드 묶음의 머리말 — 8개 필드를 세 덩어리로 끊어 읽게 한다 */
 @Composable
 private fun ProfileSectionHeader(title: String, description: String) {
     Column(modifier = Modifier.fillMaxWidth()) {
@@ -536,7 +565,7 @@ private fun ProfileSetupScreenPreview() {
     MoyeotaTheme {
         ProfileSetupScreen(
             onBack = {},
-            onNext = { _, _ -> },
+            onNext = {},
         )
     }
 }

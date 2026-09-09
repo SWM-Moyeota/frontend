@@ -8,8 +8,12 @@ import com.moyeota.data.remote.dto.PartyDetailResponse
 import com.moyeota.data.remote.dto.PartyListResponse
 import com.moyeota.data.remote.dto.RouteEstimateResponse
 import com.moyeota.data.remote.dto.RouteRequestDto
+import com.moyeota.domain.model.AuthState
 import com.moyeota.domain.model.NewParty
 import com.moyeota.domain.model.RideStatus
+import com.moyeota.domain.session.UserSession
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -17,11 +21,18 @@ import org.junit.Test
 
 class RemoteRideRepositoryTest {
 
+    /** 로그인한 사용자를 흉내 내는 세션. uuid 가 null 이면 미로그인/복원 전이다. */
+    private fun session(uuid: String? = UUID_ME): UserSession = object : UserSession {
+        override val authState: StateFlow<AuthState> = MutableStateFlow(
+            if (uuid == null) AuthState.Unauthenticated else AuthState.Authenticated(uuid),
+        )
+    }
+
     @Test
     fun `합류는 서버가 돌려준 방 상세를 재조회 없이 그대로 반환한다`() = runBlocking {
         val api = FakeMatchingApi()
 
-        val ride = RemoteRideRepository(api).joinParty(partyId = 7)
+        val ride = RemoteRideRepository(api, session()).joinParty(partyId = 7)
 
         // 합류자는 Bearer 토큰이 정한다 — partyId 외에 아무것도 넘기지 않는다.
         assertEquals(7L, api.joinCall)
@@ -32,22 +43,46 @@ class RemoteRideRepositoryTest {
         assertEquals(2, ride.members.size)
     }
 
+    /**
+     * 서버는 멤버 목록에 "누가 나인지"를 표시해 주지 않는다 — publicId 와 세션 uuid 비교가 유일한 근거다.
+     * 저장소가 세션을 매퍼에 흘려보내지 않으면 화면의 「나 제외」 카운트와 나 배지가 통째로 어긋난다.
+     */
+    @Test
+    fun `상세와 합류 응답의 멤버 중 세션 uuid 와 같은 사람을 나로 표시한다`() = runBlocking {
+        val repository = RemoteRideRepository(FakeMatchingApi(), session())
+
+        val joined = repository.joinParty(partyId = 7)
+        val detail = repository.getPartyDetail(partyId = 7)
+
+        assertEquals(listOf(true, false), joined.members.map { it.isMe })
+        assertEquals(listOf(true, false), detail.members.map { it.isMe })
+        assertEquals(listOf("성윤", "다른사람"), detail.members.map { it.nickname })
+        assertEquals(4, detail.members[0].rideCount)
+    }
+
+    @Test
+    fun `미로그인 상태에서는 아무도 나로 표시되지 않는다`() = runBlocking {
+        val ride = RemoteRideRepository(FakeMatchingApi(), session(uuid = null))
+            .getPartyDetail(partyId = 7)
+
+        assertTrue(ride.members.none { it.isMe })
+    }
+
     @Test
     fun `나가기도 partyId 만 넘긴다 — 나가는 주체는 토큰이 정한다`() = runBlocking {
         val api = FakeMatchingApi()
 
-        RemoteRideRepository(api).leaveParty(partyId = 7)
+        RemoteRideRepository(api, session()).leaveParty(partyId = 7)
 
         assertEquals(7L, api.leaveCall)
     }
 
     @Test
-    fun `방 생성은 hostId 를 서버로 보내지 않고 로컬 표시용 방장에만 쓴다`() = runBlocking {
+    fun `방 생성 요청 본문에는 좌표 라벨 정원만 실린다 — 생성자는 토큰이 정한다`() = runBlocking {
         val api = FakeMatchingApi()
 
-        val ride = RemoteRideRepository(api).createParty(
+        val ride = RemoteRideRepository(api, session()).createParty(
             NewParty(
-                hostId = 42,
                 departureLat = 37.5665,
                 departureLng = 126.9780,
                 destinationLat = 37.4979,
@@ -58,17 +93,18 @@ class RemoteRideRepositoryTest {
             ),
         )
 
-        // 서버는 방장을 토큰에서 정한다 — 본문에는 좌표·라벨·정원만 실린다.
+        // 서버는 생성자를 토큰에서 정한다 — 본문에는 좌표·라벨·정원만 실린다.
         assertEquals("서울시청", api.openRequest?.departure)
-        // 생성 응답에 members 가 없어 로컬에서 방장 한 명을 만들어 보여 준다. 이 값만이 hostId 의 쓰임이다.
-        assertEquals("42", ride.hostId)
+        assertEquals("12", ride.id)
+        // 생성 응답에 members 목록이 없어 currentMembers 만큼 자리 표시용 멤버를 만든다.
+        assertEquals(1, ride.members.size)
     }
 
     @Test
     fun `지도 범위 조회는 남서 북동 순서 그대로 API 에 넘기고 출발 좌표를 채워 돌려준다`() = runBlocking {
         val api = FakeMatchingApi()
 
-        val rides = RemoteRideRepository(api).getPartiesWithin(
+        val rides = RemoteRideRepository(api, session()).getPartiesWithin(
             swLat = 35.20,
             swLng = 129.05,
             neLat = 35.26,
@@ -96,7 +132,7 @@ class RemoteRideRepositoryTest {
 
     @Test
     fun `배정된 기사 요약을 도메인 모델로 돌려준다`() = runBlocking {
-        val driver = RemoteRideRepository(FakeMatchingApi()).getAssignedDriver(partyId = 7)
+        val driver = RemoteRideRepository(FakeMatchingApi(), session()).getAssignedDriver(partyId = 7)
 
         assertEquals(4, driver.seats)
         assertEquals("12가 3456", driver.plateNumber)
@@ -107,7 +143,7 @@ class RemoteRideRepositoryTest {
     fun `경로 미리보기는 좌표 4개를 본문으로 보내고 path 를 encodedPath 로 돌려준다`() = runBlocking {
         val api = FakeMatchingApi()
 
-        val estimate = RemoteRideRepository(api)
+        val estimate = RemoteRideRepository(api, session())
             .previewRoute(35.2313, 129.0838, 35.1580, 129.0594)
 
         // 순서가 뒤바뀌면 엉뚱한 경로가 나온다 — 출발/도착 좌표 배치를 고정한다.
@@ -221,12 +257,27 @@ class RemoteRideRepositoryTest {
             currentMembers = 2,
             status = "COMPLETED",
             members = listOf(
-                PartyDetailResponse.MemberInfo(memberId = 1, joinedAt = "2026-08-30T09:00:00Z"),
-                PartyDetailResponse.MemberInfo(memberId = 3, joinedAt = "2026-08-30T09:01:00Z"),
+                PartyDetailResponse.MemberInfo(
+                    publicId = UUID_ME,
+                    nickname = "성윤",
+                    rideCount = 4,
+                    joinedAt = "2026-08-30T09:00:00Z",
+                ),
+                PartyDetailResponse.MemberInfo(
+                    publicId = UUID_OTHER,
+                    nickname = "다른사람",
+                    joinedAt = "2026-08-30T09:01:00Z",
+                ),
             ),
             estimateFare = 9600,
             estimateTime = 14,
             route = "_p~iF~ps|U",
         )
+    }
+
+    private companion object {
+        /** 세션 uuid 와 첫 멤버의 publicId 가 같은 값이어야 "나" 판정이 성립한다. */
+        const val UUID_ME = "01a06145-3caf-7614-a3bd-cee6e25316b1"
+        const val UUID_OTHER = "01a06145-3caf-7614-a3bd-cee6e2531999"
     }
 }

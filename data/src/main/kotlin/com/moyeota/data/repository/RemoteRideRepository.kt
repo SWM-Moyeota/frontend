@@ -14,15 +14,25 @@ import com.moyeota.domain.model.NewParty
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RouteEstimate
 import com.moyeota.domain.repository.RideRepository
+import com.moyeota.domain.session.UserSession
 import kotlin.coroutines.cancellation.CancellationException
 
-// 매칭·신고 도메인만 서버 연동 — 나머지는 더미로 위임한다.
-// reportApi 기본값 null: 신고 배선이 없는 생성 호출(테스트 등)을 깨지 않기 위함.
-// 배선 전 신고 호출은 한국어 IllegalStateException 으로 실패한다 (화면은 다이얼을 우선 연다).
-// currentLocation: 신고 시점의 실측 좌표 공급자(app 모듈이 FusedLocation 으로 주입).
-// 못 얻으면 null — 서버 ReportRequest 는 좌표 null 을 허용하므로 가짜 좌표를 지어내지 않는다.
+/**
+ * 매칭·신고 도메인만 서버 연동 — 나머지는 더미로 위임한다.
+ *
+ * [session] 이 필요한 이유는 하나다: 방 상세의 멤버 중 **누가 나인지**는 서버가 표시해 주지 않는다.
+ * `MemberInfo.publicId` 가 JWT `sub` 와 같은 값이라 앱이 직접 비교해야 하고, 비교 대상인
+ * 현재 사용자 UUID 의 단일 출처가 [session] 이다. 매퍼에 세션을 들려 보내지 않으면 화면마다
+ * "나 찾기"를 다시 구현하게 된다.
+ *
+ * [reportApi] 기본값 null: 신고 배선이 없는 생성 호출(테스트 등)을 깨지 않기 위함.
+ * 배선 전 신고 호출은 한국어 IllegalStateException 으로 실패한다 (화면은 다이얼을 우선 연다).
+ * [currentLocation]: 신고 시점의 실측 좌표 공급자(app 모듈이 FusedLocation 으로 주입).
+ * 못 얻으면 null — 서버 ReportRequest 는 좌표 null 을 허용하므로 가짜 좌표를 지어내지 않는다.
+ */
 class RemoteRideRepository(
     private val api: MatchingApi,
+    private val session: UserSession,
     private val local: RideRepository = DummyRideRepository(),
     private val reportApi: ReportApi? = null,
     private val currentLocation: suspend () -> Pair<Double, Double>? = { null },
@@ -42,14 +52,17 @@ class RemoteRideRepository(
         neLng: Double,
     ): List<Ride> = api.getPartiesWithin(swLat, swLng, neLat, neLng).list.map { it.toRide() }
 
-    override suspend fun getPartyDetail(partyId: Long): Ride = api.getPartyDetail(partyId).toRide()
+    // currentUserUuid 는 호출 시점에 읽는다 — 재로그인으로 주체가 바뀌어도 다음 조회부터 바로 반영된다.
+    override suspend fun getPartyDetail(partyId: Long): Ride =
+        api.getPartyDetail(partyId).toRide(session.currentUserUuid)
 
-    // 생성 응답에 생성자 id 가 없어 요청에 쓴 hostId 를 그대로 넘겨 멤버/방장을 채운다.
+    // 생성자는 서버가 토큰에서 정한다 — 요청 본문에도 응답에도 id 가 없다.
     override suspend fun createParty(request: NewParty): Ride =
-        api.openParty(request.toRequestDto()).toRide(creatorId = request.hostId)
+        api.openParty(request.toRequestDto()).toRide()
 
     // 합류 응답이 곧 방 상세라 재조회 없이 그대로 반환한다. 합류자는 Bearer 토큰이 정한다.
-    override suspend fun joinParty(partyId: Long): Ride = api.joinParty(partyId).toRide()
+    override suspend fun joinParty(partyId: Long): Ride =
+        api.joinParty(partyId).toRide(session.currentUserUuid)
 
     override suspend fun leaveParty(partyId: Long) = api.leaveParty(partyId)
 

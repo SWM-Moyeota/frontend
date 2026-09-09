@@ -8,11 +8,15 @@ import kotlinx.serialization.Serializable
  * [birthDate] 는 서버가 `Instant` 로 받는다(예: "2000-01-01T00:00:00Z"). 날짜만 보내면
  * Jackson 이 역직렬화에 실패해 400 이 나므로 매퍼에서 UTC 자정으로 확장해 넣는다.
  * [gender] 는 서버 enum 이름 그대로 "MALE" / "FEMALE".
+ *
+ * [nickname] 은 나중에 추가된 **필수** 필드다(서버 record 필드 순서도 password 다음이다).
+ * 빠뜨리면 400, 형식이 틀리면 400 `USER107`, 이미 쓰는 값이면 409 `USER108` 이다.
  */
 @Serializable
 data class RegisterRequestDto(
     val loginId: String,
     val password: String,
+    val nickname: String,
     val name: String,
     val birthDate: String,
     val phoneNumber: String,
@@ -24,6 +28,28 @@ data class RegisterRequestDto(
 @Serializable
 data class RegisterResponse(
     val uuid: String = "",
+)
+
+/**
+ * POST /api/v1/auth/nickname/check 의 요청 본문 — 백엔드 `NicknameCheckRequest(@NotBlank String nickname)`.
+ *
+ * 가입 폼에서 로그인 전에 부르는 값이라 [com.moyeota.data.remote.AuthApi] 쪽(Bearer 미부착
+ * 클라이언트)에 있다. 컨트롤러 프리픽스가 `/api/v1/auth` 인 것도 같은 이유다 — 이 구간만 permitAll 이다.
+ */
+@Serializable
+data class NicknameCheckRequestDto(
+    val nickname: String,
+)
+
+/**
+ * 200 응답 — 백엔드 `NicknameCheckResponse(boolean exists)`.
+ *
+ * 기본값 false 는 방어다: 필드가 빠진 응답을 "사용 중"으로 읽어 멀쩡한 닉네임을 막는 것보다
+ * 통과시키고 가입에서 409 로 걸리는 편이 낫다.
+ */
+@Serializable
+data class NicknameCheckResponse(
+    val exists: Boolean = false,
 )
 
 /** POST /api/v1/auth/login — 백엔드 `UserLoginRequest`. */

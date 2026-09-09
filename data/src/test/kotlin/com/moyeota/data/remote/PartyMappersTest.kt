@@ -28,7 +28,7 @@ class PartyMappersTest {
         assertEquals(RideStatus.DISPATCHING, partyStatusToRideStatus("DRIVER_ASSIGNED"))
         assertEquals(RideStatus.ONGOING, partyStatusToRideStatus("IN_RIDE"))
         assertEquals(RideStatus.COMPLETED, partyStatusToRideStatus("FINISHED"))
-        assertEquals(RideStatus.COMPLETED, partyStatusToRideStatus("CANCELED"))
+        assertEquals(RideStatus.CANCELED, partyStatusToRideStatus("CANCELED"))
     }
 
     @Test
@@ -137,33 +137,102 @@ class PartyMappersTest {
         assertEquals(3200, ride.farePerPerson)
     }
 
+    /**
+     * 백엔드가 자동 기사 매칭으로 바뀌며 방장 개념이 사라졌다. 예전엔 joinedAt 이 가장 이른 멤버를
+     * 방장으로 추정해 "방장" 닉네임을 붙였는데, 그 추정이 되살아나지 않는지 못박는다.
+     */
     @Test
-    fun `백엔드에 host 필드가 없어 가장 먼저 참여한 멤버를 방장으로 추정한다`() {
-        // 목록 순서를 일부러 뒤집어 joinedAt 기준으로 고르는지 확인한다.
+    fun `멤버는 전부 동등하게 매핑된다 — 방장 추정이 없다`() {
         val detail = detailResponse(
             members = listOf(
-                PartyDetailResponse.MemberInfo(memberId = 3, joinedAt = "2026-08-17T09:01:00Z"),
-                PartyDetailResponse.MemberInfo(memberId = 1, joinedAt = "2026-08-17T09:00:00Z"),
+                member(publicId = UUID_OTHER, nickname = "다른사람", joinedAt = "2026-08-17T09:01:00Z"),
+                member(publicId = UUID_ME, nickname = "성윤", joinedAt = "2026-08-17T09:00:00Z"),
             ),
         )
 
         val ride = detail.toRide()
 
-        assertEquals("1", ride.hostId)
-        assertEquals("멤버 3", ride.members[0].nickname)
-        assertEquals("방장", ride.members[1].nickname)
+        // 서버가 준 순서 그대로, joinedAt 으로 재정렬하거나 특별 취급하지 않는다.
+        assertEquals(listOf(UUID_OTHER, UUID_ME), ride.members.map { it.id })
+        assertEquals(listOf("다른사람", "성윤"), ride.members.map { it.nickname })
     }
 
+    /** 서버가 주는 값(닉네임·이미지·탑승 횟수)은 그대로, 주지 않는 값(별점·인증)은 지어내지 않는다. */
     @Test
-    fun `joinedAt 이 없는 멤버는 방장 추정에서 뒤로 밀린다`() {
+    fun `멤버 요약을 표시용 User 로 옮긴다`() {
         val detail = detailResponse(
             members = listOf(
-                PartyDetailResponse.MemberInfo(memberId = 5, joinedAt = null),
-                PartyDetailResponse.MemberInfo(memberId = 9, joinedAt = "2026-08-17T09:02:00Z"),
+                member(
+                    publicId = UUID_OTHER,
+                    nickname = "모여타",
+                    imageUrl = "https://cdn.moyeota.com/p/1.png",
+                    rideCount = 12,
+                ),
             ),
         )
 
-        assertEquals("9", detail.toRide().hostId)
+        val user = detail.toRide(currentUuid = UUID_ME).members.single()
+
+        assertEquals(UUID_OTHER, user.id)
+        assertEquals("모여타", user.nickname)
+        assertEquals("https://cdn.moyeota.com/p/1.png", user.imageUrl)
+        assertEquals(12, user.rideCount)
+        // 평가 API 도 배지 매핑도 없다 — 4.9·매너 98% 같은 가짜 값이 되살아나면 여기서 깨진다.
+        assertEquals(0.0, user.rating, 0.0)
+        assertEquals("", user.verifiedLabel)
+        assertFalse(user.isMe)
+    }
+
+    /**
+     * 탈퇴 등으로 유저 요약이 없으면 서버가 publicId·nickname·imageUrl 을 전부 null 로 내려보낸다.
+     * 그래도 방 상세는 열려야 한다 — 매핑이 터지거나 빈 닉네임이 그대로 화면에 나가면 안 된다.
+     */
+    @Test
+    fun `요약이 없는 멤버는 탈퇴한 회원으로 표시하고 id 를 비운다`() {
+        val detail = detailResponse(
+            members = listOf(member(publicId = null, nickname = null, rideCount = 3)),
+        )
+
+        val user = detail.toRide(currentUuid = UUID_ME).members.single()
+
+        assertEquals("", user.id)
+        assertEquals("탈퇴한 회원", user.nickname)
+        assertNull(user.imageUrl)
+        // joinedAt 과 rideCount 는 파티 쪽 데이터라 요약이 없어도 채워진다.
+        assertEquals(3, user.rideCount)
+        // publicId 가 null 이라고 "나"가 되면 안 된다 — currentUuid 가 null 인 경우까지 참이 될 수 있다.
+        assertFalse(user.isMe)
+    }
+
+    /** publicId 가 JWT sub 와 같은 값이라 이 비교가 곧 "나" 판정이다(기존 「나 제외」 필터 결함의 해소). */
+    @Test
+    fun `publicId 가 세션 uuid 와 같은 멤버만 나로 표시한다`() {
+        val ride = detailResponse().toRide(currentUuid = UUID_ME)
+
+        assertEquals(listOf(true, false), ride.members.map { it.isMe })
+        assertEquals(1, ride.members.count { it.isMe })
+    }
+
+    /** 미로그인·복원 전이면 currentUserUuid 가 null 이다. 아무도 나로 표시되지 않아야 한다. */
+    @Test
+    fun `세션 uuid 를 모르면 아무도 나로 표시하지 않는다`() {
+        val ride = detailResponse().toRide(currentUuid = null)
+
+        assertTrue(ride.members.none { it.isMe })
+    }
+
+    /** 자리 표시용 멤버(목록·생성 응답)는 식별자가 없어 "나"를 알 수 없다 — 판정이 새어 들어오면 안 된다. */
+    @Test
+    fun `자리 표시용 멤버는 나로 표시되지 않는다`() {
+        val ride = PartyListResponse.PartyItem(
+            partyId = 7,
+            currentMembers = 2,
+            capacity = 3,
+            status = "ACTIVE",
+        ).toRide()
+
+        assertTrue(ride.members.none { it.isMe })
+        assertEquals(listOf("멤버 1", "멤버 2"), ride.members.map { it.nickname })
     }
 
     @Test
@@ -173,7 +242,7 @@ class PartyMappersTest {
     }
 
     @Test
-    fun `방 생성 응답에는 생성자 id 가 없어 요청에 쓴 값으로 방장을 채운다`() {
+    fun `방 생성 응답은 멤버 목록 없이 인원 수만 주므로 자리 표시용 멤버를 만든다`() {
         val response = OpenPartyResponse(
             id = 12,
             departureLat = 37.5665,
@@ -194,34 +263,31 @@ class PartyMappersTest {
             taxiDriverId = null,
         )
 
-        val ride = response.toRide(creatorId = 1)
+        val ride = response.toRide()
 
         assertEquals("12", ride.id)
-        assertEquals("1", ride.hostId)
         assertEquals(RideStatus.RECRUITING, ride.status)
         assertEquals(1, ride.members.size)
-        assertEquals("방장", ride.members[0].nickname)
+        assertEquals("멤버 1", ride.members[0].nickname)
         assertEquals("_p~iF~ps|U", ride.routePolyline)
         assertNull(ride.driverId)
     }
 
     @Test
-    fun `생성자 id 없이 매핑하면 멤버가 비고 방장도 없다`() {
+    fun `생성 응답 인원 수가 0 이면 멤버가 빈다`() {
         val ride = OpenPartyResponse(id = 12, capacity = 3, status = "ACTIVE").toRide()
 
-        assertNull(ride.hostId)
         assertTrue(ride.members.isEmpty())
     }
 
     /**
-     * 방장은 이제 서버가 토큰에서 정한다. [NewParty.hostId] 는 하위호환으로 남아 있을 뿐이라
-     * **본문에 실려서는 안 된다** — 실려도 서버는 조용히 무시하므로(테스트가 없으면) 되살아난 걸
-     * 아무도 눈치채지 못하고, "앱이 보낸 방장"이 유효하다는 착각만 남는다.
+     * 방 생성자는 서버가 토큰에서 정한다. 사용자 id 가 **본문에 실려서는 안 된다** — 실려도 서버는
+     * 조용히 무시하므로(테스트가 없으면) 되살아난 걸 아무도 눈치채지 못하고,
+     * "앱이 보낸 생성자"가 유효하다는 착각만 남는다.
      */
     @Test
-    fun `생성 요청 본문에 방장 id 를 싣지 않는다`() {
+    fun `생성 요청 본문에 사용자 id 를 싣지 않는다`() {
         val dto: OpenPartyRequestDto = NewParty(
-            hostId = 1,
             departureLat = 37.5665,
             departureLng = 126.9780,
             destinationLat = 37.4979,
@@ -238,8 +304,8 @@ class PartyMappersTest {
         assertEquals(500, dto.destinationRadius)
 
         val encoded = json.encodeToString(dto)
-        assertFalse("방장 id 가 본문에 되살아났다: $encoded", encoded.contains("creatorId"))
-        assertFalse("방장 id 가 본문에 되살아났다: $encoded", encoded.contains("hostId"))
+        assertFalse("생성자 id 가 본문에 되살아났다: $encoded", encoded.contains("creatorId"))
+        assertFalse("생성자 id 가 본문에 되살아났다: $encoded", encoded.contains("hostId"))
     }
 
     @Test
@@ -251,7 +317,6 @@ class PartyMappersTest {
         val ride = decoded.toRide()
 
         assertEquals("9", ride.id)
-        assertNull(ride.hostId)
         assertNull(ride.originLat)
         assertNull(ride.estimatedFare)
         assertNull(ride.routePolyline)
@@ -263,23 +328,48 @@ class PartyMappersTest {
     @Test
     fun `상세 응답 JSON 을 실제 서버 shape 그대로 역직렬화한다`() {
         // PartyDetailResult(… members, estimateFare, estimateTime, route, taxiDriverId) 기준.
+        // members 는 MemberInfo(publicId, nickname, imageUrl, badgeId, rideCount, joinedAt) —
+        // 내부 PK memberId 는 사라졌고, 둘째 멤버는 요약이 없는(탈퇴) 경우다. badgeId 는 서버 TODO 라 항상 null.
         val body = """
             {"id":7,"departureLat":37.5665,"departureLng":126.978,"destinationLat":37.4979,
              "destinationLng":127.0276,"departure":"서울시청","destination":"강남역","capacity":3,
              "currentMembers":2,"departureRadius":500,"destinationRadius":500,"status":"DRIVER_ASSIGNED",
              "createdAt":"2026-08-30T09:00:00Z",
-             "members":[{"memberId":1,"joinedAt":"2026-08-30T09:00:00Z"},
-                        {"memberId":3,"joinedAt":"2026-08-30T09:01:00Z"}],
+             "members":[{"publicId":"$UUID_ME","nickname":"성윤","imageUrl":null,"badgeId":null,
+                         "rideCount":4,"joinedAt":"2026-08-30T09:00:00Z"},
+                        {"publicId":null,"nickname":null,"imageUrl":null,"badgeId":null,
+                         "rideCount":0,"joinedAt":"2026-08-30T09:01:00Z"}],
              "estimateFare":9600,"estimateTime":14,"route":"_p~iF~ps|U","taxiDriverId":42}
         """.trimIndent()
 
-        val ride = json.decodeFromString<PartyDetailResponse>(body).toRide()
+        val ride = json.decodeFromString<PartyDetailResponse>(body).toRide(currentUuid = UUID_ME)
 
         assertEquals("7", ride.id)
         assertEquals(RideStatus.DISPATCHING, ride.status)
-        assertEquals("1", ride.hostId)
+        assertEquals(listOf(UUID_ME, ""), ride.members.map { it.id })
+        assertEquals(listOf("성윤", "탈퇴한 회원"), ride.members.map { it.nickname })
+        assertEquals(listOf(4, 0), ride.members.map { it.rideCount })
+        assertEquals(listOf(true, false), ride.members.map { it.isMe })
         assertEquals(42L, ride.driverId)
         assertEquals(9600, ride.estimatedFare)
+    }
+
+    /**
+     * 서버가 `memberId` 로 되돌아가거나 새 필드를 얹어도 방 상세가 열리는 건 지켜야 한다
+     * (`ignoreUnknownKeys` + 전 필드 기본값). 파싱이 터지면 21/25 화면이 통째로 죽는다.
+     */
+    @Test
+    fun `멤버 항목에 모르는 필드가 있거나 필드가 빠져도 파싱이 깨지지 않는다`() {
+        val body = """
+            {"id":9,"departure":"성결대 정문","destination":"안양역","capacity":3,"status":"ACTIVE",
+             "members":[{"memberId":1,"publicId":"$UUID_OTHER","nickname":"모여타","unknown":"x"},
+                        {"joinedAt":"2026-08-30T09:01:00Z"}]}
+        """.trimIndent()
+
+        val ride = json.decodeFromString<PartyDetailResponse>(body).toRide(currentUuid = UUID_ME)
+
+        assertEquals(listOf(UUID_OTHER, ""), ride.members.map { it.id })
+        assertEquals(listOf(0, 0), ride.members.map { it.rideCount })
     }
 
     @Test
@@ -358,8 +448,8 @@ class PartyMappersTest {
 
     private fun detailResponse(
         members: List<PartyDetailResponse.MemberInfo> = listOf(
-            PartyDetailResponse.MemberInfo(memberId = 1, joinedAt = "2026-08-17T09:00:00Z"),
-            PartyDetailResponse.MemberInfo(memberId = 3, joinedAt = "2026-08-17T09:01:00Z"),
+            member(publicId = UUID_ME, nickname = "성윤", joinedAt = "2026-08-17T09:00:00Z"),
+            member(publicId = UUID_OTHER, nickname = "다른사람", joinedAt = "2026-08-17T09:01:00Z"),
         ),
     ) = PartyDetailResponse(
         id = 7,
@@ -381,4 +471,25 @@ class PartyMappersTest {
         route = "_p~iF~ps|U",
         taxiDriverId = 42,
     )
+
+    private fun member(
+        publicId: String? = UUID_ME,
+        nickname: String? = "성윤",
+        imageUrl: String? = null,
+        rideCount: Int = 0,
+        joinedAt: String? = "2026-08-17T09:00:00Z",
+    ) = PartyDetailResponse.MemberInfo(
+        publicId = publicId,
+        nickname = nickname,
+        imageUrl = imageUrl,
+        badgeId = null,
+        rideCount = rideCount,
+        joinedAt = joinedAt,
+    )
+
+    private companion object {
+        /** 서버가 내려보내는 UUID v7 문자열 형식 그대로. 로그인 세션의 `sub` 와 같은 값을 가정한다. */
+        const val UUID_ME = "01a06145-3caf-7614-a3bd-cee6e25316b1"
+        const val UUID_OTHER = "01a06145-3caf-7614-a3bd-cee6e2531999"
+    }
 }
