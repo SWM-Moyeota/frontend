@@ -23,6 +23,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -44,10 +45,13 @@ private val GrayAsh = Color(0xFF9AA1AC)
  * 이동:
  * - 방 행 탭 → 24 채팅방 (onRoomClick)
  * - 하단탭 → 14/17/35 (onTabSelect)
+ *
+ * 제목은 **참여자 닉네임**, 부제가 경로다([ChatRoomListItem.peerTitle] · `chatRoomPeerTitle`).
+ * 정렬은 Route 가 이미 마친 상태로 넘어온다(`chatRoomSortKey` — 지금은 방 id 내림차순).
  */
 @Composable
 fun ChatListScreen(
-    rooms: List<MyChatRoom> = emptyList(),
+    rooms: List<ChatRoomListItem> = emptyList(),
     onRoomClick: (MyChatRoom) -> Unit = {},
     onTabSelect: (MoyeotaTab) -> Unit = {},
 ) {
@@ -88,7 +92,7 @@ fun ChatListScreen(
                         .background(MoyeotaColor.SurfaceCanvas),
                 ) {
                     rooms.forEachIndexed { index, item ->
-                        ChatRoomRow(item = item, onClick = { onRoomClick(item) })
+                        ChatRoomRow(item = item, onClick = { onRoomClick(item.room) })
                         if (index != rooms.lastIndex) {
                             HorizontalDivider(
                                 color = MoyeotaColor.Hairline,
@@ -106,7 +110,17 @@ fun ChatListScreen(
 }
 
 @Composable
-private fun ChatRoomRow(item: MyChatRoom, onClick: () -> Unit) {
+private fun ChatRoomRow(item: ChatRoomListItem, onClick: () -> Unit) {
+    val room = item.room.room
+    val routeLabel = "${room.departure} → ${room.destination}"
+    // 참여자를 못 받은 방은 예전 이름(경로)으로 떨어진다 — 그때는 부제가 방 상태다
+    // (제목과 부제에 같은 문장을 두 번 적지 않는다).
+    val title = item.peerTitle ?: routeLabel
+    val subtitle = when {
+        item.peerTitle == null -> if (room.status == ChatRoomStatus.ACTIVE) "진행 중" else "종료된 방"
+        room.status == ChatRoomStatus.ACTIVE -> routeLabel
+        else -> "종료 · $routeLabel"
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -118,22 +132,25 @@ private fun ChatRoomRow(item: MyChatRoom, onClick: () -> Unit) {
         Spacer(Modifier.size(10.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = "${item.room.departure} → ${item.room.destination}",
+                text = title,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Bold,
                 color = MoyeotaColor.InkPrimary,
                 maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             Text(
-                // 서버 목록은 마지막 메시지를 주지 않아 방 상태·개설 시각만 보여준다
-                text = if (item.room.status == ChatRoomStatus.ACTIVE) "진행 중" else "종료된 방",
+                // 서버 목록은 마지막 메시지를 주지 않는다 — 경로(+종료 여부)가 여기 들어갈 수 있는 전부다
+                text = subtitle,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Medium,
                 color = GrayMute,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
         }
         // 읽음 커서가 없으면 아직 한 번도 안 읽은 방
-        if (item.membership.lastReadMessageId == null) {
+        if (item.room.membership.lastReadMessageId == null) {
             Box(Modifier.size(8.dp).background(MoyeotaColor.Primary500, CircleShape))
         }
     }
