@@ -37,6 +37,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -149,21 +150,27 @@ fun ChatScreen(
                         BackArrowIcon(modifier = Modifier.size(22.dp))
                     }
                     Spacer(Modifier.width(8.dp))
-                    Column {
+                    // 부제가 경로(역지오코딩된 전체 주소)로 바뀌면서 길어졌다. weight 로 남는 폭을
+                    // 다 쓰되 **말줄임**한다 — 예전처럼 폭을 안 잡으면 두 줄로 흘러 우측 아이콘을 덮는다.
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = roomTitle,
                             fontSize = 18.sp,
                             fontWeight = FontWeight.Bold,
                             color = MoyeotaColor.InkPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                         Text(
                             text = if (muted) "$roomSubtitle · 알림 꺼짐" else roomSubtitle,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Medium,
                             color = GrayMute,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
-                    Spacer(Modifier.weight(1f))
+                    Spacer(Modifier.width(8.dp))
                     SearchBoxIcon() // 스펙 미정 — 무동작
                     Spacer(Modifier.width(14.dp))
                     Box(
