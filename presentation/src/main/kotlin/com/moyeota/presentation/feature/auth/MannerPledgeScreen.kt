@@ -62,6 +62,12 @@ fun MannerPledgeScreen(
     modifier: Modifier = Modifier,
     submitting: Boolean = false,
     errorMessage: String? = null,
+    /**
+     * 닉네임 중복(409)처럼 **이 화면에서 고칠 수 없는** 실패일 때만 채워진다 —
+     * 배너 아래 「닉네임 바꾸기」 가 붙고, 누르면 10 프로필 만들기로 돌아간다.
+     * null 이면 배너만 뜬다(여기서 재시도하면 되는 실패).
+     */
+    onEditNickname: (() -> Unit)? = null,
 ) {
     // 전체 항목 동의 필수 → 하나라도 미체크면 CTA 비활성.
     // 개수를 [pledgeItems] 에서 끌어온다 — 항목을 늘렸을 때 체크 배열이 짧아 터지는 일이 없도록.
@@ -167,6 +173,22 @@ fun MannerPledgeScreen(
             // 실패는 화면을 갈아엎지 않고 CTA 바로 위에 남긴다 — 다시 누를 곳이 아래 있기 때문
             if (errorMessage != null) {
                 NoticeBanner(kind = NoticeKind.ERROR, text = errorMessage)
+                if (onEditNickname != null) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = "닉네임 바꾸기",
+                        style = MoyeotaType.BodySm,
+                        fontWeight = FontWeight.Bold,
+                        color = MoyeotaColor.Primary500,
+                        modifier = Modifier
+                            .align(Alignment.CenterHorizontally)
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = onEditNickname,
+                            ),
+                    )
+                }
                 Spacer(Modifier.height(12.dp))
             }
             PrimaryCtaButton(

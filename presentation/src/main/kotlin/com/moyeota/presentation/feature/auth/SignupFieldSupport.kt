@@ -16,6 +16,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.core.designsystem.theme.MoyeotaType
+import com.moyeota.domain.model.AuthPolicy
 import java.time.LocalDate
 
 /**
@@ -34,6 +35,44 @@ import java.time.LocalDate
  * 서버도 한글을 강제하지 않는다.
  */
 internal val PersonNameRegex = Regex("^[가-힣a-zA-Z]{2,20}$")
+
+/**
+ * 닉네임 규칙 — 서버 도메인 VO `Nickname` 과 **같은 정규식**이다(앞뒤 공백 strip 후
+ * `^[가-힣a-zA-Z0-9]{2,10}$`). 화면이 같은 기준으로 먼저 걸러 400 왕복을 줄일 뿐,
+ * 최종 판정은 서버다.
+ *
+ * 2026-09 서버 변경으로 닉네임이 가입 필수가 되면서, 예전 「표시 이름 3~8자」 규칙을 대체했다.
+ * 금칙어 목록은 서버에 없는 앱 자체 정책이라 그대로 유지한다.
+ */
+internal object NicknamePolicy {
+    /** 규칙 자체는 도메인 [AuthPolicy] 가 갖는다 — 여기서는 "왜 틀렸는지"만 문구로 옮긴다. */
+    const val MAX_LENGTH = AuthPolicy.NICKNAME_MAX_LENGTH
+    private const val MIN_LENGTH = AuthPolicy.NICKNAME_MIN_LENGTH
+    private val CharRegex = Regex("^[가-힣a-zA-Z0-9]+$")
+
+    // 금칙어·욕설 + 운영자 사칭어(모여타·관리자)
+    private val BannedWords = listOf(
+        "모여타", "관리자", "운영자", "admin",
+        "시발", "씨발", "병신", "새끼", "지랄", "미친", "좆", "썅",
+    )
+
+    fun isValid(raw: String): Boolean = validate(raw) == null
+
+    /**
+     * 형식 오류 문구. 규칙을 만족하면 null.
+     * 빈 입력은 "아직 안 썼다"이지 오류가 아니므로 호출부가 먼저 걸러 쓴다.
+     */
+    fun validate(raw: String): String? {
+        val value = raw.trim()
+        return when {
+            value.isEmpty() -> "닉네임을 입력해 주세요"
+            !CharRegex.matches(value) -> "한글·영문·숫자만 쓸 수 있어요 (공백·특수문자·이모지 불가)"
+            !AuthPolicy.isValidNickname(value) -> "닉네임은 ${MIN_LENGTH}~${MAX_LENGTH}자로 입력해 주세요"
+            BannedWords.any { value.contains(it) } -> "사용할 수 없는 닉네임이에요"
+            else -> null
+        }
+    }
+}
 
 /** 생년월일 입력 하한 — 이보다 이르면 오타로 본다 */
 private const val MIN_BIRTH_YEAR = 1900

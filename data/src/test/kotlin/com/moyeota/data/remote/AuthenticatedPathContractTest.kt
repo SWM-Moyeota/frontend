@@ -5,6 +5,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import retrofit2.http.DELETE
 import retrofit2.http.GET
+import retrofit2.http.Header
+import retrofit2.http.HeaderMap
 import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.PUT
@@ -28,11 +30,40 @@ class AuthenticatedPathContractTest {
      * "아이디/비밀번호가 틀렸나?"로 오해하기 딱 좋다. 그래서 네 경로를 모두 못 박는다.
      */
     @Test
-    fun `인증 네 엔드포인트는 전부 auth 프리픽스를 쓴다`() {
+    fun `인증 엔드포인트는 전부 auth 프리픽스를 쓴다`() {
         assertEquals("api/v1/auth/register", AuthApi::class.java.path("register"))
         assertEquals("api/v1/auth/login", AuthApi::class.java.path("login"))
         assertEquals("api/v1/auth/reissue", AuthApi::class.java.path("reissue"))
         assertEquals("api/v1/auth/logout", AuthApi::class.java.path("logout"))
+        assertEquals("api/v1/auth/nickname/check", AuthApi::class.java.path("checkNickname"))
+    }
+
+    /**
+     * 닉네임 중복 확인은 **가입 도중, 즉 토큰이 없는 상태에서** 불린다. permitAll 구간이 `/api/v1/auth/`
+     * 하위뿐이라 경로도 그쪽이어야 하고, **[AuthApi] 에 있어야 한다** — [UserApi] 는 Bearer 부착
+     * 인터셉터와 401 재발급 Authenticator 가 붙은 클라이언트로 만들어지므로, 만료된 토큰이 세션에
+     * 남아 있으면 permitAll 경로인데도 JWT 필터에 걸려 401 이 날 수 있다.
+     * 그래서 "auth 프리픽스인데 UserApi 에 있는" 조합을 아예 막는다.
+     */
+    @Test
+    fun `비보호 호출은 Bearer 가 붙지 않는 AuthApi 에만 있다`() {
+        val misplaced = UserApi::class.java.declaredMethods
+            .filter { it.pathOrNull()?.startsWith("api/v1/auth/") == true }
+            .map { it.name }
+
+        assertTrue("토큰 없이 부르는 경로가 인증 클라이언트 쪽에 있다: $misplaced", misplaced.isEmpty())
+    }
+
+    /**
+     * 프로필 수정은 반대다 — 토큰 필수라 [UserApi] 여야 하고, 서버가 `@PatchMapping` 만 매핑하므로
+     * PUT/POST 로 보내면 405 다(같은 `/users/me` 경로에 fcm-token 쪽 PUT 이 있어 헷갈리기 쉽다).
+     */
+    @Test
+    fun `프로필 수정은 users me 경로의 PATCH 다`() {
+        val update = UserApi::class.java.declaredMethods.single { it.name == "updateProfile" }
+
+        assertEquals("api/v1/users/me", UserApi::class.java.path("updateProfile"))
+        assertTrue("프로필 수정이 PATCH 가 아니다", update.isAnnotationPresent(PATCH::class.java))
     }
 
     /**
@@ -102,9 +133,9 @@ class AuthenticatedPathContractTest {
 
     /**
      * 전환된 엔드포인트에 memberId/userId 가 되살아나는 걸 막는다.
-     * 채팅(X-User-Id 헤더)만 아직 전환 전이라 이 검사 대상이 아니다 —
-     * 방 생성은 본문 creatorId 를 떼면서 합류됐다
-     * (본문 쪽은 `PartyMappersTest.생성 요청 본문에 방장 id 를 싣지 않는다` 가 지킨다).
+     * 채팅이 마지막 예외였는데 백엔드가 `@CurrentUser` 로 넘기면서 **전 도메인이 대상이 됐다**
+     * (방 생성은 본문 creatorId 를 떼면서 합류됐고, 본문 쪽은
+     * `PartyMappersTest.생성 요청 본문에 방장 id 를 싣지 않는다` 가 지킨다).
      */
     @Test
     fun `전환된 API 어디에도 memberId userId 파라미터가 남아 있지 않다`() {
@@ -114,6 +145,7 @@ class AuthenticatedPathContractTest {
             PlaceApi::class.java,
             ReportApi::class.java,
             UserApi::class.java,
+            ChatApi::class.java,
         )
             .flatMap { api -> api.declaredMethods.map { api.simpleName to it } }
             .filter { (_, method) -> method.hasParameterNamed("memberId", "userId") }
@@ -122,16 +154,70 @@ class AuthenticatedPathContractTest {
         assertTrue("토큰이 정하는 주체를 앱이 다시 보내고 있다: $leftovers", leftovers.isEmpty())
     }
 
+    /**
+     * 채팅은 오랫동안 `@RequestHeader("X-User-Id")` 를 받는 유일한 도메인이었다. 토큰 주체와 헤더 id 가
+     * 서로 검증되지 않아 **누가 로그인하든 고정 id 로 채팅이 나갔다** — 백엔드가 `@CurrentUser` 로
+     * 넘어간 지금 헤더가 하나라도 되살아나면 그 버그가 그대로 돌아온다.
+     *
+     * 주체는 이제 Bearer 토큰뿐이고, 그건 [ChatApi] 가 apiClient(인터셉터가 Bearer 를 붙이고
+     * 401 이면 재발급하는 클라이언트)로 생성되기 때문에 붙는다
+     * ([NetworkModule.create] — chat 은 authClient 가 아니라 apiClient 쪽 retrofit 이다).
+     */
+    // 참여자 목록도 주체는 토큰이다 — 서버가 @CurrentUser 로 "부른 사람이 참여자인지"를 검사한다.
+    // GET 이라 본문이 없고, 경로에 남길 수 있는 건 chatRoomId 뿐이어야 한다.
+    @Test
+    fun `참여자 목록 조회는 GET 이고 방 id 만 경로에 담는다`() {
+        val members = ChatApi::class.java.declaredMethods.single { it.name == "getMembers" }
+
+        assertTrue("참여자 목록이 GET 이 아니다", members.isAnnotationPresent(GET::class.java))
+        assertEquals(1, members.parameterAnnotations.count { annotations -> annotations.any { it is Path } })
+    }
+
+    @Test
+    fun `채팅 API 에는 헤더 파라미터가 하나도 없다`() {
+        val withHeaders = ChatApi::class.java.declaredMethods
+            .filter { method ->
+                method.parameterAnnotations.any { annotations ->
+                    annotations.any { it is Header || it is HeaderMap }
+                }
+            }
+            .map { it.name }
+
+        assertTrue("채팅이 사용자 id 를 헤더로 다시 싣고 있다: $withHeaders", withHeaders.isEmpty())
+    }
+
+    /**
+     * 채팅만 경로 프리픽스가 `/api/v1/chat-rooms` 다. 메시지 조회/전송은 같은 경로에 동사만 다른 쌍이라
+     * [path] 만으로는 오타를 못 잡아 검색·after 처럼 세그먼트가 붙는 쪽을 함께 못 박는다.
+     */
+    @Test
+    fun `채팅 경로는 chat-rooms 프리픽스를 쓴다`() {
+        assertEquals("api/v1/chat-rooms/me", ChatApi::class.java.path("getMyRooms"))
+        assertEquals("api/v1/chat-rooms/{chatRoomId}/users", ChatApi::class.java.path("joinRoom"))
+        // 참여자 목록은 합류/나가기와 경로가 같고 동사만 GET 이다 — 참여자만 부를 수 있어
+        // 잘못 짚으면 404 가 아니라 403(CHAT_NOT_PARTICIPANT)처럼 보인다.
+        assertEquals("api/v1/chat-rooms/{chatRoomId}/users", ChatApi::class.java.path("getMembers"))
+        assertEquals(
+            "api/v1/chat-rooms/{chatRoomId}/users/read/{readMessageId}",
+            ChatApi::class.java.path("readRoom"),
+        )
+        assertEquals("api/v1/chat-rooms/{chatRoomId}/messages", ChatApi::class.java.path("getMessages"))
+        assertEquals("api/v1/chat-rooms/{chatRoomId}/messages/after", ChatApi::class.java.path("getMessagesAfter"))
+        assertEquals("api/v1/chat-rooms/{chatRoomId}/messages/search", ChatApi::class.java.path("searchMessages"))
+    }
+
     private fun Class<*>.path(methodName: String): String {
         val method = declaredMethods.singleOrNull { it.name == methodName }
             ?: error("$simpleName 에 $methodName 이 없거나 오버로드가 여러 개다")
-        return method.getAnnotation(GET::class.java)?.value
-            ?: method.getAnnotation(POST::class.java)?.value
-            ?: method.getAnnotation(PUT::class.java)?.value
-            ?: method.getAnnotation(DELETE::class.java)?.value
-            ?: method.getAnnotation(PATCH::class.java)?.value
-            ?: error("$simpleName.$methodName 에 HTTP 애노테이션이 없다")
+        return method.pathOrNull() ?: error("$simpleName.$methodName 에 HTTP 애노테이션이 없다")
     }
+
+    private fun Method.pathOrNull(): String? =
+        getAnnotation(GET::class.java)?.value
+            ?: getAnnotation(POST::class.java)?.value
+            ?: getAnnotation(PUT::class.java)?.value
+            ?: getAnnotation(DELETE::class.java)?.value
+            ?: getAnnotation(PATCH::class.java)?.value
 
     private fun Method.hasParameterNamed(vararg names: String): Boolean =
         parameterAnnotations.any { annotations ->

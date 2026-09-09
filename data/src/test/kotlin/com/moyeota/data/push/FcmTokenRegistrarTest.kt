@@ -2,6 +2,7 @@ package com.moyeota.data.push
 
 import com.moyeota.data.remote.UserApi
 import com.moyeota.data.remote.dto.FcmTokenRequest
+import com.moyeota.data.remote.dto.UpdateProfileRequest
 import com.moyeota.data.remote.dto.UserProfileResponse
 import com.moyeota.domain.model.AuthState
 import com.moyeota.domain.session.UserSession
@@ -196,7 +197,6 @@ class FcmTokenRegistrarTest {
 
 private class FakeUserSession(initial: AuthState) : UserSession {
     val state = MutableStateFlow(initial)
-    override val currentUserId: Long = UserSession.FIXED_MEMBER_ID
     override val authState: StateFlow<AuthState> = state.asStateFlow()
 }
 
@@ -206,6 +206,9 @@ private class FakeUserApi(private val failure: Throwable? = null) : UserApi {
         private set
 
     override suspend fun getMyProfile(): UserProfileResponse =
+        throw UnsupportedOperationException("푸시 토큰 등록과 무관하다")
+
+    override suspend fun updateProfile(request: UpdateProfileRequest): Unit =
         throw UnsupportedOperationException("푸시 토큰 등록과 무관하다")
 
     override suspend fun registerFcmToken(request: FcmTokenRequest) {

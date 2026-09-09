@@ -14,7 +14,8 @@ import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.model.RouteEstimate
 import com.moyeota.domain.model.User
 
-// 프로필(닉네임·별점·인증)은 아직 백엔드에 없어 기본값으로 채운다.
+// 방 상세의 멤버는 이제 닉네임·프로필 이미지·탑승 횟수까지 서버가 준다(PartyDetailResult.MemberInfo).
+// 다만 별점과 인증 배지는 여전히 서버에 값이 없어 0.0 / "" 로 채운다 — 지어내지 않는다.
 fun partyStatusToRideStatus(status: String): RideStatus = when (status) {
     "ACTIVE" -> RideStatus.RECRUITING
     "COMPLETED" -> RideStatus.MATCHED
@@ -22,7 +23,10 @@ fun partyStatusToRideStatus(status: String): RideStatus = when (status) {
     // 기사 배정 완료 = 배차 확정. 아직 탑승 전이라 배차 단계로 본다.
     "DRIVER_ASSIGNED" -> RideStatus.DISPATCHING
     "IN_RIDE" -> RideStatus.ONGOING
-    "FINISHED", "CANCELED" -> RideStatus.COMPLETED
+    "FINISHED" -> RideStatus.COMPLETED
+    // 정상 종료(FINISHED)와 갈라 둔다 — 기사 매칭 3분 타임아웃도 여기로 떨어지는데,
+    // 25b 가 「기사님을 찾지 못했어요」를 띄우려면 완료와 구분돼야 한다.
+    "CANCELED" -> RideStatus.CANCELED
     else -> RideStatus.RECRUITING
 }
 
@@ -37,6 +41,29 @@ internal fun farePerPerson(estimateFare: Int?, capacity: Int): Int =
 private fun placeholderMembers(count: Int): List<User> = List(count.coerceAtLeast(0)) { index ->
     User(id = "m$index", nickname = "멤버 ${index + 1}", verifiedLabel = "", rating = 0.0, rideCount = 0)
 }
+
+/**
+ * 방 상세의 멤버 한 명 → 표시용 [User].
+ *
+ * 유저 요약이 없으면(탈퇴 등) 서버가 [PartyDetailResponse.MemberInfo.publicId] 부터 전부 null 로 준다.
+ * 그때 id 는 빈 문자열이 되고 닉네임은 "탈퇴한 회원"이다 — 화면은 빈 id 를 탭 불가로 다뤄야 한다.
+ *
+ * [currentUuid] 는 로그인한 사용자의 UUID(`UserSession.currentUserUuid`). publicId 가 JWT `sub` 와
+ * 같은 값이라 이 비교가 곧 "나" 판정이다. 미로그인이거나 요약이 없으면 [User.isMe] 는 false 다
+ * — 둘 다 null 인 경우까지 참이 되지 않도록 publicId 의 null 을 먼저 끊는다.
+ *
+ * 별점([User.rating])과 인증 라벨([User.verifiedLabel])은 서버에 값이 없어 0.0 / "" 로 고정한다.
+ * 여기서 그럴듯한 값을 지어내면 화면이 가짜 평판을 진짜처럼 보여 준다.
+ */
+private fun PartyDetailResponse.MemberInfo.toUser(currentUuid: String?): User = User(
+    id = publicId ?: "",
+    nickname = nickname ?: "탈퇴한 회원",
+    verifiedLabel = "",
+    rating = 0.0,
+    rideCount = rideCount,
+    imageUrl = imageUrl,
+    isMe = publicId != null && publicId == currentUuid,
+)
 
 fun PartyListResponse.PartyItem.toRide(): Ride = Ride(
     id = partyId.toString(),
@@ -54,7 +81,11 @@ fun PartyListResponse.PartyItem.toRide(): Ride = Ride(
     originLng = departureLng,
 )
 
-fun PartyDetailResponse.toRide(): Ride {
+/**
+ * [currentUuid] 를 넘기면 멤버 중 본인이 [User.isMe] 로 표시된다. 기본값 null 은 "모름" —
+ * 아무도 나로 표시되지 않는다. 넘기는 쪽은 [com.moyeota.data.repository.RemoteRideRepository] 다.
+ */
+fun PartyDetailResponse.toRide(currentUuid: String? = null): Ride {
     return Ride(
         id = id.toString(),
         origin = departure,
@@ -62,15 +93,7 @@ fun PartyDetailResponse.toRide(): Ride {
         departureLabel = "",
         capacity = capacity,
         // 멤버는 전부 동등하다 — 서버가 방장을 구분하지 않는다.
-        members = members.map { member ->
-            User(
-                id = member.memberId.toString(),
-                nickname = "멤버 ${member.memberId}",
-                verifiedLabel = "",
-                rating = 0.0,
-                rideCount = 0,
-            )
-        },
+        members = members.map { member -> member.toUser(currentUuid) },
         farePerPerson = farePerPerson(estimateFare, capacity),
         totalFare = estimateFare ?: 0,
         status = partyStatusToRideStatus(status),
@@ -82,6 +105,8 @@ fun PartyDetailResponse.toRide(): Ride {
         estimatedMinutes = estimateTime,
         routePolyline = route,
         driverId = taxiDriverId,
+        departureRadiusMeters = departureRadius.takeIf { it > 0 },
+        destinationRadiusMeters = destinationRadius.takeIf { it > 0 },
     )
 }
 
@@ -105,6 +130,8 @@ fun OpenPartyResponse.toRide(): Ride = Ride(
     estimatedMinutes = estimateTime,
     routePolyline = route,
     driverId = taxiDriverId,
+    departureRadiusMeters = departureRadius.takeIf { it > 0 },
+    destinationRadiusMeters = destinationRadius.takeIf { it > 0 },
 )
 
 // 방장 id 는 요청에도 도메인 모델에도 없다 — 방 생성자는 서버가 토큰에서 정한다(NewParty KDoc 참고).
