@@ -130,7 +130,7 @@ fun LoginScreen(
                 verticalArrangement = Arrangement.spacedBy(20.dp),
             ) {
                 // 「학교 인증을 마친 학생만 매칭돼요」는 삭제 — 가입에 학교 인증 단계가 없어 사실이 아니다
-                TrustBulletRow(text = "원하면 동성끼리만 매칭되도록 설정할 수 있어요")
+                TrustBulletRow(text = "같은 성별끼리만 매칭돼요")
                 TrustBulletRow(text = "운행 중 위치를 지인과 공유할 수 있어요")
             }
 
