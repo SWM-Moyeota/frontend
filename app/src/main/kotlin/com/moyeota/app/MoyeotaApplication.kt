@@ -46,9 +46,14 @@ class MoyeotaApplication : Application() {
     private fun fetchFcmToken() {
         FirebaseMessaging.getInstance().token
             .addOnCompleteListener { task ->
-                val token = task.result
-                if (!task.isSuccessful || token == null) {
+                // 실패한 Task 의 result 는 예외를 던지므로 성공 여부를 먼저 본다
+                if (!task.isSuccessful) {
                     Log.w(TAG, "FCM 토큰 조회 실패", task.exception)
+                    return@addOnCompleteListener
+                }
+                val token = task.result
+                if (token.isNullOrBlank()) {
+                    Log.w(TAG, "FCM 토큰이 비어 있음")
                     return@addOnCompleteListener
                 }
                 onFcmTokenAvailable(token)
