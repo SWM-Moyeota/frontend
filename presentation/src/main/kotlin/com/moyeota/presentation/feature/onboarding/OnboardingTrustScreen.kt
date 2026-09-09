@@ -103,7 +103,7 @@ fun OnboardingTrustScreen(
         Spacer(Modifier.height(12.dp))
 
         Text(
-            text = "인증을 마친 이용자만 매칭되고\n동성끼리 탈 수도 있어요",
+            text = "인증을 마친 이용자만 매칭되고\n같은 성별끼리만 함께 타요",
             style = MoyeotaType.BodyMd.copy(lineHeight = 22.sp, letterSpacing = (-0.3).sp),
             color = MoyeotaColor.TextMute,
             textAlign = TextAlign.Center,

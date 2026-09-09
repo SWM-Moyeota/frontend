@@ -1,10 +1,12 @@
 package com.moyeota.data.remote
 
 import com.moyeota.data.remote.dto.FcmTokenRequest
+import com.moyeota.data.remote.dto.UpdateProfileRequest
 import com.moyeota.data.remote.dto.UserProfileResponse
 import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
+import retrofit2.http.PATCH
 import retrofit2.http.PUT
 
 /**
@@ -30,6 +32,19 @@ interface UserApi {
      */
     @GET("api/v1/local/users/info")
     suspend fun getMyProfile(): UserProfileResponse
+
+    /**
+     * 내 프로필 수정. 204 No Content. 기준: `user/interfaces/UserController.java`
+     * (프리픽스가 `/api/v1/users` — [getMyProfile] 의 `/api/v1/local` 과 다르다).
+     *
+     * **PATCH 다.** 서버가 `@PatchMapping` 만 매핑하므로 PUT/POST 로 보내면 405 다.
+     * 본문에서 빠진 필드는 건드리지 않는다 — 지우기는 표현할 수 없다
+     * ([com.moyeota.data.remote.dto.UpdateProfileRequest] 참조).
+     *
+     * 닉네임 형식 위반은 400 `USER107`, 중복은 409 `USER108` 이다.
+     */
+    @PATCH("api/v1/users/me")
+    suspend fun updateProfile(@Body request: UpdateProfileRequest)
 
     /**
      * 푸시 토큰 등록. 204 No Content, 멱등(같은 토큰을 다시 보내도 덮어쓰기만 한다).

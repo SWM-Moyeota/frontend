@@ -6,7 +6,9 @@ import com.moyeota.data.remote.UserApi
 import com.moyeota.data.remote.auth.jwtSubject
 import com.moyeota.data.remote.authCall
 import com.moyeota.data.remote.dto.LoginRequestDto
+import com.moyeota.data.remote.dto.NicknameCheckRequestDto
 import com.moyeota.data.remote.dto.RefreshTokenRequestDto
+import com.moyeota.data.remote.dto.UpdateProfileRequest
 import com.moyeota.data.remote.toDomain
 import com.moyeota.data.remote.toDto
 import com.moyeota.data.session.SessionManager
@@ -102,6 +104,21 @@ class RemoteAuthRepository(
         } catch (_: Throwable) {
             // 리프레시는 이미 로컬에서 지워졌고, 서버 쪽 토큰은 만료로 자연 소멸한다.
         }
+    }
+
+    /**
+     * 중복 확인은 **가입 전**, 즉 토큰이 없는 상태에서 불린다 — 그래서 [userApi] 가 아니라
+     * Bearer 가 붙지 않는 [api] 쪽이다([com.moyeota.data.remote.AuthApi.checkNickname] KDoc 참조).
+     *
+     * 서버가 앞뒤 공백을 strip 한 뒤 검사하므로 보내기 전에 같은 기준으로 다듬는다
+     * — 다듬지 않으면 `"모여타 "` 가 형식 오류가 아니라 "사용 가능"으로 잘못 보일 수 있다.
+     */
+    override suspend fun isNicknameTaken(nickname: String): Boolean =
+        authCall { api.checkNickname(NicknameCheckRequestDto(nickname.trim())) }.exists
+
+    /** 204 라 돌려받을 값이 없다. 실패는 전부 [AuthException] 으로 좁혀 올린다. */
+    override suspend fun updateProfile(nickname: String?, imageUrl: String?) {
+        authCall { userApi.updateProfile(UpdateProfileRequest(nickname?.trim(), imageUrl)) }
     }
 
     /**

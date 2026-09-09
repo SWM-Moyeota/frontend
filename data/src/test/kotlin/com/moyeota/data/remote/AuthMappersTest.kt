@@ -27,6 +27,7 @@ class AuthMappersTest {
     private val newUser = NewUser(
         loginId = "moyeota_test",
         password = "Passw0rd!",
+        nickname = "모여타",
         name = "홍길동",
         birthDate = LocalDate.of(2000, 1, 1),
         phoneNumber = "010-1234-5678",
@@ -45,6 +46,8 @@ class AuthMappersTest {
         val dto = newUser.toDto()
 
         assertEquals("moyeota_test", dto.loginId)
+        // 닉네임은 나중에 추가된 필수 필드다 — 빠지면 400 이고, 이름(name)과는 다른 값이다.
+        assertEquals("모여타", dto.nickname)
         assertEquals("홍길동", dto.name)
         // 서버가 Instant 로 받으므로 날짜만 보내면 400 이다.
         assertEquals("2000-01-01T00:00:00Z", dto.birthDate)
@@ -54,7 +57,7 @@ class AuthMappersTest {
         assertEquals("test@moyeota.com", dto.email)
 
         val encoded = json.encodeToString(RegisterRequestDto.serializer(), dto)
-        listOf("loginId", "password", "name", "birthDate", "phoneNumber", "gender", "email")
+        listOf("loginId", "password", "nickname", "name", "birthDate", "phoneNumber", "gender", "email")
             .forEach { assertTrue("$it 필드가 빠졌다: $encoded", encoded.contains("\"$it\"")) }
     }
 
@@ -118,6 +121,58 @@ class AuthMappersTest {
         assertEquals(AuthError.LOGIN_ID_DUPLICATED, exception.error)
     }
 
+    /**
+     * **409 는 세 가지 뜻을 갖는다** — 아이디(USER101)·전화번호(USER104)·닉네임(USER108) 중복.
+     * 상태 코드로만 폴백하면 무엇이 겹쳤든 "이미 사용 중인 아이디예요"가 떠서
+     * 사용자가 아이디만 계속 바꾸게 된다. 셋이 서로 다른 값으로 갈리는지 한 번에 못 박는다.
+     */
+    @Test
+    fun `409 세 코드는 서로 다른 중복 사유로 갈린다`() {
+        val duplicates = listOf(
+            """{"code":"USER101","message":"이미 존재하는 아이디입니다."}""",
+            """{"code":"USER104","message":"이미 가입된 전화번호입니다."}""",
+            """{"code":"USER108","message":"이미 사용 중인 닉네임입니다."}""",
+        ).map { httpException(409, it).toAuthException().error }
+
+        assertEquals(
+            listOf(
+                AuthError.LOGIN_ID_DUPLICATED,
+                AuthError.PHONE_NUMBER_DUPLICATED,
+                AuthError.NICKNAME_DUPLICATED,
+            ),
+            duplicates,
+        )
+    }
+
+    @Test
+    fun `409 USER108 은 아이디가 아니라 닉네임 중복이다`() {
+        val exception = httpException(409, """{"code":"USER108","message":"이미 사용 중인 닉네임입니다."}""")
+            .toAuthException()
+
+        assertEquals(AuthError.NICKNAME_DUPLICATED, exception.error)
+        assertEquals("이미 사용 중인 닉네임입니다.", exception.serverMessage)
+    }
+
+    /** 닉네임 형식 위반은 일반 검증 실패와 달리 "중복 확인" 화면이 따로 안내해야 한다. */
+    @Test
+    fun `400 USER107 은 닉네임 형식 오류로 좁힌다`() {
+        val exception = httpException(
+            400,
+            """{"code":"USER107","message":"닉네임은 2~10자의 한글, 영문, 숫자만 가능합니다."}""",
+        ).toAuthException()
+
+        assertEquals(AuthError.INVALID_NICKNAME, exception.error)
+    }
+
+    /** USER106(빈 FCM 토큰)은 사용자가 고칠 입력이 아니다 — 일반 검증 실패로 둔다. */
+    @Test
+    fun `400 USER106 은 일반 검증 실패로 취급한다`() {
+        val exception = httpException(400, """{"code":"USER106","message":"FCM 토큰이 비어 있습니다."}""")
+            .toAuthException()
+
+        assertEquals(AuthError.INVALID_REQUEST, exception.error)
+    }
+
     @Test
     fun `400 INVALID_REQUEST 는 필드 사유 메시지를 그대로 보존한다`() {
         val exception = httpException(
@@ -173,6 +228,19 @@ class AuthMappersTest {
         assertTrue(AuthPolicy.isValidPhoneNumber("010-1234-5678"))
         assertTrue("하이픈 없이도 통과한다", AuthPolicy.isValidPhoneNumber("01012345678"))
         assertFalse(AuthPolicy.isValidPhoneNumber("02-123-4567"))
+    }
+
+    /** 서버 도메인 VO `Nickname` 과 같은 판정이어야 왕복 400 을 줄일 수 있다. */
+    @Test
+    fun `닉네임 규칙은 서버 Nickname VO 와 같다`() {
+        assertTrue(AuthPolicy.isValidNickname("모여타"))
+        assertTrue("영문·숫자 혼용도 통과한다", AuthPolicy.isValidNickname("moyeota99"))
+        assertTrue("서버도 strip 한 뒤 검사한다", AuthPolicy.isValidNickname("  모여타  "))
+        assertFalse("2자 미만은 안 된다", AuthPolicy.isValidNickname("김"))
+        assertFalse("10자 초과는 안 된다", AuthPolicy.isValidNickname("가나다라마바사아자차카"))
+        assertFalse("가운데 공백은 안 된다", AuthPolicy.isValidNickname("모여 타"))
+        assertFalse("특수문자는 안 된다", AuthPolicy.isValidNickname("모여타!"))
+        assertFalse("자모 낱자는 안 된다", AuthPolicy.isValidNickname("ㄱㄴㄷ"))
     }
 
     private fun httpException(code: Int, body: String): HttpException = HttpException(

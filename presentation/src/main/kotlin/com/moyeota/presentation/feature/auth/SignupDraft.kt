@@ -14,6 +14,7 @@ import java.time.LocalDate
  *
  * | 필드 | 수집 화면 |
  * |---|---|
+ * | [nickname] | 10 프로필 만들기 (1/3, 「프로필」 절) |
  * | [name] · [birthDate] · [gender] · [phoneNumber] | 10 프로필 만들기 (1/3, 「기본 정보」 절) |
  * | [loginId] · [password] · [email] | 10 프로필 만들기 (1/3, 「로그인 정보」 절) |
  *
@@ -24,6 +25,11 @@ import java.time.LocalDate
  */
 data class SignupDraft(
     val email: String = "",
+    /**
+     * 서버 가입 필수 필드. 동승자에게 보이는 유일한 이름이고 실명([name])은 공개되지 않는다.
+     * 규칙은 [NicknamePolicy] — 서버 도메인 VO 와 같은 정규식이다.
+     */
+    val nickname: String = "",
     val name: String = "",
     val phoneNumber: String = "",
     val birthDate: LocalDate? = null,
@@ -42,9 +48,13 @@ data class SignupDraft(
         val genderValue = gender ?: return null
         if (loginId.isBlank() || password.isBlank()) return null
         if (name.isBlank() || phoneNumber.isBlank() || email.isBlank()) return null
+        // 닉네임은 2026-09 서버 변경으로 가입 필수가 됐다 — 비어 있으면 400 을 맞기 전에 걸러낸다
+        val trimmedNickname = nickname.trim()
+        if (trimmedNickname.isBlank()) return null
         return NewUser(
             loginId = loginId,
             password = password,
+            nickname = trimmedNickname,
             name = name,
             birthDate = birth,
             phoneNumber = phoneNumber,
@@ -65,7 +75,17 @@ internal fun Throwable.authUserMessage(): String {
     return when (authException.error) {
         AuthError.LOGIN_FAILED -> "아이디 또는 비밀번호가 올바르지 않아요"
         AuthError.LOGIN_ID_DUPLICATED -> "이미 사용 중인 아이디예요"
-        AuthError.INVALID_REQUEST -> authException.serverMessage ?: "입력한 정보를 다시 확인해 주세요"
+        // 전화번호 중복은 "계정이 이미 있다"는 뜻이라, 고칠 곳(로그인)을 함께 알려준다
+        AuthError.PHONE_NUMBER_DUPLICATED -> "이미 가입된 전화번호예요. 로그인해 주세요"
+        AuthError.NICKNAME_DUPLICATED -> "이미 사용 중인 닉네임이에요"
+        AuthError.INVALID_NICKNAME -> "닉네임은 한글·영문·숫자 2~10자로 입력해 주세요"
+        // 닉네임 형식 오류는 두 코드로 온다 — 서버 VO 가 먼저 걸리면 USER107, Bean Validation 이
+        // 먼저 걸리면 INVALID_REQUEST(message = "nickname: …") 다. 사용자에겐 같은 사실이므로 한 문구로 모은다.
+        AuthError.INVALID_REQUEST -> when {
+            authException.serverMessage?.startsWith("nickname") == true ->
+                "닉네임은 한글·영문·숫자 2~10자로 입력해 주세요"
+            else -> authException.serverMessage ?: "입력한 정보를 다시 확인해 주세요"
+        }
         AuthError.SESSION_EXPIRED -> "다시 로그인해 주세요"
         AuthError.NETWORK -> "네트워크 연결을 확인해 주세요"
         AuthError.UNKNOWN -> "잠시 후 다시 시도해 주세요"

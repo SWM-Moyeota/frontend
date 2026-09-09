@@ -28,6 +28,8 @@ internal fun LocalDate.toBirthDateInstant(): String =
 internal fun NewUser.toDto(): RegisterRequestDto = RegisterRequestDto(
     loginId = loginId,
     password = password,
+    // 서버가 앞뒤 공백을 strip 한 뒤 검사하므로 여기서 미리 다듬어 보낸다 — 저장되는 값도 같아진다.
+    nickname = nickname.trim(),
     name = name,
     birthDate = birthDate.toBirthDateInstant(),
     phoneNumber = phoneNumber,
@@ -50,10 +52,19 @@ internal fun NewUser.toDto(): RegisterRequestDto = RegisterRequestDto(
  * | `USER101` | 409 | 아이디 중복 |
  * | `USER102` | 401 | 로그인 실패 |
  * | `USER103` | 404 | 사용자 없음 |
+ * | `USER104` | 409 | 전화번호 중복 |
+ * | `USER106` | 400 | FCM 토큰이 비어 있음 |
+ * | `USER107` | 400 | 닉네임 형식 위반 |
+ * | `USER108` | 409 | 닉네임 중복 |
  * | `INVALID_REQUEST` | 400 | 검증 실패 (이름 그대로 남았다) |
  *
  * 특히 **로그인 실패와 세션 만료가 둘 다 401** 이라 상태 코드 폴백만으로는 구분되지 않는다
  * — `USER102` 를 놓치면 아이디/비밀번호 오류에 "다시 로그인해 주세요"가 뜬다.
+ *
+ * 같은 이유로 **409 는 세 가지 뜻을 갖는다** — 아이디(`USER101`)·전화번호(`USER104`)·닉네임(`USER108`) 중복.
+ * 서버 검사 순서가 loginId → phoneNumber → nickname 이라 셋 중 하나만 올라오는데,
+ * 코드를 놓치고 상태 코드로 폴백하면 무엇이 겹쳤든 "이미 사용 중인 아이디예요"가 떠서
+ * 사용자가 아이디만 계속 바꾸게 된다.
  */
 internal fun Throwable.toAuthException(): AuthException = when (this) {
     is AuthException -> this
@@ -63,6 +74,12 @@ internal fun Throwable.toAuthException(): AuthException = when (this) {
         val error = when (body?.code) {
             "USER102" -> AuthError.LOGIN_FAILED
             "USER101" -> AuthError.LOGIN_ID_DUPLICATED
+            "USER104" -> AuthError.PHONE_NUMBER_DUPLICATED
+            "USER107" -> AuthError.INVALID_NICKNAME
+            "USER108" -> AuthError.NICKNAME_DUPLICATED
+            // 빈 FCM 토큰. 사용자가 고칠 수 있는 입력이 아니라 앱 쪽 문제이므로 일반 검증 실패로 둔다
+            // (푸시 등록 실패는 FcmTokenRegistrar 가 삼키므로 여기까지 올라오지도 않는다).
+            "USER106" -> AuthError.INVALID_REQUEST
             "INVALID_REQUEST" -> AuthError.INVALID_REQUEST
             // 토큰 계열 + 사용자 없음: 앱의 대응은 모두 "재로그인"이다.
             "USER001", "USER002", "USER003", "USER004", "USER005", "USER103" -> AuthError.SESSION_EXPIRED

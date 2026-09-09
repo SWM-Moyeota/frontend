@@ -65,7 +65,9 @@ class CreatePartyViewModel(private val repository: RideRepository) : ViewModel()
                         // 서버 상한 3 — 초과하면 메시지 없는 500 이 떨어져 원인 파악이 어렵다.
                         // 16 모달 칩이 1~3 뿐이지만 계약을 여기서 한 번 더 못박는다.
                         capacity = conditions.capacity.coerceIn(1, MAX_PARTY_CAPACITY),
-                        // 서버 검증이 100~500m 라 UI 의 1km·2km 선택은 500m 로 clamp 한다.
+                        // 16 의 반경 칩이 100m/300m/500m 라 사용자가 고른 값이 **그대로** 실린다.
+                        // coerceIn 은 이제 방어선일 뿐이다 — 예전에는 이 clamp 가 1km·2km 선택을
+                        // 아무 표시 없이 500m 로 깎아 사용자 선택을 조용히 버렸다(QA D-2).
                         departureRadius = conditions.departureRadiusMeters.coerceIn(100, 500),
                         destinationRadius = conditions.destinationRadiusMeters.coerceIn(100, 500),
                     ),

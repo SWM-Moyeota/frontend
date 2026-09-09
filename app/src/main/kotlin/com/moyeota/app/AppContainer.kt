@@ -41,7 +41,7 @@ class AppContainer(context: Context, debugLogging: Boolean) {
     // (app/build.gradle.kts 참조).
     private val apis = NetworkModule.create(BuildConfig.BASE_URL, debugLogging, sessionManager)
 
-    // 화면이 memberId(고정 1L)와 로그인 상태를 얻는 단일 출처.
+    // 화면이 로그인 상태와 내 UUID 를 얻는 단일 출처(내부 사용자 PK 는 앱에 없다).
     val userSession: UserSession = sessionManager
 
     /**
@@ -56,9 +56,11 @@ class AppContainer(context: Context, debugLogging: Boolean) {
 
     val authRepository: AuthRepository =
         RemoteAuthRepository(apis.auth, apis.user, sessionManager, fcmTokenRegistrar)
-    val rideRepository: RideRepository = RemoteRideRepository(apis.matching)
+    // 세션을 넘기는 건 방 상세 멤버 중 "나"를 매퍼가 판정하기 위해서다(RemoteRideRepository KDoc).
+    val rideRepository: RideRepository = RemoteRideRepository(apis.matching, sessionManager)
     val placeRepository: PlaceRepository = RemotePlaceRepository(apis.place)
-    val chatRepository: ChatRepository = RemoteChatRepository(apis.chat)
+    // 세션을 넘기는 건 메시지의 "내 것" 판정 때문이다(RemoteChatRepository KDoc).
+    val chatRepository: ChatRepository = RemoteChatRepository(apis.chat, sessionManager)
     val dispatchRepository: DispatchRepository = RemoteDispatchRepository(apis.dispatch)
     val reportRepository: ReportRepository = RemoteReportRepository(apis.report)
 }

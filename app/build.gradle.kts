@@ -28,13 +28,13 @@ fun buildSetting(key: String, default: String): String = providers
 val naverMapsClientId: String = buildSetting("NAVER_MAPS_CLIENT_ID", default = "")
 
 /**
- * 백엔드 base URL. 기본값 10.0.2.2 는 에뮬레이터에서 호스트 로컬 백엔드를 가리키는 주소라
- * 실기기에서는 통하지 않는다. 실기기 테스트는 local.properties 나 환경변수에
- * MOYEOTA_BASE_URL=http://<개발PC LAN IP>:8080/ 을 지정해 오버라이드한다.
+ * 백엔드 base URL. 기본값은 배포 서버(api.moyeota.p-e.kr, CloudFront/HTTPS).
+ * 로컬 백엔드로 붙일 때는 local.properties 나 환경변수에
+ * MOYEOTA_BASE_URL=http://10.0.2.2:8080/ (에뮬레이터) 또는 http://<개발PC LAN IP>:8080/ (실기기) 을 지정해 오버라이드한다.
  * Retrofit baseUrl 규약상 반드시 '/' 로 끝나야 하므로 보정해 둔다.
  */
 val moyeotaBaseUrl: String =
-    buildSetting("MOYEOTA_BASE_URL", default = "http://10.0.2.2:8080/")
+    buildSetting("MOYEOTA_BASE_URL", default = "https://api.moyeota.p-e.kr/")
         .let { if (it.endsWith("/")) it else "$it/" }
 
 android {

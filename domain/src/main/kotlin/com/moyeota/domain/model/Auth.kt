@@ -13,6 +13,14 @@ enum class Gender { MALE, FEMALE }
 data class NewUser(
     val loginId: String,
     val password: String,
+    /**
+     * 동승자에게 보이는 이름. **서버 필수 필드다**(`@NotBlank` + 도메인 VO `Nickname`).
+     * 규칙은 [AuthPolicy.isValidNickname] — 2~10자의 한글·영문·숫자.
+     *
+     * 기본값을 두지 않는 건 의도다: 빈 값으로 가입을 보내면 서버가 400 으로 튕기므로,
+     * 새 가입 경로가 생겼을 때 컴파일러가 값을 채우도록 강제한다.
+     */
+    val nickname: String,
     val name: String,
     val birthDate: LocalDate,
     val phoneNumber: String,
@@ -40,7 +48,19 @@ object AuthPolicy {
     const val NAME_MAX_LENGTH = 20
     const val EMAIL_MAX_LENGTH = 100
 
+    /**
+     * 닉네임: 2~10자의 한글·영문·숫자. 공백과 특수문자는 불가하다.
+     * 서버 도메인 VO `Nickname` 의 정규식을 그대로 옮긴 것이며, 서버도 **앞뒤 공백을 strip 한 뒤** 검사한다
+     * — [isValidNickname] 이 trim 하는 이유다.
+     */
+    const val NICKNAME_PATTERN = "^[가-힣a-zA-Z0-9]{2,10}\$"
+    const val NICKNAME_MIN_LENGTH = 2
+    const val NICKNAME_MAX_LENGTH = 10
+
     fun isValidLoginId(value: String): Boolean = value.matches(Regex(LOGIN_ID_PATTERN))
+
+    /** 서버와 같은 기준. 통과해도 중복 여부는 별개다([AuthRepository.isNicknameTaken][com.moyeota.domain.repository.AuthRepository.isNicknameTaken]). */
+    fun isValidNickname(value: String): Boolean = value.trim().matches(Regex(NICKNAME_PATTERN))
 
     fun isValidPassword(value: String): Boolean =
         value.length in PASSWORD_MIN_LENGTH..PASSWORD_MAX_LENGTH &&

@@ -35,7 +35,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.moyeota.core.designsystem.component.AvatarCircle
 import com.moyeota.core.designsystem.component.BackArrowIcon
 import com.moyeota.core.designsystem.component.MapPlaceholder
 import com.moyeota.core.designsystem.component.NavigationBarSpacer
@@ -50,7 +49,11 @@ import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.model.User
-import kotlin.math.roundToInt
+import com.moyeota.presentation.core.MeBadge
+import com.moyeota.presentation.core.MemberAvatar
+import com.moyeota.presentation.core.displayNickname
+import com.moyeota.presentation.core.isWithdrawn
+import com.moyeota.presentation.core.rideCountLabel
 
 // 와이어프레임 그레이·서페이스 (core token 미정의 색 — 화면 재현용)
 private val CanvasBg = Color(0xFFF5F7FA)
@@ -63,7 +66,7 @@ private val FareCardBg = Color(0xFFF6F8FB)
 private val PillBg = Color(0xFFF1F5FD)
 
 // 목록에 대표로 한 명만 보여 주는 동승자 — 방장 개념은 도메인에 없다
-private val FirstJoinedMember = User("u-1", "김OO", "학교 인증", 4.9, 12)
+private val FirstJoinedMember = User("u-1", "부산불곰", "", 0.0, 12)
 
 private val DefaultJoinRide = Ride(
     id = "ride-1",
@@ -71,7 +74,7 @@ private val DefaultJoinRide = Ride(
     destination = "서면역 1번 출구",
     departureLabel = "3분 후 출발 예정 · 6.2km",
     capacity = 3,
-    members = listOf(FirstJoinedMember, User("u-2", "이OO", "직장 인증", 4.8, 7)),
+    members = listOf(FirstJoinedMember, User("u-2", "해운대곰돌", "", 0.0, 7)),
     farePerPerson = 3600,
     totalFare = 9600,
     status = RideStatus.RECRUITING,
@@ -87,7 +90,7 @@ private fun won(amount: Int): String = "%,d원".format(amount)
  * 이동(디스크립션):
  * - 「닫기」 / 뒤로가기 → 직전 목록(18/19)으로 복귀 (onDismiss)
  * - 「이 탑승에 합류하기」 → 22 탑승 상세 (onConfirmJoin, 제출 중 loading)
- * - 동승자 「김OO」 행 탭 → 23 동승자 프로필 (onMemberClick)
+ * - 동승자 행 탭 → 23 동승자 프로필 (onMemberClick)
  * - [미연결] 우측 상단 방패 아이콘 — 무동작
  *
  * 검증·상태:
@@ -219,8 +222,10 @@ fun JoinConfirmScreen(
                         color = GrayMute,
                     )
                     Spacer(Modifier.height(8.dp))
-                    // 대표로 한 명만 노출한다 — 첫 멤버라는 것 외에 특별한 지위는 없다
-                    val representative = ride.members.firstOrNull()
+                    // 대표로 한 명만 노출한다 — 첫 멤버라는 것 외에 특별한 지위는 없다.
+                    // 탈퇴 회원이 앞에 있으면 볼 것도 눌러 볼 것도 없어 실재하는 멤버를 앞세운다.
+                    val representative = ride.members.firstOrNull { !it.isWithdrawn }
+                        ?: ride.members.firstOrNull()
                     if (representative != null) {
                         MemberRow(
                             member = representative,
@@ -445,37 +450,42 @@ private fun MemberRow(
     othersCount: Int,
     onClick: () -> Unit,
 ) {
-    val mannerPercent = (member.rating * 20).roundToInt()
+    // 매너 %(별점 환산)는 지웠다 — 평가 API 가 없어 rating 은 항상 0.0 이고,
+    // 그걸 환산하면 "매너 0%" 라는 없는 사실을 사람에 붙이게 된다.
     val othersLabel = if (othersCount > 0) " · 외 ${othersCount}명" else ""
+    // 탈퇴 회원은 열어 볼 프로필이 없다 — 탭을 막는다
+    val clickable = !member.isWithdrawn
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .clickable { onClick() }
+            .then(if (clickable) Modifier.clickable { onClick() } else Modifier)
             .padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        AvatarCircle(size = 40.dp)
+        MemberAvatar(user = member, size = 40.dp)
         Spacer(Modifier.width(10.dp))
         Column(modifier = Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = member.nickname,
+                    text = member.displayNickname,
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Bold,
-                    color = MoyeotaColor.InkPrimary,
+                    color = if (clickable) MoyeotaColor.InkPrimary else GrayMute,
                 )
                 Spacer(Modifier.width(8.dp))
-                GrayPill(text = "동승자")
+                if (member.isMe) MeBadge() else GrayPill(text = "동승자")
             }
             Text(
-                text = "탑승 ${member.rideCount}회 · 매너 ${mannerPercent}%$othersLabel",
+                text = if (clickable) "${member.rideCountLabel}$othersLabel" else "탈퇴한 회원$othersLabel",
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Medium,
                 color = GrayMute,
             )
         }
-        ChevronRightIcon(color = GrayAsh)
+        if (clickable) {
+            ChevronRightIcon(color = GrayAsh)
+        }
     }
 }
 
