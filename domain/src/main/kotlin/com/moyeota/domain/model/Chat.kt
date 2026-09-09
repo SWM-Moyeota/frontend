@@ -31,13 +31,14 @@ data class MyChatRoom(
     val membership: ChatRoomMembership,
 )
 
-// 방 참여자 1명(백엔드 ChatRoomMemberResult). 메시지의 senderId(내부 PK)와 공개 신원을 잇는 조각이다.
+// 방 참여자 1명(백엔드 ChatRoomMemberResult). 메시지의 발신자 publicId 를 닉네임/프로필로 잇는 사전이다.
 //
-// userId 가 null 인 건 서버가 아직 그 필드를 내려주지 않는 경우다(패치 전 서버). 그때는 이 사람을
-// 메시지에 연결할 수 없어 이름 표시가 학습 폴백으로 되돌아간다.
+// [userId] 는 항상 null 이다 — 서버가 내부 PK 를 응답에서 뺐다(2026-09-09 실측). 필드를 남긴 건
+// 구버전 서버 응답을 파싱 에러 없이 받기 위해서이며, 앱은 이 값으로 아무것도 판정하지 않는다.
 // active=false 는 방을 나간 사람이다 — 목록에서 빼지 않는다. 남긴 메시지의 이름이 사라지면
 // 대화가 "동승자"로 뭉개진다.
 data class ChatMember(
+    /** 서버 내부 PK. 현행 서버는 주지 않아 항상 null 이다(구버전 호환 잔여 필드). */
     val userId: Long?,
     val publicId: String,
     val nickname: String,
@@ -50,26 +51,25 @@ data class ChatMessage(
     val id: Long,
     val chatRoomId: Long,
     /**
-     * 보낸 사람의 **서버 내부 PK**. 앱은 이 값을 다른 어떤 API 에서도 받지 못하므로
-     * 그 자체로는 "누구"인지 알 수 없다 — 내 메시지 판정은 [isMine] 을 볼 것.
+     * 보낸 사람의 **공개 UUID**(서버 `publicId`, JWT `sub` 와 같은 값).
+     * 파티 멤버의 [User.id][com.moyeota.domain.model.User.id] 와 같은 체계라 프로필로 이을 수 있다.
+     *
+     * 서버가 신원을 빠뜨린 응답이면 null 이고, 그때는 [isMine] 이 false, [senderName] 이 null 이다.
      */
-    val senderId: Long,
+    val senderPublicId: String?,
     val content: String,
     val type: ChatMessageType,
     val createdAt: String,
     val deleted: Boolean,
     /**
-     * 내가 보낸 메시지인지. 저장소가 계산한다
-     * ([com.moyeota.data.repository.RemoteChatRepository] 의 KDoc 에 판정 근거).
-     *
-     * 근거는 세 가지이고 우선순위가 있다: 메시지의 `senderPublicId`(서버 추가 대기) →
-     * 방 참여자 목록의 publicId → 내가 보낸 메시지에서 학습한 내부 id.
-     * 참여자 목록이 [ChatMember.userId] 를 주지 않는 서버에서는 학습만 남으므로,
-     * 그때는 **이 세션에서 한 번 보낸 뒤에야** 내 과거 메시지가 참이 된다.
+     * 내가 보낸 메시지인지. `senderPublicId == UserSession.currentUserUuid` 하나로 판정한다
+     * — 서버가 메시지에 발신자 publicId 를 실어 주면서 예전의 3단 근거(사전·학습)가 필요 없어졌다.
      */
     val isMine: Boolean,
-    // 보낸 사람 닉네임. 서버 senderNickname 이 오면 그것을, 없으면 방 참여자 목록
-    // (GET /chat-rooms/{id}/users)에서 senderId 로 찾은 닉네임을 쓴다. 둘 다 없으면 null.
+    /**
+     * 보낸 사람 닉네임. 방 참여자 목록(GET /chat-rooms/{id}/users)을 publicId 로 찾은 값이 우선이고,
+     * 서버가 `senderNickname` 을 실어 주면 그걸 폴백으로 쓴다. 둘 다 없으면 null.
+     */
     val senderName: String?,
 )
 

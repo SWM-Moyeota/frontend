@@ -87,6 +87,7 @@ private val DummyMessages = listOf(
  * - 뒤로 → 22 탑승 상세 (onBack)
  * - 「⋮」 → 24a 메뉴 열림 (내부 상태)
  * - 「＋」 → 24b 공유 시트 열림 (내부 상태)
+ * - 상단 「매칭 화면으로 →」 배너 탭 → 21/25/26 진행 단계 (onOpenMatching — 진행 중인 방의 채팅방일 때만 보인다)
  * - 상단 「실시간 위치 공유 중」 배너 탭 → 26 운행 중 (onOpenRideOngoing)
  * - 24a 「채팅방 알림 끄기」 → 24 (알림 off 로컬 적용)
  * - 24a 「채팅방 나가기」 → 14 홈 (onLeaveChat) — 진행 중 탑승이 있으면 재확인 다이얼로그
@@ -111,6 +112,14 @@ fun ChatScreen(
     onSend: () -> Unit = {},
     onBack: () -> Unit = {},
     onOpenRideOngoing: () -> Unit = {},
+    /**
+     * 이 방의 파티가 아직 진행 중일 때 매칭 단계 화면으로 되돌아가는 길. **null 이면 그리지 않는다** —
+     * 끝난 방의 채팅에서 「매칭 화면으로」를 눌러 봐야 갈 곳이 없다.
+     *
+     * 21·25·26 에서 「채팅 열기」로 들어온 사용자에게는 뒤로가기가 이미 복귀 경로지만,
+     * 채팅 **탭 목록**에서 들어온 사용자에게는 이 버튼이 유일한 길이다.
+     */
+    onOpenMatching: (() -> Unit)? = null,
     onStartLocationShare: () -> Unit = {},
     onLeaveChat: () -> Unit = {},
     onTabSelect: (MoyeotaTab) -> Unit = {},
@@ -168,6 +177,33 @@ fun ChatScreen(
                     ) {
                         KebabIcon()
                     }
+                }
+            }
+
+            // 「매칭 화면으로 →」 — 진행 중인 방의 채팅방에서만 뜬다
+            if (onOpenMatching != null) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(44.dp)
+                        .background(MoyeotaColor.Primary50)
+                        .clickable { onOpenMatching() }
+                        .padding(horizontal = 28.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "진행 중인 탑승이 있어요",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MoyeotaColor.InkPrimary,
+                    )
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        text = "매칭 화면으로 →",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MoyeotaColor.Primary600,
+                    )
                 }
             }
 

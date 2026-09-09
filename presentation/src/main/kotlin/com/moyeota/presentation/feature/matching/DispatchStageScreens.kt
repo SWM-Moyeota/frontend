@@ -39,6 +39,7 @@ import com.moyeota.domain.model.AssignedDriver
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.model.User
+import com.moyeota.presentation.core.OpenChatButton
 import kotlin.math.roundToInt
 
 // 와이어프레임 그레이 (core token 미정의 색 — 화면 재현용)
@@ -79,6 +80,8 @@ private const val PICKUP_SPEED_KMH = 25.0
 @Composable
 fun DriverSearchScreen(
     ride: Ride = stageRideDummy,
+    /** 이 방의 채팅방을 연다(독립 목적지 push — 뒤로가기로 여기 복귀). 아직 방이 없으면 null */
+    onOpenChat: (() -> Unit)? = null,
     onBack: () -> Unit = {},
 ) {
     StageScaffold(title = "기사님 찾는 중", onBack = onBack) {
@@ -104,6 +107,12 @@ fun DriverSearchScreen(
             Spacer(Modifier.height(16.dp))
 
             NoticeBanner(kind = NoticeKind.WAITING, text = "기사님이 수락하면 바로 알려드려요")
+
+            // 정원이 찬 뒤라 동승자와 말을 맞출 일이 생기는 단계다 — 채팅방이 있으면 바로 연다.
+            if (onOpenChat != null) {
+                Spacer(Modifier.height(16.dp))
+                OpenChatButton(onClick = onOpenChat, modifier = Modifier.fillMaxWidth())
+            }
         }
     }
 }
@@ -172,6 +181,8 @@ fun DriverAssignedScreen(
     driver: AssignedDriver? = null,
     pickupEtaMinutes: Int? = null,
     onSeeDispatch: () -> Unit = {},
+    /** 이 방의 채팅방을 연다(독립 목적지 push). 아직 방이 없으면 null */
+    onOpenChat: (() -> Unit)? = null,
     onBack: () -> Unit = {},
 ) {
     StageScaffold(title = "배정 완료", onBack = onBack) {
@@ -254,6 +265,10 @@ fun DriverAssignedScreen(
             )
             Spacer(Modifier.height(16.dp))
             PrimaryCtaButton(text = "배차 상태 보기", onClick = onSeeDispatch)
+            if (onOpenChat != null) {
+                Spacer(Modifier.height(10.dp))
+                OpenChatButton(onClick = onOpenChat, modifier = Modifier.fillMaxWidth())
+            }
         }
     }
 }

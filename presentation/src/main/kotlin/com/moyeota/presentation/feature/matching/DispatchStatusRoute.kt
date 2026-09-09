@@ -183,9 +183,11 @@ fun DispatchStatusRoute(
     onStartRide: () -> Unit = {},
     onRetryMatching: () -> Unit = {},
     onBack: () -> Unit = {},
+    /** 이 방의 채팅방을 여는 길. 채팅방이 아직 없으면 null — 화면이 버튼을 그리지 않는다 */
+    onOpenChat: (() -> Unit)? = null,
 ) {
     if (partyId == null) {
-        DispatchStatusScreen(onBack = onBack)
+        DispatchStatusScreen(onOpenChat = onOpenChat, onBack = onBack)
         return
     }
 
@@ -232,7 +234,7 @@ fun DispatchStatusRoute(
                     onRetry = onRetryMatching,
                     onBack = onBack,
                 )
-                !assigned -> DriverSearchScreen(ride = ride, onBack = onBack)
+                !assigned -> DriverSearchScreen(ride = ride, onOpenChat = onOpenChat, onBack = onBack)
                 !assignedSeen -> DriverAssignedScreen(
                     ride = ride,
                     driver = driver,
@@ -240,12 +242,14 @@ fun DispatchStatusRoute(
                         pickupDistanceMeters(ride, driverLocation),
                     ),
                     onSeeDispatch = { assignedSeen = true },
+                    onOpenChat = onOpenChat,
                     onBack = onBack,
                 )
                 else -> DispatchStatusScreen(
                     ride = current.ride,
                     driver = driver,
                     driverLocation = driverLocation,
+                    onOpenChat = onOpenChat,
                     onBack = onBack,
                 )
             }
