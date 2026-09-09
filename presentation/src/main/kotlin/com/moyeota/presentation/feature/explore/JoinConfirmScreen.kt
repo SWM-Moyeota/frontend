@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -36,7 +37,10 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.BackArrowIcon
-import com.moyeota.core.designsystem.component.MapPlaceholder
+import com.moyeota.core.designsystem.component.RouteStripMap
+import com.moyeota.core.designsystem.component.decodePolyline
+import com.moyeota.core.designsystem.component.latLngOrNull
+import com.moyeota.core.designsystem.component.polylineDistanceMeters
 import com.moyeota.core.designsystem.component.NavigationBarSpacer
 import com.moyeota.core.designsystem.component.NoticeBanner
 import com.moyeota.core.designsystem.component.NoticeKind
@@ -46,6 +50,8 @@ import com.moyeota.core.designsystem.component.SheetHandle
 import com.moyeota.core.designsystem.component.StatusBadge
 import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.presentation.core.buildRouteChipLabel
+import com.moyeota.presentation.core.pickupDistanceLabel
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.model.User
@@ -102,9 +108,12 @@ fun JoinConfirmScreen(
     ride: Ride = DefaultJoinRide,
     femaleOnly: Boolean = true,
     serviceFee: Int = 600,
-    etaLabel: String = "예상 12분 · 6.2km",
     pickupTimeLabel: String = "오후 6:45",
-    walkLabel: String = "도보 2분 · 180m",
+    /**
+     * 내 위치 → 이 방의 탑승 위치 거리(m). 모르면 null 이고 그 줄을 감춘다.
+     * 「도보 N분」은 쓰지 않는다 — 보행 속도를 지어내야 하고, 거리와 달리 잰 값이 아니다.
+     */
+    pickupDistanceMeters: Double? = null,
     arrivalTimeLabel: String = "오후 6:57 도착",
     joining: Boolean = false,
     joinErrorMessage: String? = null,
@@ -114,6 +123,20 @@ fun JoinConfirmScreen(
 ) {
     val joinedCount = ride.members.size
     val isFull = joinedCount >= ride.capacity
+
+    // 지도에 그릴 값 — 전부 방 상세(Ride)에서 나온다. 좌표가 못 쓸 값이면(서버 위경도 전치, QA D-1)
+    // latLngOrNull 이 null 을 돌려주고 지도는 자리표시자로 떨어진다.
+    val originPosition = latLngOrNull(ride.originLat, ride.originLng)
+    val destinationPosition = latLngOrNull(ride.destinationLat, ride.destinationLng)
+    val routePath = remember(ride.routePolyline) {
+        ride.routePolyline?.let(::decodePolyline).orEmpty()
+    }
+    // 거리는 서버가 주지 않아 **경로선에서 직접 잰다**. 경로가 없으면 거리 표기를 생략한다 —
+    // 출발·도착 직선거리로 대체하면 실제 주행 거리보다 짧아 요금과 어긋나 보인다.
+    val routeKm = remember(routePath) {
+        polylineDistanceMeters(routePath).takeIf { it > 0.0 }?.let { it / 1000.0 }
+    }
+    val etaLabel = buildRouteChipLabel(ride.estimatedMinutes, routeKm)
 
     Column(modifier = Modifier.fillMaxSize().background(CanvasBg)) {
         // 상단 헤더 (흰 배경)
@@ -139,9 +162,14 @@ fun JoinConfirmScreen(
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             // 경로 지도 스트립
             Box(modifier = Modifier.fillMaxWidth().height(172.dp)) {
-                MapPlaceholder(modifier = Modifier.fillMaxSize())
-                RoutePreviewCanvas(modifier = Modifier.fillMaxSize())
-                Box(
+                RouteStripMap(
+                    modifier = Modifier.fillMaxSize(),
+                    originPosition = originPosition,
+                    destinationPosition = destinationPosition,
+                    routePath = routePath,
+                )
+                // 시간·거리 둘 다 없으면 칩을 통째로 감춘다 — 틀린 값보다 없는 편이 낫다
+                if (etaLabel != null) Box(
                     modifier = Modifier
                         .padding(16.dp)
                         .height(30.dp)
@@ -202,7 +230,7 @@ fun JoinConfirmScreen(
                         origin = ride.origin,
                         destination = ride.destination,
                         pickupTimeLabel = pickupTimeLabel,
-                        walkLabel = walkLabel,
+                        pickupDistanceMeters = pickupDistanceMeters,
                         arrivalTimeLabel = arrivalTimeLabel,
                     )
 
@@ -293,7 +321,7 @@ private fun RouteCard(
     origin: String,
     destination: String,
     pickupTimeLabel: String,
-    walkLabel: String,
+    pickupDistanceMeters: Double?,
     arrivalTimeLabel: String,
 ) {
     Column(
@@ -324,12 +352,15 @@ private fun RouteCard(
                 DashedVerticalLine()
             }
             Spacer(Modifier.width(12.dp))
-            Text(
-                text = walkLabel,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                color = GrayMute,
-            )
+            // 내 위치를 모르면 점선만 남는다 — 「도보 2분」 같은 지어낸 값을 채우지 않는다
+            if (pickupDistanceMeters != null) {
+                Text(
+                    text = "내 위치에서 ${pickupDistanceLabel(pickupDistanceMeters)}",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = GrayMute,
+                )
+            }
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             RouteDot(color = MoyeotaColor.MarkerDestination)
@@ -506,44 +537,6 @@ private fun GrayPill(text: String) {
 }
 
 // ─── Canvas 아이콘·경로 (material-icons 미사용) ─────────────────────────────
-
-@Composable
-private fun RoutePreviewCanvas(modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier) {
-        val w = size.width
-        val h = size.height
-        val pickup = Offset(w * 0.38f, h * 0.63f)
-        // 도보 구간 (점선)
-        drawLine(
-            color = GrayAsh,
-            start = Offset(w * 0.16f, h * 0.84f),
-            end = pickup,
-            strokeWidth = 3.dp.toPx(),
-            cap = StrokeCap.Round,
-            pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 10f)),
-        )
-        // 합승 경로
-        val route = Path().apply {
-            moveTo(pickup.x, pickup.y)
-            quadraticTo(w * 0.55f, h * 0.28f, w * 0.77f, h * 0.30f)
-        }
-        drawPath(route, MoyeotaColor.RouteShared, style = Stroke(4.dp.toPx(), cap = StrokeCap.Round))
-        // 출발점
-        drawCircle(Color.White, 7.dp.toPx(), pickup)
-        drawCircle(MoyeotaColor.MarkerOrigin, 5.dp.toPx(), pickup)
-        // 도착 핀
-        val pin = Offset(w * 0.77f, h * 0.24f)
-        val tail = Path().apply {
-            moveTo(pin.x - 6.dp.toPx(), pin.y + 5.dp.toPx())
-            lineTo(pin.x + 6.dp.toPx(), pin.y + 5.dp.toPx())
-            lineTo(pin.x, pin.y + 16.dp.toPx())
-            close()
-        }
-        drawPath(tail, MoyeotaColor.MarkerDestination)
-        drawCircle(MoyeotaColor.MarkerDestination, 8.dp.toPx(), pin)
-        drawCircle(Color.White, 3.dp.toPx(), pin)
-    }
-}
 
 @Composable
 private fun ShieldIcon(modifier: Modifier = Modifier) {

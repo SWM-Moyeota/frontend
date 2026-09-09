@@ -48,6 +48,7 @@ import com.moyeota.domain.model.DriverLocation
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.model.User
+import com.moyeota.presentation.core.OpenChatButton
 import com.moyeota.presentation.core.displayNickname
 
 // 와이어프레임 그레이 (core token 미정의 색 — 화면 재현용)
@@ -86,6 +87,7 @@ private val dispatchRideDummy = Ride(
  *   [DispatchStatusRoute] 의 폴링이 잡아 자동으로 넘긴다. 임시 트리거였던 화면 전체 탭은
  *   폴링이 실동작하게 되면서 걷어냈다(오탭하면 탑승 전에 26 으로 넘어갔다 — 결함 D-9 수정).
  *   26 의 「경유 카드 탭」을 걷어낸 것과 같은 이유다(35 보고서).
+ * - 「채팅 열기」 → 24 채팅방(독립 목적지 push — 뒤로가기로 여기 복귀). [onOpenChat] 이 null 이면 그리지 않는다
  * - 차량 번호 롱프레스 → 복사 [미연결]
  * - 뒤로 → [미연결] 배차 후 되돌리기 차단 권장 (onBack — 무동작 기본값)
  * - 배차 실패 시 21 매칭 대기로 되돌리고 재탐색 (호출부 처리)
@@ -98,6 +100,8 @@ fun DispatchStatusScreen(
     ride: Ride = dispatchRideDummy,
     driver: AssignedDriver? = null,
     driverLocation: DriverLocation? = null,
+    /** 이 방의 채팅방을 연다. 아직 방이 없으면 null — 버튼 자체를 그리지 않는다 */
+    onOpenChat: (() -> Unit)? = null,
     onBack: () -> Unit = {}, // 미연결 (배차 후 되돌리기 차단 권장)
 ) {
     val pickupSpot = ride.origin
@@ -255,6 +259,10 @@ fun DispatchStatusScreen(
                         value = "%,d원".format(ride.farePerPerson),
                         valueColor = MoyeotaColor.Primary500,
                     )
+                }
+                if (onOpenChat != null) {
+                    Spacer(Modifier.height(16.dp))
+                    OpenChatButton(onClick = onOpenChat, modifier = Modifier.fillMaxWidth())
                 }
                 Spacer(Modifier.height(16.dp))
 

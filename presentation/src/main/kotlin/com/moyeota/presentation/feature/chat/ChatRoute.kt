@@ -1,10 +1,13 @@
 package com.moyeota.presentation.feature.chat
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -242,16 +245,28 @@ class ChatRoomViewModel(
     }
 }
 
-// 24 채팅 — 방 목록에서 고르면 같은 라우트 안에서 방으로 전환한다.
+/**
+ * 24 채팅 **탭** — 방 목록에서 고르면 같은 라우트 안에서 방으로 전환한다.
+ *
+ * 21·25·26 의 「채팅 열기」는 이 경로로 오지 않는다 — 탭으로 보내면 매칭 화면이 스택에서 빠진다.
+ * 그쪽은 [ChatRoomDestinationRoute] 를 독립 목적지로 쌓아 뒤로가기가 원래 화면으로 돌아가게 한다.
+ *
+ * @param activePartyId 진행 중인 방의 id([com.moyeota.domain.model.Ride.id]). 열린 채팅방이 그 방의
+ *   것이면 헤더에 「매칭 화면으로 →」를 띄운다. 진행 중인 방이 없으면 null.
+ */
 @Composable
 fun ChatRoute(
     repository: ChatRepository,
+    activePartyId: String? = null,
+    onOpenMatching: () -> Unit = {},
     onOpenRideOngoing: () -> Unit = {},
     onStartLocationShare: () -> Unit = {},
     onLeaveChat: () -> Unit = {},
     onTabSelect: (MoyeotaTab) -> Unit = {},
 ) {
     var openedRoom by rememberSaveable(stateSaver = ChatRoomSaver) { mutableStateOf<ChatRoom?>(null) }
+    // 방이 열린 상태의 시스템 뒤로가기는 탭을 빠져나가지 않고 목록으로 돌아간다 (화면 ← 와 동일)
+    BackHandler(enabled = openedRoom != null) { openedRoom = null }
 
     val room = openedRoom
     if (room == null) {
@@ -265,6 +280,7 @@ fun ChatRoute(
             repository = repository,
             room = room,
             onBack = { openedRoom = null },
+            onOpenMatching = onOpenMatching.takeIf { room.isActiveParty(activePartyId) },
             onOpenRideOngoing = onOpenRideOngoing,
             onStartLocationShare = onStartLocationShare,
             // 나간 방을 열어둔 채로 홈에 보내면, 채팅 탭에 돌아왔을 때 참여자가 아닌 방을 다시 연다.
@@ -310,6 +326,7 @@ private fun ChatRoomRoute(
     repository: ChatRepository,
     room: ChatRoom,
     onBack: () -> Unit,
+    onOpenMatching: (() -> Unit)?,
     onOpenRideOngoing: () -> Unit,
     onStartLocationShare: () -> Unit,
     onLeaveChat: () -> Unit,
@@ -358,6 +375,7 @@ private fun ChatRoomRoute(
             onInputChange = viewModel::onInputChange,
             onSend = viewModel::send,
             onBack = onBack,
+            onOpenMatching = onOpenMatching,
             onOpenRideOngoing = onOpenRideOngoing,
             onStartLocationShare = onStartLocationShare,
             onLeaveChat = viewModel::leaveRoom, // 서버에서 빠진 뒤 14 홈으로
@@ -365,6 +383,67 @@ private fun ChatRoomRoute(
         )
     }
 }
+
+/**
+ * 24 채팅방 — **독립 목적지**(`Routes.CHAT_ROOM`). 21·25·26 의 「채팅 열기」가 이걸 스택에 쌓는다.
+ *
+ * 대화 자체는 탭 안의 방 화면과 **완전히 같은 것**을 쓴다([ChatRoomRoute]) — 방 하나에 화면이 둘이면
+ * 폴링·읽음 처리·나가기 규칙이 두 벌이 된다. 여기서 더 하는 일은 하나뿐이다: 라우트 인자로 받은
+ * roomId 로 방 이름(출발지 → 목적지)을 한 번 조회하는 것. 탭 경로는 목록에서 이미 [ChatRoom] 을
+ * 통째로 들고 오지만, 진행 화면에서는 id 밖에 없다.
+ *
+ * @param activePartyId 진행 중인 방 id. 이 채팅방이 그 방의 것이면 헤더에 「매칭 화면으로 →」가 뜬다.
+ *   뒤로가기로도 돌아갈 수 있지만, 채팅방에 오래 머문 뒤에는 「어디로 돌아가는 뒤로가기인지」가
+ *   사라진다 — 이름 붙은 길을 함께 둔다.
+ */
+@Composable
+fun ChatRoomDestinationRoute(
+    repository: ChatRepository,
+    roomId: Long,
+    activePartyId: String? = null,
+    onBack: () -> Unit = {},
+    onOpenMatching: () -> Unit = {},
+    onOpenRideOngoing: () -> Unit = {},
+    onStartLocationShare: () -> Unit = {},
+    onLeaveChat: () -> Unit = {},
+    onTabSelect: (MoyeotaTab) -> Unit = {},
+) {
+    var room by rememberSaveable(stateSaver = ChatRoomSaver) { mutableStateOf<ChatRoom?>(null) }
+    var failure by remember { mutableStateOf<String?>(null) }
+    // 「다시 시도」로 같은 roomId 를 한 번 더 읽기 위한 손잡이 — key 가 같으면 LaunchedEffect 가 다시 돌지 않는다
+    var retryKey by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(roomId, retryKey) {
+        if (room?.id == roomId) return@LaunchedEffect
+        failure = null
+        runCatching { repository.getChatRoom(roomId) }
+            .onSuccess { room = it }
+            .onFailure { failure = it.toChatMessage("채팅방을 불러오지 못했어요") }
+    }
+
+    val current = room
+    when {
+        current != null -> ChatRoomRoute(
+            repository = repository,
+            room = current,
+            onBack = onBack,
+            onOpenMatching = onOpenMatching.takeIf { current.isActiveParty(activePartyId) },
+            onOpenRideOngoing = onOpenRideOngoing,
+            onStartLocationShare = onStartLocationShare,
+            onLeaveChat = onLeaveChat,
+            onTabSelect = onTabSelect,
+        )
+        // 탭바가 아니라 뒤로가기가 이 화면의 이동 수단이다 — 어느 상태에서도 원래 화면으로 돌아갈 수 있어야 한다
+        failure != null -> BackStateScaffold(title = "채팅", onBack = onBack) {
+            ErrorBox(message = failure.orEmpty(), onRetry = { retryKey++ })
+        }
+        else -> BackStateScaffold(title = "채팅", onBack = onBack) { LoadingBox() }
+    }
+}
+
+// 이 채팅방이 지금 진행 중인 방의 것인가. 진행 중인 방이 없으면(null) 언제나 false.
+private fun ChatRoom.isActiveParty(activePartyId: String?): Boolean =
+    activePartyId != null && partyId.toString() == activePartyId
 
 // 서버 메시지 → 화면 표시 모델.
 // "내 메시지" 판정은 Repository 가 계산한 isMine 을 그대로 믿는다(토큰 주체 기준).

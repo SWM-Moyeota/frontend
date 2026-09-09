@@ -50,18 +50,17 @@ fun ChatRoomUserResponse.toMembership(): ChatRoomMembership = ChatRoomMembership
     joinedAt = joinedAt.orEmpty(),
 )
 
-// "이 메시지가 누구 것인가"를 판정할 때 쓰는 근거 세 가지.
+// "이 메시지가 누구 것인가"를 판정할 때 쓰는 근거.
 //
-// myUuid: 세션의 공개 UUID. publicId 계열 근거는 전부 이 값과의 비교로 끝난다.
-// members: 방 참여자 목록(userId → 참여자). GET /chat-rooms/{id}/users 를 저장소가 캐시한 것으로,
-//   메시지의 내부 PK 를 공개 신원(publicId·nickname)으로 바꿔 주는 사전이다.
-//   참여자 목록을 못 받았거나 서버가 userId 를 안 주면 비어 있다.
-// myInternalId: 내가 보낸 메시지의 응답에서 학습한 서버 내부 PK. 사전이 비었을 때만 쓰는 폴백이며,
-//   학습 전이거나 학습 이후 계정이 바뀌었으면 null 이다.
+// 예전에는 근거가 셋이었다(메시지 publicId / 참여자 사전 / 내가 보낸 메시지에서 학습한 내부 PK).
+// 서버가 메시지에 발신자 publicId 를 실어 주면서 **하나로 줄었다** — 세션 uuid 와의 문자열 비교.
+// 학습 폴백은 근거가 사라져 삭제했다(서버가 userId 를 더 이상 주지 않는다).
+//
+// myUuid: 세션의 공개 UUID. 미로그인/복원 전이면 null 이고, 그때는 어떤 메시지도 내 것이 아니다.
+// members: 방 참여자 목록(publicId → 참여자). 이제 신원 판정에는 쓰이지 않고 **닉네임 사전**으로만 쓴다.
 data class ChatIdentity(
     val myUuid: String?,
-    val myInternalId: Long?,
-    val members: Map<Long, ChatMember> = emptyMap(),
+    val members: Map<String, ChatMember> = emptyMap(),
 )
 
 // publicId 가 빈 문자열인 참여자는 서버 응답이 깨진 경우다 — isMe 를 참으로 만들지 않는다
@@ -75,38 +74,32 @@ fun ChatMemberResponse.toChatMember(myUuid: String?): ChatMember = ChatMember(
     isMe = publicId.isNotBlank() && publicId == myUuid,
 )
 
-// 서버 필드는 userId 지만 도메인은 senderId 다 — 이름이 바뀌는 유일한 지점.
+/**
+ * 발신자 공개 UUID. 서버 필드명이 흔들려서(`senderPublicId` 요청 → `publicId` 구현) 둘 다 읽는다.
+ * 빈 문자열은 "없음"으로 접는다 — 빈 값끼리의 비교가 남의 메시지를 내 것으로 만들면 안 된다.
+ */
+private val ChatMessageResponse.effectiveSenderPublicId: String?
+    get() = senderPublicId?.takeIf { it.isNotBlank() } ?: publicId?.takeIf { it.isNotBlank() }
+
+// isMine 은 발신자 publicId 와 세션 uuid 의 비교 하나로 끝난다. 둘 다 서버가 준 공개 신원이라
+// 계정 전환 직후에도 어긋나지 않는다(캐시된 ChatMember.isMe 를 믿지 않는 이유이기도 하다).
 //
-// isMine 우선순위:
-// 1. 메시지의 senderPublicId 와 세션 uuid 비교 (미로그인이면 세션 uuid 가 null 이라 false)
-// 2. 참여자 사전에서 userId 로 찾은 참여자의 publicId 와 세션 uuid 비교
-// 3. 학습한 내부 id 와 userId 비교 (사전에 없는 발신자일 때만)
-//
-// 순서의 이유: 1·2 는 서버가 준 공개 신원끼리의 비교라 계정 전환 직후에도 어긋나지 않는다.
-// 3 은 앱이 추측한 값이라 가장 나중이다. 사전 히트는 캐시된 isMe 대신 publicId 를 그 자리에서
-// 다시 비교한다 — 캐시가 다른 계정 시절에 만들어졌더라도 판정이 오염되지 않게.
-//
-// senderName 은 서버 senderNickname → 참여자 사전의 닉네임 순. 방을 나간 참여자(active=false)도
-// 사전에 남아 있어 이름이 유지된다.
+// senderName 은 참여자 사전(publicId → 닉네임)이 우선이고, 서버가 senderNickname 을 실어 주면
+// 그걸 폴백으로 쓴다. 방을 나간 참여자(active=false)도 사전에 남아 있어 이름이 유지된다.
 fun ChatMessageResponse.toChatMessage(identity: ChatIdentity): ChatMessage {
-    val publicId = senderPublicId?.takeIf { it.isNotBlank() }
-    val member = identity.members[userId]
-    val mine = when {
-        publicId != null -> publicId == identity.myUuid
-        member != null -> member.publicId.isNotBlank() && member.publicId == identity.myUuid
-        else -> identity.myInternalId != null && userId == identity.myInternalId
-    }
+    val senderPublicId = effectiveSenderPublicId
+    val member = senderPublicId?.let { identity.members[it] }
     return ChatMessage(
         id = id,
         chatRoomId = chatRoomId,
-        senderId = userId,
+        senderPublicId = senderPublicId,
         content = content,
         type = chatMessageTypeOf(type),
         createdAt = createdAt.orEmpty(),
         deleted = deleted,
-        isMine = mine,
-        senderName = senderNickname?.takeIf { it.isNotBlank() }
-            ?: member?.nickname?.takeIf { it.isNotBlank() },
+        isMine = senderPublicId != null && senderPublicId == identity.myUuid,
+        senderName = member?.nickname?.takeIf { it.isNotBlank() }
+            ?: senderNickname?.takeIf { it.isNotBlank() },
     )
 }
 

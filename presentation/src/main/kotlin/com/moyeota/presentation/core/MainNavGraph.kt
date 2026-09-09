@@ -7,17 +7,23 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.compose.LifecycleResumeEffect
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.dialog
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
 import com.moyeota.core.designsystem.component.MoyeotaTab
 import com.moyeota.domain.model.AuthState
 import com.moyeota.domain.model.Place
+import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.User
+import com.moyeota.domain.repository.ActivePartyRepository
 import com.moyeota.domain.repository.AuthRepository
 import com.moyeota.domain.repository.ChatRepository
 import com.moyeota.domain.repository.DispatchRepository
@@ -30,6 +36,7 @@ import com.moyeota.presentation.feature.auth.ProfileSetupRoute
 import com.moyeota.presentation.feature.auth.SafetySettingsScreen
 import com.moyeota.presentation.feature.auth.SignupCompleteScreen
 import com.moyeota.presentation.feature.auth.SignupDraft
+import com.moyeota.presentation.feature.chat.ChatRoomDestinationRoute
 import com.moyeota.presentation.feature.chat.ChatRoute
 import com.moyeota.presentation.feature.chat.EmergencyRoute
 import com.moyeota.presentation.feature.chat.RideOngoingRoute
@@ -54,6 +61,7 @@ import com.moyeota.presentation.feature.payment.PaymentAddScreen
 import com.moyeota.presentation.feature.payment.PaymentMethodsScreen
 import com.moyeota.presentation.feature.payment.PaymentResultScreen
 import com.moyeota.presentation.feature.payment.SettlementScreen
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -70,6 +78,7 @@ fun MainNavGraph(
     placeRepository: PlaceRepository,
     chatRepository: ChatRepository,
     dispatchRepository: DispatchRepository,
+    activePartyRepository: ActivePartyRepository,
 ) {
     val authState by authRepository.authState.collectAsState()
 
@@ -85,8 +94,13 @@ fun MainNavGraph(
         placeRepository = placeRepository,
         chatRepository = chatRepository,
         dispatchRepository = dispatchRepository,
+        activePartyRepository = activePartyRepository,
     )
 }
+
+// Routes.CHAT_ROOM 의 경로 인자 이름. 라우트 문자열과 navArgument 선언이 어긋나면
+// 런타임에야 드러나므로 한 곳에서만 적는다.
+private const val CHAT_ROOM_ID_ARG = "roomId"
 
 // 하단탭 네 루트 — 탭 전환이 saveState 로 상태를 보관하는 대상이자, 로그아웃 때 그 보관분을 지울 대상.
 private val TabRoutes = listOf(Routes.HOME, Routes.EXPLORE, Routes.CHAT, Routes.MYPAGE)
@@ -101,6 +115,7 @@ private fun MainNavHost(
     placeRepository: PlaceRepository,
     chatRepository: ChatRepository,
     dispatchRepository: DispatchRepository,
+    activePartyRepository: ActivePartyRepository,
 ) {
     val navController = rememberNavController()
     val scope = rememberCoroutineScope()
@@ -110,6 +125,26 @@ private fun MainNavHost(
     val profileViewModel: UserProfileViewModel =
         viewModel(factory = UserProfileViewModel.factory(authRepository))
     val userName by profileViewModel.userName.collectAsState()
+
+    // 「지금 내가 타고 있는 방」 — 홈·합승 배너, 34 내 탑승, 앱 시작 시 단계 복귀가 같은 값을 본다.
+    // profileViewModel 과 같은 이유로 NavHost 바깥에 둔다(탭을 옮길 때마다 재조회하지 않게).
+    val activePartyViewModel: ActivePartyViewModel = viewModel(
+        factory = ActivePartyViewModel.factory(activePartyRepository, chatRepository),
+    )
+    val activeRide by activePartyViewModel.ride.collectAsState()
+    val activeChatRoomId by activePartyViewModel.chatRoomId.collectAsState()
+    val activeResolved by activePartyViewModel.resolvedOnce.collectAsState()
+
+    // 정원이 찬 뒤 생기는 채팅방을 뒤늦게라도 잡는다(21·25 의 「채팅 열기」가 이 값으로 뜬다).
+    // 컴포지션 스코프라 화면이 사라지면 함께 멈춘다.
+    LaunchedEffect(activePartyViewModel) { activePartyViewModel.pollChatRoom() }
+
+    // 앱을 다시 앞으로 가져올 때마다 재조회한다 — 배경에 있는 동안 방이 끝났을 수 있다.
+    // 탭 진입마다의 재조회는 각 화면(홈·합승·34)의 LaunchedEffect 가 따로 건다.
+    LifecycleResumeEffect(Unit) {
+        activePartyViewModel.refresh()
+        onPauseOrDispose { }
+    }
 
     // 화면 사이에 넘겨야 하는 값 (백엔드 없는 와이어프레임 데모용 간이 상태)
     // 10 프로필 만들기가 채우는 가입 정보 — 12 매너 서약에서 제출한다
@@ -179,6 +214,58 @@ private fun MainNavHost(
         }
     }
 
+    /**
+     * 진행 중인 방의 **지금 단계 화면**으로 보낸다. 배너·34·채팅방 헤더·앱 시작 복귀가 모두 여기로 모인다.
+     *
+     * | [Ride] | 목적지 |
+     * |---|---|
+     * | RECRUITING · MATCHED(서버 COMPLETED = 정원 충족) | 21 매칭 대기 |
+     * | DISPATCHING (기사 미배정) | 25b — [Routes.DISPATCH_STATUS] 안에서 갈린다 |
+     * | DISPATCHING (기사 배정) | 25c·25 — 같은 라우트 |
+     * | ONGOING | 26 운행 중 |
+     * | 그 외(끝난 방) | 14 홈 |
+     *
+     * 스택은 **홈 위에 단계 화면 하나**로 만든다(resetTo 로 통째로 비우지 않는다) — 단계 화면의
+     * 뒤로가기가 갈 곳이 있어야 하고, 홈은 언제나 스택 바닥이라 popUpTo 로 나머지만 걷어내면 된다.
+     */
+    fun navigateToStage(ride: Ride) {
+        ride.id.toLongOrNull()?.let { id ->
+            createdPartyId = id
+            activePartyId = id
+        }
+        val route = when (ride.activeStage) {
+            ActiveStage.WAITING -> Routes.MATCH_WAITING
+            // 25b/25c/25 는 한 라우트가 서버 status 로 갈아 끼운다(DispatchStatusRoute)
+            ActiveStage.DRIVER_SEARCH, ActiveStage.DRIVER_COMING -> Routes.DISPATCH_STATUS
+            ActiveStage.ONGOING -> Routes.RIDE_ONGOING
+            // 끝난 방을 가리키는 배너가 남아 있을 수 있다 — 없는 단계로 보내는 대신 홈으로
+            ActiveStage.NONE -> null
+        }
+        if (route == null) {
+            activePartyViewModel.clearParty()
+            navigateTab(MoyeotaTab.HOME)
+            return
+        }
+        if (navController.currentDestination?.route == route) return
+        // 그 단계 화면이 이미 스택에 있으면(채팅방을 쌓아 연 상태 등) **되돌아간다**.
+        // 새로 쌓으면 같은 화면이 두 겹이 되고, 뒤로가기가 자기 자신으로 돌아가는 길이 생긴다.
+        if (navController.popBackStack(route, inclusive = false)) return
+        navController.navigate(route) {
+            // 홈은 스택 바닥이라 여기까지만 걷어내면 「홈 위에 단계 화면 하나」가 된다.
+            // 26 처럼 스택을 비우고 진입한 화면에서는 홈이 없어 아무것도 걷어내지 않는다(그대로 쌓인다).
+            popUpTo(Routes.HOME) { inclusive = false }
+            launchSingleTop = true
+        }
+    }
+
+    /**
+     * 진행 화면(21·25·26)의 「채팅 열기」. 채팅 **탭**이 아니라 채팅방을 **쌓아** 연다 —
+     * 탭으로 보내면 매칭 화면이 스택에서 빠져 돌아올 길이 없어진다(이 작업의 출발점이 된 결함).
+     */
+    fun openActiveChatRoom(roomId: Long) {
+        navController.navigate(Routes.chatRoom(roomId))
+    }
+
     // 로그인 상태는 앱을 켤 때 한 번만 시작 화면을 정한다. 이후 전이는 아래 LaunchedEffect 가 다룬다
     // — startDestination 을 계속 따라가게 만들면 NavHost 가 통째로 재생성돼 백스택이 날아간다.
     val startDestination = remember { if (loggedIn) Routes.HOME else Routes.ONBOARDING_SAVING }
@@ -191,9 +278,31 @@ private fun MainNavHost(
         if (wasLoggedIn && !loggedIn) {
             signOutNotice = if (logoutRequested) null else "세션이 만료됐어요. 다시 로그인해 주세요"
             logoutRequested = false
+            // 로컬 기억은 남긴다(계정에 매인 값이라 같은 계정 재로그인 시 되살아나야 한다) —
+            // 화면이 들고 있던 값만 버린다
+            activePartyViewModel.forget()
             resetAfterSignOut(Routes.LOGIN_FORM)
         }
         wasLoggedIn = loggedIn
+    }
+
+    /**
+     * 앱을 껐다 켜도 매칭 화면으로 돌아온다 — 첫 [ActivePartyViewModel.resolve] 가 끝난 뒤 딱 한 번.
+     *
+     * [ActivePartyViewModel.resolvedOnce] 를 기다리는 이유는 「아직 모른다」와 「없다」가 둘 다
+     * null 이기 때문이다. 이미 사용자가 홈을 떠났으면 끼어들지 않는다 — 켜자마자 목적지를 검색하는
+     * 사람의 화면을 빼앗는 것이 복귀보다 나을 리 없다.
+     */
+    var startupStageHandled by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(activeResolved, activeRide) {
+        if (!loggedIn || startupStageHandled || !activeResolved) return@LaunchedEffect
+        // resolve 가 I/O 를 거치는 동안 NavHost 는 이미 그래프를 세웠을 것이다. 그래도 아주 빠른
+        // 응답(캐시된 실패 등)이 같은 프레임에 닿으면 목적지가 아직 없어 navigate 가 던진다.
+        if (navController.currentDestination == null) delay(100)
+        startupStageHandled = true
+        val ride = activeRide ?: return@LaunchedEffect
+        if (navController.currentDestination?.route != Routes.HOME) return@LaunchedEffect
+        navigateToStage(ride)
     }
 
     NavHost(navController = navController, startDestination = startDestination) {
@@ -297,9 +406,13 @@ private fun MainNavHost(
 
         // D · 홈 · 목적지 14–16
         composable(Routes.HOME) {
+            // 탭으로 돌아올 때마다 진행 중 방을 다시 읽는다 — 배너가 끝난 방을 가리키면 안 된다
+            LaunchedEffect(Unit) { activePartyViewModel.refresh() }
             HomeRoute(
                 repository = placeRepository,
                 userName = (userName as? UserNameState.Resolved)?.name,
+                activeRide = activeRide,
+                onActiveRideClick = { activeRide?.let(::navigateToStage) },
                 onSearchClick = {
                     searchInitialQuery = ""
                     navController.navigate(Routes.DESTINATION)
@@ -338,6 +451,8 @@ private fun MainNavHost(
                 onPartyCreated = { ride ->
                     createdPartyId = ride.id.toLongOrNull()
                     activePartyId = createdPartyId
+                    // 진행 중 방으로 기억한다 — 앱을 껐다 켜거나 탭을 옮겨도 여기로 돌아올 근거
+                    activePartyViewModel.rememberParty(ride.id)
                     // 모달을 닫고 21 매칭 대기로 — 뒤로 눌러 모달로 돌아오지 않게 한다
                     navController.navigate(Routes.MATCH_WAITING) {
                         popUpTo(Routes.DESTINATION_CONFIRM) { inclusive = true }
@@ -348,13 +463,16 @@ private fun MainNavHost(
 
         // E · 합승 탐색 17–20 (17·18·19 는 한 화면의 시트 상태)
         composable(Routes.EXPLORE) {
+            LaunchedEffect(Unit) { activePartyViewModel.refresh() }
             ExploreRoute(
                 repository = rideRepository,
+                activeRide = activeRide,
                 onJoinParty = { ride ->
                     selectedPartyId = ride.id.toLongOrNull()
                     navController.navigate(Routes.JOIN_CONFIRM)
                 },
-                onOngoingRideClick = { navController.navigate(Routes.MY_RIDES) },
+                // 배너는 34 목업이 아니라 **지금 단계 화면**으로 간다 — 34 를 거치면 한 번 더 눌러야 한다
+                onOngoingRideClick = { activeRide?.let(::navigateToStage) },
                 onCreateRoomClick = { navController.navigate(Routes.DESTINATION) },
                 onTabSelect = ::navigateTab,
             )
@@ -369,6 +487,7 @@ private fun MainNavHost(
                 onJoined = { ride ->
                     createdPartyId = ride.id.toLongOrNull()
                     activePartyId = createdPartyId
+                    activePartyViewModel.rememberParty(ride.id)
                     navController.navigate(Routes.MATCH_WAITING) {
                         popUpTo(Routes.JOIN_CONFIRM) { inclusive = true }
                     }
@@ -385,7 +504,11 @@ private fun MainNavHost(
             MatchWaitingRoute(
                 repository = rideRepository,
                 partyId = createdPartyId,
-                onCancelSearch = { navigateTab(MoyeotaTab.HOME) }, // 나가기 성공 후 14 홈
+                // 나가기 성공 후 14 홈 — 방에서 빠졌으니 진행 중 기억도 함께 지운다
+                onCancelSearch = {
+                    activePartyViewModel.clearParty()
+                    navigateTab(MoyeotaTab.HOME)
+                },
                 // 매칭이 시작되면 서버가 나가기를 막는다(ensureRecruiting). 그 단계의 뒤로가기는
                 // 방을 그대로 두고 홈으로만 보낸다 — 방은 25b 로 이어진다.
                 onExitKeepingParty = { navigateTab(MoyeotaTab.HOME) },
@@ -398,10 +521,13 @@ private fun MainNavHost(
                 // 다시 앞으로 튕겨나가는 루프가 된다(공통 규칙: 배차 후 되돌리기 차단).
                 onMatchingStarted = {
                     activePartyId = createdPartyId
+                    // 정원이 찼다 = 채팅방이 생기는 시점. 단계와 채팅방 id 를 같이 다시 읽는다
+                    activePartyViewModel.refresh()
                     navController.navigate(Routes.DISPATCH_STATUS) {
                         popUpTo(Routes.MATCH_WAITING) { inclusive = true }
                     }
                 },
+                onOpenChat = activeChatRoomId?.let { roomId -> { openActiveChatRoom(roomId) } },
             )
         }
         composable(Routes.RIDE_DETAIL) {
@@ -439,17 +565,23 @@ private fun MainNavHost(
                 rideRepository = rideRepository,
                 dispatchRepository = dispatchRepository,
                 partyId = activePartyId,
-                onStartRide = { resetTo(Routes.RIDE_ONGOING) },
+                onStartRide = {
+                    activePartyViewModel.refresh()
+                    resetTo(Routes.RIDE_ONGOING)
+                },
                 // 매칭 3분 타임아웃 — 서버가 방을 취소해 되살릴 대상이 없다. 같은 조건으로
                 // 다시 만들려면 14 홈부터 시작해야 하므로 진행 중 방 id 도 함께 비운다.
                 onRetryMatching = {
                     activePartyId = null
                     createdPartyId = null
+                    // 서버가 방을 CANCELED 로 닫았다 — 되살릴 대상이 없으니 기억도 지운다
+                    activePartyViewModel.clearParty()
                     navigateTab(MoyeotaTab.HOME)
                 },
                 // 배차 단계에는 나가기가 없다(서버가 막는다). 뒤로가기는 방을 유지한 채 홈으로만 —
                 // 스택을 되돌리면 이미 지운 21 자리로 떨어져 상태와 화면이 어긋난다.
                 onBack = { navigateTab(MoyeotaTab.HOME) },
+                onOpenChat = activeChatRoomId?.let { roomId -> { openActiveChatRoom(roomId) } },
             )
         }
 
@@ -457,11 +589,40 @@ private fun MainNavHost(
         composable(Routes.CHAT) {
             ChatRoute(
                 repository = chatRepository,
+                // 열린 방이 진행 중인 그 방이면 헤더에 「매칭 화면으로 →」가 뜬다
+                activePartyId = activeRide?.id,
+                onOpenMatching = { activeRide?.let(::navigateToStage) },
                 onOpenRideOngoing = { navController.navigate(Routes.RIDE_ONGOING) },
                 onStartLocationShare = { navController.navigate(Routes.RIDE_ONGOING) },
                 onLeaveChat = { navigateTab(MoyeotaTab.HOME) },
                 onTabSelect = ::navigateTab,
             )
+        }
+        // 24 채팅방 **단독 목적지** — 21·25·26 의 「채팅 열기」가 이 위에 쌓인다.
+        // 뒤로가기 한 번이면 원래 진행 화면으로 돌아온다(탭 이동은 스택을 갈아엎어 그럴 수 없었다).
+        composable(
+            Routes.CHAT_ROOM,
+            arguments = listOf(navArgument(CHAT_ROOM_ID_ARG) { type = NavType.LongType }),
+        ) { entry ->
+            val roomId = entry.arguments?.getLong(CHAT_ROOM_ID_ARG)
+            if (roomId == null) {
+                // 인자 없이 이 라우트에 닿을 길은 없다. 그래도 빈 채팅방을 그리는 대신 되돌린다
+                BackStateScaffold("채팅", ::back) {
+                    ErrorBox(message = "채팅방을 찾지 못했어요", onRetry = ::back)
+                }
+            } else {
+                ChatRoomDestinationRoute(
+                    repository = chatRepository,
+                    roomId = roomId,
+                    activePartyId = activeRide?.id,
+                    onBack = ::back,
+                    onOpenMatching = { activeRide?.let(::navigateToStage) },
+                    onOpenRideOngoing = { navController.navigate(Routes.RIDE_ONGOING) },
+                    onStartLocationShare = { navController.navigate(Routes.RIDE_ONGOING) },
+                    onLeaveChat = { navigateTab(MoyeotaTab.HOME) },
+                    onTabSelect = ::navigateTab,
+                )
+            }
         }
         composable(Routes.RIDE_ONGOING) {
             // 28 로의 전이는 기사측 운행 종료(FINISHED)를 폴링으로 잡아 자동으로 넘어간다.
@@ -472,11 +633,18 @@ private fun MainNavHost(
                 repository = rideRepository,
                 partyId = activePartyId,
                 onBack = ::back,
-                onOpenChat = { navController.navigate(Routes.CHAT) },
+                // 채팅방을 알면 쌓아 열어 뒤로가기로 26 에 돌아오게 한다.
+                // 아직 못 찾았으면(목록 조회 실패 등) 예전처럼 채팅 탭으로 — 길을 아예 막지는 않는다
+                onOpenChat = {
+                    val roomId = activeChatRoomId
+                    if (roomId != null) openActiveChatRoom(roomId) else navigateTab(MoyeotaTab.CHAT)
+                },
                 onReport = { navController.navigate(Routes.EMERGENCY) },
                 // 운행이 끝났으니 26 은 스택에서 지운다. 남겨두면 28 에서 뒤로 왔을 때
                 // status 가 여전히 FINISHED 라 폴링이 다시 28 로 튕겨내는 루프가 된다(21→25 와 같은 이유).
                 onRideFinished = {
+                    // 운행이 끝났다(서버 FINISHED) — 진행 중 기억을 지워 배너·34 가 따라 사라지게 한다
+                    activePartyViewModel.clearParty()
                     navController.navigate(Routes.FARE_FINAL) {
                         popUpTo(Routes.RIDE_ONGOING) { inclusive = true }
                     }
@@ -537,9 +705,17 @@ private fun MainNavHost(
             )
         }
         composable(Routes.MY_RIDES) {
+            LaunchedEffect(Unit) { activePartyViewModel.refresh() }
             MyRidesScreen(
-                onRideClick = { navController.navigate(Routes.RIDE_DETAIL) },
-                onLiveLocationClick = { navController.navigate(Routes.RIDE_ONGOING) },
+                // 목업(7월 25일 · 3,200원)을 걷어냈다 — 진행 중 방이 없으면 빈 상태만 뜬다
+                ongoingRide = activeRide,
+                // 「예정 탑승」에 해당하는 개념이 서버에 없다(방은 만들어지는 순간 진행 중이다)
+                upcomingRides = emptyList(),
+                onRideClick = { ride ->
+                    selectedPartyId = ride.id.toLongOrNull()
+                    navController.navigate(Routes.RIDE_DETAIL)
+                },
+                onOpenStage = ::navigateToStage,
                 onHistoryClick = { navController.navigate(Routes.MYPAGE) },
                 onTabSelect = ::navigateTab,
             )

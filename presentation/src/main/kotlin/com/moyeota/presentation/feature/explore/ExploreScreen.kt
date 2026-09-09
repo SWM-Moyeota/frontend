@@ -65,6 +65,7 @@ import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.model.User
+import com.moyeota.presentation.core.ActiveRideBanner
 import com.moyeota.presentation.feature.home.DemoOrigin
 import com.naver.maps.geometry.LatLng
 import com.naver.maps.geometry.LatLngBounds
@@ -193,7 +194,7 @@ private val ListHeaderGap = 12.dp
  * - FULL: 「지도 펼치기 ⌃」 / 「🗺 지도」 → HALF (18)
  *
  * 이동(디스크립션):
- * - 「진행 중 탑승 · 서면역 방향 보기 ›」 배너 → 34 내 탑승 (onOngoingRideClick)
+ * - 「{단계} · {목적지} 보기 ›」 배너 → 진행 중인 방의 단계 화면 21/25/26 (onOngoingRideClick)
  * - 지도 마커 탭 / 카드 「합류」 → 20 합류 확인 (onJoinParty)
  * - 「＋ 새 합승 방 만들기」 → 15 목적지 입력 (onCreateRoomClick, 미연결 — 기본 무동작)
  * - 하단탭 홈 / 채팅 / 마이 → 14 / 24 / 35 (onTabSelect)
@@ -203,14 +204,16 @@ private val ListHeaderGap = 12.dp
  * - 지도는 네이버 실지도. 내 위치는 기기 GPS([myLocation]) — 못 받으면 [DemoOrigin] 기준점으로 폴백
  * - 위치 권한 없으면 지도 대신 권한 요청 안내 + 「위치 권한 허용」 버튼 (locationGranted)
  * - 후보 0건이면 peek 문구 자리에 빈 상태 + 지도를 움직여 보라는 안내
- * - 진행 중 탑승 없으면 상단 배너 숨김 (hasOngoingRide)
+ * - 진행 중 탑승 없으면 상단 배너 숨김 ([activeRide] 가 null). 데모 기본값을 두지 않는다 —
+ *   있지도 않은 탑승을 가리키는 배너는 눌러도 갈 곳이 없다
  * - 정원 찬 방(3/3)은 「합류」 비활성 + 「마감」 표기
  */
 @Composable
 fun ExploreScreen(
     parties: List<Ride> = DefaultParties,
     waitingCount: Int = 23,
-    hasOngoingRide: Boolean = true,
+    /** 지금 진행 중인 내 방. null 이면 상단 배너를 그리지 않는다 */
+    activeRide: Ride? = null,
     locationGranted: Boolean = true,
     // 기기 실위치. null = 권한 없음 · 아직 fix 없음 → 지도는 DemoOrigin 기준점으로 떨어진다
     myLocation: MyLocationFix? = null,
@@ -269,7 +272,7 @@ fun ExploreScreen(
                 ExploreSheetState.PEEK -> PeekContent(
                     parties = parties,
                     waitingCount = waitingCount,
-                    hasOngoingRide = hasOngoingRide,
+                    activeRide = activeRide,
                     locationGranted = locationGranted,
                     myLocation = myLocation,
                     cameraState = cameraState,
@@ -314,7 +317,7 @@ fun ExploreScreen(
 private fun PeekContent(
     parties: List<Ride>,
     waitingCount: Int,
-    hasOngoingRide: Boolean,
+    activeRide: Ride?,
     locationGranted: Boolean,
     myLocation: MyLocationFix?,
     cameraState: ExploreCameraState,
@@ -343,8 +346,9 @@ private fun PeekContent(
         }
 
         // 지도 위 오버레이는 이제 배너 하나뿐 — 자기 높이(48dp)만 덮고 나머지 팬·줌은 지도로 간다
-        if (hasOngoingRide) {
-            OngoingRideBanner(
+        if (activeRide != null) {
+            ActiveRideBanner(
+                ride = activeRide,
                 onClick = onOngoingRideClick,
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
             )
@@ -697,35 +701,6 @@ private fun CreateRoomButton(onClick: () -> Unit, modifier: Modifier = Modifier)
             fontSize = 15.sp,
             fontWeight = FontWeight.Bold,
             color = MoyeotaColor.TextOnDark,
-        )
-    }
-}
-
-@Composable
-private fun OngoingRideBanner(onClick: () -> Unit, modifier: Modifier = Modifier) {
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .height(48.dp)
-            .shadow(8.dp, RoundedCornerShape(18.dp), spotColor = Color(0x29085AF5))
-            .clip(RoundedCornerShape(18.dp))
-            .background(MoyeotaColor.SurfaceCanvas)
-            .clickable { onClick() }
-            .padding(horizontal = 18.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            text = "진행 중 탑승 · 서면역 방향",
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Bold,
-            color = GrayMute,
-        )
-        Spacer(Modifier.weight(1f))
-        Text(
-            text = "보기 ›",
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Bold,
-            color = GrayMute,
         )
     }
 }
