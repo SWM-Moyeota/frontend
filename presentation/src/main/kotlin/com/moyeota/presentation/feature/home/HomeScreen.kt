@@ -48,6 +48,8 @@ import com.moyeota.core.designsystem.component.NaverMapView
 import com.moyeota.core.designsystem.component.SheetHandle
 import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.domain.model.Ride
+import com.moyeota.presentation.core.ActiveRideBanner
 
 // 와이어프레임 그레이 (core token 미정의 색 — 화면 재현용)
 private val CanvasBg = Color(0xFFF5F7FA)
@@ -69,6 +71,8 @@ data class RecentPlace(val name: String, val address: String, val distanceLabel:
  * 14 · 홈 — 어디로 갈까요 [S09]
  *
  * 이동(디스크립션):
+ * - 상단 「{단계} · {목적지} 보기 ›」 배너 → 진행 중인 방의 단계 화면 21/25/26 (onActiveRideClick)
+ *   — 진행 중인 방이 없으면([activeRide] null) 배너 자체가 없다
  * - 「목적지 검색」 바 탭 → 15 (onSearchClick)
  * - 「자주 가는 곳」 카드 탭 → 15, 도착지 자동 입력 (onFavoritePlaceClick)
  * - 「최근 목적지」 행 탭 → 15 (onRecentPlaceClick)
@@ -83,6 +87,8 @@ data class RecentPlace(val name: String, val address: String, val distanceLabel:
 fun HomeScreen(
     // 로그인 사용자의 실명. 아직 못 받았거나 서버에 이름이 없으면 null — 인사말에서 이름을 뺀다.
     userName: String? = null,
+    /** 지금 진행 중인 내 방. null 이면 지도 위 배너를 그리지 않는다 */
+    activeRide: Ride? = null,
     favoritePlaces: List<FavoritePlace> = listOf(
         FavoritePlace("집", "서면 롯데"),
         FavoritePlace("학교", "부산대 정문"),
@@ -94,6 +100,7 @@ fun HomeScreen(
         RecentPlace("부산역 광장", "동구 초량동", "11.0km"),
     ),
     onSearchClick: () -> Unit = {},
+    onActiveRideClick: () -> Unit = {},
     onFavoritePlaceClick: (FavoritePlace) -> Unit = {},
     onRecentPlaceClick: (RecentPlace) -> Unit = {},
     onRecentAllClick: () -> Unit = {}, // 미연결
@@ -114,8 +121,20 @@ fun HomeScreen(
         Column(modifier = Modifier.fillMaxSize()) {
             StatusBarSpacer()
 
-            // 지도 노출 영역 (터치 미소비 → 팬·줌이 지도로 전달됨)
-            Spacer(Modifier.weight(MAP_PEEK_WEIGHT))
+            // 지도 노출 영역 (터치 미소비 → 팬·줌이 지도로 전달됨).
+            // 진행 중인 방이 있으면 그 위에 복귀 배너 하나만 얹는다 — 배너 자기 높이 밖은
+            // 여전히 지도의 것이다(17 합승 탭의 같은 배너와 같은 배치).
+            Box(modifier = Modifier.weight(MAP_PEEK_WEIGHT).fillMaxWidth()) {
+                if (activeRide != null) {
+                    ActiveRideBanner(
+                        ride = activeRide,
+                        onClick = onActiveRideClick,
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                    )
+                }
+            }
 
             Column(
                 modifier = Modifier

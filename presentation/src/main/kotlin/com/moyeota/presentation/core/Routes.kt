@@ -48,6 +48,18 @@ object Routes {
 
     // G · 채팅 · 안심
     const val CHAT = "chat"                                  // 24 S16 (+24a 메뉴 · 24b 공유 시트)
+
+    /**
+     * 24 S16 — **채팅방 단독 목적지**. 21·25·26 의 「채팅 열기」가 이리로 push 한다.
+     *
+     * 채팅 탭([CHAT])으로 보내면 매칭 화면이 스택에서 빠져 뒤로가기로 돌아올 곳이 없어진다
+     * (사용자 신고: "채팅방에서 매칭 진행 화면으로 돌아갈 수 없다"). 방을 **쌓아** 열면
+     * 뒤로가기가 곧 원래 화면 복귀다. 채팅 탭 목록에서 여는 경로는 예전 그대로 탭 안에서 전환한다.
+     */
+    const val CHAT_ROOM = "chat/room/{roomId}"               // 24 S16 (단독 진입)
+
+    fun chatRoom(roomId: Long) = "chat/room/$roomId"
+
     const val RIDE_ONGOING = "ride/ongoing"                  // 26 S15
     const val EMERGENCY = "ride/emergency"                   // 27 S17
 

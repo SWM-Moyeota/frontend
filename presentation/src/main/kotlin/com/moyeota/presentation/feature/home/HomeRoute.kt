@@ -10,6 +10,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.moyeota.core.designsystem.component.MoyeotaTab
+import com.moyeota.domain.model.Ride
 import com.moyeota.domain.repository.PlaceRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -47,7 +48,10 @@ fun HomeRoute(
     // 이름은 NavHost 의 공용 홀더(UserProfileViewModel)가 세션당 한 번 받아 내려보낸다
     // — 홈 진입마다 다시 조회하지 않는다.
     userName: String? = null,
+    /** 지금 진행 중인 내 방(ActivePartyViewModel.resolve 결과). 있으면 지도 위에 복귀 배너를 띄운다 */
+    activeRide: Ride? = null,
     onSearchClick: () -> Unit = {},
+    onActiveRideClick: () -> Unit = {},
     onPlaceQuery: (String) -> Unit = {},
     onTabSelect: (MoyeotaTab) -> Unit = {},
 ) {
@@ -59,8 +63,10 @@ fun HomeRoute(
 
     HomeScreen(
         userName = userName,
+        activeRide = activeRide,
         favoritePlaces = favorites,
         onSearchClick = onSearchClick,
+        onActiveRideClick = onActiveRideClick,
         onFavoritePlaceClick = { onPlaceQuery(it.address) },
         onRecentPlaceClick = { onPlaceQuery(it.name) },
         onTabSelect = onTabSelect,
