@@ -1,6 +1,16 @@
 package com.moyeota.domain.model
 
-enum class RideStatus { RECRUITING, MATCHED, DISPATCHING, ONGOING, COMPLETED }
+/**
+ * 방의 진행 단계.
+ *
+ * [CANCELED] 는 [COMPLETED] 와 갈라 둔다 — 서버는 **기사 매칭 3분 타임아웃**에도 방을 CANCELED 로
+ * 바꾸는데, 그걸 「완료」와 같은 값으로 접으면 앱이 「기사님을 찾지 못했어요」를 정상 종료와
+ * 구분할 수 없다. 정상 종료는 FINISHED 뿐이다.
+ *
+ * [DISPATCHING] 은 서버의 MATCHING(기사 찾는 중)과 DRIVER_ASSIGNED(배정 완료)를 함께 담는다 —
+ * 둘의 구분은 [Ride.driverId] 유무로 한다(배정되면 taxiDriverId 가 채워진다).
+ */
+enum class RideStatus { RECRUITING, MATCHED, DISPATCHING, ONGOING, COMPLETED, CANCELED }
 
 data class Ride(
     val id: String,
@@ -28,4 +38,13 @@ data class Ride(
     val routePolyline: String? = null,
     /** 배정된 기사 id. 미배정이면 null. 서버 taxiDriverId. */
     val driverId: Long? = null,
+    /**
+     * 방 생성 시 정해진 탐색 반경(m). 서버 departureRadius / destinationRadius.
+     *
+     * 목록 응답에는 없어 null 이다 — 21 대기 화면이 「탐색 반경」을 하드코딩("1km")하지 않고
+     * 실제 방 값으로 보여 주기 위해 상세·생성 응답에서만 채운다(QA D-3).
+     * 서버가 0 을 내려보내면(값 없음) null 로 접는다 — 0m 반경은 의미가 없다.
+     */
+    val departureRadiusMeters: Int? = null,
+    val destinationRadiusMeters: Int? = null,
 )

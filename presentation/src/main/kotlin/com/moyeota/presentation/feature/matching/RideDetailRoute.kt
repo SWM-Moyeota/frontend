@@ -12,7 +12,6 @@ import androidx.lifecycle.viewModelScope
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.User
 import com.moyeota.domain.repository.RideRepository
-import com.moyeota.domain.session.UserSession
 import com.moyeota.presentation.core.BackStateScaffold
 import com.moyeota.presentation.core.ErrorBox
 import com.moyeota.presentation.core.LoadingBox
@@ -23,7 +22,6 @@ import kotlinx.coroutines.launch
 
 class RideDetailViewModel(
     private val repository: RideRepository,
-    private val userSession: UserSession,
     private val partyId: Long,
 ) : ViewModel() {
 
@@ -68,17 +66,19 @@ class RideDetailViewModel(
     }
 
     companion object {
-        fun factory(repository: RideRepository, userSession: UserSession, partyId: Long) = viewModelFactory {
-            initializer { RideDetailViewModel(repository, userSession, partyId) }
+        fun factory(repository: RideRepository, partyId: Long) = viewModelFactory {
+            initializer { RideDetailViewModel(repository, partyId) }
         }
     }
 }
 
 // 22 탑승 상세 — 서버 상세 연동 진입점. partyId 없으면 기존 더미 화면 유지.
+//
+// UserSession 을 더 이상 받지 않는다: 「나」 판정이 매퍼(publicId == 세션 uuid)로 내려가
+// 화면은 User.isMe 만 보면 된다. 예전에는 여기서 고정 memberId 1 을 내려보내야 했다.
 @Composable
 fun RideDetailRoute(
     repository: RideRepository,
-    userSession: UserSession,
     partyId: Long?,
     onBack: () -> Unit = {},
     onPartnerClick: (User) -> Unit = {},
@@ -95,14 +95,10 @@ fun RideDetailRoute(
 
     val viewModel: RideDetailViewModel = viewModel(
         key = "party-$partyId",
-        factory = RideDetailViewModel.factory(repository, userSession, partyId),
+        factory = RideDetailViewModel.factory(repository, partyId),
     )
     val state by viewModel.uiState.collectAsState()
     val left by viewModel.left.collectAsState()
-    // 알려진 한계(22 보고서 D-5): 이 값은 고정 "1" 이다. 앱은 자기 내부 Long id 를 모르고
-    // (로그인으로 받는 건 UUID 뿐), 방 상세 응답에도 "내 멤버십 여부"가 없다.
-    // 서버가 그 정보를 주기 전까지는 id 1 이 아닌 계정에서 「나 제외」 필터가 어긋난다.
-    val currentUserId = userSession.currentUserId.toString()
 
     LaunchedEffect(left) {
         if (left) onLeave()
@@ -118,7 +114,6 @@ fun RideDetailRoute(
         }
         is RideDetailViewModel.UiState.Success -> RideDetailScreen(
             ride = current.ride,
-            currentUserId = currentUserId,
             onBack = onBack,
             onPartnerClick = onPartnerClick,
             onLeave = viewModel::leave, // 나가기 성공 후 onLeave 로 화면 전환

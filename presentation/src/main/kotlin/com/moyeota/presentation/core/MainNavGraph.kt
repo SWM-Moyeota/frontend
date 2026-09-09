@@ -17,17 +17,17 @@ import androidx.navigation.compose.rememberNavController
 import com.moyeota.core.designsystem.component.MoyeotaTab
 import com.moyeota.domain.model.AuthState
 import com.moyeota.domain.model.Place
+import com.moyeota.domain.model.User
 import com.moyeota.domain.repository.AuthRepository
 import com.moyeota.domain.repository.ChatRepository
 import com.moyeota.domain.repository.DispatchRepository
 import com.moyeota.domain.repository.PlaceRepository
 import com.moyeota.domain.repository.ReportRepository
 import com.moyeota.domain.repository.RideRepository
-import com.moyeota.domain.session.UserSession
 import com.moyeota.presentation.feature.auth.LoginFormRoute
 import com.moyeota.presentation.feature.auth.LoginScreen
 import com.moyeota.presentation.feature.auth.MannerPledgeRoute
-import com.moyeota.presentation.feature.auth.ProfileSetupScreen
+import com.moyeota.presentation.feature.auth.ProfileSetupRoute
 import com.moyeota.presentation.feature.auth.SafetySettingsScreen
 import com.moyeota.presentation.feature.auth.SignupCompleteScreen
 import com.moyeota.presentation.feature.auth.SignupDraft
@@ -72,7 +72,6 @@ fun MainNavGraph(
     chatRepository: ChatRepository,
     dispatchRepository: DispatchRepository,
     reportRepository: ReportRepository,
-    userSession: UserSession,
 ) {
     val authState by authRepository.authState.collectAsState()
 
@@ -89,9 +88,11 @@ fun MainNavGraph(
         chatRepository = chatRepository,
         dispatchRepository = dispatchRepository,
         reportRepository = reportRepository,
-        userSession = userSession,
     )
 }
+
+// 하단탭 네 루트 — 탭 전환이 saveState 로 상태를 보관하는 대상이자, 로그아웃 때 그 보관분을 지울 대상.
+private val TabRoutes = listOf(Routes.HOME, Routes.EXPLORE, Routes.CHAT, Routes.MYPAGE)
 
 // v15 와이어프레임 35화면 이동 규칙을 한곳에서 배선한다.
 // 각 화면은 콜백만 노출하는 순수 컴포저블 — 화면 안에는 네비게이션 코드가 없다.
@@ -104,7 +105,6 @@ private fun MainNavHost(
     chatRepository: ChatRepository,
     dispatchRepository: DispatchRepository,
     reportRepository: ReportRepository,
-    userSession: UserSession,
 ) {
     val navController = rememberNavController()
     val scope = rememberCoroutineScope()
@@ -127,6 +127,10 @@ private fun MainNavHost(
     var confirmedOrigin by remember { mutableStateOf<Place?>(null) }
     var confirmedDestination by remember { mutableStateOf<Place?>(null) }
     var selectedPartyId by remember { mutableStateOf<Long?>(null) }
+    // 20·22 에서 탭한 동승자 — 23 프로필이 이 값을 그린다.
+    // 라우트 인자로 넘기지 않는 이유: User 는 방 상세 응답의 일부라 id 만 넘기면 23 이 방을 다시
+    // 조회해야 하는데, 그 조회 API 는 "멤버 한 명"이 아니라 방 전체다.
+    var selectedPartner by remember { mutableStateOf<User?>(null) }
     // 16 에서 만든 방 — 21 매칭 대기가 이 방을 조회한다
     var createdPartyId by remember { mutableStateOf<Long?>(null) }
     // 지금 배차·운행 중인 방 — 25 배차 현황과 27 신고가 이 id 로 서버를 조회한다.
@@ -143,6 +147,16 @@ private fun MainNavHost(
             popUpTo(0) { inclusive = true }
             launchSingleTop = true
         }
+    }
+
+    // 로그아웃·세션 만료 전용 초기화.
+    // popUpTo(0) 은 "지금 스택"만 지운다 — 탭 전환이 saveState=true 로 따로 보관해 둔 엔트리는
+    // ViewModelStore 째 살아남아, 새 계정으로 그 탭에 들어가면 이전 계정의 ViewModel 이 복원된다.
+    // 채팅에서는 그게 이전 방을 향한 3초 폴링으로 나타났다(QA 결함-1: 새 토큰으로 403 반복).
+    // 저장분까지 명시적으로 폐기해 계정 전환 뒤에는 어떤 탭도 이전 상태를 되살리지 않게 한다.
+    fun resetAfterSignOut(route: String) {
+        resetTo(route)
+        TabRoutes.forEach { navController.clearBackStack(it) }
     }
 
     // 하단탭(14 홈 · 17 합승 · 24 채팅 · 35 마이) 이동 — 홈을 탭 루트로 유지
@@ -181,7 +195,7 @@ private fun MainNavHost(
         if (wasLoggedIn && !loggedIn) {
             signOutNotice = if (logoutRequested) null else "세션이 만료됐어요. 다시 로그인해 주세요"
             logoutRequested = false
-            resetTo(Routes.LOGIN_FORM)
+            resetAfterSignOut(Routes.LOGIN_FORM)
         }
         wasLoggedIn = loggedIn
     }
@@ -248,11 +262,13 @@ private fun MainNavHost(
         // 서버로 가지도 않는 값을 묻는 화면이 된다(Routes.kt B' 절 참고).
         // 09 가 받던 실명·생년월일·성별·휴대폰은 10 의 「기본 정보」 절이 이어받았다.
         composable(Routes.PROFILE_SETUP) {
-            ProfileSetupScreen(
+            // Route 인 이유는 닉네임 중복 확인(POST /auth/nickname/check) 하나 때문이다 —
+            // 입력값 자체는 여전히 화면이 들고 있다.
+            ProfileSetupRoute(
+                repository = authRepository,
                 onBack = ::back,
-                onNext = { _, info ->
-                    // 서버로 갈 7개 값이 이 화면에서 한 번에 채워진다.
-                    // 표시 이름은 가입 필드에 자리가 없어 아직 전송되지 않는다.
+                onNext = { info ->
+                    // 닉네임을 포함한 서버 가입 8개 값이 이 화면에서 한 번에 채워진다
                     signupDraft = info
                     navController.navigate(Routes.SAFETY_SETTINGS)
                 },
@@ -271,6 +287,9 @@ private fun MainNavHost(
                 draft = signupDraft,
                 onBack = ::back,
                 onCompleted = { navController.navigate(Routes.SIGNUP_COMPLETE) },
+                // 409 닉네임 중복 — 10 으로 되돌린다. 스택에 남아 있는 그 엔트리로 pop 하므로
+                // 이미 채운 나머지 7개 필드는 그대로 있고 닉네임만 고치면 된다.
+                onEditNickname = { navController.popBackStack(Routes.PROFILE_SETUP, inclusive = false) },
             )
         }
         composable(Routes.SIGNUP_COMPLETE) {
@@ -358,7 +377,10 @@ private fun MainNavHost(
                         popUpTo(Routes.JOIN_CONFIRM) { inclusive = true }
                     }
                 },
-                onMemberClick = { navController.navigate(Routes.PARTNER_PROFILE) },
+                onMemberClick = { member ->
+                    selectedPartner = member
+                    navController.navigate(Routes.PARTNER_PROFILE)
+                },
             )
         }
 
@@ -368,6 +390,9 @@ private fun MainNavHost(
                 repository = rideRepository,
                 partyId = createdPartyId,
                 onCancelSearch = { navigateTab(MoyeotaTab.HOME) }, // 나가기 성공 후 14 홈
+                // 매칭이 시작되면 서버가 나가기를 막는다(ensureRecruiting). 그 단계의 뒤로가기는
+                // 방을 그대로 두고 홈으로만 보낸다 — 방은 25b 로 이어진다.
+                onExitKeepingParty = { navigateTab(MoyeotaTab.HOME) },
                 onCardClick = {
                     selectedPartyId = createdPartyId
                     navController.navigate(Routes.RIDE_DETAIL)
@@ -386,20 +411,32 @@ private fun MainNavHost(
         composable(Routes.RIDE_DETAIL) {
             RideDetailRoute(
                 repository = rideRepository,
-                userSession = userSession,
                 partyId = selectedPartyId,
                 onBack = ::back,
-                onPartnerClick = { navController.navigate(Routes.PARTNER_PROFILE) },
+                onPartnerClick = { partner ->
+                    selectedPartner = partner
+                    navController.navigate(Routes.PARTNER_PROFILE)
+                },
                 // 25 배차 현황으로 넘기는 건 status 전이를 관찰하는 21 매칭 대기뿐이다 —
                 // 자동 기사 매칭 전환으로 이 화면에는 수동 출발 CTA 가 없다.
                 onLeave = { navigateTab(MoyeotaTab.HOME) },
             )
         }
         composable(Routes.PARTNER_PROFILE) {
-            PartnerProfileScreen(
-                onBack = ::back,
-                onChatClick = { navController.navigate(Routes.CHAT) },
-            )
+            // 20·22 를 거치지 않고 이 라우트에 닿을 길은 없다. 그래도 null 이면 데모 프로필을
+            // 그리는 대신 사실대로 말하고 되돌린다 — 존재하지 않는 사람을 보여주는 것보다 낫다.
+            val partner = selectedPartner
+            if (partner == null) {
+                BackStateScaffold("프로필", ::back) {
+                    ErrorBox(message = "동승자 정보를 불러오지 못했어요", onRetry = ::back)
+                }
+            } else {
+                PartnerProfileScreen(
+                    user = partner,
+                    onBack = ::back,
+                    onChatClick = { navController.navigate(Routes.CHAT) },
+                )
+            }
         }
         composable(Routes.DISPATCH_STATUS) {
             DispatchStatusRoute(
@@ -407,7 +444,16 @@ private fun MainNavHost(
                 dispatchRepository = dispatchRepository,
                 partyId = activePartyId,
                 onStartRide = { resetTo(Routes.RIDE_ONGOING) },
-                onBack = ::back,
+                // 매칭 3분 타임아웃 — 서버가 방을 취소해 되살릴 대상이 없다. 같은 조건으로
+                // 다시 만들려면 14 홈부터 시작해야 하므로 진행 중 방 id 도 함께 비운다.
+                onRetryMatching = {
+                    activePartyId = null
+                    createdPartyId = null
+                    navigateTab(MoyeotaTab.HOME)
+                },
+                // 배차 단계에는 나가기가 없다(서버가 막는다). 뒤로가기는 방을 유지한 채 홈으로만 —
+                // 스택을 되돌리면 이미 지운 21 자리로 떨어져 상태와 화면이 어긋난다.
+                onBack = { navigateTab(MoyeotaTab.HOME) },
             )
         }
 
@@ -415,7 +461,6 @@ private fun MainNavHost(
         composable(Routes.CHAT) {
             ChatRoute(
                 repository = chatRepository,
-                userSession = userSession,
                 onOpenRideOngoing = { navController.navigate(Routes.RIDE_ONGOING) },
                 onStartLocationShare = { navController.navigate(Routes.RIDE_ONGOING) },
                 onLeaveChat = { navigateTab(MoyeotaTab.HOME) },

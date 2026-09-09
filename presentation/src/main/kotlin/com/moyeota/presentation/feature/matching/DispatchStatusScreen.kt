@@ -31,6 +31,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -47,6 +48,7 @@ import com.moyeota.domain.model.DriverLocation
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.model.User
+import com.moyeota.presentation.core.displayNickname
 
 // 와이어프레임 그레이 (core token 미정의 색 — 화면 재현용)
 private val CanvasBg = Color(0xFFF5F7FA)
@@ -64,9 +66,9 @@ private val dispatchRideDummy = Ride(
     departureLabel = "지금 출발",
     capacity = 3,
     members = listOf(
-        User("partner-1", "김OO", "부산대 인증", 4.9, 12),
-        User("partner-2", "이OO", "부산대 인증", 4.7, 6),
-        User("me", "나", "부산대 인증", 4.8, 5),
+        User("partner-1", "부산불곰", "", 0.0, 12),
+        User("partner-2", "해운대곰돌", "", 0.0, 6),
+        User("me", "부산가자", "", 0.0, 5, isMe = true),
     ),
     farePerPerson = 3600,
     totalFare = 10800,
@@ -107,6 +109,12 @@ fun DispatchStatusScreen(
         driver == null -> "차량 정보를 불러오는 중이에요"
         driver.seats != null -> "${driver.vehicleType} · ${driver.seats}인승"
         else -> driver.vehicleType
+    }
+    // 동승자 = 나를 뺀 멤버(isMe = publicId == 세션 uuid). 탈퇴 회원은 이름이 없어 그렇게 적는다.
+    val partners = ride.members.filter { !it.isMe }
+    val partnerLabel = when {
+        partners.isEmpty() -> "나 혼자 탑승"
+        else -> partners.joinToString(", ") { it.displayNickname } + " · 나 포함 ${ride.members.size}명"
     }
 
     Column(
@@ -234,7 +242,9 @@ fun DispatchStatusScreen(
                     HorizontalDivider(color = DividerGray)
                     DispatchInfoRow(label = "도착지", value = ride.destination)
                     HorizontalDivider(color = DividerGray)
-                    DispatchInfoRow(label = "동승자", value = "나 포함 ${ride.members.size}명")
+                    // 서버가 닉네임을 주므로 "나 포함 N명" 대신 누구와 타는지를 쓴다 —
+                    // 차에 타기 직전 화면이라 인원수보다 이름이 필요한 자리다.
+                    DispatchInfoRow(label = "동승자", value = partnerLabel)
                     HorizontalDivider(color = DividerGray)
                     if (ride.estimatedMinutes != null) {
                         DispatchInfoRow(label = "예상 소요", value = "${ride.estimatedMinutes}분")
@@ -264,21 +274,31 @@ fun DispatchStatusScreen(
 }
 
 @Composable
-private fun DispatchInfoRow(label: String, value: String, valueColor: Color = MoyeotaColor.InkPrimary) {
+internal fun DispatchInfoRow(label: String, value: String, valueColor: Color = MoyeotaColor.InkPrimary) {
     Row(
         modifier = Modifier.fillMaxWidth().height(40.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(text = label, fontSize = 14.sp, fontWeight = FontWeight.Medium, color = MoyeotaColor.TextMute)
-        Spacer(Modifier.weight(1f))
-        Text(text = value, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = valueColor)
+        Spacer(Modifier.width(12.dp))
+        // 값 쪽이 길어질 수 있다(동승자 닉네임 나열·전체 주소) — 라벨을 밀어내는 대신 말줄임한다
+        Text(
+            text = value,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Bold,
+            color = valueColor,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.End,
+            modifier = Modifier.weight(1f),
+        )
     }
 }
 
 // ─── 아이콘 (material-icons 미사용 — Canvas 직접 드로잉) ─────────────────────
 
 @Composable
-private fun CarIcon(modifier: Modifier = Modifier, tint: Color = Color(0xFF54637D)) {
+internal fun CarIcon(modifier: Modifier = Modifier, tint: Color = Color(0xFF54637D)) {
     Canvas(modifier = modifier.size(width = 40.dp, height = 24.dp)) {
         val w = size.width
         val h = size.height
