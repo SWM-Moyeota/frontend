@@ -134,3 +134,22 @@ private fun mercatorY(latitude: Double): Double {
 }
 
 private fun inverseMercatorY(y: Double): Double = (2 * atan(exp(y)) - PI / 2) * 180.0 / PI
+
+/**
+ * 폴리라인의 실제 이동 거리(m). 이웃한 점 사이 거리를 그대로 더한다.
+ *
+ * 서버는 방에 **거리를 내려주지 않는다**(요금·소요시간만 준다). 20 합류 확인 등에서 「N.Nkm」 를
+ * 보여 주려면 앱이 서버가 준 경로선에서 재는 수밖에 없다 — 출발·도착 **직선거리로 대체하지 않는다**.
+ * 직선거리는 실제 주행 거리보다 늘 짧아 요금과 어긋나 보인다.
+ *
+ * 점이 2개 미만이면 0.0 — 호출부가 거리 표기를 생략한다.
+ */
+fun polylineDistanceMeters(points: List<LatLng>): Double {
+    if (points.size < 2) return 0.0
+    var total = 0.0
+    for (i in 1 until points.size) {
+        val step = points[i - 1].distanceTo(points[i])
+        if (step.isFinite()) total += step
+    }
+    return total
+}

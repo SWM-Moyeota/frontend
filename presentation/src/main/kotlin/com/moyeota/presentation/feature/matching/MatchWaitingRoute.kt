@@ -122,12 +122,15 @@ fun MatchWaitingRoute(
     onExitKeepingParty: () -> Unit = {},
     onCardClick: () -> Unit = {},
     onMatchingStarted: () -> Unit = {},
+    /** 이 방의 채팅방을 여는 길. 채팅방이 아직 없으면 null — 화면이 버튼을 그리지 않는다 */
+    onOpenChat: (() -> Unit)? = null,
 ) {
     if (partyId == null) {
         MatchWaitingScreen(
             onCancelSearch = onCancelSearch,
             onExitKeepingParty = onExitKeepingParty,
             onCardClick = onCardClick,
+            onOpenChat = onOpenChat,
         )
         return
     }
@@ -176,6 +179,7 @@ fun MatchWaitingRoute(
                 onCancelSearch = viewModel::leaveParty, // 나가기 성공 시 14 홈
                 onExitKeepingParty = onExitKeepingParty,
                 onCardClick = onCardClick,
+                onOpenChat = onOpenChat,
             )
         }
     }

@@ -1,8 +1,10 @@
 package com.moyeota.app
 
 import android.content.Context
+import com.moyeota.data.local.DataStoreActivePartyStorage
 import com.moyeota.data.push.FcmTokenRegistrar
 import com.moyeota.data.remote.NetworkModule
+import com.moyeota.data.repository.RemoteActivePartyRepository
 import com.moyeota.data.repository.RemoteAuthRepository
 import com.moyeota.data.repository.RemoteChatRepository
 import com.moyeota.data.repository.RemoteDispatchRepository
@@ -11,6 +13,7 @@ import com.moyeota.data.repository.RemoteReportRepository
 import com.moyeota.data.repository.RemoteRideRepository
 import com.moyeota.data.session.DataStoreTokenStorage
 import com.moyeota.data.session.SessionManager
+import com.moyeota.domain.repository.ActivePartyRepository
 import com.moyeota.domain.repository.AuthRepository
 import com.moyeota.domain.repository.ChatRepository
 import com.moyeota.domain.repository.DispatchRepository
@@ -63,4 +66,16 @@ class AppContainer(context: Context, debugLogging: Boolean) {
     val chatRepository: ChatRepository = RemoteChatRepository(apis.chat, sessionManager)
     val dispatchRepository: DispatchRepository = RemoteDispatchRepository(apis.dispatch)
     val reportRepository: ReportRepository = RemoteReportRepository(apis.report)
+
+    /**
+     * "지금 내가 타고 있는 방"의 단일 출처. 서버에 `GET /matching/rooms/me` 가 없어
+     * 앱이 방 id 를 로컬에 기억했다가 상세 조회로 되살린다(RemoteActivePartyRepository KDoc).
+     * rideRepository·chatRepository 를 그대로 쓰므로 **둘의 선언 아래**에 둔다.
+     */
+    val activePartyRepository: ActivePartyRepository = RemoteActivePartyRepository(
+        rideRepository = rideRepository,
+        chatRepository = chatRepository,
+        storage = DataStoreActivePartyStorage(context),
+        session = sessionManager,
+    )
 }

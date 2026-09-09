@@ -26,35 +26,34 @@ import retrofit2.HttpException
 import retrofit2.Response
 
 /**
- * 이 저장소의 핵심 책임은 조회가 아니라 **"이 메시지가 내 것인가" 판정**이다.
- * 서버가 그 정보를 주지 않아 저장소가 학습으로 메우고 있으므로, 학습의 경계(학습 전/후,
- * publicId 우선, 계정 변경)를 테스트가 지킨다.
+ * 서버가 메시지에 발신자 `publicId` 를 실어 주면서 이 저장소의 판정 책임은 **이름 하나**로 줄었다
+ * (내 메시지 여부는 매퍼의 문자열 비교로 끝난다 — `ChatMappersTest`).
+ * 그래서 여기서 지키는 건 두 가지다: 참여자 사전이 없거나 실패해도 **isMine 이 흔들리지 않을 것**,
+ * 그리고 사전 조회가 필요 이상으로 반복되지 않을 것.
  */
 class RemoteChatRepositoryTest {
 
+    /**
+     * 예전에는 "이번 세션에 한 번 보내기 전"까지 내 메시지가 상대 쪽에 있었다(학습 폴백의 대가).
+     * 그 대가는 사라졌다 — 방에 처음 들어간 첫 프레임부터 정확해야 한다.
+     */
     @Test
-    fun `학습 전에는 내 과거 메시지도 상대 메시지로 온다`() = runBlocking {
-        val api = FakeChatApi(history = listOf(message(id = 1, userId = 7)))
+    fun `참여자 목록 없이 첫 진입부터 내 메시지를 가린다`() = runBlocking {
+        val api = FakeChatApi(history = listOf(message(id = 1, publicId = UUID_ME), message(id = 2, publicId = UUID_OTHER)))
 
         val page = RemoteChatRepository(api, FakeChatSession()).getMessages(chatRoomId = 5)
 
-        assertFalse(page.messages.single().isMine)
+        assertEquals(listOf(true, false), page.messages.map { it.isMine })
     }
 
-    /**
-     * 전송 응답의 userId 가 곧 내 내부 PK 다. 이걸 놓치면 세션 내내 내 말풍선이 상대 쪽에 남는다.
-     * 방금 보낸 메시지 자신부터 참이어야 한다 — 화면이 전송 결과를 그대로 목록에 붙이기 때문이다.
-     */
     @Test
-    fun `전송 응답으로 내 내부 id 를 학습하면 같은 발신자 메시지가 내 것이 된다`() = runBlocking {
-        val api = FakeChatApi(history = listOf(message(id = 1, userId = 7), message(id = 2, userId = 9)))
-        val repository = RemoteChatRepository(api, FakeChatSession())
+    fun `방금 보낸 메시지는 응답만으로 내 것이 된다`() = runBlocking {
+        val api = FakeChatApi()
 
-        val sent = repository.sendMessage(chatRoomId = 5, content = "안녕하세요")
-        val page = repository.getMessages(chatRoomId = 5)
+        val sent = RemoteChatRepository(api, FakeChatSession()).sendMessage(chatRoomId = 5, content = "안녕하세요")
 
-        assertTrue("방금 보낸 메시지가 내 것으로 오지 않았다", sent.isMine)
-        assertEquals(listOf(true, false), page.messages.map { it.isMine })
+        assertTrue("전송 응답의 publicId 를 읽지 못했다", sent.isMine)
+        assertEquals("안녕하세요", sent.content)
     }
 
     @Test
@@ -67,44 +66,155 @@ class RemoteChatRepositoryTest {
         assertEquals(5L, api.sentRoomId)
     }
 
-    /**
-     * 서버가 senderPublicId 를 추가하면 학습 없이 첫 진입부터 정확해져야 한다 —
-     * 이 케이스가 통과하는 한 백엔드 배포만으로 인터림 전략의 한계가 사라진다.
-     */
     @Test
-    fun `senderPublicId 가 오면 학습 없이도 세션 uuid 로 판정한다`() = runBlocking {
+    fun `참여자 목록으로 보낸 사람 이름을 채운다`() = runBlocking {
         val api = FakeChatApi(
-            history = listOf(
-                message(id = 1, userId = 999, senderPublicId = UUID_ME, senderNickname = "성윤"),
-                message(id = 2, userId = 7, senderPublicId = "uuid-other", senderNickname = "동승자A"),
+            history = listOf(message(id = 1, publicId = UUID_ME), message(id = 2, publicId = UUID_OTHER)),
+            members = listOf(
+                memberDto(publicId = UUID_ME, nickname = "스모크일"),
+                memberDto(publicId = UUID_OTHER, nickname = "스모크이"),
             ),
         )
 
         val page = RemoteChatRepository(api, FakeChatSession()).getMessages(chatRoomId = 5)
 
-        assertEquals(listOf(true, false), page.messages.map { it.isMine })
-        assertEquals(listOf("성윤", "동승자A"), page.messages.map { it.senderName })
+        assertEquals(listOf("스모크일", "스모크이"), page.messages.map { it.senderName })
+        assertEquals(1, api.memberCalls)
+    }
+
+    // 나간 사람도 active=false 로 목록에 남는다 — 이름이 사라지면 대화가 "동승자"로 뭉개진다.
+    @Test
+    fun `방을 나간 참여자의 메시지도 이름을 유지한다`() = runBlocking {
+        val api = FakeChatApi(
+            history = listOf(message(id = 1, publicId = "uuid-gone")),
+            members = listOf(memberDto(publicId = "uuid-gone", nickname = "먼저내림", active = false)),
+        )
+
+        val page = RemoteChatRepository(api, FakeChatSession()).getMessages(chatRoomId = 5)
+
+        assertEquals("먼저내림", page.messages.single().senderName)
     }
 
     /**
-     * 로그아웃하면 학습값은 남의 것이 된다. 안 버리면 재로그인한 **다른 계정**의 화면에서
-     * 이전 사용자의 메시지가 내 말풍선으로 뜬다 — 계정 전환 시 가장 눈에 띄는 오염이다.
+     * 참여자 목록은 이름을 위한 것뿐이다. 조회가 실패해도 채팅방은 열려야 하고,
+     * **무엇보다 내 말풍선 위치가 흔들리면 안 된다** — 예전 구조에서는 여기서 판정이 무너졌다.
      */
     @Test
-    fun `로그아웃하면 학습한 내부 id 를 버린다`() = runBlocking {
-        val api = FakeChatApi(history = listOf(message(id = 1, userId = 7)))
+    fun `참여자 조회에 실패해도 메시지와 내 메시지 판정은 그대로다`() = runBlocking {
+        val api = FakeChatApi(
+            history = listOf(message(id = 1, publicId = UUID_ME)),
+            membersFailure = IllegalStateException("참여자 조회 실패"),
+        )
+
+        val page = RemoteChatRepository(api, FakeChatSession()).getMessages(chatRoomId = 5)
+
+        assertTrue("사전이 없다고 내 메시지를 놓쳤다", page.messages.single().isMine)
+        assertNull(page.messages.single().senderName)
+    }
+
+    // 사전에 없는 발신자를 폴링마다 다시 물으면 트래픽이 두 배가 된다. 한 번만 묻고 적어 둔다.
+    @Test
+    fun `못 찾은 발신자를 폴링마다 다시 조회하지 않는다`() = runBlocking {
+        val api = FakeChatApi(
+            history = listOf(message(id = 1, publicId = "uuid-ghost")),
+            members = listOf(memberDto(publicId = UUID_OTHER, nickname = "자동에이")),
+        )
+        val repository = RemoteChatRepository(api, FakeChatSession())
+
+        repository.getMessages(chatRoomId = 5)
+        val afterInitialLoad = api.memberCalls
+
+        repository.getMessagesAfter(chatRoomId = 5, cursor = 1)
+        repository.getMessagesAfter(chatRoomId = 5, cursor = 1)
+
+        assertEquals("초기 로드에서 한 번만 불러야 한다", 1, afterInitialLoad)
+        assertEquals("모르는 발신자를 폴링마다 다시 조회하고 있다", 1, api.memberCalls)
+    }
+
+    // 방에 뒤늦게 합류한 사람의 첫 메시지. 사전에 없는 발신자가 나오면 그 로드에서 한 번 다시 받는다.
+    @Test
+    fun `새 참여자가 나타나면 한 번만 재조회해 이름을 채운다`() = runBlocking {
+        val api = FakeChatApi(
+            history = listOf(message(id = 1, publicId = UUID_ME)),
+            members = listOf(memberDto(publicId = UUID_ME, nickname = "스모크일")),
+        )
+        val repository = RemoteChatRepository(api, FakeChatSession())
+        repository.getMessages(chatRoomId = 5)
+
+        // 중간 합류자가 말을 걸었다.
+        api.members = api.members + memberDto(publicId = UUID_OTHER, nickname = "늦게탄사람")
+        api.afterMessages = listOf(message(id = 2, publicId = UUID_OTHER))
+
+        val fresh = repository.getMessagesAfter(chatRoomId = 5, cursor = 1)
+        assertEquals("늦게탄사람", fresh.messages.single().senderName)
+        assertEquals(2, api.memberCalls)
+
+        // 이제 사전에 있으니 다음 폴링은 조용해야 한다.
+        repository.getMessagesAfter(chatRoomId = 5, cursor = 2)
+        assertEquals(2, api.memberCalls)
+    }
+
+    /**
+     * 계정이 바뀌면 참여자 캐시는 남의 것이다. 캐시를 버리는지 확인하려면 **캐시에만 있는 이름**이
+     * 사라지는지 봐야 한다(isMine 은 이제 캐시와 무관하게 세션 uuid 로 판정되므로 근거가 못 된다).
+     */
+    @Test
+    fun `계정이 바뀌면 참여자 캐시를 버린다`() = runBlocking {
+        val api = FakeChatApi(
+            history = listOf(message(id = 1, publicId = UUID_ME)),
+            members = listOf(memberDto(publicId = UUID_ME, nickname = "스모크일")),
+        )
         val session = FakeChatSession()
         val repository = RemoteChatRepository(api, session)
 
-        repository.sendMessage(chatRoomId = 5, content = "안녕")
-        assertTrue(repository.getMessages(chatRoomId = 5).messages.single().isMine)
+        val first = repository.getMessages(chatRoomId = 5).messages.single()
+        assertTrue(first.isMine)
+        assertEquals("스모크일", first.senderName)
 
+        // 로그아웃: 캐시를 쓰지 않고, 그 계정의 메시지도 더는 내 것이 아니다.
         session.state.value = AuthState.Unauthenticated
-        assertFalse(repository.getMessages(chatRoomId = 5).messages.single().isMine)
+        api.membersFailure = IllegalStateException("401")
+        val loggedOut = repository.getMessages(chatRoomId = 5).messages.single()
+        assertFalse(loggedOut.isMine)
+        assertNull("로그아웃 후에도 이전 계정의 참여자 캐시를 썼다", loggedOut.senderName)
 
-        // 다른 계정으로 다시 로그인해도 되살아나면 안 된다.
-        session.state.value = AuthState.Authenticated("uuid-other")
-        assertFalse(repository.getMessages(chatRoomId = 5).messages.single().isMine)
+        // 다른 계정으로 로그인해도 앞 사람의 캐시가 되살아나면 안 된다.
+        session.state.value = AuthState.Authenticated(UUID_OTHER)
+        val switched = repository.getMessages(chatRoomId = 5).messages.single()
+        assertFalse(switched.isMine)
+        assertNull(switched.senderName)
+    }
+
+    @Test
+    fun `참여자 목록을 그대로 돌려주고 나를 표시한다`() = runBlocking {
+        val api = FakeChatApi(
+            members = listOf(
+                memberDto(publicId = UUID_ME, nickname = "스모크일"),
+                memberDto(publicId = UUID_OTHER, nickname = "스모크이"),
+            ),
+        )
+
+        val members = RemoteChatRepository(api, FakeChatSession()).getChatRoomMembers(chatRoomId = 5)
+
+        assertEquals(listOf("스모크일", "스모크이"), members.map { it.nickname })
+        assertEquals(listOf(true, false), members.map { it.isMe })
+        assertEquals("서버가 안 주는 userId 가 채워졌다", listOf(null, null), members.map { it.userId })
+    }
+
+    // 목록을 이미 받아 왔으면 이어지는 메시지 조회가 그 캐시를 그대로 쓴다(중복 호출 금지).
+    @Test
+    fun `참여자를 조회해 두면 다음 메시지 조회가 캐시를 쓴다`() = runBlocking {
+        val api = FakeChatApi(
+            history = listOf(message(id = 1, publicId = UUID_OTHER)),
+            members = listOf(memberDto(publicId = UUID_OTHER, nickname = "자동에이")),
+        )
+        val repository = RemoteChatRepository(api, FakeChatSession())
+        repository.getChatRoomMembers(chatRoomId = 5)
+
+        val page = repository.getMessagesAfter(chatRoomId = 5, cursor = 0)
+
+        assertEquals("자동에이", page.messages.single().senderName)
+        assertEquals(1, api.memberCalls)
     }
 
     @Test
@@ -183,200 +293,38 @@ class RemoteChatRepositoryTest {
         assertTrue(chat.isRoomNotFound)
     }
 
-    // 여기서부터가 참여자 목록 연동의 본론이다.
-    // 학습은 "이번 세션에 내가 한 번 보냈다"가 전제라 재진입하면 다시 무너졌다.
-    // 참여자 목록은 그 전제 없이 첫 화면부터 정답을 준다.
-    @Test
-    fun `참여자 목록으로 학습 없이 첫 진입부터 내 메시지를 가린다`() = runBlocking {
-        val api = FakeChatApi(
-            history = listOf(message(id = 1, userId = MY_INTERNAL_ID), message(id = 2, userId = 9)),
-            members = listOf(
-                memberDto(userId = MY_INTERNAL_ID, publicId = UUID_ME, nickname = "성윤"),
-                memberDto(userId = 9, publicId = "uuid-other", nickname = "자동에이"),
-            ),
-        )
-
-        val page = RemoteChatRepository(api, FakeChatSession()).getMessages(chatRoomId = 5)
-
-        assertEquals(listOf(true, false), page.messages.map { it.isMine })
-        assertEquals(listOf("성윤", "자동에이"), page.messages.map { it.senderName })
-        assertEquals(1, api.memberCalls)
-    }
-
-    // 나간 사람도 active=false 로 목록에 남는다 — 이름이 사라지면 대화가 "동승자"로 뭉개진다.
-    @Test
-    fun `방을 나간 참여자의 메시지도 이름을 유지한다`() = runBlocking {
-        val api = FakeChatApi(
-            history = listOf(message(id = 1, userId = 9)),
-            members = listOf(memberDto(userId = 9, publicId = "uuid-gone", nickname = "먼저내림", active = false)),
-        )
-
-        val page = RemoteChatRepository(api, FakeChatSession()).getMessages(chatRoomId = 5)
-
-        assertEquals("먼저내림", page.messages.single().senderName)
-    }
-
-    // 참여자 목록은 표시를 좋게 할 뿐이다. 이것 때문에 채팅방이 안 열리면 안 된다.
-    @Test
-    fun `참여자 조회에 실패해도 메시지는 그대로 오고 학습 폴백이 남는다`() = runBlocking {
-        val api = FakeChatApi(
-            history = listOf(message(id = 1, userId = MY_INTERNAL_ID)),
-            membersFailure = IllegalStateException("참여자 조회 실패"),
-        )
-        val repository = RemoteChatRepository(api, FakeChatSession())
-
-        val before = repository.getMessages(chatRoomId = 5)
-        assertFalse(before.messages.single().isMine)
-        assertNull(before.messages.single().senderName)
-
-        repository.sendMessage(chatRoomId = 5, content = "안녕")
-        assertTrue(repository.getMessages(chatRoomId = 5).messages.single().isMine)
-    }
-
-    // 패치 전 서버는 userId 를 안 준다 — 메시지와 이을 키가 없으니 학습으로 되돌아가야 한다.
-    @Test
-    fun `참여자에 userId 가 없으면 학습 폴백으로 판정한다`() = runBlocking {
-        val api = FakeChatApi(
-            history = listOf(message(id = 1, userId = MY_INTERNAL_ID)),
-            members = listOf(memberDto(userId = null, publicId = UUID_ME, nickname = "성윤")),
-        )
-        val repository = RemoteChatRepository(api, FakeChatSession())
-
-        assertFalse(repository.getMessages(chatRoomId = 5).messages.single().isMine)
-
-        repository.sendMessage(chatRoomId = 5, content = "안녕")
-        assertTrue(repository.getMessages(chatRoomId = 5).messages.single().isMine)
-    }
-
-    // 그 서버에서 폴링마다 참여자 목록을 다시 부르면 트래픽이 두 배가 된다.
-    // 못 찾은 발신자는 한 번만 묻고 적어 둔다.
-    @Test
-    fun `못 찾은 발신자를 폴링마다 다시 조회하지 않는다`() = runBlocking {
-        val api = FakeChatApi(
-            history = listOf(message(id = 1, userId = 9)),
-            members = listOf(memberDto(userId = null, publicId = "uuid-other", nickname = "자동에이")),
-        )
-        val repository = RemoteChatRepository(api, FakeChatSession())
-
-        repository.getMessages(chatRoomId = 5)
-        val afterInitialLoad = api.memberCalls
-
-        repository.getMessagesAfter(chatRoomId = 5, cursor = 1)
-        repository.getMessagesAfter(chatRoomId = 5, cursor = 1)
-
-        assertEquals("초기 로드에서 한 번만 불러야 한다", 1, afterInitialLoad)
-        assertEquals("모르는 발신자를 폴링마다 다시 조회하고 있다", 1, api.memberCalls)
-    }
-
-    // 방에 뒤늦게 합류한 사람의 첫 메시지. 사전에 없는 발신자가 나오면 그 로드에서 한 번 다시 받는다.
-    @Test
-    fun `새 참여자가 나타나면 한 번만 재조회해 이름을 채운다`() = runBlocking {
-        val api = FakeChatApi(
-            history = listOf(message(id = 1, userId = MY_INTERNAL_ID)),
-            members = listOf(memberDto(userId = MY_INTERNAL_ID, publicId = UUID_ME, nickname = "성윤")),
-        )
-        val repository = RemoteChatRepository(api, FakeChatSession())
-        repository.getMessages(chatRoomId = 5)
-
-        // 중간 합류자가 말을 걸었다.
-        api.members = api.members + memberDto(userId = 9, publicId = "uuid-other", nickname = "늦게탄사람")
-        api.afterMessages = listOf(message(id = 2, userId = 9))
-
-        val fresh = repository.getMessagesAfter(chatRoomId = 5, cursor = 1)
-        assertEquals("늦게탄사람", fresh.messages.single().senderName)
-        assertEquals(2, api.memberCalls)
-
-        // 이제 사전에 있으니 다음 폴링은 조용해야 한다.
-        repository.getMessagesAfter(chatRoomId = 5, cursor = 2)
-        assertEquals(2, api.memberCalls)
-    }
-
-    // 계정이 바뀌면 참여자 캐시는 남의 것이다. 안 버리면 이전 사용자의 메시지가 내 말풍선으로 뜬다.
-    @Test
-    fun `계정이 바뀌면 참여자 캐시를 버린다`() = runBlocking {
-        val api = FakeChatApi(
-            history = listOf(message(id = 1, userId = MY_INTERNAL_ID)),
-            members = listOf(memberDto(userId = MY_INTERNAL_ID, publicId = UUID_ME, nickname = "성윤")),
-        )
-        val session = FakeChatSession()
-        val repository = RemoteChatRepository(api, session)
-        assertTrue(repository.getMessages(chatRoomId = 5).messages.single().isMine)
-
-        session.state.value = AuthState.Unauthenticated
-        // 로그아웃 상태에서는 캐시를 쓰지 않는다(참여자 조회도 401 이 정상이라 실패로 둔다).
-        assertFalse(repository.getMessages(chatRoomId = 5).messages.single().isMine)
-
-        // 다른 계정으로 다시 로그인하면 그 계정 기준으로 다시 받아 판정한다.
-        session.state.value = AuthState.Authenticated("uuid-other")
-        assertFalse(repository.getMessages(chatRoomId = 5).messages.single().isMine)
-    }
-
-    @Test
-    fun `참여자 목록은 userId 가 없는 참여자까지 그대로 돌려준다`() = runBlocking {
-        val api = FakeChatApi(
-            members = listOf(
-                memberDto(userId = MY_INTERNAL_ID, publicId = UUID_ME, nickname = "성윤"),
-                memberDto(userId = null, publicId = "uuid-other", nickname = "자동에이"),
-            ),
-        )
-
-        val members = RemoteChatRepository(api, FakeChatSession()).getChatRoomMembers(chatRoomId = 5)
-
-        assertEquals(listOf("성윤", "자동에이"), members.map { it.nickname })
-        assertEquals(listOf(true, false), members.map { it.isMe })
-    }
-
-    // 목록을 이미 받아 왔으면 이어지는 메시지 조회가 그 캐시를 그대로 쓴다(중복 호출 금지).
-    @Test
-    fun `참여자를 조회해 두면 다음 메시지 조회가 캐시를 쓴다`() = runBlocking {
-        val api = FakeChatApi(
-            history = listOf(message(id = 1, userId = 9)),
-            members = listOf(memberDto(userId = 9, publicId = "uuid-other", nickname = "자동에이")),
-        )
-        val repository = RemoteChatRepository(api, FakeChatSession())
-        repository.getChatRoomMembers(chatRoomId = 5)
-
-        val page = repository.getMessagesAfter(chatRoomId = 5, cursor = 0)
-
-        assertEquals("자동에이", page.messages.single().senderName)
-        assertEquals(1, api.memberCalls)
-    }
-
     private fun httpException(code: Int, body: String) = HttpException(
         Response.error<Any>(code, body.toResponseBody("application/json".toMediaType())),
     )
 }
 
 private const val UUID_ME = "uuid-me"
-private const val MY_INTERNAL_ID = 7L
+private const val UUID_OTHER = "uuid-other"
 
 private fun memberDto(
-    userId: Long?,
     publicId: String,
     nickname: String,
     active: Boolean = true,
 ) = ChatMemberResponse(
-    userId = userId,
     publicId = publicId,
     nickname = nickname,
     imageUrl = null,
     active = active,
 )
 
+// 배포 서버 실측 shape: userId 없이 publicId 로 발신자를 밝힌다.
 private fun message(
     id: Long,
-    userId: Long,
-    senderPublicId: String? = null,
+    publicId: String,
     senderNickname: String? = null,
 ) = ChatMessageResponse(
     id = id,
     chatRoomId = 5,
-    userId = userId,
+    publicId = publicId,
     content = "본문 $id",
     type = "TEXT",
     createdAt = "2026-09-07T09:0$id:00Z",
     deleted = false,
-    senderPublicId = senderPublicId,
     senderNickname = senderNickname,
 )
 
@@ -395,9 +343,9 @@ private class FakeChatApi(
     private val memberships: List<Long> = emptyList(),
     private val brokenRoomIds: Set<Long> = emptySet(),
     private val failure: Throwable? = null,
-    // 참여자 목록은 테스트 도중 바뀔 수 있다(중간 합류자). var 로 두고 갈아 끼운다.
+    // 참여자 목록은 테스트 도중 바뀔 수 있다(중간 합류자·로그아웃). var 로 두고 갈아 끼운다.
     var members: List<ChatMemberResponse> = emptyList(),
-    private val membersFailure: Throwable? = null,
+    var membersFailure: Throwable? = null,
 ) : ChatApi {
 
     // 재조회가 정말 "한 번만" 일어나는지 세려면 호출 횟수가 필요하다.
@@ -467,12 +415,12 @@ private class FakeChatApi(
         return ChatMessageSliceResponse(messages = afterMessages ?: history, nextCursor = null, hasNext = false)
     }
 
-    // 서버는 전송자의 내부 PK 를 응답에 담아 준다 — 앱이 "나"를 학습하는 유일한 창구다.
+    // 서버는 전송 응답에도 발신자 publicId 를 담아 준다 — 조회와 같은 shape 이다.
     override suspend fun sendMessage(chatRoomId: Long, request: SendMessageRequestDto): ChatMessageResponse {
         failIfNeeded()
         sentRoomId = chatRoomId
         sentBody = request
-        return message(id = 99, userId = MY_INTERNAL_ID).copy(content = request.content)
+        return message(id = 99, publicId = UUID_ME).copy(content = request.content)
     }
 
     override suspend fun deleteMessage(chatRoomId: Long, messageId: Long) = failIfNeeded() ?: Unit

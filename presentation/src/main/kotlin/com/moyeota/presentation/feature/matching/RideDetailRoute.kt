@@ -15,6 +15,8 @@ import com.moyeota.domain.repository.RideRepository
 import com.moyeota.presentation.core.BackStateScaffold
 import com.moyeota.presentation.core.ErrorBox
 import com.moyeota.presentation.core.LoadingBox
+import com.moyeota.presentation.core.location.rememberMyLocationState
+import com.moyeota.presentation.core.pickupDistanceMeters
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -100,6 +102,9 @@ fun RideDetailRoute(
     val state by viewModel.uiState.collectAsState()
     val left by viewModel.left.collectAsState()
 
+    // 「내 위치에서 약 N m」용 좌표. 20 합류 확인과 같은 이유로 권한을 자동 요청하지 않는다.
+    val myLocation = rememberMyLocationState(autoRequestPermission = false)
+
     LaunchedEffect(left) {
         if (left) onLeave()
     }
@@ -114,6 +119,7 @@ fun RideDetailRoute(
         }
         is RideDetailViewModel.UiState.Success -> RideDetailScreen(
             ride = current.ride,
+            pickupDistanceMeters = pickupDistanceMeters(current.ride, myLocation.coordinates),
             onBack = onBack,
             onPartnerClick = onPartnerClick,
             onLeave = viewModel::leave, // 나가기 성공 후 onLeave 로 화면 전환

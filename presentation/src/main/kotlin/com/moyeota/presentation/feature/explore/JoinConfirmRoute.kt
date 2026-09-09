@@ -15,6 +15,8 @@ import com.moyeota.domain.repository.RideRepository
 import com.moyeota.presentation.core.BackStateScaffold
 import com.moyeota.presentation.core.ErrorBox
 import com.moyeota.presentation.core.LoadingBox
+import com.moyeota.presentation.core.location.rememberMyLocationState
+import com.moyeota.presentation.core.pickupDistanceMeters
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -110,6 +112,10 @@ fun JoinConfirmRoute(
     val state by viewModel.uiState.collectAsState()
     val join by viewModel.joinState.collectAsState()
 
+    // 「내 위치에서 약 N m」용 좌표. 권한을 자동 요청하지 않는다 — 합류 판단에 꼭 필요한 값이 아니라
+    // 여기서 다이얼로그를 띄우면 흐름을 끊는다. 이미 허용돼 있으면(14·17 에서) 거리 줄이 뜬다.
+    val myLocation = rememberMyLocationState(autoRequestPermission = false)
+
     LaunchedEffect(join.joinedRide) {
         join.joinedRide?.let(onJoined)
     }
@@ -124,6 +130,7 @@ fun JoinConfirmRoute(
         }
         is JoinConfirmViewModel.UiState.Success -> JoinConfirmScreen(
             ride = current.ride,
+            pickupDistanceMeters = pickupDistanceMeters(current.ride, myLocation.coordinates),
             joining = join.joining,
             joinErrorMessage = join.errorMessage,
             onDismiss = onDismiss,

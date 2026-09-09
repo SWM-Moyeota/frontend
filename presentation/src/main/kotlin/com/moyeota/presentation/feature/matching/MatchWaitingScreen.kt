@@ -63,6 +63,7 @@ import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.model.User
 import com.moyeota.presentation.core.MeBadge
+import com.moyeota.presentation.core.OpenChatButton
 import com.moyeota.presentation.core.location.UserCoordinates
 import com.moyeota.presentation.core.MemberAvatar
 import com.moyeota.presentation.core.displayNickname
@@ -105,6 +106,8 @@ private val waitingRideDummy = Ride(
  *   실패하는 버튼이 된다 — 그래서 status 를 보고 **즉시** 버튼을 비활성 문구로 바꾸고,
  *   뒤로가기는 방을 유지한 채 홈으로만 보낸다([onExitKeepingParty]).
  * - 카드 탭 → 22 탑승 상세 (onCardClick)
+ * - 「채팅 열기」 → 24 채팅방(독립 목적지, 뒤로가기로 여기 복귀) — [onOpenChat] 이 null 이 아닐 때만 그린다.
+ *   채팅방은 **정원이 찬 뒤에** 생기므로 모집 중에는 대개 null 이다. 눌러도 열 것이 없는 버튼을 두지 않는다.
  * - 매칭 성사(서버 status 전이) → 25 배차 현황 — 화면이 아니라 Route 가 관찰해 넘긴다
  * - 매칭 조건·탐색 반경은 **읽기 전용**이다. 방을 만들 때(16) 정해진 값이고 바꾸는 API 도 없다 —
  *   방장 개념이 사라진 뒤로 「누가 조건을 고치는가」에 답이 없어졌다. 눌러도 아무 일 없는
@@ -138,6 +141,8 @@ fun MatchWaitingScreen(
     /** 방을 **유지한 채** 화면만 벗어난다. 나가기가 막힌 단계의 뒤로가기가 여기로 온다 */
     onExitKeepingParty: () -> Unit = {},
     onCardClick: () -> Unit = {},
+    /** 이 방의 채팅방을 연다. **채팅방이 아직 없으면 null** — 버튼 자체를 그리지 않는다 */
+    onOpenChat: (() -> Unit)? = null,
 ) {
     // 나가기 확인 다이얼로그. 화면 안에서만 쓰는 UI 상태라 ViewModel 로 올리지 않는다
     // (12 마이페이지의 로그아웃 확인과 같은 패턴).
@@ -200,9 +205,10 @@ fun MatchWaitingScreen(
             // 16 보다 지도를 더 남긴다. 21 의 펼침 콘텐츠(안내 · 모인 사람 · 조건 카드)는
             // 16 의 매칭 조건 카드보다 짧아서, 16 과 같은 160dp 로 두면 상세 영역이 남아
             // 조건 카드와 「그만 찾기」 사이가 휑하게 빈다. 남는 만큼 지도에 준다.
-            // 조건 카드 아래 안내 한 줄이 늘면서 상세 콘텐츠가 그만큼 길어졌다 —
-            // 안내가 펼침 상태에서 잘리지 않도록 지도 몫을 조금 돌려준다.
-            mapRevealHeight = 216.dp,
+            // 상세 콘텐츠(안내 배너 · 모인 사람 N줄 · 조건 카드 4줄 · 안내 문구)가 멤버가 늘수록
+            // 길어진다. 실기에서 2명일 때 「탐색 반경」 줄과 안내 문구가 잘려 나가는 것을 확인해
+            // 16 과 같은 160dp 로 되돌렸다 — 펼침은 정보를 보는 상태이고, 지도는 접힘이 맡는다.
+            mapRevealHeight = 160.dp,
             // 접힘 = 핸들 + 헤드라인 + 인원 문구 + 진행바 + 「그만 찾기」
             collapsedSheetHeight = 196.dp,
             background = { sheet ->
@@ -334,6 +340,16 @@ fun MatchWaitingScreen(
                         Spacer(Modifier.height(14.dp))
                     }
 
+                    // 조건이 왜 고정인지 한 줄로. **카드 위**에 둔다 — 멤버가 늘면 상세 영역이
+                    // 스크롤되는데, 아래에 두면 이 설명이 가장 먼저 화면 밖으로 나가 「수정 버튼이
+                    // 왜 없지」에 답할 기회를 잃는다. 접힘 상태에서는 상세 영역째 사라진다.
+                    Text(
+                        text = "매칭 조건은 방을 만들 때 정해지고 찾는 중엔 바꿀 수 없어요",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = GrayAsh,
+                    )
+                    Spacer(Modifier.height(8.dp))
                     // 조건 카드 — 탭 시 22 탑승 상세
                     Column(
                         modifier = Modifier
@@ -351,17 +367,6 @@ fun MatchWaitingScreen(
                         HorizontalDivider(color = DividerGray)
                         ConditionRow(label = "탐색 반경", value = radiusLabel)
                     }
-                    Spacer(Modifier.height(10.dp))
-                    // 조건이 왜 고정인지 한 줄로. 접힘 상태에서는 상세 영역이 통째로 숨으므로
-                    // 이 문구도 함께 사라진다 — 접힘은 「진행 상황」만 보는 상태다.
-                    Text(
-                        text = "매칭 조건은 방을 만들 때 정해지고 찾는 중엔 바꿀 수 없어요",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = GrayAsh,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
                     Spacer(Modifier.height(16.dp))
                 }
             },
@@ -372,6 +377,16 @@ fun MatchWaitingScreen(
                         text = actionErrorMessage,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
                     )
+                }
+
+                // 채팅방이 생긴 뒤에만 뜬다. 채팅 **탭**이 아니라 채팅방을 스택에 쌓아 열기 때문에
+                // 뒤로가기 한 번이면 이 대기 화면으로 돌아온다.
+                if (onOpenChat != null) {
+                    OpenChatButton(
+                        onClick = onOpenChat,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                    )
+                    Spacer(Modifier.height(8.dp))
                 }
 
                 // 남은 액션은 나가기 하나뿐 — 매칭 시작·준비 버튼은 도메인에서 사라졌다.
