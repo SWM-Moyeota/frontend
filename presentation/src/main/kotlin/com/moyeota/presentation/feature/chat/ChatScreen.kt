@@ -96,6 +96,8 @@ private val DummyMessages = listOf(
  *
  * 유효값: 메시지 1~500자, 공백만 입력 시 전송 비활성.
  */
+// 파라미터 기본값(방 제목·부제·더미 대화)은 **Preview 전용**이다.
+// 실제 진입(ChatRoute)은 서버 ChatRoom 의 출발지 → 목적지와 조회한 메시지를 항상 넘긴다.
 @Composable
 fun ChatScreen(
     roomTitle: String = "서면역 동승",
