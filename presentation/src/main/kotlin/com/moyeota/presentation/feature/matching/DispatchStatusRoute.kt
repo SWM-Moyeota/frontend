@@ -107,9 +107,12 @@ class DispatchStatusViewModel(
                 if (latest != null) _uiState.value = UiState.Success(latest)
                 loadDriverIfAssigned(latest ?: previous)
                 if (markStartedIfInRide(latest)) return
-                // 조회 주체는 Bearer 토큰이 정한다 — memberId 를 넘기지 않는다 (22 보고서 §2)
-                runCatching { dispatchRepository.getDriverLocation(partyId) }
-                    .onSuccess { _driverLocation.value = it }
+                // 기사 위치는 배정된 뒤에만 묻는다 — 배정 전 호출은 서버가 DRIVER_NOT_ASSIGNED 로 거절하며
+                // 폴링 주기마다 서버 WARN 로그만 쌓는다. 조회 주체는 Bearer 토큰이 정한다(22 보고서 §2).
+                if ((latest ?: previous)?.driverId != null) {
+                    runCatching { dispatchRepository.getDriverLocation(partyId) }
+                        .onSuccess { _driverLocation.value = it }
+                }
                 delay(DRIVER_POLL_INTERVAL_MS)
             }
         } finally {
