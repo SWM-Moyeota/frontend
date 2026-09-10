@@ -22,6 +22,7 @@ import com.moyeota.domain.repository.RideRepository
 import com.moyeota.presentation.core.BackStateScaffold
 import com.moyeota.presentation.core.ErrorBox
 import com.moyeota.presentation.core.LoadingBox
+import com.moyeota.presentation.core.location.rememberMyLocationState
 import com.moyeota.core.designsystem.component.latLngOrNull
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -189,8 +190,12 @@ fun DispatchStatusRoute(
     /** 이 방의 채팅방을 여는 길. 채팅방이 아직 없으면 null — 화면이 버튼을 그리지 않는다 */
     onOpenChat: (() -> Unit)? = null,
 ) {
+    // 내 현재 위치 — 25c·25 지도의 파란 점. 권한 다이얼로그는 새로 띄우지 않는다(배차 흐름을 끊지 않게,
+    // 26 RideOngoingRoute 와 같은 이유). 15~19 에서 이미 허용한 사용자라면 점이 뜨고, 아니면 마커만 그린다.
+    val myLocation = rememberMyLocationState(autoRequestPermission = false)
+
     if (partyId == null) {
-        DispatchStatusScreen(onOpenChat = onOpenChat, onBack = onBack)
+        DispatchStatusScreen(myLocation = myLocation.coordinates, onOpenChat = onOpenChat, onBack = onBack)
         return
     }
 
@@ -241,6 +246,8 @@ fun DispatchStatusRoute(
                 !assignedSeen -> DriverAssignedScreen(
                     ride = ride,
                     driver = driver,
+                    driverLocation = driverLocation,
+                    myLocation = myLocation.coordinates,
                     pickupEtaMinutes = pickupEtaMinutes(
                         pickupDistanceMeters(ride, driverLocation),
                     ),
@@ -252,6 +259,7 @@ fun DispatchStatusRoute(
                     ride = current.ride,
                     driver = driver,
                     driverLocation = driverLocation,
+                    myLocation = myLocation.coordinates,
                     onOpenChat = onOpenChat,
                     onBack = onBack,
                 )

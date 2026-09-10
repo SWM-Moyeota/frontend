@@ -2,6 +2,7 @@ package com.moyeota.presentation.feature.matching
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -16,6 +17,10 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -32,14 +37,21 @@ import com.moyeota.core.designsystem.component.NoticeBanner
 import com.moyeota.core.designsystem.component.NoticeKind
 import com.moyeota.core.designsystem.component.PrimaryCtaButton
 import com.moyeota.core.designsystem.component.RadarSearchArea
+import com.moyeota.core.designsystem.component.MoyeotaDefaultCamera
+import com.moyeota.core.designsystem.component.RouteMapView
+import com.moyeota.core.designsystem.component.fitMapCamera
+import com.moyeota.core.designsystem.component.latLngOrNull
 import com.moyeota.core.designsystem.component.SheetHandle
 import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.domain.model.AssignedDriver
+import com.moyeota.domain.model.DriverLocation
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.model.User
 import com.moyeota.presentation.core.OpenChatButton
+import com.moyeota.presentation.core.location.UserCoordinates
+import com.naver.maps.geometry.LatLng
 import kotlin.math.roundToInt
 
 // 와이어프레임 그레이 (core token 미정의 색 — 화면 재현용)
@@ -179,6 +191,10 @@ fun DriverSearchFailedScreen(
 fun DriverAssignedScreen(
     ride: Ride = stageRideDummy,
     driver: AssignedDriver? = null,
+    /** 폴링으로 갱신되는 기사 위치. 아직 보고 전이면 null — 마커 없이 탑승지·내 위치만 그린다 */
+    driverLocation: DriverLocation? = null,
+    /** 내 실위치. 권한이 없거나 fix 전이면 null */
+    myLocation: UserCoordinates? = null,
     pickupEtaMinutes: Int? = null,
     onSeeDispatch: () -> Unit = {},
     /** 이 방의 채팅방을 연다(독립 목적지 push). 아직 방이 없으면 null */
@@ -186,17 +202,12 @@ fun DriverAssignedScreen(
     onBack: () -> Unit = {},
 ) {
     StageScaffold(title = "배정 완료", onBack = onBack) {
-        Box(
-            modifier = Modifier.fillMaxWidth().height(200.dp).background(StageCanvasBg),
-            contentAlignment = Alignment.Center,
-        ) {
-            Box(
-                modifier = Modifier.size(96.dp).background(StageChipBg, RoundedCornerShape(48.dp)),
-                contentAlignment = Alignment.Center,
-            ) {
-                CarIcon(modifier = Modifier.size(width = 56.dp, height = 34.dp))
-            }
-        }
+        PickupMap(
+            modifier = Modifier.fillMaxWidth().height(PickupMapHeightDp.dp),
+            pickupPosition = latLngOrNull(ride.originLat, ride.originLng),
+            driverPosition = latLngOrNull(driverLocation?.latitude, driverLocation?.longitude),
+            myPosition = latLngOrNull(myLocation?.latitude, myLocation?.longitude),
+        )
 
         StageSheet {
             Text(
@@ -272,6 +283,55 @@ fun DriverAssignedScreen(
         }
     }
 }
+
+/** 25c 상단 지도 높이(dp). 시트(차량 카드·요약 카드·CTA)가 아래에 다 들어가는 선에서 최대 */
+private const val PickupMapHeightDp = 220
+
+/**
+ * 25c 상단 지도 — **탑승지 · 기사님 · 내 위치** 세 점. 도착지·경로는 그리지 않는다(21 에서 이미 봤고,
+ * 이 단계의 관심은 "기사님이 어디쯤 오고 있고 나는 탑승지에서 얼마나 떨어져 있나"뿐이다).
+ *
+ * 카메라는 **점이 새로 생길 때만** 다시 맞춘다. 기사 위치는 폴링마다, 내 위치는 1초마다 바뀌는데
+ * 그때마다 fit 을 다시 걸면 지도를 볼 수가 없다(26 RideOngoingMap 과 같은 이유). 그래서
+ * "어떤 점들이 있는가"(있음/없음 조합)를 키로 삼아 — 탑승지만 → 기사 등장 → 내 위치 등장 —
+ * 최대 세 번만 카메라를 옮기고, 그 뒤 마커는 자리를 옮겨도 카메라는 그대로 둔다.
+ *
+ * 점이 하나뿐이면 fit 을 구할 수 없어 그 점을 중심으로 동네 단위 줌을 쓴다.
+ */
+@Composable
+private fun PickupMap(
+    modifier: Modifier = Modifier,
+    pickupPosition: LatLng?,
+    driverPosition: LatLng?,
+    myPosition: LatLng?,
+) {
+    BoxWithConstraints(modifier = modifier.background(StageCanvasBg)) {
+        val widthDp = maxWidth.value
+        val heightDp = maxHeight.value
+        val availability = Triple(pickupPosition != null, driverPosition != null, myPosition != null)
+        // 같은 조합이 유지되는 동안은 처음 구한 카메라를 붙든다 (좌표 갱신은 마커만 움직인다)
+        var camera by remember { mutableStateOf<Pair<LatLng, Double>?>(null) }
+        var fittedFor by remember { mutableStateOf<Triple<Boolean, Boolean, Boolean>?>(null) }
+        if (fittedFor != availability) {
+            val points = listOfNotNull(pickupPosition, driverPosition, myPosition)
+            camera = fitMapCamera(points, widthDp, heightDp)
+                ?: points.firstOrNull()?.let { it to SinglePointZoom }
+            fittedFor = availability
+        }
+        val fitted = camera
+        RouteMapView(
+            modifier = Modifier.fillMaxSize(),
+            originPosition = pickupPosition,
+            driverPosition = driverPosition,
+            myPosition = myPosition,
+            center = fitted?.first ?: (pickupPosition ?: driverPosition ?: myPosition ?: MoyeotaDefaultCamera),
+            zoom = fitted?.second ?: SinglePointZoom,
+        )
+    }
+}
+
+/** 점이 하나뿐일 때의 줌 — 동네 단위가 보이는 수준 (26 의 MyLocationZoom 과 같은 값) */
+private const val SinglePointZoom = 15.0
 
 /**
  * 기사 위치 → 탑승지 **직선거리**로 어림한 도착 예정(분). 좌표가 없으면 null.

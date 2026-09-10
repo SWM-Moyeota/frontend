@@ -463,14 +463,6 @@ fun DestinationConfirmModal(
                         }
 
                         Spacer(Modifier.height(16.dp))
-                        Text(
-                            text = "설정한 출발지 · 도착지 반경 안의 탑승만 18 합승 리스트에 보여요",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = GrayAsh,
-                            modifier = Modifier.align(Alignment.CenterHorizontally),
-                        )
-                        Spacer(Modifier.height(16.dp))
 
                     }
                 },
@@ -480,9 +472,9 @@ fun DestinationConfirmModal(
                     Text(
                         text = when {
                             routePreview.loading -> "예상 요금 계산 중이에요"
-                            farePerPersonText != null ->
-                                "예상 요금 1인 ${farePerPersonText}원 · 인원이 확정되면 요금도 확정돼요"
-                            else -> "예상 요금 — · 방을 만들면 요금이 확정돼요"
+                            // 뒤에 붙던 설명 문구(「인원이 확정되면…」)는 뺐다 — 한 줄 안내는 금액만으로 충분하다
+                            farePerPersonText != null -> "예상 요금 1인 ${farePerPersonText}원"
+                            else -> "예상 요금 —"
                         },
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Medium,

@@ -50,6 +50,7 @@ import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.model.User
 import com.moyeota.presentation.core.OpenChatButton
 import com.moyeota.presentation.core.displayNickname
+import com.moyeota.presentation.core.location.UserCoordinates
 
 // 와이어프레임 그레이 (core token 미정의 색 — 화면 재현용)
 private val CanvasBg = Color(0xFFF5F7FA)
@@ -100,6 +101,8 @@ fun DispatchStatusScreen(
     ride: Ride = dispatchRideDummy,
     driver: AssignedDriver? = null,
     driverLocation: DriverLocation? = null,
+    /** 내 실위치. 지도에 파란 점으로만 얹는다 — 없으면(권한 없음·fix 전) 점 없이 마커만 */
+    myLocation: UserCoordinates? = null,
     /** 이 방의 채팅방을 연다. 아직 방이 없으면 null — 버튼 자체를 그리지 않는다 */
     onOpenChat: (() -> Unit)? = null,
     onBack: () -> Unit = {}, // 미연결 (배차 후 되돌리기 차단 권장)
@@ -155,6 +158,7 @@ fun DispatchStatusScreen(
             driverPosition = driverPosition, // 범위를 벗어난 좌표면 null → 마커 미표시
             originPosition = latLngOrNull(ride.originLat, ride.originLng),
             destinationPosition = latLngOrNull(ride.destinationLat, ride.destinationLng),
+            myPosition = latLngOrNull(myLocation?.latitude, myLocation?.longitude),
         )
 
         // 바텀시트
