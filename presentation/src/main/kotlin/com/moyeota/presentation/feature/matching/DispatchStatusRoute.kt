@@ -110,7 +110,7 @@ class DispatchStatusViewModel(
                 if (markStartedIfInRide(latest)) return
                 // 기사 위치는 배정된 뒤에만 묻는다 — 배정 전 호출은 서버가 DRIVER_NOT_ASSIGNED 로 거절하며
                 // 폴링 주기마다 서버 WARN 로그만 쌓는다. 조회 주체는 Bearer 토큰이 정한다(22 보고서 §2).
-                if ((latest ?: previous)?.driverId != null) {
+                if (shouldFetchDriverLocation(latest ?: previous)) {
                     runCatching { dispatchRepository.getDriverLocation(partyId) }
                         .onSuccess { _driverLocation.value = it }
                 }
@@ -121,11 +121,10 @@ class DispatchStatusViewModel(
         }
     }
 
-    // 기사 미배정(taxiDriverId == null)이면 서버가 거절하므로, 배차된 상태에서만 호출한다.
+    // 기사 미배정(taxiDriverId == null)이면 서버가 거절하므로, 배정된 뒤에만 호출한다.
     // 이미 받아온 뒤에는 다시 부르지 않는다 — 차량 정보는 배차 동안 바뀌지 않는다.
     private suspend fun loadDriverIfAssigned(ride: Ride?) {
-        if (_driver.value != null) return
-        if (ride == null || ride.status !in DRIVER_ASSIGNED_STATUSES) return
+        if (!shouldFetchDriverInfo(ride, alreadyLoaded = _driver.value != null)) return
         runCatching { rideRepository.getAssignedDriver(partyId) }
             .onSuccess { _driver.value = it }
     }
@@ -142,9 +141,6 @@ class DispatchStatusViewModel(
     }
 
     companion object {
-        // 서버 DRIVER_ASSIGNED → DISPATCHING, IN_RIDE → ONGOING 으로 매핑된다
-        private val DRIVER_ASSIGNED_STATUSES = setOf(RideStatus.DISPATCHING, RideStatus.ONGOING)
-
         fun factory(
             rideRepository: RideRepository,
             dispatchRepository: DispatchRepository,
@@ -267,6 +263,22 @@ fun DispatchStatusRoute(
         }
     }
 }
+
+/**
+ * 기사 **정보**(`GET /matching/rooms/{id}/driver`)를 물어도 되는가.
+ *
+ * 판정 기준은 **[Ride.driverId] 하나**다. status 로 가르면 안 된다 — 서버 `MATCHING`(기사 없음)과
+ * `DRIVER_ASSIGNED`(기사 있음)가 앱에서는 둘 다 [RideStatus.DISPATCHING] 으로 접히기 때문에,
+ * status 만 보면 「기사 찾는 중」에도 참이 되어 5초마다 서버가 `DRIVER_NOT_ASSIGNED` 409 를 던지고
+ * WARN 로그를 쌓는다(실제로 있었던 결함 — 위치 조회만 driverId 로 막고 이 호출은 놓쳤었다).
+ *
+ * @param alreadyLoaded 이미 받아온 뒤면 다시 묻지 않는다 — 차량 정보는 배차 동안 바뀌지 않는다
+ */
+internal fun shouldFetchDriverInfo(ride: Ride?, alreadyLoaded: Boolean): Boolean =
+    !alreadyLoaded && ride?.driverId != null
+
+/** 기사 **위치**(`GET /dispatch/rides/{id}`)를 물어도 되는가. 위와 같은 이유로 [Ride.driverId] 만 본다. */
+internal fun shouldFetchDriverLocation(ride: Ride?): Boolean = ride?.driverId != null
 
 /**
  * 기사 현재 위치 → 탑승지 **직선거리**(m). 둘 중 하나라도 못 쓸 좌표면 null.
