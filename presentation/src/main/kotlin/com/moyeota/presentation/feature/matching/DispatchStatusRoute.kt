@@ -275,9 +275,13 @@ fun DispatchStatusRoute(
  * @param alreadyLoaded 이미 받아온 뒤면 다시 묻지 않는다 — 차량 정보는 배차 동안 바뀌지 않는다
  */
 internal fun shouldFetchDriverInfo(ride: Ride?, alreadyLoaded: Boolean): Boolean =
-    !alreadyLoaded && ride?.driverId != null
+    !alreadyLoaded && shouldFetchDriverLocation(ride)
 
-/** 기사 **위치**(`GET /dispatch/rides/{id}`)를 물어도 되는가. 위와 같은 이유로 [Ride.driverId] 만 본다. */
+/**
+ * 기사 **위치**(`GET /dispatch/rides/{id}`)를 물어도 되는가. 위와 같은 이유로 [Ride.driverId] 만 본다.
+ * 정보 게이트가 이 함수를 재사용하므로 "배정됨"의 정의는 **여기 한 곳**에만 있다 — 두 게이트가 따로
+ * 갈리면서 한쪽만 고쳐지는 일(이번 결함의 원인)이 다시 생기지 않게.
+ */
 internal fun shouldFetchDriverLocation(ride: Ride?): Boolean = ride?.driverId != null
 
 /**
