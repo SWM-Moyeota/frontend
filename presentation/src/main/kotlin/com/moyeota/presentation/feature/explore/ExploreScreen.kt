@@ -50,6 +50,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -602,12 +603,9 @@ private fun PartyCard(
         AvatarStack(count = ride.members.size)
         Spacer(Modifier.width(10.dp))
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(
-                text = "${ride.origin} → ${ride.destination}",
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Bold,
-                color = MoyeotaColor.InkPrimary,
-            )
+            // 출발지·목적지를 라벨 붙여 두 줄로 — 「A → B」 한 줄은 주소가 길면 어디서 갈리는지 읽기 어렵다
+            PlaceLine(label = "출발지", place = ride.origin)
+            PlaceLine(label = "목적지", place = ride.destination)
             Text(
                 text = ride.departureLabel,
                 fontSize = 12.sp,
@@ -623,6 +621,29 @@ private fun PartyCard(
         }
         Spacer(Modifier.width(8.dp))
         JoinButton(full = full, onClick = { onJoin(ride) })
+    }
+}
+
+/** 「출발지 : 장소」 한 줄. 라벨은 고정 폭이라 두 줄의 장소가 같은 x 에서 시작한다 */
+@Composable
+private fun PlaceLine(label: String, place: String) {
+    Row(verticalAlignment = Alignment.Top) {
+        Text(
+            text = "$label :",
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+            color = GrayMute,
+            modifier = Modifier.width(52.dp),
+        )
+        Text(
+            text = place,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Bold,
+            color = MoyeotaColor.InkPrimary,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
     }
 }
 
