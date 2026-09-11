@@ -84,13 +84,16 @@ internal fun chatRoomPeerTitle(members: List<ChatMember>): String {
 }
 
 /**
- * 목록 정렬 키(**내림차순** = 최근 방이 위).
+ * 목록 정렬 키(**내림차순** = 최근 방이 위) — **마지막 활동 시각**(epoch ms).
  *
- * 서버가 **마지막 메시지 시각을 주지 않아** 방 id 로 대신한다 — id 는 개설 순서라 「최근에 열린 방」
- * 까지는 맞지만 「최근에 대화한 방」은 아니다. `GET /chat-rooms/me` 에 `lastMessageAt` 이 생기면
- * **이 함수 하나만** 바꾸면 목록 전체가 따라온다(정렬 키를 호출부에 흩어 놓지 않은 이유).
+ * 마지막 메시지가 있으면 그 시각, 없으면(방금 열린 방) 방 개설 시각이다. 카카오톡식 「최근에 대화한 방」
+ * 정렬이며, 메시지가 없는 새 방은 개설 시각으로 자연스럽게 끼어든다. 두 시각 다 파싱이 안 되는
+ * 깨진 응답은 방 id 로 떨어진다(epoch 와 자릿수가 달라 맨 아래로 가지만 목록이 죽진 않는다).
  */
-internal fun chatRoomSortKey(item: MyChatRoom): Long = item.room.id
+internal fun chatRoomSortKey(item: MyChatRoom): Long {
+    val stamp = item.membership.lastMessage?.createdAt?.takeIf { it.isNotBlank() } ?: item.room.createdAt
+    return stamp.toEpochMillisOrNull() ?: item.room.id
+}
 
 class ChatListViewModel(
     private val repository: ChatRepository,
@@ -560,12 +563,34 @@ private fun Throwable.toChatMessage(fallback: String): String {
     }
 }
 
+/** 서버 ISO-8601(Instant 또는 오프셋 표기) → Instant. 그 외 형식은 null. */
+private fun String.toInstantOrNull(): Instant? =
+    runCatching { Instant.parse(this) }.getOrNull()
+        ?: runCatching { OffsetDateTime.parse(this).toInstant() }.getOrNull()
+
+internal fun String.toEpochMillisOrNull(): Long? = toInstantOrNull()?.toEpochMilli()
+
+/**
+ * 채팅 **목록**의 시각 표기 — 오늘이면 `HH:mm`, 올해면 `M월 d일`, 그 전이면 `yyyy.M.d`.
+ * 말풍선([toTimeLabel])과 달리 날짜가 필요하다 — 목록에서 「17:36」만 보면 어제인지 지난주인지 모른다.
+ * 파싱이 안 되면 null(그 칸을 비운다 — 틀린 시각보다 없는 편이 낫다).
+ */
+internal fun String.toListTimeLabel(now: Instant = Instant.now(), zone: ZoneId = ZoneId.systemDefault()): String? {
+    val at = toInstantOrNull()?.atZone(zone) ?: return null
+    val today = now.atZone(zone).toLocalDate()
+    val date = at.toLocalDate()
+    return when {
+        date == today -> "%02d:%02d".format(at.hour, at.minute)
+        date.year == today.year -> "${date.monthValue}월 ${date.dayOfMonth}일"
+        else -> "${date.year}.${date.monthValue}.${date.dayOfMonth}"
+    }
+}
+
 // createdAt 은 서버가 UTC 기준으로 내려주는 ISO-8601 문자열이다.
 // 문자열을 그대로 자르면 KST 17:36 이 08:36 으로 보인다(QA 결함-3) — 기기 시간대로 변환해 HH:mm 만 쓴다.
 // 파싱할 수 없는 형식(오프셋 없는 LocalDateTime 등)이면 예전처럼 잘라 쓴다 — 화면은 살아야 한다.
 internal fun String.toTimeLabel(zone: ZoneId = ZoneId.systemDefault()): String? {
-    val instant = runCatching { Instant.parse(this) }.getOrNull()
-        ?: runCatching { OffsetDateTime.parse(this).toInstant() }.getOrNull()
+    val instant = toInstantOrNull()
     if (instant != null) {
         val local = instant.atZone(zone).toLocalTime()
         return "%02d:%02d".format(local.hour, local.minute)

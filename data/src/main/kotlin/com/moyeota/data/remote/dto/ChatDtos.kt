@@ -18,12 +18,25 @@ data class ChatRoomResponse(
 
 // GET /api/v1/chat-rooms/me → List<ChatRoomUserResult>
 // 방 이름 정보가 없다는 점에 주의(방마다 상세를 따로 조회해야 한다).
+// lastMessage 는 2026-09-11 서버 커밋(963c340)부터 실린다 — 그 전 서버는 필드가 없어 null.
 @Serializable
 data class ChatRoomUserResponse(
     val chatRoomId: Long,
     val lastReadMessageId: Long? = null,
     val notificationMuted: Boolean = false,
     val joinedAt: String? = null,
+    val lastMessage: ChatLastMessageResponse? = null,
+)
+
+// ChatRoomUserResult.LastMessage — 방의 마지막 메시지 요약. 삭제된 메시지는 서버가 content 를 치환해 준다.
+// senderPublicId 는 발신자를 못 찾으면(탈퇴) null.
+@Serializable
+data class ChatLastMessageResponse(
+    val id: Long,
+    val senderPublicId: String? = null,
+    val content: String = "",
+    val type: String = "",
+    val createdAt: String? = null,
 )
 
 // POST /api/v1/chat-rooms 요청 본문 (ChatRoomRequest)
