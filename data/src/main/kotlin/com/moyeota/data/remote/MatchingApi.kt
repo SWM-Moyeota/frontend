@@ -76,7 +76,12 @@ interface MatchingApi {
     @DELETE("api/v1/matching/leave/{partyId}")
     suspend fun leaveParty(@Path("partyId") partyId: Long)
 
-    // 기사 미배정이면 서버가 IllegalArgumentException 을 던진다(전역 예외 핸들러가 없어 500).
+    /**
+     * 200 / 404 `PARTY_NOT_FOUND`·`ASSIGNED_DRIVER_NOT_FOUND` / **409 `DRIVER_NOT_ASSIGNED`**(배정 전).
+     * 예전 주석의 「IllegalArgumentException → 500」은 옛 서버 얘기다 — 지금은 `PartyApplicationService.getAssignDriver`
+     * 가 `BusinessException(MatchingErrorCode.DRIVER_NOT_ASSIGNED)` 를 던지고 전역 핸들러가 409 로 답한다.
+     * 호출자는 배정 전에 부르지 말아야 한다([com.moyeota.presentation.feature.matching.shouldFetchDriverInfo]).
+     */
     @GET("api/v1/matching/rooms/{partyId}/driver")
     suspend fun getAssignedDriver(@Path("partyId") partyId: Long): DriverSummaryResponse
 
