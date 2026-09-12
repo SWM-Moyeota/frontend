@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
@@ -562,8 +563,15 @@ private fun ConditionRow(label: String, chips: @Composable () -> Unit) {
             fontWeight = FontWeight.Bold,
             color = MoyeotaColor.InkPrimary,
         )
-        Spacer(Modifier.weight(1f))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Spacer(Modifier.width(12.dp))
+        // 칩 행이 **남는 폭 안에서** 오른쪽 정렬된다. 예전엔 라벨 뒤 Spacer(weight) + 고정폭 칩이라
+        // 작은 폰(360dp)에서 칩 3개가 카드 밖으로 밀려 「500m」이 잘리고 선택 칩의 파란 배경이 카드
+        // 모서리를 넘어 보였다(실기 QA). 칩 자체도 좁아졌다(ConditionChip 패딩 20 → 14dp).
+        Row(
+            modifier = Modifier.weight(1f),
+            horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.End),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             chips()
         }
     }
@@ -587,7 +595,7 @@ internal fun ConditionChip(
             .clip(RoundedCornerShape(18.dp))
             .background(bg)
             .clickable { onClick() }
-            .padding(horizontal = if (wide) 28.dp else 20.dp),
+            .padding(horizontal = if (wide) 28.dp else 14.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
@@ -595,6 +603,8 @@ internal fun ConditionChip(
             fontSize = 13.sp,
             fontWeight = FontWeight.Bold,
             color = fg,
+            maxLines = 1,
+            softWrap = false,
         )
     }
 }
