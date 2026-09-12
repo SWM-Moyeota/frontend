@@ -7,6 +7,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -44,13 +45,14 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.BackArrowIcon
+import com.moyeota.core.designsystem.component.MapSheetScaffold
 import com.moyeota.core.designsystem.component.MoyeotaDefaultCamera
 import com.moyeota.core.designsystem.component.NavigationBarSpacer
 import com.moyeota.core.designsystem.component.RouteMapView
-import com.moyeota.core.designsystem.component.SheetHandle
 import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.component.latLngOrNull
 import com.moyeota.core.designsystem.theme.MoyeotaColor
@@ -134,175 +136,185 @@ fun RideOngoingScreen(
             }
         }
 
-        // 지도 — 출발·도착 마커 + 경로 + 내 위치. 크기는 기존 플레이스홀더(190dp)를 그대로 유지한다
-        RideOngoingMap(
-            modifier = Modifier.fillMaxWidth().height(190.dp),
-            originPosition = originPosition,
-            destinationPosition = destinationPosition,
-            routePath = routePath,
-            myLocation = myLocation,
-        )
-
-        // 바텀 시트
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .shadow(14.dp, RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp), spotColor = CardShadow)
-                .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
-                .background(MoyeotaColor.SurfaceCanvas),
-        ) {
-            Box(modifier = Modifier.fillMaxWidth().padding(top = 14.dp), contentAlignment = Alignment.Center) {
-                SheetHandle()
-            }
-            Spacer(Modifier.height(12.dp))
-            Text(
-                text = remainingLabel,
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold,
-                color = MoyeotaColor.InkPrimary,
-                modifier = Modifier.padding(horizontal = 16.dp),
-            )
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = arrivalLabel,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Medium,
-                color = MuteGray,
-                modifier = Modifier.padding(horizontal = 16.dp),
-            )
-
-            Spacer(Modifier.height(18.dp))
-            // 경유 순서 카드 — 진행 상황 표시 전용. 탭 동작 없음(하차는 기사가 서버에 알린다).
-            Box(
-                modifier = Modifier
-                    .padding(horizontal = 16.dp)
-                    .fillMaxWidth()
-                    .height(150.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(RouteCardBg),
-            ) {
-                // 타임라인 연결선
-                Box(
-                    Modifier
-                        .offset(x = 30.dp, y = 30.dp)
-                        .size(width = 3.dp, height = 88.dp)
-                        .background(RouteLine, RoundedCornerShape(1.5.dp)),
+        // 지도(배경) + 드래그 시트(16·21·14 와 같은 MapSheetScaffold).
+        // 펼침(기본) = 예전과 같은 지도 190dp + 남은 시간 · 경유 순서 · 안심 공유 · 신고/채팅.
+        // 핸들을 내리면 경유 순서·안심 공유 카드가 접혀 **지도가 남은 시간 줄 위까지 전부** 보인다.
+        // 신고·채팅 열기는 푸터라 접힘에서도 항상 보인다.
+        MapSheetScaffold(
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            mapRevealHeight = OngoingMapRevealHeight,
+            collapsedSheetHeight = OngoingCollapsedSheetHeight,
+            background = { sheet ->
+                RideOngoingMap(
+                    modifier = Modifier.fillMaxSize(),
+                    originPosition = originPosition,
+                    destinationPosition = destinationPosition,
+                    routePath = routePath,
+                    myLocation = myLocation,
+                    // 앵커 기준 시트 높이 — fitBounds·카메라 중심이 시트에 가리지 않는 영역을 쓰게 한다
+                    bottomInset = sheet.settledSheetHeight,
                 )
-                Column(modifier = Modifier.fillMaxSize().padding(vertical = 18.dp)) {
-                    RouteStepRow(label = "부산대 정문 · 탑승 완료", time = "6:45", state = RouteStepState.DONE)
-                    Spacer(Modifier.weight(1f))
-                    RouteStepRow(label = "서면역 1번 출구로 이동 중", time = "6:57", state = RouteStepState.CURRENT)
-                    Spacer(Modifier.weight(1f))
-                    RouteStepRow(label = "내린 뒤 현장에서 1/N 정산", time = null, state = RouteStepState.PENDING)
-                }
-            }
-
-            Spacer(Modifier.height(18.dp))
-            // 안심 공유 카드 — 보호자 실시간 공유 (11에서 등록·동의된 연락처에만 전송)
-            Row(
-                modifier = Modifier
-                    .padding(horizontal = 16.dp)
-                    .fillMaxWidth()
-                    .shadow(4.dp, RoundedCornerShape(16.dp), spotColor = CardShadow)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(MoyeotaColor.SurfaceCanvas)
-                    .padding(horizontal = 20.dp, vertical = 16.dp),
-                verticalAlignment = Alignment.Top,
-            ) {
-                ShieldIcon(tint = MoyeotaColor.Success500, modifier = Modifier.padding(top = 2.dp))
-                Spacer(Modifier.width(10.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "보호자에게 실시간 공유 중",
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MoyeotaColor.InkPrimary,
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = guardianLabel,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = MuteGray,
-                    )
-                }
-                Spacer(Modifier.width(10.dp))
-                // 토글 (하차·도착 확인 시 자동 종료 + 도착 알림 발송)
+            },
+            sheetTop = {
+                Text(
+                    text = remainingLabel,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MoyeotaColor.InkPrimary,
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = arrivalLabel,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MuteGray,
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
+                Spacer(Modifier.height(12.dp))
+            },
+            sheetDetail = {
+                Spacer(Modifier.height(6.dp))
+                // 경유 순서 카드 — 진행 상황 표시 전용. 탭 동작 없음(하차는 기사가 서버에 알린다).
                 Box(
                     modifier = Modifier
-                        .size(width = 46.dp, height = 26.dp)
-                        .background(
-                            if (guardianSharing) MoyeotaColor.Success500 else MoyeotaColor.TextAsh,
-                            RoundedCornerShape(13.dp),
+                        .padding(horizontal = 16.dp)
+                        .fillMaxWidth()
+                        .height(150.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(RouteCardBg),
+                ) {
+                    // 타임라인 연결선
+                    Box(
+                        Modifier
+                            .offset(x = 30.dp, y = 30.dp)
+                            .size(width = 3.dp, height = 88.dp)
+                            .background(RouteLine, RoundedCornerShape(1.5.dp)),
+                    )
+                    Column(modifier = Modifier.fillMaxSize().padding(vertical = 18.dp)) {
+                        RouteStepRow(label = "부산대 정문 · 탑승 완료", time = "6:45", state = RouteStepState.DONE)
+                        Spacer(Modifier.weight(1f))
+                        RouteStepRow(label = "서면역 1번 출구로 이동 중", time = "6:57", state = RouteStepState.CURRENT)
+                        Spacer(Modifier.weight(1f))
+                        RouteStepRow(label = "내린 뒤 현장에서 1/N 정산", time = null, state = RouteStepState.PENDING)
+                    }
+                }
+
+                Spacer(Modifier.height(18.dp))
+                // 안심 공유 카드 — 보호자 실시간 공유 (11에서 등록·동의된 연락처에만 전송)
+                Row(
+                    modifier = Modifier
+                        .padding(horizontal = 16.dp)
+                        .fillMaxWidth()
+                        .shadow(4.dp, RoundedCornerShape(16.dp), spotColor = CardShadow)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(MoyeotaColor.SurfaceCanvas)
+                        .padding(horizontal = 20.dp, vertical = 16.dp),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    ShieldIcon(tint = MoyeotaColor.Success500, modifier = Modifier.padding(top = 2.dp))
+                    Spacer(Modifier.width(10.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "보호자에게 실시간 공유 중",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MoyeotaColor.InkPrimary,
                         )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = guardianLabel,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MuteGray,
+                        )
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    // 토글 (하차·도착 확인 시 자동 종료 + 도착 알림 발송)
+                    Box(
+                        modifier = Modifier
+                            .size(width = 46.dp, height = 26.dp)
+                            .background(
+                                if (guardianSharing) MoyeotaColor.Success500 else MoyeotaColor.TextAsh,
+                                RoundedCornerShape(13.dp),
+                            )
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                            ) { guardianSharing = !guardianSharing },
+                        contentAlignment = if (guardianSharing) Alignment.CenterEnd else Alignment.CenterStart,
+                    ) {
+                        Box(
+                            Modifier
+                                .padding(horizontal = 3.dp)
+                                .size(20.dp)
+                                .background(MoyeotaColor.SurfaceCanvas, CircleShape),
+                        )
+                    }
+                }
+                Spacer(Modifier.height(18.dp))
+            },
+            sheetFooter = {
+                // 신고 안내 문구 → 27
+                Text(
+                    text = "문제가 생기면 아래에서 바로 신고할 수 있어요",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = AshGray,
+                    modifier = Modifier
+                        .align(Alignment.CenterHorizontally)
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
-                        ) { guardianSharing = !guardianSharing },
-                    contentAlignment = if (guardianSharing) Alignment.CenterEnd else Alignment.CenterStart,
-                ) {
-                    Box(
-                        Modifier
-                            .padding(horizontal = 3.dp)
-                            .size(20.dp)
-                            .background(MoyeotaColor.SurfaceCanvas, CircleShape),
-                    )
+                        ) { onReport() },
+                )
+                Spacer(Modifier.height(10.dp))
+                Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                    // 「신고」 → 27 긴급 신고
+                    Row(
+                        modifier = Modifier
+                            .size(width = 112.dp, height = 52.dp)
+                            .background(ReportBg, RoundedCornerShape(16.dp))
+                            .clickable { onReport() },
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
+                    ) {
+                        WarnTriangleIcon(tint = ReportRed)
+                        Spacer(Modifier.width(6.dp))
+                        Text(text = "신고", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = ReportRed)
+                    }
+                    Spacer(Modifier.weight(1f))
+                    // 「채팅 열기」 → 24 채팅
+                    Row(
+                        modifier = Modifier
+                            .size(width = 176.dp, height = 52.dp)
+                            .shadow(4.dp, RoundedCornerShape(16.dp), spotColor = CardShadow)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(RouteCardBg)
+                            .clickable { onOpenChat() },
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
+                    ) {
+                        ChatBubbleIcon(tint = SlateGray)
+                        Spacer(Modifier.width(7.dp))
+                        Text(text = "채팅 열기", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = SlateGray)
+                    }
                 }
-            }
-
-            Spacer(Modifier.weight(1f))
-
-            // 신고 안내 문구 → 27
-            Text(
-                text = "문제가 생기면 아래에서 바로 신고할 수 있어요",
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                color = AshGray,
-                modifier = Modifier
-                    .align(Alignment.CenterHorizontally)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                    ) { onReport() },
-            )
-            Spacer(Modifier.height(10.dp))
-            Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-                // 「신고」 → 27 긴급 신고
-                Row(
-                    modifier = Modifier
-                        .size(width = 112.dp, height = 52.dp)
-                        .background(ReportBg, RoundedCornerShape(16.dp))
-                        .clickable { onReport() },
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
-                ) {
-                    WarnTriangleIcon(tint = ReportRed)
-                    Spacer(Modifier.width(6.dp))
-                    Text(text = "신고", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = ReportRed)
-                }
-                Spacer(Modifier.weight(1f))
-                // 「채팅 열기」 → 24 채팅
-                Row(
-                    modifier = Modifier
-                        .size(width = 176.dp, height = 52.dp)
-                        .shadow(4.dp, RoundedCornerShape(16.dp), spotColor = CardShadow)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(RouteCardBg)
-                        .clickable { onOpenChat() },
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
-                ) {
-                    ChatBubbleIcon(tint = SlateGray)
-                    Spacer(Modifier.width(7.dp))
-                    Text(text = "채팅 열기", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = SlateGray)
-                }
-            }
-            Spacer(Modifier.height(14.dp))
-            NavigationBarSpacer()
-        }
+                Spacer(Modifier.height(14.dp))
+                NavigationBarSpacer()
+            },
+        )
     }
 }
+
+/** 펼친 시트 위로 남기는 지도 높이 — 예전 고정 지도(190dp)와 같다 */
+private val OngoingMapRevealHeight = 190.dp
+
+/**
+ * 접힘 높이 추정치 = 핸들(36) + 남은 시간·도착 예정(~60) + 푸터(안내 12 + 버튼 52 + 여백 40 + 내비바 ~24 ≈ 130).
+ * 앵커·카메라 계산용 추정치다(실제 높이는 콘텐츠가 정한다).
+ */
+private val OngoingCollapsedSheetHeight = 230.dp
 
 private enum class RouteStepState { DONE, CURRENT, PENDING }
 
@@ -369,6 +381,8 @@ private fun RideOngoingMap(
     destinationPosition: LatLng?,
     routePath: List<LatLng>,
     myLocation: UserCoordinates?,
+    /** 시트에 가리는 아래쪽 높이. 지도 contentPadding 으로 넘겨 fitBounds·중심이 보이는 영역 기준이 되게 한다 */
+    bottomInset: Dp = 0.dp,
 ) {
     var map by remember { mutableStateOf<NaverMap?>(null) }
     val density = LocalDensity.current
@@ -388,6 +402,7 @@ private fun RideOngoingMap(
         originPosition = originPosition,
         destinationPosition = destinationPosition,
         center = MoyeotaDefaultCamera, // 상수 — 카메라는 아래 이펙트가 움직인다 (KDoc 참고)
+        contentPadding = PaddingValues(bottom = bottomInset),
         onMapReady = { map = it },
     )
 
