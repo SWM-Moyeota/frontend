@@ -621,7 +621,12 @@ private fun MainNavHost(
                 onOpenMatching = { activeRide?.let(::navigateToStage) },
                 onOpenRideOngoing = { navController.navigate(Routes.RIDE_ONGOING) },
                 onStartLocationShare = { navController.navigate(Routes.RIDE_ONGOING) },
-                onLeaveChat = { navigateTab(MoyeotaTab.HOME) },
+                onLeaveChat = {
+                    // 나간 방 id 를 진행 화면이 들고 있으면 「채팅 열기」가 죽은 방으로 간다 — 캐시를 버린다
+                    activePartyViewModel.forgetChatRoom()
+                    navigateTab(MoyeotaTab.HOME)
+                },
+                onNotParticipant = activePartyViewModel::forgetChatRoom,
                 onTabSelect = ::navigateTab,
             )
         }
@@ -646,7 +651,12 @@ private fun MainNavHost(
                     onOpenMatching = { activeRide?.let(::navigateToStage) },
                     onOpenRideOngoing = { navController.navigate(Routes.RIDE_ONGOING) },
                     onStartLocationShare = { navController.navigate(Routes.RIDE_ONGOING) },
-                    onLeaveChat = { navigateTab(MoyeotaTab.HOME) },
+                    onLeaveChat = {
+                    // 나간 방 id 를 진행 화면이 들고 있으면 「채팅 열기」가 죽은 방으로 간다 — 캐시를 버린다
+                    activePartyViewModel.forgetChatRoom()
+                    navigateTab(MoyeotaTab.HOME)
+                },
+                onNotParticipant = activePartyViewModel::forgetChatRoom,
                     onTabSelect = ::navigateTab,
                 )
             }

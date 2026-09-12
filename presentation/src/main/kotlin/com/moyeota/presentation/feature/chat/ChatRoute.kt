@@ -160,7 +160,8 @@ class ChatRoomViewModel(
     sealed interface UiState {
         data object Loading : UiState
         data class Success(val messages: List<DomainChatMessage>) : UiState
-        data class Error(val message: String) : UiState
+        /** @param notParticipant 403 CHAT_NOT_PARTICIPANT — 이 방에 더는 참여자가 아니다(나갔거나 빠졌다). 호출자가 캐시를 버린다 */
+        data class Error(val message: String, val notParticipant: Boolean = false) : UiState
     }
 
     data class InputState(
@@ -288,7 +289,10 @@ class ChatRoomViewModel(
             } catch (e: Exception) {
                 // 이미 대화가 떠 있는데(조용한 재조회) 실패하면 화면을 에러로 갈아치우지 않는다
                 if (showLoading || _uiState.value !is UiState.Success) {
-                    _uiState.value = UiState.Error(e.toChatMessage("대화를 불러오지 못했어요"))
+                    _uiState.value = UiState.Error(
+                        message = e.toChatMessage("대화를 불러오지 못했어요"),
+                        notParticipant = (e as? ChatException)?.isNotParticipant == true,
+                    )
                 }
             }
         }
@@ -398,6 +402,8 @@ fun ChatRoute(
     onStartLocationShare: () -> Unit = {},
     onLeaveChat: () -> Unit = {},
     onTabSelect: (MoyeotaTab) -> Unit = {},
+    /** 열린 방에서 403(참여자 아님) — 진행 화면의 채팅방 id 캐시를 버리게 한다 */
+    onNotParticipant: () -> Unit = {},
 ) {
     var openedRoom by rememberSaveable(stateSaver = ChatRoomSaver) { mutableStateOf<ChatRoom?>(null) }
     // 방이 열린 상태의 시스템 뒤로가기는 탭을 빠져나가지 않고 목록으로 돌아간다 (화면 ← 와 동일)
@@ -424,6 +430,7 @@ fun ChatRoute(
                 onLeaveChat()
             },
             onTabSelect = onTabSelect,
+            onNotParticipant = onNotParticipant,
         )
     }
 }
@@ -466,6 +473,8 @@ private fun ChatRoomRoute(
     onStartLocationShare: () -> Unit,
     onLeaveChat: () -> Unit,
     onTabSelect: (MoyeotaTab) -> Unit,
+    /** 서버가 「참여자 아님」(403)을 답했다 — 호출자는 이 방 id 캐시를 버려야 한다 */
+    onNotParticipant: () -> Unit = {},
 ) {
     // 방이 바뀌어도 인스턴스는 하나다 — 방별 key 로 만들면 스토어에 쌓여 각자 폴링한다(QA 결함-2).
     val viewModel: ChatRoomViewModel = viewModel(
@@ -491,6 +500,9 @@ private fun ChatRoomRoute(
 
     LaunchedEffect(leftRoom) {
         if (leftRoom) onLeaveChat()
+    }
+    LaunchedEffect(state) {
+        if ((state as? ChatRoomViewModel.UiState.Error)?.notParticipant == true) onNotParticipant()
     }
 
     // 방 화면의 이동 수단은 뒤로가기(목록 복귀) + 하단탭 둘 다다.
@@ -523,6 +535,9 @@ private fun ChatRoomRoute(
             onBack = onBack,
             muted = muted,
             onToggleMute = viewModel::toggleMuted,
+            // 진행 중인 내 방의 채팅방에서는 「나가기」를 두지 않는다 — 서버가 나간 참여자를 되살리지 못해
+            // (chat_room_user 복합키에 leftAt 만 찍힘) 한 번 나가면 운행 내내 대화에 못 돌아온다(실기 QA)
+            canLeave = onOpenMatching == null,
             onOpenMatching = onOpenMatching,
             onOpenRideOngoing = onOpenRideOngoing,
             onStartLocationShare = onStartLocationShare,
@@ -555,6 +570,8 @@ fun ChatRoomDestinationRoute(
     onStartLocationShare: () -> Unit = {},
     onLeaveChat: () -> Unit = {},
     onTabSelect: (MoyeotaTab) -> Unit = {},
+    /** 이 방에 참여자가 아니라는 403 — 진행 화면이 들고 있던 채팅방 id 캐시를 버리게 한다 */
+    onNotParticipant: () -> Unit = {},
 ) {
     var room by rememberSaveable(stateSaver = ChatRoomSaver) { mutableStateOf<ChatRoom?>(null) }
     var failure by remember { mutableStateOf<String?>(null) }
@@ -576,6 +593,7 @@ fun ChatRoomDestinationRoute(
             room = current,
             onBack = onBack,
             onOpenMatching = onOpenMatching.takeIf { current.isActiveParty(activePartyId) },
+            onNotParticipant = onNotParticipant,
             onOpenRideOngoing = onOpenRideOngoing,
             onStartLocationShare = onStartLocationShare,
             onLeaveChat = onLeaveChat,

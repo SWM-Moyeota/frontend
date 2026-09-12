@@ -45,11 +45,12 @@ val MoyeotaDefaultCamera: LatLng = LatLng(35.1578, 129.0594)
  * @param zoom 줌 레벨. center 와 동일하게 변경이 반영된다
  * @param contentPadding 지도 위에 겹쳐지는 UI(시트·바) 영역. 이 값을 빼고 남은
  *   가시 영역을 기준으로 카메라 중심이 잡히므로, 마커가 시트에 가려지지 않는다
- * @param useTextureView 지도를 SurfaceView 대신 TextureView 로 그린다. **별도 윈도우에
- *   올라가는 화면(Compose `Dialog` = navigation 의 `dialog()` 목적지)에서만 켠다** —
- *   SurfaceView 는 자신의 윈도우에 구멍을 뚫는 방식이라 다이얼로그 위에서 검게 비거나
- *   스크림 아래로 가려질 수 있다. TextureView 는 일반 뷰처럼 합성되므로 그 문제가 없다.
- *   대신 렌더 비용이 조금 더 크므로 전면 화면(홈·배차)에서는 기본값 false 를 유지한다
+ * @param useTextureView 지도를 SurfaceView 대신 TextureView 로 그린다. **기본값 true.**
+ *   SurfaceView 는 자신의 윈도우에 구멍을 뚫는 방식이라 (1) 다이얼로그 위에서 검게 비거나 스크림
+ *   아래로 가려지고, (2) **화면 전환 애니메이션 동안 서피스가 준비될 때까지 그 영역이 검게 깜빡인다**
+ *   (실기 QA: 지도 화면으로 들어갈 때마다 검은 프레임 + 딜레이). TextureView 는 일반 뷰처럼
+ *   합성되므로 둘 다 없다. 렌더 비용이 조금 더 들지만 이 앱의 지도는 화면 일부(스트립·배경)라
+ *   체감 차이가 없어 전 화면 기본값으로 켠다. false 는 성능 실험용으로만 남긴다
  * @param onMapReady 지도 준비 완료 콜백. 마커·오버레이 추가는 여기서 한다
  */
 @Composable
@@ -58,7 +59,7 @@ fun NaverMapView(
     center: LatLng = MoyeotaDefaultCamera,
     zoom: Double = 14.0,
     contentPadding: PaddingValues = PaddingValues(),
-    useTextureView: Boolean = false,
+    useTextureView: Boolean = true,
     onMapReady: (NaverMap) -> Unit = {},
 ) {
     // @Preview / 레이아웃 인스펙터에서는 MapView 가 네이티브 초기화에 실패하므로 대체 배경만 그린다

@@ -127,6 +127,8 @@ fun ChatScreen(
     /** 이 방의 푸시 알림 음소거 여부(서버 값). 24a 메뉴의 「알림 끄기/켜기」와 부제의 「알림 꺼짐」이 따른다 */
     muted: Boolean = false,
     onToggleMute: () -> Unit = {},
+    /** 24a 「채팅방 나가기」를 보여 줄지. 진행 중인 내 방의 채팅방이면 false(되돌아올 길이 없다) */
+    canLeave: Boolean = true,
 ) {
     var menuOpen by remember { mutableStateOf(false) } // 24a
     var shareSheetOpen by remember { mutableStateOf(false) } // 24b
@@ -293,6 +295,7 @@ fun ChatScreen(
                                     }
                                     .padding(horizontal = 20.dp, vertical = 14.dp),
                             )
+                            if (canLeave) {
                             HorizontalDivider(color = MoyeotaColor.Hairline, modifier = Modifier.padding(horizontal = 20.dp))
                             Text(
                                 text = "채팅방 나가기",
@@ -308,6 +311,7 @@ fun ChatScreen(
                                     }
                                     .padding(horizontal = 20.dp, vertical = 14.dp),
                             )
+                            }
                         }
                     }
                 }

@@ -97,7 +97,7 @@ fun latLngOrNull(latitude: Double?, longitude: Double?): LatLng? {
  * @param radiusCircle 반경 원(21 매칭 대기의 탐색 반경). null 이면 그리지 않는다
  * @param myPosition 내 위치 파란 점. **null 이면 SDK 의 locationOverlay 를 아예 건드리지 않는다** —
  *   26 운행중처럼 화면이 오버레이를 직접 관리하는 경우와 충돌하지 않기 위해서다
- * @param useTextureView 다이얼로그 위에 올라가는 화면에서만 true — [NaverMapView] 설명 참고
+ * @param useTextureView 기본 true(전환 시 검은 깜빡임 방지) — [NaverMapView] 설명 참고
  * @param onMapReady 지도 인스턴스가 필요할 때만 쓴다(카메라 이동 구독 등). 마커·경로는 이
  *   컴포저블이 이미 관리하므로, 여기서 또 붙이면 생명주기가 이원화된다
  */
@@ -113,7 +113,7 @@ fun RouteMapView(
     center: LatLng = originPosition ?: routePath.firstOrNull() ?: MoyeotaDefaultCamera,
     zoom: Double = 14.0,
     contentPadding: PaddingValues = PaddingValues(),
-    useTextureView: Boolean = false,
+    useTextureView: Boolean = true,
     onMapReady: (NaverMap) -> Unit = {},
 ) {
     // @Preview 에서는 네이티브 지도가 뜨지 않는다 (NaverMapView 와 동일한 대체 처리)
