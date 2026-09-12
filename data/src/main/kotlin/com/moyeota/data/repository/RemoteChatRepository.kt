@@ -74,6 +74,10 @@ class RemoteChatRepository(
 
     override suspend fun leaveChatRoom(chatRoomId: Long) = chatCall { api.leaveRoom(chatRoomId) }
 
+    override suspend fun setNotificationMuted(chatRoomId: Long, muted: Boolean) = chatCall {
+        if (muted) api.muteNotification(chatRoomId) else api.unmuteNotification(chatRoomId)
+    }
+
     // 목록은 그대로 돌려주되 캐시도 함께 채운다 — 호출자가 참여자를 보려고 부른 김에
     // 다음 메시지 매핑도 정확해진다. userId 가 없는 참여자는 캐시에 넣을 수 없지만(이을 키가 없다)
     // 반환 목록에는 그대로 포함한다.

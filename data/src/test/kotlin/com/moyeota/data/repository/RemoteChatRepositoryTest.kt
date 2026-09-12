@@ -247,6 +247,28 @@ class RemoteChatRepositoryTest {
         assertEquals(listOf(1L), rooms.map { it.room.id })
     }
 
+    /** 음소거는 같은 경로의 POST/DELETE 다 — 불리언 하나가 어느 메서드로 가는지가 계약이다. */
+    @Test
+    fun `알림 끄기는 mute, 켜기는 unmute 로 간다`() = runBlocking {
+        val api = FakeChatApi()
+        val repository = RemoteChatRepository(api, FakeChatSession())
+
+        repository.setNotificationMuted(5, muted = true)
+        repository.setNotificationMuted(5, muted = false)
+
+        assertEquals(listOf(5L to true, 5L to false), api.muteCalls)
+    }
+
+    @Test
+    fun `음소거 실패도 ChatException 으로 좁혀진다`() = runBlocking {
+        val api = FakeChatApi(
+            failure = httpException(403, """{"code":"CHAT_NOT_PARTICIPANT","message":"채팅방 참여자가 아닙니다."}"""),
+        )
+        val error = runCatching { RemoteChatRepository(api, FakeChatSession()).setNotificationMuted(5, true) }
+            .exceptionOrNull()
+        assertTrue((error as? ChatException)?.isNotParticipant == true)
+    }
+
     /**
      * 채팅 실패 본문은 `{code, message}` 이고 code 가 enum 이름이다. 이걸 도메인 예외로 좁혀 두지 않으면
      * 화면이 HttpException 을 직접 뒤져야 하고, 403 두 종류(참여자 아님/남의 메시지)가 구분되지 않는다.
@@ -402,6 +424,10 @@ private class FakeChatApi(
     }
 
     override suspend fun readRoom(chatRoomId: Long, readMessageId: Long) = failIfNeeded() ?: Unit
+
+    val muteCalls = mutableListOf<Pair<Long, Boolean>>()
+    override suspend fun muteNotification(chatRoomId: Long) { failIfNeeded(); muteCalls += chatRoomId to true }
+    override suspend fun unmuteNotification(chatRoomId: Long) { failIfNeeded(); muteCalls += chatRoomId to false }
 
     override suspend fun getMessages(chatRoomId: Long, cursor: Long?, size: Int): ChatMessageSliceResponse {
         failIfNeeded()

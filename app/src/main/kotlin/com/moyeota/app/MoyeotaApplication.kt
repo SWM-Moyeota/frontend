@@ -77,13 +77,22 @@ class MoyeotaApplication : Application() {
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
 
-        val channel = NotificationChannel(
-            MoyeotaFirebaseMessagingService.CHANNEL_ID,
-            MoyeotaFirebaseMessagingService.CHANNEL_NAME,
-            NotificationManager.IMPORTANCE_HIGH,
-        )
         val manager = getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(channel)
+        manager.createNotificationChannel(
+            NotificationChannel(
+                MoyeotaFirebaseMessagingService.CHANNEL_ID,
+                MoyeotaFirebaseMessagingService.CHANNEL_NAME,
+                NotificationManager.IMPORTANCE_HIGH,
+            ),
+        )
+        // 채팅 메시지는 별도 채널 — 도착 알림은 두고 채팅만 끄고 싶은 사용자를 위해
+        manager.createNotificationChannel(
+            NotificationChannel(
+                MoyeotaFirebaseMessagingService.CHAT_CHANNEL_ID,
+                MoyeotaFirebaseMessagingService.CHAT_CHANNEL_NAME,
+                NotificationManager.IMPORTANCE_HIGH,
+            ),
+        )
     }
 
     private companion object {

@@ -44,6 +44,14 @@ interface ChatRepository {
     // 참여자가 아니면 403 CHAT_NOT_PARTICIPANT.
     suspend fun getChatRoomMembers(chatRoomId: Long): List<ChatMember>
 
+    /**
+     * 이 방의 **푸시 알림** 끄기/켜기 — POST(끄기) / DELETE(켜기) `/api/v1/chat-rooms/{chatRoomId}/users/notification/mute` (200).
+     * 서버는 음소거한 참여자에게 새 메시지 푸시(`CHAT_MESSAGE`)를 보내지 않는다. 방 목록의
+     * [ChatRoomMembership.notificationMuted][com.moyeota.domain.model.ChatRoomMembership.notificationMuted] 로 현재 상태를 읽는다.
+     * 참여자가 아니면 403 CHAT_NOT_PARTICIPANT.
+     */
+    suspend fun setNotificationMuted(chatRoomId: Long, muted: Boolean)
+
     /** POST /api/v1/chat-rooms/{chatRoomId}/users/read/{readMessageId}. 성공 후 목록의 안읽음 배지 갱신 필요. */
     suspend fun markAsRead(chatRoomId: Long, readMessageId: Long)
 

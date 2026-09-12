@@ -185,6 +185,13 @@ class ChatRoomViewModel(
     private val _peerTitle = MutableStateFlow<String?>(null)
     val peerTitle: StateFlow<String?> = _peerTitle.asStateFlow()
 
+    /**
+     * 이 방의 푸시 알림 음소거 여부(서버 `notificationMuted`). 서버 값을 받기 전엔 false 다 —
+     * 「알림 꺼짐」을 잘못 보여 주는 것보다 잠깐 켜진 것으로 보이는 편이 낫다(기본값이 켜짐이므로).
+     */
+    private val _muted = MutableStateFlow(false)
+    val muted: StateFlow<Boolean> = _muted.asStateFlow()
+
     private var lastMessageId: Long? = null
     private var chatRoomId: Long? = null
     private var pollingJob: Job? = null
@@ -203,6 +210,7 @@ class ChatRoomViewModel(
             chatRoomId = roomId
             lastMessageId = null
             _peerTitle.value = null
+            _muted.value = false
             _uiState.value = UiState.Loading
             _inputState.value = InputState()
         }
@@ -211,7 +219,42 @@ class ChatRoomViewModel(
         // 이미 대화를 그리고 있으면 스피너로 되돌리지 않는다(깜빡임 방지)
         load(showLoading = roomChanged || _uiState.value !is UiState.Success)
         loadPeerTitle(roomId)
+        if (roomChanged) loadMuted(roomId)
         startPolling()
+    }
+
+    /**
+     * 음소거 상태는 방 단독 API 가 없어 **내 방 목록**(`/chat-rooms/me`)에서 이 방을 찾아 읽는다.
+     * 방을 처음 열 때 한 번이면 된다 — 이후 변경은 이 화면의 토글이 유일한 출처라 응답을 기다리지 않고 반영한다.
+     * 실패는 삼킨다(기본 「켜짐」으로 남을 뿐).
+     */
+    private fun loadMuted(roomId: Long) {
+        viewModelScope.launch {
+            val rooms = runCatching { repository.getMyChatRooms() }.getOrNull() ?: return@launch
+            if (chatRoomId != roomId) return@launch
+            rooms.firstOrNull { it.room.id == roomId }?.let { _muted.value = it.membership.notificationMuted }
+        }
+    }
+
+    /**
+     * 알림 끄기/켜기. **낙관적으로** 먼저 바꾸고 서버가 거절하면 되돌린다 — 메뉴를 닫자마자
+     * 헤더의 「알림 꺼짐」이 따라와야 눌렀다는 느낌이 난다.
+     */
+    fun toggleMuted() {
+        val roomId = chatRoomId ?: return
+        val target = !_muted.value
+        _muted.value = target
+        viewModelScope.launch {
+            runCatching { repository.setNotificationMuted(roomId, target) }
+                .onFailure {
+                    if (chatRoomId == roomId) {
+                        _muted.value = !target
+                        _inputState.update { state ->
+                            state.copy(errorMessage = it.toChatMessage("알림 설정을 바꾸지 못했어요"))
+                        }
+                    }
+                }
+        }
     }
 
     fun retryLoad() {
@@ -433,11 +476,17 @@ private fun ChatRoomRoute(
     val input by viewModel.inputState.collectAsState()
     val leftRoom by viewModel.leftRoom.collectAsState()
     val peerTitle by viewModel.peerTitle.collectAsState()
+    val muted by viewModel.muted.collectAsState()
 
     // 화면이 보이는 동안만 조회·폴링한다. 탭을 옮기거나 앱이 백그라운드로 가면 즉시 멈춘다.
+    // 같은 구간 동안 「이 방을 보고 있다」를 알려 푸시 알림이 겹치지 않게 한다([ChatForeground]).
     LifecycleStartEffect(room.id) {
         viewModel.onScreenStart(room.id)
-        onStopOrDispose { viewModel.stopPolling() }
+        ChatForeground.visibleRoomId = room.id
+        onStopOrDispose {
+            viewModel.stopPolling()
+            if (ChatForeground.visibleRoomId == room.id) ChatForeground.visibleRoomId = null
+        }
     }
 
     LaunchedEffect(leftRoom) {
@@ -472,6 +521,8 @@ private fun ChatRoomRoute(
             onInputChange = viewModel::onInputChange,
             onSend = viewModel::send,
             onBack = onBack,
+            muted = muted,
+            onToggleMute = viewModel::toggleMuted,
             onOpenMatching = onOpenMatching,
             onOpenRideOngoing = onOpenRideOngoing,
             onStartLocationShare = onStartLocationShare,

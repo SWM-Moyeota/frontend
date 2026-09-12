@@ -90,7 +90,7 @@ private val DummyMessages = listOf(
  * - 「＋」 → 24b 공유 시트 열림 (내부 상태)
  * - 상단 「매칭 화면으로 →」 배너 탭 → 21/25/26 진행 단계 (onOpenMatching — 진행 중인 방의 채팅방일 때만 보인다)
  * - 상단 「실시간 위치 공유 중」 배너 탭 → 26 운행 중 (onOpenRideOngoing)
- * - 24a 「채팅방 알림 끄기」 → 24 (알림 off 로컬 적용)
+ * - 24a 「채팅방 알림 끄기/켜기」 → 24 (서버 음소거 토글 — onToggleMute, 부제에 「알림 꺼짐」)
  * - 24a 「채팅방 나가기」 → 14 홈 (onLeaveChat) — 진행 중 탑승이 있으면 재확인 다이얼로그
  * - 24b 「실시간 위치 공유 시작」 → 26 운행 중 (onStartLocationShare)
  * - 하단탭 → 14/17/35 (onTabSelect)
@@ -124,10 +124,12 @@ fun ChatScreen(
     onStartLocationShare: () -> Unit = {},
     onLeaveChat: () -> Unit = {},
     onTabSelect: (MoyeotaTab) -> Unit = {},
+    /** 이 방의 푸시 알림 음소거 여부(서버 값). 24a 메뉴의 「알림 끄기/켜기」와 부제의 「알림 꺼짐」이 따른다 */
+    muted: Boolean = false,
+    onToggleMute: () -> Unit = {},
 ) {
     var menuOpen by remember { mutableStateOf(false) } // 24a
     var shareSheetOpen by remember { mutableStateOf(false) } // 24b
-    var muted by remember { mutableStateOf(false) } // 알림 off
     var leaveConfirmOpen by remember { mutableStateOf(false) }
 
     val sendEnabled = input.isNotBlank() && input.length <= 500 && !sending
@@ -278,14 +280,15 @@ fun ChatScreen(
                                 .background(MoyeotaColor.SurfaceCanvas),
                         ) {
                             Text(
-                                text = "채팅방 알림 끄기",
+                                // 서버 음소거 토글 — 눌러서 끄고, 다시 눌러 켠다(예전엔 끄기만 있는 로컬 상태였다)
+                                text = if (muted) "채팅방 알림 켜기" else "채팅방 알림 끄기",
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = MoyeotaColor.InkPrimary,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
-                                        muted = true // 알림 off 적용 후 24 복귀
+                                        onToggleMute()
                                         menuOpen = false
                                     }
                                     .padding(horizontal = 20.dp, vertical = 14.dp),

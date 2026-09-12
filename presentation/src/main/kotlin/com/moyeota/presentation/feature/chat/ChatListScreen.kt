@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -181,11 +182,42 @@ private fun ChatRoomRow(item: ChatRoomListItem, onClick: () -> Unit) {
                 )
                 Spacer(Modifier.size(6.dp))
             }
-            // 남의 마지막 메시지가 읽음 커서 뒤에 있으면 안읽음 배지. 서버가 개수는 아직 안 줘 점으로만
+            // 안읽음 배지 — 서버가 개수를 주면 숫자(99+ 상한), 개수 없는 구버전 응답이면 점
             if (unread) {
-                Box(Modifier.size(8.dp).background(MoyeotaColor.Primary500, CircleShape))
+                UnreadBadge(count = membership.unreadCount)
             }
         }
+    }
+}
+
+/** 안읽음 개수 표기 — 두 자리까지 그대로, 그 위는 「99+」(배지가 행 높이를 넘지 않게). null 은 개수 모름(점) */
+internal fun unreadBadgeLabel(count: Int?): String? = when {
+    count == null -> null
+    count <= 0 -> null
+    count > 99 -> "99+"
+    else -> count.toString()
+}
+
+@Composable
+private fun UnreadBadge(count: Int?) {
+    val label = unreadBadgeLabel(count)
+    if (label == null) {
+        Box(Modifier.size(8.dp).background(MoyeotaColor.Primary500, CircleShape))
+        return
+    }
+    Box(
+        modifier = Modifier
+            .defaultMinSize(minWidth = 20.dp, minHeight = 20.dp)
+            .background(MoyeotaColor.Primary500, CircleShape)
+            .padding(horizontal = 6.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            color = MoyeotaColor.SurfaceCanvas,
+        )
     }
 }
 
