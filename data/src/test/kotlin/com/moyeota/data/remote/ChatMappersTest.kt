@@ -248,6 +248,42 @@ class ChatMappersTest {
         assertFalse(empty.hasUnread)
     }
 
+    /** 서버 7c95683(2026-09-12): 목록 항목에 unreadCount. 개수가 오면 그것이 안읽음의 유일한 근거다. */
+    @Test
+    fun `unreadCount 가 오면 마지막 메시지 판정보다 우선한다`() {
+        val body = """
+            [{"chatRoomId":7,"lastReadMessageId":null,"notificationMuted":true,"joinedAt":"2026-09-08T06:14:44Z","unreadCount":3,
+              "lastMessage":{"id":41,"senderPublicId":"peer","content":"안녕","type":"TEXT","createdAt":"2026-09-11T02:52:55Z"}}]
+        """.trimIndent()
+        val membership = json.decodeFromString<List<ChatRoomUserResponse>>(body)[0].toMembership(myUuid = "me-uuid")
+
+        assertEquals(3, membership.unreadCount)
+        assertTrue(membership.hasUnread)
+        assertTrue(membership.notificationMuted)
+
+        // 커서가 없어도(한 번도 안 읽음) 서버가 0 이라 하면 0 이다 — 내 메시지뿐인 방
+        val zero = ChatRoomUserResponse(
+            chatRoomId = 7, lastReadMessageId = null, unreadCount = 0,
+            lastMessage = ChatLastMessageResponse(id = 41, senderPublicId = "peer", content = "안녕", type = "TEXT"),
+        ).toMembership(myUuid = "me-uuid")
+        assertEquals(0, zero.unreadCount)
+        assertFalse(zero.hasUnread)
+    }
+
+    @Test
+    fun `unreadCount 가 없는 구서버 응답은 마지막 메시지로 유무만 가리고, 음수는 0 으로 접는다`() {
+        val legacy = ChatRoomUserResponse(
+            chatRoomId = 7, lastReadMessageId = 40,
+            lastMessage = ChatLastMessageResponse(id = 41, senderPublicId = "peer", content = "안녕", type = "TEXT"),
+        ).toMembership(myUuid = "me-uuid")
+        assertNull(legacy.unreadCount)
+        assertTrue(legacy.hasUnread)
+
+        val negative = ChatRoomUserResponse(chatRoomId = 7, unreadCount = -5).toMembership(myUuid = "me-uuid")
+        assertEquals(0, negative.unreadCount)
+        assertFalse(negative.hasUnread)
+    }
+
     /** 발신자를 못 찾은(탈퇴) 마지막 메시지: senderPublicId null → 내 것이 아니고, 빈 uuid 끼리 같다고 보지 않는다. */
     @Test
     fun `발신자 없는 마지막 메시지는 세션이 없어도 내 것이 되지 않는다`() {

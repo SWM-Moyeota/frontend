@@ -40,13 +40,19 @@ data class ChatRoomMembership(
     val joinedAt: String,
     /** 방의 마지막 메시지. 아직 아무 메시지도 없으면 null (구버전 서버 응답도 null 로 떨어진다) */
     val lastMessage: ChatLastMessage? = null,
+    /**
+     * 안 읽은 메시지 **개수**(서버 `unreadCount`, 2026-09-12 추가) — 남이 보낸 · 삭제 안 된 · 읽음 커서 뒤의 메시지 수.
+     * 필드를 안 주는 구버전 서버면 null 이고, 그때는 [hasUnread] 가 마지막 메시지로 유무만 가린다.
+     */
+    val unreadCount: Int? = null,
 ) {
     /**
-     * 안 읽은 메시지가 있는가 — **마지막 메시지가 남의 것이고 읽음 커서가 그 앞에 있을 때**.
-     * 메시지가 없는 방은 읽을 게 없으니 false. 서버가 안읽음 **개수**는 아직 주지 않아 유무만 안다.
+     * 안 읽은 메시지가 있는가. 서버가 개수를 주면 그 값이 **유일한 근거**다(0 이면 없음).
+     * 개수가 없는(구버전) 응답에서만 「마지막 메시지가 남의 것이고 읽음 커서가 그 앞」으로 어림한다.
      */
     val hasUnread: Boolean
         get() {
+            unreadCount?.let { return it > 0 }
             val last = lastMessage ?: return false
             if (last.isMine) return false
             val cursor = lastReadMessageId ?: return true

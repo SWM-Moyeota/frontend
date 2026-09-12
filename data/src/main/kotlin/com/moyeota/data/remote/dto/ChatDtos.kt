@@ -26,6 +26,8 @@ data class ChatRoomUserResponse(
     val notificationMuted: Boolean = false,
     val joinedAt: String? = null,
     val lastMessage: ChatLastMessageResponse? = null,
+    // 2026-09-12 서버(7c95683)부터. 필드가 없는 구서버는 null 로 두어 앱이 「개수 모름」으로 다룬다.
+    val unreadCount: Long? = null,
 )
 
 // ChatRoomUserResult.LastMessage — 방의 마지막 메시지 요약. 삭제된 메시지는 서버가 content 를 치환해 준다.

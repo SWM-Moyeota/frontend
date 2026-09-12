@@ -55,6 +55,8 @@ fun ChatRoomUserResponse.toMembership(myUuid: String? = null): ChatRoomMembershi
     notificationMuted = notificationMuted,
     joinedAt = joinedAt.orEmpty(),
     lastMessage = lastMessage?.toLastMessage(myUuid),
+    // 음수는 서버 결함이다 — 배지에 「-1」을 그리느니 0 으로 접는다. Int 범위를 넘을 일은 없다.
+    unreadCount = unreadCount?.coerceAtLeast(0)?.toInt(),
 )
 
 fun ChatLastMessageResponse.toLastMessage(myUuid: String?): ChatLastMessage {

@@ -7,6 +7,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
+import com.moyeota.presentation.feature.chat.ChatForeground
 
 /**
  * FCM 수신 진입점. 알림 채널은 [MoyeotaApplication.onCreate] 에서 미리 생성한다.
@@ -54,6 +55,7 @@ class MoyeotaFirebaseMessagingService : FirebaseMessagingService() {
 
         when (val type = message.data[KEY_TYPE]) {
             TYPE_DRIVER_ARRIVED -> showDriverArrived(message.data[KEY_PARTY_ID])
+            TYPE_CHAT_MESSAGE -> showChatMessage(message.data)
             else -> {
                 Log.d(TAG, "처리 대상이 아닌 메시지 type=$type")
                 showGeneric(message)
@@ -84,6 +86,43 @@ class MoyeotaFirebaseMessagingService : FirebaseMessagingService() {
     }
 
     /**
+     * 새 채팅 메시지 알림. 서버 `FcmChatNotifier` 가 싣는 데이터:
+     * `{type:"CHAT_MESSAGE", chatRoomId, messageId, senderPublicId, senderNickname, preview}`.
+     * 서버가 이미 나(발신자)·나간 사람·음소거한 사람은 수신자에서 뺀다 — 여기서 다시 거를 건 하나뿐이다:
+     * **지금 그 방을 보고 있으면** 띄우지 않는다([ChatForeground]). 폴링이 곧 화면에 그리므로 알림은 중복이다.
+     *
+     * 알림 id 는 **방 단위**다 — 같은 방의 연속 메시지는 쌓이지 않고 최신 한 장으로 갱신된다(카카오톡식).
+     * 탭하면 [MainActivity] 가 [EXTRA_CHAT_ROOM_ID] 를 읽어 그 채팅방을 연다.
+     */
+    private fun showChatMessage(data: Map<String, String>) {
+        val roomId = data[KEY_CHAT_ROOM_ID]?.toLongOrNull()
+        if (roomId == null) {
+            Log.w(TAG, "chatRoomId 없는 채팅 알림 — 표시 생략")
+            return
+        }
+        if (ChatForeground.visibleRoomId == roomId) {
+            Log.d(TAG, "보고 있는 방의 메시지 — 알림 생략 roomId=$roomId")
+            return
+        }
+        val sender = data[KEY_SENDER_NICKNAME]?.takeIf { it.isNotBlank() }
+            ?: getString(R.string.notification_chat_unknown_sender)
+        val preview = data[KEY_PREVIEW]?.takeIf { it.isNotBlank() }
+            ?: getString(R.string.notification_chat_empty_preview)
+
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra(EXTRA_CHAT_ROOM_ID, roomId)
+        }
+        show(
+            notificationId = chatNotificationId(roomId),
+            title = sender,
+            body = preview,
+            intent = intent,
+            channelId = CHAT_CHANNEL_ID,
+        )
+    }
+
+    /**
      * 앞으로 서버가 다른 type 을 보내거나 notification 페이로드를 실어 보낼 때를 위한 폴백.
      * 표시할 문구를 만들 수 없으면 조용히 버린다 — 빈 알림을 띄우는 것보다 낫다.
      */
@@ -105,7 +144,13 @@ class MoyeotaFirebaseMessagingService : FirebaseMessagingService() {
         )
     }
 
-    private fun show(notificationId: Int, title: String, body: String, intent: Intent) {
+    private fun show(
+        notificationId: Int,
+        title: String,
+        body: String,
+        intent: Intent,
+        channelId: String = CHANNEL_ID,
+    ) {
         val pendingIntent = PendingIntent.getActivity(
             this,
             // requestCode 를 알림 id 와 맞춘다. 0 으로 고정하면 FLAG_UPDATE_CURRENT 때문에
@@ -115,7 +160,7 @@ class MoyeotaFirebaseMessagingService : FirebaseMessagingService() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+        val notification = NotificationCompat.Builder(this, channelId)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(title)
             .setContentText(body)
@@ -144,12 +189,29 @@ class MoyeotaFirebaseMessagingService : FirebaseMessagingService() {
         /** 서버 `FcmPassengerNotifier.notifyDriverArrived` 가 싣는 값. 문자열이 계약이다. */
         private const val TYPE_DRIVER_ARRIVED = "DRIVER_ARRIVED"
 
+        /** 서버 `FcmChatNotifier.notifyNewMessage` 가 싣는 값들. */
+        private const val TYPE_CHAT_MESSAGE = "CHAT_MESSAGE"
+        private const val KEY_CHAT_ROOM_ID = "chatRoomId"
+        private const val KEY_SENDER_NICKNAME = "senderNickname"
+        private const val KEY_PREVIEW = "preview"
+
         private const val DEFAULT_NOTIFICATION_ID = 1001
+
+        // 채팅 알림 id 는 방 id 에 오프셋을 더해 만든다 — 파티 알림(partyId.hashCode)과 겹치지 않게.
+        private const val CHAT_NOTIFICATION_ID_BASE = 200_000
+        private fun chatNotificationId(roomId: Long): Int = CHAT_NOTIFICATION_ID_BASE + (roomId % 100_000).toInt()
 
         /** 알림 탭으로 열린 [MainActivity] 가 읽을 파티 식별자. 서버가 문자열로 보내므로 문자열이다. */
         const val EXTRA_PARTY_ID = "com.moyeota.app.extra.PARTY_ID"
 
+        /** 채팅 알림 탭 → 이 채팅방을 연다. Long 이다(라우트 인자와 같은 타입). */
+        const val EXTRA_CHAT_ROOM_ID = "com.moyeota.app.extra.CHAT_ROOM_ID"
+
         const val CHANNEL_ID = "moyeota_default"
         const val CHANNEL_NAME = "모여타 알림"
+
+        /** 채팅은 채널을 따로 둔다 — 사용자가 시스템 설정에서 채팅 알림만 끌 수 있게(도착 알림은 남기고). */
+        const val CHAT_CHANNEL_ID = "moyeota_chat"
+        const val CHAT_CHANNEL_NAME = "채팅 메시지"
     }
 }

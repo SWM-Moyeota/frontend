@@ -4,4 +4,6 @@
     <!-- 기사 도착 푸시. 서버는 type/partyId 만 보내고 문구를 싣지 않으므로 표시 문구는 앱이 갖는다. -->
     <string name="notification_driver_arrived_title">기사님이 도착했어요</string>
     <string name="notification_driver_arrived_body">탑승 장소에서 기사님이 기다리고 계세요.</string>
+    <string name="notification_chat_unknown_sender">동승자</string>
+    <string name="notification_chat_empty_preview">새 메시지가 도착했어요</string>
 </resources>
