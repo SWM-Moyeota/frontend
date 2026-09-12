@@ -53,9 +53,11 @@ class RemoteChatRepository(
 
     // /chat-rooms/me 는 방 이름을 주지 않아 방마다 상세를 한 번 더 부른다(N+1).
     override suspend fun getMyChatRooms(): List<MyChatRoom> = chatCall {
+        // 마지막 메시지의 isMine 판정용. 목록 조회 시점의 세션 하나로 전 방을 매핑한다.
+        val myUuid = session.currentUserUuid
         api.getMyRooms().mapNotNull { membership ->
             val room = runCatching { api.getRoom(membership.chatRoomId) }.getOrNull() ?: return@mapNotNull null
-            MyChatRoom(room = room.toChatRoom(), membership = membership.toMembership())
+            MyChatRoom(room = room.toChatRoom(), membership = membership.toMembership(myUuid))
         }
     }
 

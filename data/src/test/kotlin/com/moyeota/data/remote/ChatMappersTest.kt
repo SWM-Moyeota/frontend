@@ -2,6 +2,7 @@ package com.moyeota.data.remote
 
 import com.moyeota.data.remote.dto.ChatMemberResponse
 import com.moyeota.data.remote.dto.ChatMessageResponse
+import com.moyeota.data.remote.dto.ChatLastMessageResponse
 import com.moyeota.data.remote.dto.ChatMessageSliceResponse
 import com.moyeota.data.remote.dto.ChatRoomResponse
 import com.moyeota.data.remote.dto.ChatRoomUserResponse
@@ -200,6 +201,62 @@ class ChatMappersTest {
 
         assertEquals(1, decoded.size)
         assertNull(decoded[0].toMembership().lastReadMessageId)
+    }
+
+    /** 서버 커밋 963c340(2026-09-11): 목록 항목에 lastMessage 가 실린다. 발신자·읽음 커서로 안읽음을 가른다. */
+    @Test
+    fun `목록의 lastMessage 를 매핑하고 남의 메시지가 커서 뒤면 안읽음이다`() {
+        val body = """
+            [{"chatRoomId":7,"lastReadMessageId":40,"notificationMuted":false,"joinedAt":"2026-09-08T06:14:44Z",
+              "lastMessage":{"id":41,"senderPublicId":"peer-uuid","content":"어디쯤이세요?","type":"TEXT","createdAt":"2026-09-11T02:52:55.123Z"}}]
+        """.trimIndent()
+
+        val membership = json.decodeFromString<List<ChatRoomUserResponse>>(body)[0].toMembership(myUuid = "me-uuid")
+
+        val last = membership.lastMessage ?: error("lastMessage 가 없다")
+        assertEquals(41L, last.id)
+        assertEquals("어디쯤이세요?", last.content)
+        assertEquals(ChatMessageType.TEXT, last.type)
+        assertEquals("peer-uuid", last.senderPublicId)
+        assertFalse(last.isMine)
+        assertTrue(membership.hasUnread)
+    }
+
+    @Test
+    fun `내가 보낸 메시지가 마지막이면 커서가 뒤처져도 안읽음이 아니다`() {
+        val membership = ChatRoomUserResponse(
+            chatRoomId = 7,
+            lastReadMessageId = 40,
+            lastMessage = ChatLastMessageResponse(id = 41, senderPublicId = "me-uuid", content = "네", type = "TEXT"),
+        ).toMembership(myUuid = "me-uuid")
+
+        assertTrue(membership.lastMessage!!.isMine)
+        assertFalse(membership.hasUnread)
+    }
+
+    @Test
+    fun `커서가 마지막 메시지에 닿아 있으면 안읽음이 아니고, 메시지가 없으면 커서가 없어도 안읽음이 아니다`() {
+        val read = ChatRoomUserResponse(
+            chatRoomId = 7,
+            lastReadMessageId = 41,
+            lastMessage = ChatLastMessageResponse(id = 41, senderPublicId = "peer", content = "네", type = "TEXT"),
+        ).toMembership(myUuid = "me-uuid")
+        assertFalse(read.hasUnread)
+
+        val empty = ChatRoomUserResponse(chatRoomId = 8, lastReadMessageId = null).toMembership(myUuid = "me-uuid")
+        assertNull(empty.lastMessage)
+        assertFalse(empty.hasUnread)
+    }
+
+    /** 발신자를 못 찾은(탈퇴) 마지막 메시지: senderPublicId null → 내 것이 아니고, 빈 uuid 끼리 같다고 보지 않는다. */
+    @Test
+    fun `발신자 없는 마지막 메시지는 세션이 없어도 내 것이 되지 않는다`() {
+        val last = ChatLastMessageResponse(id = 1, senderPublicId = "", content = "x", type = "LOCATION")
+            .toLastMessage(myUuid = null)
+
+        assertNull(last.senderPublicId)
+        assertFalse(last.isMine)
+        assertEquals(ChatMessageType.LOCATION, last.type)
     }
 
     /** 배포 서버 실측(2026-09-09): 참여자 응답에 userId 가 없다. 없어도 매핑이 깨지면 안 된다. */

@@ -16,15 +16,45 @@ data class ChatRoom(
     val status: ChatRoomStatus,
 )
 
+/**
+ * 방의 **마지막 메시지** 요약(백엔드 `ChatRoomUserResult.LastMessage`, 2026-09-11 추가).
+ * 목록의 미리보기·정렬·안읽음 판정에 쓴다. 삭제된 메시지는 서버가 content 를 「삭제된 메시지입니다」로 바꿔 준다.
+ *
+ * @property senderPublicId 보낸 사람 공개 UUID. 탈퇴 등으로 서버가 못 찾으면 null
+ * @property isMine 내가 보낸 메시지인지(senderPublicId == 세션 uuid). 내 메시지가 마지막이면 안읽음이 아니다
+ */
+data class ChatLastMessage(
+    val id: Long,
+    val senderPublicId: String?,
+    val content: String,
+    val type: ChatMessageType,
+    val createdAt: String,
+    val isMine: Boolean,
+)
+
 // 내가 그 방에 대해 갖는 상태(마지막 읽은 메시지 등). 백엔드 ChatRoomUserResult 대응.
 data class ChatRoomMembership(
     val chatRoomId: Long,
     val lastReadMessageId: Long?,
     val notificationMuted: Boolean,
     val joinedAt: String,
-)
+    /** 방의 마지막 메시지. 아직 아무 메시지도 없으면 null (구버전 서버 응답도 null 로 떨어진다) */
+    val lastMessage: ChatLastMessage? = null,
+) {
+    /**
+     * 안 읽은 메시지가 있는가 — **마지막 메시지가 남의 것이고 읽음 커서가 그 앞에 있을 때**.
+     * 메시지가 없는 방은 읽을 게 없으니 false. 서버가 안읽음 **개수**는 아직 주지 않아 유무만 안다.
+     */
+    val hasUnread: Boolean
+        get() {
+            val last = lastMessage ?: return false
+            if (last.isMine) return false
+            val cursor = lastReadMessageId ?: return true
+            return cursor < last.id
+        }
+}
 
-// GET /chat-rooms/me 는 membership 만 주고 방 이름(출발지/목적지)을 주지 않는다.
+// GET /chat-rooms/me 는 membership(+마지막 메시지)만 주고 방 이름(출발지/목적지)을 주지 않는다.
 // 채팅 목록 화면이 한 번에 그릴 수 있도록 Repository 에서 방 상세를 합쳐 내려준다.
 data class MyChatRoom(
     val room: ChatRoom,

@@ -32,6 +32,7 @@ import com.moyeota.core.designsystem.component.MoyeotaBottomBar
 import com.moyeota.core.designsystem.component.MoyeotaTab
 import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.domain.model.ChatMessageType
 import com.moyeota.domain.model.ChatRoomStatus
 import com.moyeota.domain.model.MyChatRoom
 
@@ -46,8 +47,9 @@ private val GrayAsh = Color(0xFF9AA1AC)
  * - 방 행 탭 → 24 채팅방 (onRoomClick)
  * - 하단탭 → 14/17/35 (onTabSelect)
  *
- * 제목은 **참여자 닉네임**, 부제가 경로다([ChatRoomListItem.peerTitle] · `chatRoomPeerTitle`).
- * 정렬은 Route 가 이미 마친 상태로 넘어온다(`chatRoomSortKey` — 지금은 방 id 내림차순).
+ * 제목은 **참여자 닉네임**([ChatRoomListItem.peerTitle] · `chatRoomPeerTitle`), 부제는 **마지막 메시지**
+ * (없으면 경로 — [chatRoomSubtitle]), 우측에 마지막 메시지 시각과 안읽음 점.
+ * 정렬은 Route 가 이미 마친 상태로 넘어온다(`chatRoomSortKey` — 마지막 활동 시각 내림차순).
  */
 @Composable
 fun ChatListScreen(
@@ -109,18 +111,37 @@ fun ChatListScreen(
     }
 }
 
-@Composable
-private fun ChatRoomRow(item: ChatRoomListItem, onClick: () -> Unit) {
+/**
+ * 목록 부제 — **마지막 메시지 미리보기**가 있으면 그것, 없으면 경로(+종료 여부).
+ * 위치 공유 메시지는 본문이 좌표라 사람 말로 바꾼다. 삭제된 메시지는 서버가 이미 「삭제된 메시지입니다」로 준다.
+ */
+internal fun chatRoomSubtitle(item: ChatRoomListItem): String {
     val room = item.room.room
+    val last = item.room.membership.lastMessage
+    if (last != null) {
+        val preview = when (last.type) {
+            ChatMessageType.LOCATION -> "📍 위치를 공유했어요"
+            ChatMessageType.TEXT -> last.content
+        }
+        return if (room.status == ChatRoomStatus.ACTIVE) preview else "종료 · $preview"
+    }
     val routeLabel = "${room.departure} → ${room.destination}"
-    // 참여자를 못 받은 방은 예전 이름(경로)으로 떨어진다 — 그때는 부제가 방 상태다
-    // (제목과 부제에 같은 문장을 두 번 적지 않는다).
-    val title = item.peerTitle ?: routeLabel
-    val subtitle = when {
+    return when {
+        // 참여자를 못 받은 방은 제목이 경로라, 부제까지 경로면 같은 문장이 두 번이다 — 방 상태를 쓴다
         item.peerTitle == null -> if (room.status == ChatRoomStatus.ACTIVE) "진행 중" else "종료된 방"
         room.status == ChatRoomStatus.ACTIVE -> routeLabel
         else -> "종료 · $routeLabel"
     }
+}
+
+@Composable
+private fun ChatRoomRow(item: ChatRoomListItem, onClick: () -> Unit) {
+    val room = item.room.room
+    val membership = item.room.membership
+    val title = item.peerTitle ?: "${room.departure} → ${room.destination}"
+    val subtitle = chatRoomSubtitle(item)
+    val timeLabel = membership.lastMessage?.createdAt?.toListTimeLabel()
+    val unread = membership.hasUnread
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -140,18 +161,30 @@ private fun ChatRoomRow(item: ChatRoomListItem, onClick: () -> Unit) {
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                // 서버 목록은 마지막 메시지를 주지 않는다 — 경로(+종료 여부)가 여기 들어갈 수 있는 전부다
                 text = subtitle,
                 fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                color = GrayMute,
+                // 안 읽은 방은 미리보기를 진하게 — 배지와 함께 「새 대화」를 두 신호로 알린다
+                fontWeight = if (unread) FontWeight.SemiBold else FontWeight.Medium,
+                color = if (unread) MoyeotaColor.InkPrimary else GrayMute,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        // 읽음 커서가 없으면 아직 한 번도 안 읽은 방
-        if (item.room.membership.lastReadMessageId == null) {
-            Box(Modifier.size(8.dp).background(MoyeotaColor.Primary500, CircleShape))
+        Spacer(Modifier.size(8.dp))
+        Column(horizontalAlignment = Alignment.End) {
+            if (timeLabel != null) {
+                Text(
+                    text = timeLabel,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = GrayAsh,
+                )
+                Spacer(Modifier.size(6.dp))
+            }
+            // 남의 마지막 메시지가 읽음 커서 뒤에 있으면 안읽음 배지. 서버가 개수는 아직 안 줘 점으로만
+            if (unread) {
+                Box(Modifier.size(8.dp).background(MoyeotaColor.Primary500, CircleShape))
+            }
         }
     }
 }

@@ -1,6 +1,8 @@
 package com.moyeota.presentation.feature.chat
 
+import com.moyeota.domain.model.ChatLastMessage
 import com.moyeota.domain.model.ChatMember
+import com.moyeota.domain.model.ChatMessageType
 import com.moyeota.domain.model.ChatRoom
 import com.moyeota.domain.model.ChatRoomMembership
 import com.moyeota.domain.model.ChatRoomStatus
@@ -78,33 +80,66 @@ class ChatRoomTitleTest {
         assertEquals("동승자", chatRoomPeerTitle(members))
     }
 
-    /**
-     * 서버가 마지막 메시지 시각을 주지 않아 방 id 를 대신 쓴다(최근 개설 순).
-     * `lastMessageAt` 이 생기면 [chatRoomSortKey] 하나만 바꾼다.
-     */
+    /** 정렬 키는 **마지막 활동 시각** — 마지막 메시지 시각, 없으면 방 개설 시각. 카카오톡식 최근 대화 순. */
     @Test
-    fun `정렬 키는 방 id 이고 내림차순이 최근 방 우선이다`() {
-        val rooms = listOf(myRoom(1), myRoom(9), myRoom(4))
-        assertEquals(
-            listOf(9L, 4L, 1L),
-            rooms.sortedByDescending(::chatRoomSortKey).map { it.room.id },
+    fun `마지막 메시지가 최근인 방이 방 id 와 무관하게 위로 온다`() {
+        val rooms = listOf(
+            myRoom(1, lastMessageAt = "2026-09-11T03:00:00Z"),
+            myRoom(9, lastMessageAt = "2026-09-10T03:00:00Z"),
+            myRoom(4, lastMessageAt = "2026-09-11T01:00:00Z"),
         )
+        assertEquals(listOf(1L, 4L, 9L), rooms.sortedByDescending(::chatRoomSortKey).map { it.room.id })
     }
 
-    private fun myRoom(id: Long) = MyChatRoom(
+    @Test
+    fun `메시지가 없는 새 방은 개설 시각으로 끼어든다`() {
+        val rooms = listOf(
+            myRoom(1, lastMessageAt = "2026-09-11T03:00:00Z"),
+            myRoom(2, createdAt = "2026-09-11T04:00:00Z"), // 방금 열린 방, 메시지 없음
+            myRoom(3, lastMessageAt = "2026-09-11T02:00:00Z"),
+        )
+        assertEquals(listOf(2L, 1L, 3L), rooms.sortedByDescending(::chatRoomSortKey).map { it.room.id })
+    }
+
+    @Test
+    fun `부제는 마지막 메시지가 우선이고 위치 공유는 사람 말로 바꾼다`() {
+        val text = ChatRoomListItem(myRoom(1, lastMessageAt = "2026-09-11T03:00:00Z", content = "어디쯤이세요?"), "스모크일")
+        assertEquals("어디쯤이세요?", chatRoomSubtitle(text))
+
+        val location = ChatRoomListItem(
+            myRoom(1, lastMessageAt = "2026-09-11T03:00:00Z", content = "35.1,129.0", type = ChatMessageType.LOCATION),
+            "스모크일",
+        )
+        assertEquals("📍 위치를 공유했어요", chatRoomSubtitle(location))
+
+        val none = ChatRoomListItem(myRoom(1), "스모크일")
+        assertEquals("출발 → 도착", chatRoomSubtitle(none))
+    }
+
+    private fun myRoom(
+        id: Long,
+        createdAt: String = "2026-09-09T07:33:00Z",
+        lastMessageAt: String? = null,
+        content: String = "안녕하세요",
+        type: ChatMessageType = ChatMessageType.TEXT,
+    ) = MyChatRoom(
         room = ChatRoom(
             id = id,
             partyId = id + 100,
             departure = "출발",
             destination = "도착",
-            createdAt = "2026-09-09T07:33:00Z",
+            createdAt = createdAt,
             status = ChatRoomStatus.ACTIVE,
         ),
         membership = ChatRoomMembership(
             chatRoomId = id,
             lastReadMessageId = null,
             notificationMuted = false,
-            joinedAt = "2026-09-09T07:33:00Z",
+            joinedAt = createdAt,
+            lastMessage = lastMessageAt?.let {
+                ChatLastMessage(id = id * 10, senderPublicId = "peer", content = content, type = type, createdAt = it, isMine = false)
+            },
         ),
     )
+
 }
