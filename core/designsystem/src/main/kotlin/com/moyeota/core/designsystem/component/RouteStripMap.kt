@@ -20,7 +20,7 @@ import com.naver.maps.geometry.LatLng
  * @param destinationPosition null 이면 지도를 띄우지 않고 [MapPlaceholder] 로 떨어진다
  *   (좌표를 아직 못 받은 로딩 상태와 못 쓸 좌표를 같게 다룬다)
  * @param routePath 서버 경로 폴리라인. 비어 있으면 마커 2개만으로 카메라를 맞춘다
- * @param useTextureView 다이얼로그 목적지에서만 true — [NaverMapView] 설명 참고
+ * @param useTextureView 기본 true(전환 시 검은 깜빡임 방지) — [NaverMapView] 설명 참고
  */
 @Composable
 fun RouteStripMap(
@@ -28,7 +28,7 @@ fun RouteStripMap(
     originPosition: LatLng? = null,
     destinationPosition: LatLng? = null,
     routePath: List<LatLng> = emptyList(),
-    useTextureView: Boolean = false,
+    useTextureView: Boolean = true,
 ) {
     BoxWithConstraints(modifier = modifier) {
         if (destinationPosition == null) {

@@ -309,6 +309,7 @@ private class FakeChatRepository(
     override suspend fun closeChatRoom(chatRoomId: Long) = error("쓰이지 않는다")
     override suspend fun joinChatRoom(chatRoomId: Long) = error("쓰이지 않는다")
     override suspend fun leaveChatRoom(chatRoomId: Long) = error("쓰이지 않는다")
+    override suspend fun setNotificationMuted(chatRoomId: Long, muted: Boolean) = error("쓰이지 않는다")
     override suspend fun getChatRoomMembers(chatRoomId: Long): List<ChatMember> = error("쓰이지 않는다")
     override suspend fun markAsRead(chatRoomId: Long, readMessageId: Long) = error("쓰이지 않는다")
     override suspend fun getMessages(chatRoomId: Long, cursor: Long?, size: Int): ChatMessagePage =

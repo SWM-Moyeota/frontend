@@ -14,17 +14,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -36,16 +30,20 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.unit.sp
+import com.moyeota.core.designsystem.component.MapSheetScaffold
 import com.moyeota.core.designsystem.component.MoyeotaBottomBar
 import com.moyeota.core.designsystem.component.MoyeotaTab
 import com.moyeota.core.designsystem.component.NaverMapView
-import com.moyeota.core.designsystem.component.SheetHandle
 import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.domain.model.Ride
@@ -59,8 +57,14 @@ private val GrayDeep = Color(0xFF54637D)
 private val GrayMute = Color(0xFF8A93A0)
 private val GrayAsh = Color(0xFF9AA1AC)
 
-// 상단 지도 노출 비율 (오버레이 시트 weight 1f 기준 상대값 → 화면의 약 30%)
-private const val MAP_PEEK_WEIGHT = 0.45f
+/** 펼친 시트 위로 남기는 지도 높이 — 예전 홈의 「화면 약 30%」 지도 노출과 비슷한 값 */
+private val HomeMapRevealHeight = 200.dp
+
+/**
+ * 접힘 높이 추정치 = 핸들(36) + HeroSection(인사 18 + 제목·부제 ~70 + 검색 바 64 + 여백 40 ≈ 190).
+ * 드래그 앵커·카메라 계산에만 쓰인다(실제 높이는 콘텐츠가 정한다 — MapSheetDefaults 설명 참고).
+ */
+private val HomeCollapsedSheetHeight = 226.dp
 
 // 홈·목적지 화면 공용 더미 모델
 data class FavoritePlace(val label: String, val address: String)
@@ -80,8 +84,8 @@ data class RecentPlace(val name: String, val address: String, val distanceLabel:
  * - [미연결] 자주 가는 곳 편집 · 최근 목적지 「전체」 (onRecentAllClick)
  *
  * 레이아웃: 와이어프레임 B1「풀스크린 지도」 — 네이버 지도가 배경 레이어이고
- * 기존 홈 UI(검색 카드·자주 가는 곳·최근 목적지)는 그 위 오버레이 시트로 올라간다.
- * 시트 위쪽 여백은 터치를 소비하지 않아 지도 팬/줌이 그대로 동작한다.
+ * 홈 UI 는 그 위 **드래그 시트**([MapSheetScaffold])다. 핸들·검색 카드는 항상 보이고,
+ * 아래로 내리면 자주 가는 곳·최근 목적지가 접혀 지도가 검색 카드 위까지 전부 드러난다.
  */
 @Composable
 fun HomeScreen(
@@ -106,66 +110,48 @@ fun HomeScreen(
     onRecentAllClick: () -> Unit = {}, // 미연결
     onTabSelect: (MoyeotaTab) -> Unit = {},
 ) {
-    // 지도를 가리는 오버레이(시트+하단탭+인디케이터) 높이 — 지도 contentPadding 으로 넘겨
-    // 카메라 중심이 시트 뒤가 아니라 실제 보이는 상단 영역에 잡히게 한다
-    var overlayHeightPx by remember { mutableIntStateOf(0) }
-    val density = LocalDensity.current
-
-    Box(modifier = Modifier.fillMaxSize().background(CanvasBg)) {
-        // 배경 레이어 — 풀스크린 지도
-        NaverMapView(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = with(density) { overlayHeightPx.toDp() }),
-        )
-
-        Column(modifier = Modifier.fillMaxSize()) {
-            StatusBarSpacer()
-
-            // 지도 노출 영역 (터치 미소비 → 팬·줌이 지도로 전달됨).
-            // 진행 중인 방이 있으면 그 위에 복귀 배너 하나만 얹는다 — 배너 자기 높이 밖은
-            // 여전히 지도의 것이다(17 합승 탭의 같은 배너와 같은 배치).
-            Box(modifier = Modifier.weight(MAP_PEEK_WEIGHT).fillMaxWidth()) {
+    Column(modifier = Modifier.fillMaxSize().background(CanvasBg)) {
+        // 배경 = 풀스크린 지도, 그 위에 **드래그로 접었다 펴는** 시트(16·21 과 같은 MapSheetScaffold).
+        // 펼침(기본)에서는 예전 홈처럼 지도 약 200dp + 검색·자주 가는 곳·최근 목적지,
+        // 핸들을 내리면 상세(자주 가는 곳·최근 목적지)가 접혀 **지도가 검색 카드 위까지 전부** 보인다.
+        MapSheetScaffold(
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            mapRevealHeight = HomeMapRevealHeight,
+            collapsedSheetHeight = HomeCollapsedSheetHeight,
+            background = { sheet ->
+                // 진행 배너(상태바 포함) 높이 — 지도 top contentPadding 으로 넘겨 줌 컨트롤(+/−)이
+                // 배너 아래로 내려가게 한다(작은 폰에서 배너와 줌 버튼이 겹치던 문제)
+                var bannerHeightPx by remember { mutableIntStateOf(0) }
+                val bannerHeight = with(LocalDensity.current) { bannerHeightPx.toDp() }
+                NaverMapView(
+                    modifier = Modifier.fillMaxSize(),
+                    // 앵커 기준 시트 높이를 빼 카메라 중심이 시트 뒤가 아니라 실제 보이는 영역에 잡히게 한다
+                    contentPadding = PaddingValues(top = bannerHeight, bottom = sheet.settledSheetHeight),
+                )
+                // 진행 중인 방이 있으면 지도 위에 복귀 배너 하나만 얹는다 — 배너 밖은 여전히 지도의 것이다
                 if (activeRide != null) {
-                    ActiveRideBanner(
-                        ride = activeRide,
-                        onClick = onActiveRideClick,
+                    Column(
                         modifier = Modifier
                             .align(Alignment.TopCenter)
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                    )
-                }
-            }
-
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .onSizeChanged { overlayHeightPx = it.height },
-            ) {
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
-                        .background(CanvasBg)
-                        .verticalScroll(rememberScrollState()),
-                ) {
-                    // 드래그 핸들 — HeroBg 로 칠해 아래 HeroSection 과 연속돼 보이게 한다
-                    Box(
-                        modifier = Modifier
                             .fillMaxWidth()
-                            .background(HeroBg)
-                            .padding(vertical = 8.dp),
-                        contentAlignment = Alignment.Center,
+                            .onSizeChanged { bannerHeightPx = it.height },
                     ) {
-                        SheetHandle()
+                        StatusBarSpacer()
+                        ActiveRideBanner(
+                            ride = activeRide,
+                            onClick = onActiveRideClick,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        )
                     }
-
-                    HeroSection(
-                        userName = userName,
-                        onSearchClick = onSearchClick,
-                    )
-
+                }
+            },
+            // 항상 보이는 줄 = 인사 + 「어디로 갈까요?」 + 검색 바 (핸들과 함께 드래그 타깃)
+            sheetTop = {
+                HeroSection(userName = userName, onSearchClick = onSearchClick)
+            },
+            // 접히면 사라지는 상세 = 자주 가는 곳 · 최근 목적지
+            sheetDetail = {
+                Column(modifier = Modifier.fillMaxWidth().background(CanvasBg)) {
                     Spacer(Modifier.height(24.dp))
 
                     // 자주 가는 곳
@@ -246,10 +232,10 @@ fun HomeScreen(
 
                     Spacer(Modifier.height(16.dp))
                 }
+            },
+        )
 
-                MoyeotaBottomBar(selected = MoyeotaTab.HOME, onSelect = onTabSelect)
-            }
-        }
+        MoyeotaBottomBar(selected = MoyeotaTab.HOME, onSelect = onTabSelect)
     }
 }
 

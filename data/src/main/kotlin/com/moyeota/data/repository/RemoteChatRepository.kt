@@ -53,9 +53,11 @@ class RemoteChatRepository(
 
     // /chat-rooms/me 는 방 이름을 주지 않아 방마다 상세를 한 번 더 부른다(N+1).
     override suspend fun getMyChatRooms(): List<MyChatRoom> = chatCall {
+        // 마지막 메시지의 isMine 판정용. 목록 조회 시점의 세션 하나로 전 방을 매핑한다.
+        val myUuid = session.currentUserUuid
         api.getMyRooms().mapNotNull { membership ->
             val room = runCatching { api.getRoom(membership.chatRoomId) }.getOrNull() ?: return@mapNotNull null
-            MyChatRoom(room = room.toChatRoom(), membership = membership.toMembership())
+            MyChatRoom(room = room.toChatRoom(), membership = membership.toMembership(myUuid))
         }
     }
 
@@ -71,6 +73,10 @@ class RemoteChatRepository(
     override suspend fun joinChatRoom(chatRoomId: Long) = chatCall { api.joinRoom(chatRoomId) }
 
     override suspend fun leaveChatRoom(chatRoomId: Long) = chatCall { api.leaveRoom(chatRoomId) }
+
+    override suspend fun setNotificationMuted(chatRoomId: Long, muted: Boolean) = chatCall {
+        if (muted) api.muteNotification(chatRoomId) else api.unmuteNotification(chatRoomId)
+    }
 
     // 목록은 그대로 돌려주되 캐시도 함께 채운다 — 호출자가 참여자를 보려고 부른 김에
     // 다음 메시지 매핑도 정확해진다. userId 가 없는 참여자는 캐시에 넣을 수 없지만(이을 키가 없다)

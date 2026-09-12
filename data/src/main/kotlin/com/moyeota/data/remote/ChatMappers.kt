@@ -1,12 +1,14 @@
 package com.moyeota.data.remote
 
 import com.moyeota.data.remote.dto.ApiErrorDto
+import com.moyeota.data.remote.dto.ChatLastMessageResponse
 import com.moyeota.data.remote.dto.ChatMemberResponse
 import com.moyeota.data.remote.dto.ChatMessageResponse
 import com.moyeota.data.remote.dto.ChatMessageSliceResponse
 import com.moyeota.data.remote.dto.ChatRoomResponse
 import com.moyeota.data.remote.dto.ChatRoomUserResponse
 import com.moyeota.domain.model.ChatException
+import com.moyeota.domain.model.ChatLastMessage
 import com.moyeota.domain.model.ChatMember
 import com.moyeota.domain.model.ChatMessage
 import com.moyeota.domain.model.ChatMessagePage
@@ -43,12 +45,31 @@ fun ChatRoomResponse.toChatRoom(): ChatRoom = ChatRoom(
     status = chatRoomStatusOf(status),
 )
 
-fun ChatRoomUserResponse.toMembership(): ChatRoomMembership = ChatRoomMembership(
+/**
+ * @param myUuid 세션 공개 UUID. 마지막 메시지가 내 것인지(`isMine`) 가리는 데만 쓴다 —
+ *   빈 값끼리의 비교로 남의 메시지가 내 것이 되지 않게 빈 문자열은 "없음"으로 접는다.
+ */
+fun ChatRoomUserResponse.toMembership(myUuid: String? = null): ChatRoomMembership = ChatRoomMembership(
     chatRoomId = chatRoomId,
     lastReadMessageId = lastReadMessageId,
     notificationMuted = notificationMuted,
     joinedAt = joinedAt.orEmpty(),
+    lastMessage = lastMessage?.toLastMessage(myUuid),
+    // 음수는 서버 결함이다 — 배지에 「-1」을 그리느니 0 으로 접는다. Int 범위를 넘을 일은 없다.
+    unreadCount = unreadCount?.coerceAtLeast(0)?.toInt(),
 )
+
+fun ChatLastMessageResponse.toLastMessage(myUuid: String?): ChatLastMessage {
+    val sender = senderPublicId?.takeIf { it.isNotBlank() }
+    return ChatLastMessage(
+        id = id,
+        senderPublicId = sender,
+        content = content,
+        type = chatMessageTypeOf(type),
+        createdAt = createdAt.orEmpty(),
+        isMine = sender != null && sender == myUuid,
+    )
+}
 
 // "이 메시지가 누구 것인가"를 판정할 때 쓰는 근거.
 //

@@ -84,13 +84,16 @@ internal fun chatRoomPeerTitle(members: List<ChatMember>): String {
 }
 
 /**
- * 목록 정렬 키(**내림차순** = 최근 방이 위).
+ * 목록 정렬 키(**내림차순** = 최근 방이 위) — **마지막 활동 시각**(epoch ms).
  *
- * 서버가 **마지막 메시지 시각을 주지 않아** 방 id 로 대신한다 — id 는 개설 순서라 「최근에 열린 방」
- * 까지는 맞지만 「최근에 대화한 방」은 아니다. `GET /chat-rooms/me` 에 `lastMessageAt` 이 생기면
- * **이 함수 하나만** 바꾸면 목록 전체가 따라온다(정렬 키를 호출부에 흩어 놓지 않은 이유).
+ * 마지막 메시지가 있으면 그 시각, 없으면(방금 열린 방) 방 개설 시각이다. 카카오톡식 「최근에 대화한 방」
+ * 정렬이며, 메시지가 없는 새 방은 개설 시각으로 자연스럽게 끼어든다. 두 시각 다 파싱이 안 되는
+ * 깨진 응답은 방 id 로 떨어진다(epoch 와 자릿수가 달라 맨 아래로 가지만 목록이 죽진 않는다).
  */
-internal fun chatRoomSortKey(item: MyChatRoom): Long = item.room.id
+internal fun chatRoomSortKey(item: MyChatRoom): Long {
+    val stamp = item.membership.lastMessage?.createdAt?.takeIf { it.isNotBlank() } ?: item.room.createdAt
+    return stamp.toEpochMillisOrNull() ?: item.room.id
+}
 
 class ChatListViewModel(
     private val repository: ChatRepository,
@@ -157,7 +160,8 @@ class ChatRoomViewModel(
     sealed interface UiState {
         data object Loading : UiState
         data class Success(val messages: List<DomainChatMessage>) : UiState
-        data class Error(val message: String) : UiState
+        /** @param notParticipant 403 CHAT_NOT_PARTICIPANT — 이 방에 더는 참여자가 아니다(나갔거나 빠졌다). 호출자가 캐시를 버린다 */
+        data class Error(val message: String, val notParticipant: Boolean = false) : UiState
     }
 
     data class InputState(
@@ -182,6 +186,13 @@ class ChatRoomViewModel(
     private val _peerTitle = MutableStateFlow<String?>(null)
     val peerTitle: StateFlow<String?> = _peerTitle.asStateFlow()
 
+    /**
+     * 이 방의 푸시 알림 음소거 여부(서버 `notificationMuted`). 서버 값을 받기 전엔 false 다 —
+     * 「알림 꺼짐」을 잘못 보여 주는 것보다 잠깐 켜진 것으로 보이는 편이 낫다(기본값이 켜짐이므로).
+     */
+    private val _muted = MutableStateFlow(false)
+    val muted: StateFlow<Boolean> = _muted.asStateFlow()
+
     private var lastMessageId: Long? = null
     private var chatRoomId: Long? = null
     private var pollingJob: Job? = null
@@ -200,6 +211,7 @@ class ChatRoomViewModel(
             chatRoomId = roomId
             lastMessageId = null
             _peerTitle.value = null
+            _muted.value = false
             _uiState.value = UiState.Loading
             _inputState.value = InputState()
         }
@@ -208,7 +220,42 @@ class ChatRoomViewModel(
         // 이미 대화를 그리고 있으면 스피너로 되돌리지 않는다(깜빡임 방지)
         load(showLoading = roomChanged || _uiState.value !is UiState.Success)
         loadPeerTitle(roomId)
+        if (roomChanged) loadMuted(roomId)
         startPolling()
+    }
+
+    /**
+     * 음소거 상태는 방 단독 API 가 없어 **내 방 목록**(`/chat-rooms/me`)에서 이 방을 찾아 읽는다.
+     * 방을 처음 열 때 한 번이면 된다 — 이후 변경은 이 화면의 토글이 유일한 출처라 응답을 기다리지 않고 반영한다.
+     * 실패는 삼킨다(기본 「켜짐」으로 남을 뿐).
+     */
+    private fun loadMuted(roomId: Long) {
+        viewModelScope.launch {
+            val rooms = runCatching { repository.getMyChatRooms() }.getOrNull() ?: return@launch
+            if (chatRoomId != roomId) return@launch
+            rooms.firstOrNull { it.room.id == roomId }?.let { _muted.value = it.membership.notificationMuted }
+        }
+    }
+
+    /**
+     * 알림 끄기/켜기. **낙관적으로** 먼저 바꾸고 서버가 거절하면 되돌린다 — 메뉴를 닫자마자
+     * 헤더의 「알림 꺼짐」이 따라와야 눌렀다는 느낌이 난다.
+     */
+    fun toggleMuted() {
+        val roomId = chatRoomId ?: return
+        val target = !_muted.value
+        _muted.value = target
+        viewModelScope.launch {
+            runCatching { repository.setNotificationMuted(roomId, target) }
+                .onFailure {
+                    if (chatRoomId == roomId) {
+                        _muted.value = !target
+                        _inputState.update { state ->
+                            state.copy(errorMessage = it.toChatMessage("알림 설정을 바꾸지 못했어요"))
+                        }
+                    }
+                }
+        }
     }
 
     fun retryLoad() {
@@ -242,7 +289,10 @@ class ChatRoomViewModel(
             } catch (e: Exception) {
                 // 이미 대화가 떠 있는데(조용한 재조회) 실패하면 화면을 에러로 갈아치우지 않는다
                 if (showLoading || _uiState.value !is UiState.Success) {
-                    _uiState.value = UiState.Error(e.toChatMessage("대화를 불러오지 못했어요"))
+                    _uiState.value = UiState.Error(
+                        message = e.toChatMessage("대화를 불러오지 못했어요"),
+                        notParticipant = (e as? ChatException)?.isNotParticipant == true,
+                    )
                 }
             }
         }
@@ -352,6 +402,8 @@ fun ChatRoute(
     onStartLocationShare: () -> Unit = {},
     onLeaveChat: () -> Unit = {},
     onTabSelect: (MoyeotaTab) -> Unit = {},
+    /** 열린 방에서 403(참여자 아님) — 진행 화면의 채팅방 id 캐시를 버리게 한다 */
+    onNotParticipant: () -> Unit = {},
 ) {
     var openedRoom by rememberSaveable(stateSaver = ChatRoomSaver) { mutableStateOf<ChatRoom?>(null) }
     // 방이 열린 상태의 시스템 뒤로가기는 탭을 빠져나가지 않고 목록으로 돌아간다 (화면 ← 와 동일)
@@ -378,6 +430,7 @@ fun ChatRoute(
                 onLeaveChat()
             },
             onTabSelect = onTabSelect,
+            onNotParticipant = onNotParticipant,
         )
     }
 }
@@ -420,6 +473,8 @@ private fun ChatRoomRoute(
     onStartLocationShare: () -> Unit,
     onLeaveChat: () -> Unit,
     onTabSelect: (MoyeotaTab) -> Unit,
+    /** 서버가 「참여자 아님」(403)을 답했다 — 호출자는 이 방 id 캐시를 버려야 한다 */
+    onNotParticipant: () -> Unit = {},
 ) {
     // 방이 바뀌어도 인스턴스는 하나다 — 방별 key 로 만들면 스토어에 쌓여 각자 폴링한다(QA 결함-2).
     val viewModel: ChatRoomViewModel = viewModel(
@@ -430,15 +485,24 @@ private fun ChatRoomRoute(
     val input by viewModel.inputState.collectAsState()
     val leftRoom by viewModel.leftRoom.collectAsState()
     val peerTitle by viewModel.peerTitle.collectAsState()
+    val muted by viewModel.muted.collectAsState()
 
     // 화면이 보이는 동안만 조회·폴링한다. 탭을 옮기거나 앱이 백그라운드로 가면 즉시 멈춘다.
+    // 같은 구간 동안 「이 방을 보고 있다」를 알려 푸시 알림이 겹치지 않게 한다([ChatForeground]).
     LifecycleStartEffect(room.id) {
         viewModel.onScreenStart(room.id)
-        onStopOrDispose { viewModel.stopPolling() }
+        ChatForeground.visibleRoomId = room.id
+        onStopOrDispose {
+            viewModel.stopPolling()
+            if (ChatForeground.visibleRoomId == room.id) ChatForeground.visibleRoomId = null
+        }
     }
 
     LaunchedEffect(leftRoom) {
         if (leftRoom) onLeaveChat()
+    }
+    LaunchedEffect(state) {
+        if ((state as? ChatRoomViewModel.UiState.Error)?.notParticipant == true) onNotParticipant()
     }
 
     // 방 화면의 이동 수단은 뒤로가기(목록 복귀) + 하단탭 둘 다다.
@@ -469,6 +533,11 @@ private fun ChatRoomRoute(
             onInputChange = viewModel::onInputChange,
             onSend = viewModel::send,
             onBack = onBack,
+            muted = muted,
+            onToggleMute = viewModel::toggleMuted,
+            // 진행 중인 내 방의 채팅방에서는 「나가기」를 두지 않는다 — 서버가 나간 참여자를 되살리지 못해
+            // (chat_room_user 복합키에 leftAt 만 찍힘) 한 번 나가면 운행 내내 대화에 못 돌아온다(실기 QA)
+            canLeave = onOpenMatching == null,
             onOpenMatching = onOpenMatching,
             onOpenRideOngoing = onOpenRideOngoing,
             onStartLocationShare = onStartLocationShare,
@@ -501,6 +570,8 @@ fun ChatRoomDestinationRoute(
     onStartLocationShare: () -> Unit = {},
     onLeaveChat: () -> Unit = {},
     onTabSelect: (MoyeotaTab) -> Unit = {},
+    /** 이 방에 참여자가 아니라는 403 — 진행 화면이 들고 있던 채팅방 id 캐시를 버리게 한다 */
+    onNotParticipant: () -> Unit = {},
 ) {
     var room by rememberSaveable(stateSaver = ChatRoomSaver) { mutableStateOf<ChatRoom?>(null) }
     var failure by remember { mutableStateOf<String?>(null) }
@@ -522,6 +593,7 @@ fun ChatRoomDestinationRoute(
             room = current,
             onBack = onBack,
             onOpenMatching = onOpenMatching.takeIf { current.isActiveParty(activePartyId) },
+            onNotParticipant = onNotParticipant,
             onOpenRideOngoing = onOpenRideOngoing,
             onStartLocationShare = onStartLocationShare,
             onLeaveChat = onLeaveChat,
@@ -560,12 +632,34 @@ private fun Throwable.toChatMessage(fallback: String): String {
     }
 }
 
+/** 서버 ISO-8601(Instant 또는 오프셋 표기) → Instant. 그 외 형식은 null. */
+private fun String.toInstantOrNull(): Instant? =
+    runCatching { Instant.parse(this) }.getOrNull()
+        ?: runCatching { OffsetDateTime.parse(this).toInstant() }.getOrNull()
+
+internal fun String.toEpochMillisOrNull(): Long? = toInstantOrNull()?.toEpochMilli()
+
+/**
+ * 채팅 **목록**의 시각 표기 — 오늘이면 `HH:mm`, 올해면 `M월 d일`, 그 전이면 `yyyy.M.d`.
+ * 말풍선([toTimeLabel])과 달리 날짜가 필요하다 — 목록에서 「17:36」만 보면 어제인지 지난주인지 모른다.
+ * 파싱이 안 되면 null(그 칸을 비운다 — 틀린 시각보다 없는 편이 낫다).
+ */
+internal fun String.toListTimeLabel(now: Instant = Instant.now(), zone: ZoneId = ZoneId.systemDefault()): String? {
+    val at = toInstantOrNull()?.atZone(zone) ?: return null
+    val today = now.atZone(zone).toLocalDate()
+    val date = at.toLocalDate()
+    return when {
+        date == today -> "%02d:%02d".format(at.hour, at.minute)
+        date.year == today.year -> "${date.monthValue}월 ${date.dayOfMonth}일"
+        else -> "${date.year}.${date.monthValue}.${date.dayOfMonth}"
+    }
+}
+
 // createdAt 은 서버가 UTC 기준으로 내려주는 ISO-8601 문자열이다.
 // 문자열을 그대로 자르면 KST 17:36 이 08:36 으로 보인다(QA 결함-3) — 기기 시간대로 변환해 HH:mm 만 쓴다.
 // 파싱할 수 없는 형식(오프셋 없는 LocalDateTime 등)이면 예전처럼 잘라 쓴다 — 화면은 살아야 한다.
 internal fun String.toTimeLabel(zone: ZoneId = ZoneId.systemDefault()): String? {
-    val instant = runCatching { Instant.parse(this) }.getOrNull()
-        ?: runCatching { OffsetDateTime.parse(this).toInstant() }.getOrNull()
+    val instant = toInstantOrNull()
     if (instant != null) {
         val local = instant.atZone(zone).toLocalTime()
         return "%02d:%02d".format(local.hour, local.minute)

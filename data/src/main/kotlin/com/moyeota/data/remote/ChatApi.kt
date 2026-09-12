@@ -62,6 +62,13 @@ interface ChatApi {
     suspend fun getMembers(@Path("chatRoomId") chatRoomId: Long): List<ChatMemberResponse>
 
     // 200 OK, 본문 없음
+    // 알림 음소거 — 같은 경로에 POST(끄기) / DELETE(켜기). 둘 다 200, 본문 없음.
+    @POST("api/v1/chat-rooms/{chatRoomId}/users/notification/mute")
+    suspend fun muteNotification(@Path("chatRoomId") chatRoomId: Long)
+
+    @DELETE("api/v1/chat-rooms/{chatRoomId}/users/notification/mute")
+    suspend fun unmuteNotification(@Path("chatRoomId") chatRoomId: Long)
+
     @POST("api/v1/chat-rooms/{chatRoomId}/users/read/{readMessageId}")
     suspend fun readRoom(
         @Path("chatRoomId") chatRoomId: Long,

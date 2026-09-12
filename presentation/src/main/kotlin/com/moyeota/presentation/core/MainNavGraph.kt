@@ -79,6 +79,12 @@ fun MainNavGraph(
     chatRepository: ChatRepository,
     dispatchRepository: DispatchRepository,
     activePartyRepository: ActivePartyRepository,
+    /**
+     * 채팅 알림 탭으로 열어 달라는 방. 로그인돼 있고 그래프가 준비되면 그 채팅방을 **스택에 쌓고**
+     * [onPendingChatRoomHandled] 로 소비를 알린다. 미로그인이면 무시한다(로그인 뒤 엉뚱한 방을 여는 것보다 낫다).
+     */
+    pendingChatRoomId: Long? = null,
+    onPendingChatRoomHandled: () -> Unit = {},
 ) {
     val authState by authRepository.authState.collectAsState()
 
@@ -95,6 +101,8 @@ fun MainNavGraph(
         chatRepository = chatRepository,
         dispatchRepository = dispatchRepository,
         activePartyRepository = activePartyRepository,
+        pendingChatRoomId = pendingChatRoomId,
+        onPendingChatRoomHandled = onPendingChatRoomHandled,
     )
 }
 
@@ -116,6 +124,8 @@ private fun MainNavHost(
     chatRepository: ChatRepository,
     dispatchRepository: DispatchRepository,
     activePartyRepository: ActivePartyRepository,
+    pendingChatRoomId: Long? = null,
+    onPendingChatRoomHandled: () -> Unit = {},
 ) {
     val navController = rememberNavController()
     val scope = rememberCoroutineScope()
@@ -303,6 +313,23 @@ private fun MainNavHost(
         val ride = activeRide ?: return@LaunchedEffect
         if (navController.currentDestination?.route != Routes.HOME) return@LaunchedEffect
         navigateToStage(ride)
+    }
+
+    // 채팅 알림 탭 → 그 채팅방. 현재 화면 위에 **쌓는다**(뒤로가기로 원래 자리 복귀). 이미 그 방이
+    // 맨 위면 다시 쌓지 않는다. 미로그인이면 소비만 하고 지나간다 — 로그인 화면을 채팅방으로 덮을 순 없다.
+    LaunchedEffect(pendingChatRoomId, loggedIn) {
+        val roomId = pendingChatRoomId ?: return@LaunchedEffect
+        if (!loggedIn) {
+            onPendingChatRoomHandled()
+            return@LaunchedEffect
+        }
+        if (navController.currentDestination == null) delay(100)
+        val target = Routes.chatRoom(roomId)
+        val onTop = navController.currentBackStackEntry?.let { entry ->
+            entry.destination.route == Routes.CHAT_ROOM && entry.arguments?.getLong(CHAT_ROOM_ID_ARG) == roomId
+        } ?: false
+        if (!onTop) navController.navigate(target)
+        onPendingChatRoomHandled()
     }
 
     NavHost(navController = navController, startDestination = startDestination) {
@@ -594,7 +621,12 @@ private fun MainNavHost(
                 onOpenMatching = { activeRide?.let(::navigateToStage) },
                 onOpenRideOngoing = { navController.navigate(Routes.RIDE_ONGOING) },
                 onStartLocationShare = { navController.navigate(Routes.RIDE_ONGOING) },
-                onLeaveChat = { navigateTab(MoyeotaTab.HOME) },
+                onLeaveChat = {
+                    // 나간 방 id 를 진행 화면이 들고 있으면 「채팅 열기」가 죽은 방으로 간다 — 캐시를 버린다
+                    activePartyViewModel.forgetChatRoom()
+                    navigateTab(MoyeotaTab.HOME)
+                },
+                onNotParticipant = activePartyViewModel::forgetChatRoom,
                 onTabSelect = ::navigateTab,
             )
         }
@@ -619,7 +651,12 @@ private fun MainNavHost(
                     onOpenMatching = { activeRide?.let(::navigateToStage) },
                     onOpenRideOngoing = { navController.navigate(Routes.RIDE_ONGOING) },
                     onStartLocationShare = { navController.navigate(Routes.RIDE_ONGOING) },
-                    onLeaveChat = { navigateTab(MoyeotaTab.HOME) },
+                    onLeaveChat = {
+                    // 나간 방 id 를 진행 화면이 들고 있으면 「채팅 열기」가 죽은 방으로 간다 — 캐시를 버린다
+                    activePartyViewModel.forgetChatRoom()
+                    navigateTab(MoyeotaTab.HOME)
+                },
+                onNotParticipant = activePartyViewModel::forgetChatRoom,
                     onTabSelect = ::navigateTab,
                 )
             }
