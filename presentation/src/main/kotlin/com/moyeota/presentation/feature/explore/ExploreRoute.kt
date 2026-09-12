@@ -172,7 +172,6 @@ fun ExploreRoute(
         }
         is ExploreViewModel.UiState.Success -> ExploreScreen(
             parties = current.parties,
-            waitingCount = current.parties.sumOf { it.members.size },
             activeRide = activeRide,
             locationGranted = myLocation.isGranted,
             myLocation = myFix,

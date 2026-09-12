@@ -7,7 +7,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -54,6 +53,16 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.AvatarCircle
 import com.moyeota.core.designsystem.component.MoyeotaBottomBar
@@ -123,9 +132,8 @@ private data class MapCamera(val center: LatLng, val zoom: Double)
 /**
  * 지도 카메라 — **화면 레벨**에서 들고 있는다.
  *
- * 시트 단계가 바뀌면 지도가 통째로 교체된다(PEEK 전체 화면 ⇄ HALF 320dp = 서로 다른 컴포저블).
- * 카메라를 지도 안에만 두면 그때마다 기준점으로 되돌아가는데, 목록이 카메라를 따라가는 지금은
- * 「서면까지 팬 → 리스트 보려고 시트 올림 → 부산대 목록」이 되어 보던 결과가 통째로 사라진다.
+ * 지도는 이제 시트 단계와 무관하게 하나지만, **탭 전환·회전**으로는 여전히 다시 만들어진다.
+ * 카메라를 지도 안에만 두면 그때마다 기준점으로 되돌아가 보던 목록이 통째로 사라진다.
  */
 @Stable
 private class ExploreCameraState(
@@ -173,46 +181,53 @@ private val DefaultParties = listOf(
 // 「여성만」 방 (Ride 도메인 모델에 없는 속성 — 카드 배지 재현용)
 private val FemaleOnlyRideIds = setOf("ride-1", "ride-3", "ride-5")
 
-// 시트가 지도를 덮는 높이 — 지도 contentPadding 으로 넘겨 카메라 중심을 가시 영역에 잡는다
+/** 접힘(17) 시트 높이 — 핸들 + 한 줄 요약 */
 private val PeekSheetHeight = 96.dp
-private val HalfMapHeight = 320.dp
-private val HalfSheetTop = 300.dp
+
+/** 반펼침(18)에서 시트 위로 남기는 지도 높이 */
+private val HalfMapHeight = 300.dp
+
+/** 시트 앵커 사이를 오가는 정착 애니메이션 */
+private const val SheetAnimMs = 260
+
+/** 이 속도(px/s) 이상으로 던지면 위치와 무관하게 그 방향의 다음 앵커로 붙는다 (MapSheetScaffold 와 같은 값) */
+private const val SheetFlingVelocity = 400f
 
 /**
  * 목록 헤더와 첫 카드 사이 간격 — 18·19 공통.
- *
- * 필터 칩 행이 빠지면서 두 화면의 헤더-리스트 간격이 서로 다른 여백 조각의 합(12+14 / 10+14)으로
- * 남았다. 같은 목록을 같은 리듬으로 보여줘야 하므로 한 값으로 묶는다.
  */
 private val ListHeaderGap = 12.dp
 
 /**
  * 17·18·19 · 합승 — 내 주변 [V07/V07b/V07c]
  *
- * 시트 상태 전환 (디스크립션):
- * - PEEK: 시트 위로 드래그 → HALF (18)
- * - HALF: 「지도 접기 ⌄」 → FULL (19) · 시트 아래로 드래그 → PEEK (17)
- * - FULL: 「지도 펼치기 ⌃」 / 「🗺 지도」 → HALF (18)
+ * **지도는 하나다.** 시트 단계(PEEK/HALF/FULL)는 지도 위에 얹힌 시트의 **높이**만 바꾼다 —
+ * 예전에는 단계마다 다른 컴포저블(전체 지도 / 320dp 지도 / 지도 없음)로 갈아끼워서
+ * 단계를 바꿀 때마다 지도가 새로 만들어지고(타일 재로드·카메라 복원) 전환 애니메이션도 없었다(실기 QA).
+ * 지금은 시트 높이가 앵커 사이를 애니메이션으로 오가고, 지도는 `contentPadding` 만 따라 바뀐다.
+ *
+ * 시트 상태 전환:
+ * - 핸들·헤더를 **드래그**하면 가까운 앵커(또는 던진 방향의 다음 앵커)로 정착 — 세 단계 모두
+ * - PEEK 의 「⌃」 탭 → HALF · HALF/FULL 헤더의 「지도 접기 ⌄ / 지도 펼치기 ⌃」 → FULL/HALF
+ *   (접기·펼치기는 **이 한 버튼**뿐이다 — 타이틀 행의 「🗺 지도」는 행 높이를 흔들어 뺐다)
  *
  * 이동(디스크립션):
  * - 「{단계} · {목적지} 보기 ›」 배너 → 진행 중인 방의 단계 화면 21/25/26 (onOngoingRideClick)
  * - 지도 마커 탭 / 카드 「합류」 → 20 합류 확인 (onJoinParty)
- * - 「＋ 새 합승 방 만들기」 → 15 목적지 입력 (onCreateRoomClick, 미연결 — 기본 무동작)
+ * - 「＋ 새 합승 방 만들기」 → 15 목적지 입력 (onCreateRoomClick)
  * - 하단탭 홈 / 채팅 / 마이 → 14 / 24 / 35 (onTabSelect)
  *
  * 검증·상태:
- * - 방 목록은 **지도에 보이는 범위**로 조회한 결과다([onVisibleBoundsChange]) — 마커와 리스트가 같은 목록
+ * - 방 목록은 **지도에 보이는 범위**로 조회한 결과다([onVisibleBoundsChange]) — 마커·리스트·**헤더의 N개**가 같은 목록
  * - 지도는 네이버 실지도. 내 위치는 기기 GPS([myLocation]) — 못 받으면 [DemoOrigin] 기준점으로 폴백
  * - 위치 권한 없으면 지도 대신 권한 요청 안내 + 「위치 권한 허용」 버튼 (locationGranted)
  * - 후보 0건이면 peek 문구 자리에 빈 상태 + 지도를 움직여 보라는 안내
- * - 진행 중 탑승 없으면 상단 배너 숨김 ([activeRide] 가 null). 데모 기본값을 두지 않는다 —
- *   있지도 않은 탑승을 가리키는 배너는 눌러도 갈 곳이 없다
+ * - 진행 중 탑승 없으면 상단 배너 숨김 ([activeRide] 가 null). 배너가 있으면 지도 줌 컨트롤이 그 아래로 내려간다
  * - 정원 찬 방(3/3)은 「합류」 비활성 + 「마감」 표기
  */
 @Composable
 fun ExploreScreen(
     parties: List<Ride> = DefaultParties,
-    waitingCount: Int = 23,
     /** 지금 진행 중인 내 방. null 이면 상단 배너를 그리지 않는다 */
     activeRide: Ride? = null,
     locationGranted: Boolean = true,
@@ -221,24 +236,24 @@ fun ExploreScreen(
     initialSheetState: ExploreSheetState = ExploreSheetState.PEEK,
     onJoinParty: (Ride) -> Unit = {},
     onOngoingRideClick: () -> Unit = {},
-    onCreateRoomClick: () -> Unit = {}, // 미연결 (→ 15 목적지 입력)
+    onCreateRoomClick: () -> Unit = {},
     onRequestLocationPermission: () -> Unit = {},
     // 지도 카메라가 멈출 때마다 보이는 영역을 올려보낸다 → 그 범위의 방 목록으로 갱신
     onVisibleBoundsChange: (MapBounds) -> Unit = {},
     onTabSelect: (MoyeotaTab) -> Unit = {},
 ) {
-    var sheetState by remember { mutableStateOf(initialSheetState) }
-    // 시트 단계를 오르내려도 지도가 보던 자리에 그대로 있어야 목록도 그대로다
+    var sheetState by rememberSaveable { mutableStateOf(initialSheetState) }
+    // 탭 전환·회전에도 보던 자리를 유지한다 (시트 단계 변경으로는 이제 지도가 재생성되지 않는다)
     val cameraState = rememberSaveable(saver = ExploreCameraStateSaver) {
         ExploreCameraState(initialCamera = null, initialCenteredOnMyLocation = false)
     }
     Column(modifier = Modifier.fillMaxSize().background(CanvasBg)) {
         StatusBarSpacer()
 
-        // 타이틀 행 — FULL에서는 우측에 「🗺 지도」 (→ 18)
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        // 타이틀 행 — **고정 높이**. 단계에 따라 버튼이 생기고 사라지면 행 높이가 흔들려 제목이 움직였다
+        Box(
+            modifier = Modifier.fillMaxWidth().height(TitleRowHeight).padding(horizontal = 24.dp),
+            contentAlignment = Alignment.CenterStart,
         ) {
             Text(
                 text = "합승 — 내 주변",
@@ -246,65 +261,137 @@ fun ExploreScreen(
                 fontWeight = FontWeight.Bold,
                 color = MoyeotaColor.InkPrimary,
             )
-            Spacer(Modifier.weight(1f))
-            if (sheetState == ExploreSheetState.FULL) {
-                Box(
-                    modifier = Modifier
-                        .height(32.dp)
-                        .clip(CircleShape)
-                        .background(MoyeotaColor.SurfaceCanvas)
-                        .border(1.dp, ChipBorder, CircleShape)
-                        .clickable { sheetState = ExploreSheetState.HALF }
-                        .padding(horizontal = 14.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        text = "🗺 지도",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MoyeotaColor.Primary500,
-                    )
-                }
-            }
         }
 
-        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            when (sheetState) {
-                ExploreSheetState.PEEK -> PeekContent(
-                    parties = parties,
-                    waitingCount = waitingCount,
-                    activeRide = activeRide,
-                    locationGranted = locationGranted,
+        BoxWithConstraints(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            val density = LocalDensity.current
+            val containerHeight = maxHeight
+            // 앵커 = 시트 높이. HALF 는 지도 300dp 를 남기고, FULL 은 지도를 다 덮는다
+            val anchorDp: (ExploreSheetState) -> Dp = { state ->
+                when (state) {
+                    ExploreSheetState.PEEK -> PeekSheetHeight
+                    ExploreSheetState.HALF -> (containerHeight - HalfMapHeight).coerceAtLeast(PeekSheetHeight)
+                    ExploreSheetState.FULL -> containerHeight
+                }
+            }
+            val anchorPx: (ExploreSheetState) -> Float = { state -> with(density) { anchorDp(state).toPx() } }
+
+            val sheetPx = remember { Animatable(anchorPx(sheetState)) }
+            // 단계가 바뀌면(탭·드래그 정착·회전) 그 앵커로 애니메이션
+            LaunchedEffect(sheetState, containerHeight) {
+                sheetPx.animateTo(anchorPx(sheetState), tween(SheetAnimMs))
+            }
+            // 드래그 중에는 이 값만 따라간다 (MapSheetScaffold 와 같은 이유 — 매 프레임 snapTo 는 정착을 끊는다)
+            var dragPx by remember { mutableStateOf<Float?>(null) }
+            val sheetHeight = with(density) { (dragPx ?: sheetPx.value).toDp() }
+            val scope = rememberCoroutineScope()
+            val dragState = rememberDraggableState { delta ->
+                dragPx = ((dragPx ?: sheetPx.value) - delta)
+                    .coerceIn(anchorPx(ExploreSheetState.PEEK), anchorPx(ExploreSheetState.FULL))
+            }
+
+            // 진행 배너 높이 — 지도 위 contentPadding 으로 넘겨 줌 컨트롤(+/−)이 배너 아래로 내려가게 한다
+            // (작은 폰에서 배너와 줌 버튼이 겹치던 문제)
+            var bannerHeightPx by remember { mutableIntStateOf(0) }
+            val bannerHeight = with(density) { bannerHeightPx.toDp() }
+
+            // 배경 지도 — 단계가 바뀌어도 같은 인스턴스. 시트에 덮이는 높이만 contentPadding 으로 알린다.
+            // FULL 에서는 지도가 통째로 가려지므로 HALF 기준으로 고정한다(패딩이 뷰 높이를 넘으면 안 된다)
+            val mapBottomInset = minOf(anchorDp(sheetState), anchorDp(ExploreSheetState.HALF))
+            if (locationGranted) {
+                ExploreMap(
+                    rides = parties,
                     myLocation = myLocation,
                     cameraState = cameraState,
-                    onOngoingRideClick = onOngoingRideClick,
                     onMarkerClick = onJoinParty,
-                    onRequestLocationPermission = onRequestLocationPermission,
                     onVisibleBoundsChange = onVisibleBoundsChange,
-                    onRaise = { sheetState = ExploreSheetState.HALF },
+                    contentPadding = PaddingValues(top = bannerHeight, bottom = mapBottomInset),
+                    modifier = Modifier.fillMaxSize(),
                 )
+            } else {
+                LocationPermissionNotice(
+                    onRequestPermission = onRequestLocationPermission,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
 
-                ExploreSheetState.HALF -> HalfContent(
-                    parties = parties,
-                    locationGranted = locationGranted,
-                    myLocation = myLocation,
-                    cameraState = cameraState,
-                    onJoinParty = onJoinParty,
-                    onMarkerClick = onJoinParty,
-                    onCreateRoomClick = onCreateRoomClick,
-                    onRequestLocationPermission = onRequestLocationPermission,
-                    onVisibleBoundsChange = onVisibleBoundsChange,
-                    onCollapseMap = { sheetState = ExploreSheetState.FULL },
-                    onLower = { sheetState = ExploreSheetState.PEEK },
+            if (activeRide != null) {
+                ActiveRideBanner(
+                    ride = activeRide,
+                    onClick = onOngoingRideClick,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .onSizeChanged { bannerHeightPx = it.height }
+                        .padding(horizontal = 20.dp, vertical = 4.dp),
                 )
+            }
 
-                ExploreSheetState.FULL -> FullContent(
-                    parties = parties,
-                    waitingCount = waitingCount,
-                    onJoinParty = onJoinParty,
-                    onCreateRoomClick = onCreateRoomClick,
-                    onExpandMap = { sheetState = ExploreSheetState.HALF },
-                )
+            // 시트 — 높이만 앵커 사이를 오간다. 내용은 **목표 단계** 기준이라 애니메이션 중에 흔들리지 않는다.
+            // FULL 에서는 모서리를 각지게 — 둥근 모서리 틈으로 뒤의 지도가 비친다
+            val sheetShape = if (sheetState == ExploreSheetState.FULL) RoundedCornerShape(0.dp)
+            else RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .height(sheetHeight)
+                    .shadow(14.dp, sheetShape, spotColor = Color(0x1A000000))
+                    .clip(sheetShape)
+                    .background(MoyeotaColor.SurfaceCanvas),
+            ) {
+                // 드래그 타깃 = 핸들 + 그 아래 한 줄(요약 또는 헤더)
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .draggable(
+                            state = dragState,
+                            orientation = Orientation.Vertical,
+                            onDragStopped = { velocity ->
+                                val from = dragPx ?: sheetPx.value
+                                val target = settleTarget(from, velocity, anchorPx)
+                                scope.launch {
+                                    sheetPx.snapTo(from)
+                                    dragPx = null
+                                    // 같은 단계로 돌아가면 LaunchedEffect 가 다시 돌지 않으므로 직접 정착시킨다
+                                    if (target == sheetState) sheetPx.animateTo(anchorPx(target), tween(SheetAnimMs))
+                                    else sheetState = target
+                                }
+                            },
+                        ),
+                ) {
+                    Box(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
+                        SheetHandle()
+                    }
+                    if (sheetState == ExploreSheetState.PEEK) {
+                        PeekSummaryRow(count = parties.size, onRaise = { sheetState = ExploreSheetState.HALF })
+                    } else {
+                        ListHeaderRow(
+                            count = parties.size,
+                            mapShown = sheetState == ExploreSheetState.HALF,
+                            onToggleMap = {
+                                sheetState = if (sheetState == ExploreSheetState.HALF) ExploreSheetState.FULL else ExploreSheetState.HALF
+                            },
+                        )
+                    }
+                }
+
+                if (sheetState != ExploreSheetState.PEEK) {
+                    Spacer(Modifier.height(ListHeaderGap))
+                    if (sheetState == ExploreSheetState.FULL) {
+                        HorizontalDivider(color = ChipBorder)
+                        Spacer(Modifier.height(ListHeaderGap))
+                    }
+                    PartyList(
+                        parties = parties,
+                        onJoinParty = onJoinParty,
+                        showEndOfList = sheetState == ExploreSheetState.FULL,
+                        modifier = Modifier.weight(1f),
+                    )
+                    CreateRoomButton(
+                        onClick = onCreateRoomClick,
+                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 10.dp),
+                    )
+                }
             }
         }
 
@@ -312,241 +399,79 @@ fun ExploreScreen(
     }
 }
 
-// ─── 17 · 지도 (peek) ───────────────────────────────────────────────────────
+/** 타이틀 행 고정 높이 — 예전 「🗺 지도」 버튼(32dp) + 세로 여백(6dp×2) 과 같은 값이라 레이아웃이 그대로다 */
+private val TitleRowHeight = 44.dp
 
-@Composable
-private fun PeekContent(
-    parties: List<Ride>,
-    waitingCount: Int,
-    activeRide: Ride?,
-    locationGranted: Boolean,
-    myLocation: MyLocationFix?,
-    cameraState: ExploreCameraState,
-    onOngoingRideClick: () -> Unit,
-    onMarkerClick: (Ride) -> Unit,
-    onRequestLocationPermission: () -> Unit,
-    onVisibleBoundsChange: (MapBounds) -> Unit,
-    onRaise: () -> Unit,
-) {
-    Box(modifier = Modifier.fillMaxSize()) {
-        if (locationGranted) {
-            ExploreMap(
-                rides = parties,
-                myLocation = myLocation,
-                cameraState = cameraState,
-                onMarkerClick = onMarkerClick,
-                onVisibleBoundsChange = onVisibleBoundsChange,
-                contentPadding = PaddingValues(bottom = PeekSheetHeight),
-                modifier = Modifier.fillMaxSize(),
-            )
-        } else {
-            LocationPermissionNotice(
-                onRequestPermission = onRequestLocationPermission,
-                modifier = Modifier.fillMaxSize(),
-            )
-        }
-
-        // 지도 위 오버레이는 이제 배너 하나뿐 — 자기 높이(48dp)만 덮고 나머지 팬·줌은 지도로 간다
-        if (activeRide != null) {
-            ActiveRideBanner(
-                ride = activeRide,
-                onClick = onOngoingRideClick,
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
-            )
-        }
-
-        PeekSheet(
-            waitingCount = waitingCount,
-            isEmpty = parties.isEmpty(),
-            onRaise = onRaise,
-            modifier = Modifier.align(Alignment.BottomCenter),
-        )
+/**
+ * 손을 뗀 위치·속도로 정착할 앵커. 빠르게 던지면 그 방향의 **다음** 앵커, 아니면 가장 가까운 앵커.
+ */
+private fun settleTarget(
+    fromPx: Float,
+    velocity: Float,
+    anchorPx: (ExploreSheetState) -> Float,
+): ExploreSheetState {
+    val ordered = ExploreSheetState.entries.sortedBy(anchorPx)
+    return when {
+        // 아래로 던짐 → 현재 위치보다 낮은 앵커 중 가장 가까운 것
+        velocity > SheetFlingVelocity -> ordered.lastOrNull { anchorPx(it) < fromPx - 1f } ?: ordered.first()
+        velocity < -SheetFlingVelocity -> ordered.firstOrNull { anchorPx(it) > fromPx + 1f } ?: ordered.last()
+        else -> ordered.minBy { kotlin.math.abs(anchorPx(it) - fromPx) }
     }
 }
 
+/** 17 접힘 요약 — 「주변 합승 N개」. N 은 헤더·마커와 같은 목록(지도 범위)의 방 수다 */
 @Composable
-private fun PeekSheet(
-    waitingCount: Int,
-    isEmpty: Boolean,
-    onRaise: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .height(PeekSheetHeight)
-            .shadow(14.dp, RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp), spotColor = Color(0x1A000000))
-            .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
-            .background(MoyeotaColor.SurfaceCanvas)
-            .dragToTransition(onDragUp = onRaise),
-        horizontalAlignment = Alignment.CenterHorizontally,
+private fun PeekSummaryRow(count: Int, onRaise: () -> Unit) {
+    val isEmpty = count == 0
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Spacer(Modifier.height(12.dp))
-        SheetHandle()
-        Spacer(Modifier.height(10.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            if (!isEmpty) {
-                Box(Modifier.size(10.dp).background(MoyeotaColor.Primary500, CircleShape))
-                Spacer(Modifier.width(8.dp))
-            }
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = if (isEmpty) "이 근처엔 대기가 없어요" else "주변에 ${waitingCount}명이 대기 중",
-                    fontSize = 19.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MoyeotaColor.InkPrimary,
-                )
-                Text(
-                    text = if (isEmpty) "지도를 움직여 보세요" else "위로 올리면 리스트, 목적지 정하면 바로 자동 매칭",
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = GrayMute,
-                )
-            }
-            ChevronUpIcon(
-                color = GrayAsh,
-                modifier = Modifier.clickable { onRaise() },
-            )
+        if (!isEmpty) {
+            Box(Modifier.size(10.dp).background(MoyeotaColor.Primary500, CircleShape))
+            Spacer(Modifier.width(8.dp))
         }
-    }
-}
-
-// ─── 18 · 지도+리스트 (half) ────────────────────────────────────────────────
-
-@Composable
-private fun HalfContent(
-    parties: List<Ride>,
-    locationGranted: Boolean,
-    myLocation: MyLocationFix?,
-    cameraState: ExploreCameraState,
-    onJoinParty: (Ride) -> Unit,
-    onMarkerClick: (Ride) -> Unit,
-    onCreateRoomClick: () -> Unit,
-    onRequestLocationPermission: () -> Unit,
-    onVisibleBoundsChange: (MapBounds) -> Unit,
-    onCollapseMap: () -> Unit,
-    onLower: () -> Unit,
-) {
-    Box(modifier = Modifier.fillMaxSize()) {
-        if (locationGranted) {
-            ExploreMap(
-                rides = parties,
-                myLocation = myLocation,
-                cameraState = cameraState,
-                onMarkerClick = onMarkerClick,
-                onVisibleBoundsChange = onVisibleBoundsChange,
-                // 시트가 지도 하단 20dp 를 덮는다 (지도 320 · 시트 top 300)
-                contentPadding = PaddingValues(bottom = HalfMapHeight - HalfSheetTop),
-                modifier = Modifier.fillMaxWidth().height(HalfMapHeight),
-            )
-        } else {
-            LocationPermissionNotice(
-                onRequestPermission = onRequestLocationPermission,
-                modifier = Modifier.fillMaxWidth().height(HalfMapHeight),
-            )
-        }
-
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(top = HalfSheetTop)
-                .shadow(14.dp, RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp), spotColor = Color(0x1A000000))
-                .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
-                .background(MoyeotaColor.SurfaceCanvas),
-        ) {
-            // 핸들 + 헤더 — 아래로 드래그 → 17 (peek)
-            Column(
-                modifier = Modifier.fillMaxWidth().dragToTransition(onDragDown = onLower),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Spacer(Modifier.height(12.dp))
-                SheetHandle()
-                Spacer(Modifier.height(14.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = "주변 합승 · 가까운 순",
-                        fontSize = 17.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MoyeotaColor.InkPrimary,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Text(
-                        text = "지도 접기 ⌄",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = MoyeotaColor.Primary500,
-                        modifier = Modifier.clickable { onCollapseMap() },
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(ListHeaderGap))
-
-            PartyList(
-                parties = parties,
-                onJoinParty = onJoinParty,
-                showEndOfList = false,
-                modifier = Modifier.weight(1f),
-            )
-
-            CreateRoomButton(
-                onClick = onCreateRoomClick,
-                modifier = Modifier.padding(horizontal = 24.dp, vertical = 10.dp),
-            )
-        }
-    }
-}
-
-// ─── 19 · 리스트 (full) ─────────────────────────────────────────────────────
-
-@Composable
-private fun FullContent(
-    parties: List<Ride>,
-    waitingCount: Int,
-    onJoinParty: (Ride) -> Unit,
-    onCreateRoomClick: () -> Unit,
-    onExpandMap: () -> Unit,
-) {
-    Column(modifier = Modifier.fillMaxSize()) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+        Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = "주변 ${waitingCount}명 · 가까운 순",
-                fontSize = 17.sp,
+                text = if (isEmpty) "이 근처엔 합승이 없어요" else "주변 합승 ${count}개 모집 중",
+                fontSize = 19.sp,
                 fontWeight = FontWeight.Bold,
                 color = MoyeotaColor.InkPrimary,
-                modifier = Modifier.weight(1f),
             )
             Text(
-                text = "지도 펼치기 ⌃",
+                text = if (isEmpty) "지도를 움직여 보세요" else "위로 올리면 리스트, 목적지 정하면 바로 자동 매칭",
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Medium,
-                color = MoyeotaColor.Primary500,
-                modifier = Modifier.clickable { onExpandMap() },
+                color = GrayMute,
             )
         }
-        Spacer(Modifier.height(ListHeaderGap))
-        HorizontalDivider(color = ChipBorder)
-        Spacer(Modifier.height(ListHeaderGap))
+        ChevronUpIcon(
+            color = GrayAsh,
+            modifier = Modifier.clickable { onRaise() },
+        )
+    }
+}
 
-        PartyList(
-            parties = parties,
-            onJoinParty = onJoinParty,
-            showEndOfList = true,
+/** 18·19 목록 헤더 — 「주변 합승 N개 · 가까운 순」 + 지도 접기/펼치기 **단일** 토글 */
+@Composable
+private fun ListHeaderRow(count: Int, mapShown: Boolean, onToggleMap: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "주변 합승 ${count}개 · 가까운 순",
+            fontSize = 17.sp,
+            fontWeight = FontWeight.Bold,
+            color = MoyeotaColor.InkPrimary,
             modifier = Modifier.weight(1f),
         )
-
-        CreateRoomButton(
-            onClick = onCreateRoomClick,
-            modifier = Modifier.padding(horizontal = 24.dp, vertical = 10.dp),
+        Text(
+            text = if (mapShown) "지도 접기 ⌄" else "지도 펼치기 ⌃",
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+            color = MoyeotaColor.Primary500,
+            modifier = Modifier.clickable { onToggleMap() },
         )
     }
 }
@@ -1097,6 +1022,17 @@ private fun MyLocationOverlay(map: NaverMap?, fix: MyLocationFix) {
     }
 }
 
+@Composable
+private fun ChevronUpIcon(color: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier.size(18.dp)) {
+        val w = size.width
+        val h = size.height
+        val stroke = 2.2.dp.toPx()
+        drawLine(color, Offset(w * 0.2f, h * 0.62f), Offset(w * 0.5f, h * 0.34f), stroke, StrokeCap.Round)
+        drawLine(color, Offset(w * 0.8f, h * 0.62f), Offset(w * 0.5f, h * 0.34f), stroke, StrokeCap.Round)
+    }
+}
+
 /**
  * 오차 반경(m)을 현재 줌의 화면 픽셀로 환산한다.
  *
@@ -1109,38 +1045,6 @@ private fun accuracyRadiusPx(map: NaverMap, accuracyMeters: Float?): Int {
     // 지도가 아직 레이아웃되지 않으면 0·NaN 이 나온다 — 다음 카메라 변화 때 다시 계산된다
     if (!metersPerPixel.isFinite() || metersPerPixel <= 0.0) return LocationOverlay.SIZE_AUTO
     return (accuracyMeters / metersPerPixel).toInt().coerceIn(0, MaxAccuracyRadiusPx)
-}
-
-@Composable
-private fun ChevronUpIcon(color: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier.size(18.dp)) {
-        val w = size.width
-        val h = size.height
-        val stroke = 2.2.dp.toPx()
-        drawLine(color, Offset(w * 0.2f, h * 0.62f), Offset(w * 0.5f, h * 0.34f), stroke, StrokeCap.Round)
-        drawLine(color, Offset(w * 0.8f, h * 0.62f), Offset(w * 0.5f, h * 0.34f), stroke, StrokeCap.Round)
-    }
-}
-
-
-// 시트 핸들 드래그 → 상태 전환 (위: PEEK→HALF · 아래: HALF→PEEK)
-private fun Modifier.dragToTransition(
-    onDragUp: (() -> Unit)? = null,
-    onDragDown: (() -> Unit)? = null,
-): Modifier = pointerInput(onDragUp, onDragDown) {
-    var total = 0f
-    val threshold = 24.dp.toPx()
-    detectVerticalDragGestures(
-        onDragStart = { total = 0f },
-        onDragEnd = {
-            if (total < -threshold) onDragUp?.invoke()
-            if (total > threshold) onDragDown?.invoke()
-        },
-        onVerticalDrag = { change, dragAmount ->
-            change.consume()
-            total += dragAmount
-        },
-    )
 }
 
 @Preview(showBackground = true, widthDp = 393, heightDp = 852)

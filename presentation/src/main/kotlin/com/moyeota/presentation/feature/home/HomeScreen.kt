@@ -33,6 +33,12 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.MapSheetScaffold
 import com.moyeota.core.designsystem.component.MoyeotaBottomBar
@@ -113,14 +119,23 @@ fun HomeScreen(
             mapRevealHeight = HomeMapRevealHeight,
             collapsedSheetHeight = HomeCollapsedSheetHeight,
             background = { sheet ->
+                // 진행 배너(상태바 포함) 높이 — 지도 top contentPadding 으로 넘겨 줌 컨트롤(+/−)이
+                // 배너 아래로 내려가게 한다(작은 폰에서 배너와 줌 버튼이 겹치던 문제)
+                var bannerHeightPx by remember { mutableIntStateOf(0) }
+                val bannerHeight = with(LocalDensity.current) { bannerHeightPx.toDp() }
                 NaverMapView(
                     modifier = Modifier.fillMaxSize(),
                     // 앵커 기준 시트 높이를 빼 카메라 중심이 시트 뒤가 아니라 실제 보이는 영역에 잡히게 한다
-                    contentPadding = PaddingValues(bottom = sheet.settledSheetHeight),
+                    contentPadding = PaddingValues(top = bannerHeight, bottom = sheet.settledSheetHeight),
                 )
                 // 진행 중인 방이 있으면 지도 위에 복귀 배너 하나만 얹는다 — 배너 밖은 여전히 지도의 것이다
                 if (activeRide != null) {
-                    Column(modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth()) {
+                    Column(
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .fillMaxWidth()
+                            .onSizeChanged { bannerHeightPx = it.height },
+                    ) {
                         StatusBarSpacer()
                         ActiveRideBanner(
                             ride = activeRide,
