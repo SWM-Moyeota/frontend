@@ -13,6 +13,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -136,8 +141,18 @@ fun ChatScreen(
 
     val sendEnabled = input.isNotBlank() && input.length <= 500 && !sending
 
+    // 키보드가 올라온 만큼 화면을 줄인다. enableEdgeToEdge() 로 창이 IME 에 맞춰 리사이즈되지 않아
+    // imePadding 이 없으면 입력 바와 하단탭이 키보드 뒤로 숨는다(실기 QA).
+    val imeBottomPx = WindowInsets.ime.getBottom(LocalDensity.current)
+    val imeVisible = imeBottomPx > 0
+    // 메시지 리스트는 항상 **마지막 대화**를 보여 준다 — 새 메시지·키보드 등장으로 영역이 줄 때 모두
+    val listScroll = rememberScrollState()
+    LaunchedEffect(messages.size, imeVisible, listScroll.maxValue) {
+        listScroll.animateScrollTo(listScroll.maxValue)
+    }
+
     Box(modifier = Modifier.fillMaxSize().background(CanvasBg)) {
-        Column(modifier = Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize().imePadding()) {
             // 헤더 (흰 배경)
             Column(modifier = Modifier.fillMaxWidth().background(MoyeotaColor.SurfaceCanvas)) {
                 StatusBarSpacer()
@@ -202,38 +217,65 @@ fun ChatScreen(
                         .padding(horizontal = 28.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    // 왼쪽 문구만 줄어든다 — weight 없이 두면 좁은 폰에서 오른쪽 링크가 밀려 잘린다
                     Text(
                         text = "진행 중인 탑승이 있어요",
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
                         color = MoyeotaColor.InkPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
                     )
-                    Spacer(Modifier.weight(1f))
+                    Spacer(Modifier.width(10.dp))
                     Text(
                         text = "매칭 화면으로 →",
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
                         color = MoyeotaColor.Primary600,
+                        maxLines = 1,
                     )
                 }
             }
 
-            // 「실시간 위치 공유 중」 배너 — 탭 → 26 운행 중
+            // 「실시간 위치 공유 중」 배너 — 탭 → 26 운행 중.
+            // 문구 두 개가 weight 없이 나란히 있으면 좁은 폰에서 Row 가 넘쳐 **마지막 자식인 토글이
+            // 0dp 로 찌그러진다**(실기 QA: 토글이 작게 보이는 문제). 문구 묶음만 남는 폭을 쓰고 줄어들게 한다.
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(44.dp)
                     .background(BannerBg)
                     .clickable { onOpenRideOngoing() }
-                    .padding(horizontal = 28.dp),
+                    .padding(horizontal = 20.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(Modifier.size(8.dp).background(MoyeotaColor.Waiting500, CircleShape))
                 Spacer(Modifier.width(10.dp))
-                Text(text = "실시간 위치 공유 중", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = BannerStrong)
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "실시간 위치 공유 중",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = BannerStrong,
+                        maxLines = 1,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    // 부제는 자리가 모자라면 말줄임 — 제목과 토글은 항상 온전히 보인다
+                    Text(
+                        text = "동승자에게 내 위치가 보여요",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = BannerSub,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                }
                 Spacer(Modifier.width(10.dp))
-                Text(text = "동승자에게 내 위치가 보여요", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = BannerSub)
-                Spacer(Modifier.weight(1f))
                 TogglePill(on = true, onColor = MoyeotaColor.Primary500)
             }
 
@@ -242,7 +284,7 @@ fun ChatScreen(
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .verticalScroll(rememberScrollState())
+                        .verticalScroll(listScroll)
                         .padding(horizontal = 16.dp, vertical = 18.dp),
                 ) {
                     // 시스템 칩 — 매칭 완료
@@ -439,8 +481,11 @@ fun ChatScreen(
                 }
             }
 
-            // 24는 하단탭 노출 화면 (공통 규칙)
-            MoyeotaBottomBar(selected = MoyeotaTab.CHAT, onSelect = onTabSelect)
+            // 24는 하단탭 노출 화면 (공통 규칙). 다만 키보드가 올라오면 숨긴다 —
+            // 키보드 바로 위에 탭바가 얹히면 대화가 보이는 높이만 그만큼 줄어든다.
+            if (!imeVisible) {
+                MoyeotaBottomBar(selected = MoyeotaTab.CHAT, onSelect = onTabSelect)
+            }
         }
 
         // 채팅방 나가기 재확인 다이얼로그 (진행 중 탑승 존재 시)

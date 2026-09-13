@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -85,7 +86,7 @@ fun WorkVerifyScreen(
     // 회사 메일과 재직 서류 중 최소 1개 필수 — 서류 업로드가 미연결이므로 회사 메일이 사실상 필수다
     val ctaEnabled = emailValid
 
-    Column(modifier = Modifier.fillMaxSize().background(MoyeotaColor.SurfaceSoft)) {
+    Column(modifier = Modifier.fillMaxSize().imePadding().background(MoyeotaColor.SurfaceSoft)) {
         StatusBarSpacer()
         MoyeotaTopBar(
             title = "",

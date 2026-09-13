@@ -269,11 +269,16 @@ fun RideOngoingScreen(
                         ) { onReport() },
                 )
                 Spacer(Modifier.height(10.dp))
-                Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                // 고정폭(112·176dp)이면 좁은 폰에서 Row 가 넘쳐 버튼이 찌그러진다 — 남는 폭을 비율로 나눈다
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp),
+                ) {
                     // 「신고」 → 27 긴급 신고
                     Row(
                         modifier = Modifier
-                            .size(width = 112.dp, height = 52.dp)
+                            .weight(0.39f)
+                            .height(52.dp)
                             .background(ReportBg, RoundedCornerShape(16.dp))
                             .clickable { onReport() },
                         verticalAlignment = Alignment.CenterVertically,
@@ -283,11 +288,11 @@ fun RideOngoingScreen(
                         Spacer(Modifier.width(6.dp))
                         Text(text = "신고", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = ReportRed)
                     }
-                    Spacer(Modifier.weight(1f))
                     // 「채팅 열기」 → 24 채팅
                     Row(
                         modifier = Modifier
-                            .size(width = 176.dp, height = 52.dp)
+                            .weight(0.61f)
+                            .height(52.dp)
                             .shadow(4.dp, RoundedCornerShape(16.dp), spotColor = CardShadow)
                             .clip(RoundedCornerShape(16.dp))
                             .background(RouteCardBg)
