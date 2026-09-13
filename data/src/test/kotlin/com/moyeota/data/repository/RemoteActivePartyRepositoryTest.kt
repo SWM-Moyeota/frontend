@@ -2,6 +2,7 @@ package com.moyeota.data.repository
 
 import com.moyeota.data.local.ActivePartyStorage
 import com.moyeota.data.local.RememberedParty
+import com.moyeota.domain.model.MemberLocation
 import com.moyeota.domain.model.AssignedDriver
 import com.moyeota.domain.model.AuthState
 import com.moyeota.domain.model.ChatMember
@@ -282,6 +283,8 @@ private class FakeRideRepository(
     override suspend fun getAssignedDriver(partyId: Long): AssignedDriver = error("쓰이지 않는다")
     override suspend fun reportEmergency(partyId: Long?): Long = error("쓰이지 않는다")
     override suspend fun confirmEmergencyCall(called: Boolean) = error("쓰이지 않는다")
+    override suspend fun reportMyLocation(partyId: Long, latitude: Double, longitude: Double) = error("쓰이지 않는다")
+    override suspend fun getMemberLocations(partyId: Long): List<MemberLocation> = error("쓰이지 않는다")
     override suspend fun previewRoute(
         departureLat: Double,
         departureLng: Double,

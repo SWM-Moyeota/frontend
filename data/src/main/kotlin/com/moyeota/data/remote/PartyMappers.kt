@@ -1,5 +1,6 @@
 package com.moyeota.data.remote
 
+import com.moyeota.data.remote.dto.MemberLocationResponse
 import com.moyeota.data.remote.dto.DriverSummaryResponse
 import com.moyeota.data.remote.dto.OpenPartyRequestDto
 import com.moyeota.data.remote.dto.OpenPartyResponse
@@ -7,6 +8,7 @@ import com.moyeota.data.remote.dto.PartyDetailResponse
 import com.moyeota.data.remote.dto.PartyListResponse
 import com.moyeota.data.remote.dto.RouteEstimateResponse
 import com.moyeota.data.remote.dto.RouteRequestDto
+import com.moyeota.domain.model.MemberLocation
 import com.moyeota.domain.model.AssignedDriver
 import com.moyeota.domain.model.NewParty
 import com.moyeota.domain.model.Ride
@@ -169,4 +171,12 @@ fun routeRequestDto(
     departureLng = departureLng,
     destinationLat = destinationLat,
     destinationLng = destinationLng,
+)
+
+/** 서버 동승자 위치 → 도메인. 좌표 범위 검증은 화면(latLngOrNull)이 맡는다 — 여기선 그대로 옮긴다. */
+fun MemberLocationResponse.toMemberLocation(): MemberLocation = MemberLocation(
+    publicId = publicId?.takeIf { it.isNotBlank() },
+    nickname = nickname?.takeIf { it.isNotBlank() },
+    latitude = latitude,
+    longitude = longitude,
 )

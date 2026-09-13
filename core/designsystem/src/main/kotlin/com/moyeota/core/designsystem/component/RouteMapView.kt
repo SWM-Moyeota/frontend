@@ -199,8 +199,12 @@ data class MapRadiusCircle(val center: LatLng, val radiusMeters: Double)
 // 원 안쪽 채우기 투명도. 지도의 도로·지명이 비쳐야 「이 범위」로 읽히지 덮개로 보이지 않는다.
 private const val RadiusFillAlpha = 0.12f
 
+/**
+ * 지도 위 핀 하나. 좌표가 null 이면 그리지 않고, 화면을 떠날 때 지운다.
+ * [RouteMapView] 바깥에서도 쓴다(26 운행 중의 동승자 마커) — 그래서 public 이다.
+ */
 @Composable
-private fun MapMarker(map: NaverMap?, position: LatLng?, tint: Int, caption: String) {
+fun MapMarker(map: NaverMap?, position: LatLng?, tint: Int, caption: String) {
     DisposableEffect(map, position, tint, caption) {
         val marker = if (map != null && position != null) {
             Marker().apply {
