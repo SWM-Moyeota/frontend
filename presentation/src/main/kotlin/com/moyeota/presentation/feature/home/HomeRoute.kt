@@ -12,6 +12,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.moyeota.core.designsystem.component.MoyeotaTab
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.repository.PlaceRepository
+import com.moyeota.presentation.core.location.rememberMyLocationState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -58,12 +59,17 @@ fun HomeRoute(
     val viewModel: HomeViewModel = viewModel(factory = HomeViewModel.factory(repository))
     val favorites by viewModel.favorites.collectAsState()
 
+    // 홈은 배경이 통째로 지도인 화면이라 내 위치가 있어야 지도가 쓸모 있다 — 합승 탭(17~19)과 같이
+    // 권한을 요청한다. 거부하면 파란 점 없이 기본 카메라(부산)로 남고 화면은 그대로 동작한다.
+    val myLocation = rememberMyLocationState()
+
     // 15 에서 즐겨찾기를 등록하고 돌아오면 반영돼야 해서 진입마다 재조회한다
     LaunchedEffect(Unit) { viewModel.refresh() }
 
     HomeScreen(
         userName = userName,
         activeRide = activeRide,
+        myLocation = myLocation.coordinates,
         favoritePlaces = favorites,
         onSearchClick = onSearchClick,
         onActiveRideClick = onActiveRideClick,
