@@ -1,6 +1,8 @@
 package com.moyeota.data.repository
 
 import com.moyeota.data.remote.MatchingApi
+import com.moyeota.data.remote.dto.MemberLocationResponse
+import com.moyeota.data.remote.dto.MemberLocationRequestDto
 import com.moyeota.data.remote.dto.DriverSummaryResponse
 import com.moyeota.data.remote.dto.OpenPartyRequestDto
 import com.moyeota.data.remote.dto.OpenPartyResponse
@@ -239,6 +241,8 @@ class RemoteRideRepositoryTest {
             DriverSummaryResponse(seats = 4, plateNumber = "12가 3456", type = "쏘나타")
 
         // 실서버(localhost:8080) 응답을 축약한 값 — 폴리라인 필드명이 path 다.
+        override suspend fun reportMyLocation(partyId: Long, request: MemberLocationRequestDto) = Unit
+        override suspend fun getMemberLocations(partyId: Long): List<MemberLocationResponse> = emptyList()
         override suspend fun previewRoute(request: RouteRequestDto): RouteEstimateResponse {
             routeRequest = request
             return RouteEstimateResponse(

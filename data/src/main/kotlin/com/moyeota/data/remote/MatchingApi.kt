@@ -1,5 +1,7 @@
 package com.moyeota.data.remote
 
+import com.moyeota.data.remote.dto.MemberLocationResponse
+import com.moyeota.data.remote.dto.MemberLocationRequestDto
 import com.moyeota.data.remote.dto.DriverSummaryResponse
 import com.moyeota.data.remote.dto.OpenPartyRequestDto
 import com.moyeota.data.remote.dto.OpenPartyResponse
@@ -82,6 +84,20 @@ interface MatchingApi {
      * 가 `BusinessException(MatchingErrorCode.DRIVER_NOT_ASSIGNED)` 를 던지고 전역 핸들러가 409 로 답한다.
      * 호출자는 배정 전에 부르지 말아야 한다([com.moyeota.presentation.feature.matching.shouldFetchDriverInfo]).
      */
+    /**
+     * 내 위치 보고(204). 방 화면이 열려 있는 동안 주기 호출(권장 5초) — 서버 TTL 60초.
+     * 403 NOT_PARTY_MEMBER / 404 PARTY_NOT_FOUND.
+     */
+    @POST("api/v1/matching/rooms/{partyId}/location")
+    suspend fun reportMyLocation(
+        @Path("partyId") partyId: Long,
+        @Body request: MemberLocationRequestDto,
+    )
+
+    /** **나를 뺀** 동승자 위치. 보고가 없거나 TTL 이 지난 멤버는 빠진다(빈 배열 정상). */
+    @GET("api/v1/matching/rooms/{partyId}/locations")
+    suspend fun getMemberLocations(@Path("partyId") partyId: Long): List<MemberLocationResponse>
+
     @GET("api/v1/matching/rooms/{partyId}/driver")
     suspend fun getAssignedDriver(@Path("partyId") partyId: Long): DriverSummaryResponse
 
