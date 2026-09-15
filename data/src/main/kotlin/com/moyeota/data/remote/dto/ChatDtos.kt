@@ -28,6 +28,13 @@ data class ChatRoomUserResponse(
     val lastMessage: ChatLastMessageResponse? = null,
     // 2026-09-12 서버(7c95683)부터. 필드가 없는 구서버는 null 로 두어 앱이 「개수 모름」으로 다룬다.
     val unreadCount: Long? = null,
+    // 2026-09-14 서버(69e991e·c0cbe7a)부터 방 정보와 참여자가 목록에 함께 온다.
+    // 이 셋이 채워지면 앱은 방마다 GET /chat-rooms/{id} · /users 를 더 부르지 않는다(요청 1+2N → 1).
+    // 아직 배포 전인 서버는 전부 null 이라 예전 경로(방별 추가 조회)로 떨어진다.
+    val departure: String? = null,
+    val destination: String? = null,
+    val status: String? = null,
+    val members: List<ChatMemberResponse>? = null,
 )
 
 // ChatRoomUserResult.LastMessage — 방의 마지막 메시지 요약. 삭제된 메시지는 서버가 content 를 치환해 준다.

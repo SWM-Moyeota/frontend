@@ -127,12 +127,20 @@ class ChatListViewModel(
      */
     private suspend fun loadRooms(): List<ChatRoomListItem> {
         val rooms = repository.getMyChatRooms().sortedByDescending(::chatRoomSortKey)
+        // 목록 응답에 참여자가 함께 오면(서버 2026-09-14) **추가 조회 없이** 제목을 짓는다.
+        // 다 채워져 있으면 화면 하나에 요청 1회로 끝난다 — 예전엔 1+2N 회였다.
+        if (rooms.all { it.membership.members.isNotEmpty() }) {
+            return rooms.map { ChatRoomListItem(room = it, peerTitle = chatRoomPeerTitle(it.membership.members)) }
+        }
+        // 구버전 서버 폴백 — 방마다 참여자를 따로 읽는다. 순차로 돌면 방 수만큼 왕복이 쌓여 병렬로 돌린다.
+        // 조회 실패는 **그 방만** null 로 떨어뜨린다(목록 전체를 에러로 만들지 않는다).
         return coroutineScope {
             rooms.map { room ->
                 async {
-                    val title = runCatching { repository.getChatRoomMembers(room.room.id) }
-                        .getOrNull()
-                        ?.let(::chatRoomPeerTitle)
+                    val title = room.membership.members.takeIf { it.isNotEmpty() }?.let(::chatRoomPeerTitle)
+                        ?: runCatching { repository.getChatRoomMembers(room.room.id) }
+                            .getOrNull()
+                            ?.let(::chatRoomPeerTitle)
                     ChatRoomListItem(room = room, peerTitle = title)
                 }
             }.awaitAll()
@@ -203,7 +211,7 @@ class ChatRoomViewModel(
      * 방이 바뀌었으면 상태를 갈아엎고, 같은 방이면 조용히 다시 읽는다 —
      * 재진입 시 재조회가 없으면 내가 보낸 뒤 학습된 「내 메시지」 판정이 교정되지 않는다(QA 결함-2).
      */
-    fun onScreenStart(roomId: Long) {
+    fun onScreenStart(roomId: Long, knownMuted: Boolean? = null) {
         val roomChanged = chatRoomId != roomId
         if (roomChanged) {
             stopPolling()
@@ -220,7 +228,7 @@ class ChatRoomViewModel(
         // 이미 대화를 그리고 있으면 스피너로 되돌리지 않는다(깜빡임 방지)
         load(showLoading = roomChanged || _uiState.value !is UiState.Success)
         loadPeerTitle(roomId)
-        if (roomChanged) loadMuted(roomId)
+        if (roomChanged) loadMuted(roomId, knownMuted)
         startPolling()
     }
 
@@ -229,7 +237,16 @@ class ChatRoomViewModel(
      * 방을 처음 열 때 한 번이면 된다 — 이후 변경은 이 화면의 토글이 유일한 출처라 응답을 기다리지 않고 반영한다.
      * 실패는 삼킨다(기본 「켜짐」으로 남을 뿐).
      */
-    private fun loadMuted(roomId: Long) {
+    /**
+     * 음소거 상태. 서버에 방 단건으로 묻는 길이 없어 **내 방 목록**에서 이 방을 찾아 읽는다.
+     * 목록에서 들어온 경우엔 그 값을 그대로 받아(knownMuted) 호출 자체를 생략한다 —
+     * 목록 API 는 방 정보·참여자까지 다 담고 있어 방을 열 때마다 다시 부르기엔 무겁다.
+     */
+    private fun loadMuted(roomId: Long, knownMuted: Boolean?) {
+        if (knownMuted != null) {
+            _muted.value = knownMuted
+            return
+        }
         viewModelScope.launch {
             val rooms = runCatching { repository.getMyChatRooms() }.getOrNull() ?: return@launch
             if (chatRoomId != roomId) return@launch
@@ -415,6 +432,8 @@ fun ChatRoute(
     onNotParticipant: () -> Unit = {},
 ) {
     var openedRoom by rememberSaveable(stateSaver = ChatRoomSaver) { mutableStateOf<ChatRoom?>(null) }
+    // 목록에서 고른 방의 음소거 상태 — 방 화면이 목록 API 를 다시 부르지 않게 함께 들고 간다
+    var openedMuted by rememberSaveable { mutableStateOf<Boolean?>(null) }
     // 방이 열린 상태의 시스템 뒤로가기는 탭을 빠져나가지 않고 목록으로 돌아간다 (화면 ← 와 동일)
     BackHandler(enabled = openedRoom != null) { openedRoom = null }
 
@@ -422,13 +441,17 @@ fun ChatRoute(
     if (room == null) {
         ChatListRoute(
             repository = repository,
-            onRoomClick = { openedRoom = it.room },
+            onRoomClick = {
+                openedMuted = it.membership.notificationMuted
+                openedRoom = it.room
+            },
             onTabSelect = onTabSelect,
         )
     } else {
         ChatRoomRoute(
             repository = repository,
             room = room,
+            knownMuted = openedMuted,
             onBack = { openedRoom = null },
             onOpenMatching = onOpenMatching.takeIf { room.isActiveParty(activePartyId) },
             onOpenRideOngoing = onOpenRideOngoing,
@@ -476,6 +499,8 @@ private fun ChatListRoute(
 private fun ChatRoomRoute(
     repository: ChatRepository,
     room: ChatRoom,
+    /** 목록에서 들어왔다면 이미 알고 있는 음소거 상태 — 방을 열 때 목록 API 를 다시 부르지 않는다 */
+    knownMuted: Boolean? = null,
     onBack: () -> Unit,
     onOpenMatching: (() -> Unit)?,
     onOpenRideOngoing: () -> Unit,
@@ -499,7 +524,7 @@ private fun ChatRoomRoute(
     // 화면이 보이는 동안만 조회·폴링한다. 탭을 옮기거나 앱이 백그라운드로 가면 즉시 멈춘다.
     // 같은 구간 동안 「이 방을 보고 있다」를 알려 푸시 알림이 겹치지 않게 한다([ChatForeground]).
     LifecycleStartEffect(room.id) {
-        viewModel.onScreenStart(room.id)
+        viewModel.onScreenStart(room.id, knownMuted)
         ChatForeground.visibleRoomId = room.id
         onStopOrDispose {
             viewModel.stopPolling()
