@@ -102,7 +102,7 @@ fun BackArrowIcon(modifier: Modifier = Modifier) {
 }
 
 enum class MoyeotaTab(val label: String) {
-    HOME("홈"), EXPLORE("합승"), CHAT("채팅"), MYPAGE("마이")
+    HOME("홈"), EXPLORE("동승"), CHAT("채팅"), MYPAGE("마이")
 }
 
 // 하단탭 — 공통 규칙: 14(홈) · 17(합승) · 24(채팅) · 35(마이) 네 화면에서만 노출

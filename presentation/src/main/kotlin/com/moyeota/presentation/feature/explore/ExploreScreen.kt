@@ -280,7 +280,7 @@ fun ExploreScreen(
             contentAlignment = Alignment.CenterStart,
         ) {
             Text(
-                text = "합승 — 내 주변",
+                text = "동승 — 내 주변",
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
                 color = MoyeotaColor.InkPrimary,
@@ -457,7 +457,7 @@ private fun PeekSummaryRow(count: Int, onRaise: () -> Unit) {
         }
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = if (isEmpty) "이 근처엔 합승이 없어요" else "주변 합승 ${count}개 모집 중",
+                text = if (isEmpty) "이 근처엔 동승이 없어요" else "주변 동승 ${count}개 모집 중",
                 fontSize = 19.sp,
                 fontWeight = FontWeight.Bold,
                 color = MoyeotaColor.InkPrimary,
@@ -484,7 +484,7 @@ private fun ListHeaderRow(count: Int, mapShown: Boolean, onToggleMap: () -> Unit
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            text = "주변 합승 ${count}개 · 가까운 순",
+            text = "주변 동승 ${count}개 · 가까운 순",
             fontSize = 17.sp,
             fontWeight = FontWeight.Bold,
             color = MoyeotaColor.InkPrimary,
@@ -667,7 +667,7 @@ private fun CreateRoomButton(onClick: () -> Unit, modifier: Modifier = Modifier)
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            text = "＋ 새 합승 방 만들기",
+            text = "＋ 새 동승 방 만들기",
             fontSize = 15.sp,
             fontWeight = FontWeight.Bold,
             color = MoyeotaColor.TextOnDark,
@@ -695,7 +695,7 @@ private fun LocationPermissionNotice(
                 color = MoyeotaColor.InkPrimary,
             )
             Text(
-                text = "권한을 허용하면 내 주변 합승을 지도로 볼 수 있어요",
+                text = "권한을 허용하면 내 주변 동승을 지도로 볼 수 있어요",
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Medium,
                 color = GrayMute,
@@ -729,7 +729,7 @@ private fun EmptyListNotice() {
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Text(
-            text = "이 근처엔 합승이 없어요",
+            text = "이 근처엔 동승이 없어요",
             fontSize = 15.sp,
             fontWeight = FontWeight.Bold,
             color = MoyeotaColor.InkPrimary,
