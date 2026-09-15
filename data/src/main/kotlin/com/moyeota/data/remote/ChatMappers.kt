@@ -57,6 +57,7 @@ fun ChatRoomUserResponse.toMembership(myUuid: String? = null): ChatRoomMembershi
     lastMessage = lastMessage?.toLastMessage(myUuid),
     // 음수는 서버 결함이다 — 배지에 「-1」을 그리느니 0 으로 접는다. Int 범위를 넘을 일은 없다.
     unreadCount = unreadCount?.coerceAtLeast(0)?.toInt(),
+    members = members.orEmpty().map { it.toChatMember(myUuid) },
 )
 
 fun ChatLastMessageResponse.toLastMessage(myUuid: String?): ChatLastMessage {
@@ -178,3 +179,24 @@ internal suspend fun <T> chatCall(block: suspend () -> T): T =
     } catch (e: Throwable) {
         throw e.toChatException()
     }
+
+/**
+ * 목록 항목에 방 정보가 함께 왔으면 [ChatRoom] 으로 옮긴다. 안 왔으면(구버전 서버) null —
+ * 호출부가 방 상세를 한 번 더 읽는다.
+ *
+ * 목록 응답에는 `partyId` 가 없다. 진행 중인 방을 partyId 로 찾는 쪽([ActivePartyRepository])이 그 값을
+ * 쓰므로 **0 으로 채우지 않고** 방 상세에서 받은 값만 신뢰해야 한다 — 그래서 partyId 가 필요한 경로는
+ * 여전히 상세 조회를 쓴다. 여기서는 목록 표시에 필요한 것만 채운다.
+ */
+fun ChatRoomUserResponse.toChatRoomOrNull(): ChatRoom? {
+    val departure = departure ?: return null
+    val destination = destination ?: return null
+    return ChatRoom(
+        id = chatRoomId,
+        partyId = 0L,
+        departure = departure,
+        destination = destination,
+        createdAt = joinedAt.orEmpty(),
+        status = chatRoomStatusOf(status.orEmpty()),
+    )
+}
