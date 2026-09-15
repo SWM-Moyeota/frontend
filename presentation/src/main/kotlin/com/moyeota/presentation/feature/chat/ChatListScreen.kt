@@ -80,7 +80,7 @@ fun ChatListScreen(
             Spacer(Modifier.size(16.dp))
             if (rooms.isEmpty()) {
                 Text(
-                    text = "아직 참여 중인 채팅방이 없어요. 합승에 합류하면 채팅방이 열려요",
+                    text = "아직 참여 중인 채팅방이 없어요. 동승에 합류하면 채팅방이 열려요",
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Medium,
                     color = GrayAsh,

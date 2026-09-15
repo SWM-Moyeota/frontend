@@ -108,7 +108,7 @@ class ExploreViewModel(private val repository: RideRepository) : ViewModel() {
             // 갱신 실패로 지도를 통째로 에러 화면으로 바꾸지 않는다(21 대기 화면과 같은 판단) —
             // 보던 목록을 남기고 다음 주기에 다시 읽는다. 처음부터 실패한 경우만 에러 화면.
             if (hadParties) return
-            UiState.Error("합승 목록을 불러오지 못했어요")
+            UiState.Error("동승 목록을 불러오지 못했어요")
         }
     }
 

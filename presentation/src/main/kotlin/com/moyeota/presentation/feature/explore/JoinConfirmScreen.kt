@@ -277,7 +277,7 @@ fun JoinConfirmScreen(
                 if (isFull) {
                     NoticeBanner(
                         kind = NoticeKind.ERROR,
-                        text = "방금 인원이 찼어요. 목록에서 다른 합승을 선택해 주세요",
+                        text = "방금 인원이 찼어요. 목록에서 다른 동승을 선택해 주세요",
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                     )
                 }
