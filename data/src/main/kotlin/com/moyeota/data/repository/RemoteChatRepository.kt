@@ -22,6 +22,10 @@ import com.moyeota.data.remote.toChatRoomOrNull
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import com.moyeota.data.remote.chat.ChatSocket
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.map
 import com.moyeota.domain.repository.ChatRepository
 import com.moyeota.domain.session.UserSession
 import kotlinx.coroutines.CancellationException
@@ -49,6 +53,11 @@ import java.util.concurrent.ConcurrentHashMap
 class RemoteChatRepository(
     private val api: ChatApi,
     private val session: UserSession,
+    /**
+     * 실시간 수신 통로. 미주입(테스트·더미 구동)이면 빈 흐름이라 **폴링만으로 동작한다** —
+     * 소켓은 있으면 빠르고 없으면 느릴 뿐, 없다고 채팅이 멈추지 않는다.
+     */
+    private val socket: ChatSocket? = null,
 ) : ChatRepository {
 
     // 방 id → 그 방의 참여자 사전. 캐시가 어느 계정의 것인지는 cacheOwnerUuid 가 들고 있다.
@@ -90,6 +99,13 @@ class RemoteChatRepository(
         return MyChatRoom(room = room, membership = membership)
     }
 
+    // 소켓이 밀어 준 프레임도 조회와 **같은 경로로 신원을 푼다** — 모르는 발신자가 오면 참여자 사전을
+    // 한 번 새로 읽는다(중간 합류자). 그래야 실시간으로 온 메시지도 이름과 좌우 정렬이 맞는다.
+    override fun observeMessages(chatRoomId: Long): Flow<ChatMessage> =
+        socket?.messages(chatRoomId)
+            ?.map { response -> response.toChatMessage(resolveIdentity(chatRoomId, listOf(response), priorRefresh = null)) }
+            ?: emptyFlow()
+
     override suspend fun getChatRoom(chatRoomId: Long): ChatRoom = chatCall {
         api.getRoom(chatRoomId).toChatRoom()
     }
@@ -130,6 +146,13 @@ class RemoteChatRepository(
         val slice = api.getMessagesAfter(chatRoomId, cursor, size)
         slice.toPage(resolveIdentity(chatRoomId, slice.messages, priorRefresh = null))
     }
+
+    // 소켓이 이 방에 붙어 있을 때만 참. 저장 결과는 응답이 아니라 observeMessages 로 돌아온다.
+    override suspend fun trySendMessage(chatRoomId: Long, content: String): Boolean =
+        socket?.sendMessage(chatRoomId, content) ?: false
+
+    override suspend fun tryMarkAsRead(chatRoomId: Long, readMessageId: Long): Boolean =
+        socket?.markAsRead(chatRoomId, readMessageId) ?: false
 
     // 전송 응답도 조회와 같은 shape 이라 발신자 publicId 가 들어 있다 — 방금 보낸 메시지가
     // 그 자리에서 바로 내 것으로 판정된다(화면이 전송 결과를 그대로 목록에 붙이기 때문에 중요하다).

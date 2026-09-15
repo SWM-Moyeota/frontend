@@ -1,4 +1,5 @@
 [versions]
+krossbow = "9.3.0"
 agp = "9.2.1"
 kotlin = "2.2.10"
 coreKtx = "1.19.0"
@@ -21,6 +22,8 @@ junitVersion = "1.3.0"
 espressoCore = "3.7.0"
 
 [libraries]
+krossbow-stomp-core = { group = "org.hildan.krossbow", name = "krossbow-stomp-core", version.ref = "krossbow" }
+krossbow-websocket-okhttp = { group = "org.hildan.krossbow", name = "krossbow-websocket-okhttp", version.ref = "krossbow" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
 androidx-compose-ui = { group = "androidx.compose.ui", name = "ui" }

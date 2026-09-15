@@ -55,7 +55,16 @@ object NetworkModule {
             .build()
         val retrofit = retrofit(baseUrl, apiClient)
 
+        // 웹소켓 전용 클라이언트. 인증 인터셉터를 붙이지 않는다 — STOMP 인증은 CONNECT **프레임** 헤더이고,
+        // 401 재발급 Authenticator 가 업그레이드 요청에 끼어들 이유도 없다.
+        // readTimeout 은 끈다(상시 연결이라 "응답이 늦다"는 개념이 없다). 대신 ping 으로 살아있음을 확인한다.
+        val socketClient = baseClient.newBuilder()
+            .readTimeout(0, java.util.concurrent.TimeUnit.MILLISECONDS)
+            .pingInterval(20, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+
         return Apis(
+            socketClient = socketClient,
             auth = authApi,
             matching = retrofit.create(MatchingApi::class.java),
             place = retrofit.create(PlaceApi::class.java),
@@ -75,6 +84,8 @@ object NetworkModule {
         .build()
 
     data class Apis(
+        /** 채팅 실시간 수신(STOMP)이 쓰는 OkHttp. 인증 인터셉터가 붙지 않은 순정 클라이언트다 */
+        val socketClient: OkHttpClient,
         val auth: AuthApi,
         val matching: MatchingApi,
         val place: PlaceApi,
