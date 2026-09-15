@@ -310,10 +310,19 @@ class ChatRoomViewModel(
             while (true) {
                 delay(POLL_INTERVAL_MS)
                 val roomId = chatRoomId ?: continue
-                val cursor = lastMessageId ?: continue
                 val current = _uiState.value as? UiState.Success ?: continue
+                // 커서(마지막 메시지 id)가 없으면 **첫 페이지를 다시 읽는다**.
+                //
+                // 예전엔 여기서 continue 했는데, 그러면 **메시지가 하나도 없는 방**은 커서가 영영 null 이라
+                // 폴링이 한 번도 돌지 않았다 — 매칭 직후 새로 열린 방이 정확히 그 상태다. 상대가 보낸 첫
+                // 메시지가 안 보이고 나갔다 들어와야(재조회) 보이던 원인이다(실기 QA).
+                // `after` 에 0 을 넘기는 방법은 못 쓴다 — 서버가 cursor < 1 을 400 CHAT_INVALID_CURSOR 로 막는다.
+                // 첫 메시지가 들어오면 커서가 잡혀 다음 주기부터는 가벼운 after 조회로 돌아간다.
+                val cursor = lastMessageId
                 // 폴링 실패는 화면을 깨지 않는다 — 다음 주기에 다시 시도한다
-                runCatching { repository.getMessagesAfter(roomId, cursor) }
+                runCatching {
+                    if (cursor == null) repository.getMessages(roomId) else repository.getMessagesAfter(roomId, cursor)
+                }
                     .onSuccess { page ->
                         if (page.messages.isEmpty()) return@onSuccess
                         val merged = (current.messages + page.messages)
