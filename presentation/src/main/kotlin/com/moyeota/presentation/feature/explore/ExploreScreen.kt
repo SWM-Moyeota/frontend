@@ -116,6 +116,31 @@ data class MyLocationFix(
  * 위도·경도가 뒤바뀌어도 서버는 오류가 아니라 **빈 목록**을 돌려주므로,
  * 순서를 틀리면 「이 근처엔 방이 없네」로 보여 발견이 늦는다.
  */
+/**
+ * 조회 영역을 가시 영역보다 이만큼 넓힌다(각 변의 폭·높이 대비 비율).
+ *
+ * 서버는 **출발지가 영역 안**인 방만 돌려주므로, 보이는 만큼만 물으면 카메라가 조금만 움직여도
+ * 가장자리의 방이 목록에서 빠져 **마커가 깜빡인다**(실기 QA: 확대·축소 중 출발지가 화면에 있는데도
+ * 사라졌다 나타남). 조회 영역이 화면보다 넓으면 그 경계가 화면 밖에 있어 눈에 띄지 않는다.
+ * 지도 앱이 뷰포트보다 넓게 미리 받아 두는 것과 같은 이유다.
+ */
+private const val BoundsMarginRatio = 0.3
+
+/**
+ * 가시 영역을 [BoundsMarginRatio] 만큼 넓힌 조회용 영역.
+ * 위도는 ±90, 경도는 ±180 을 넘지 않게 자른다.
+ */
+internal fun MapBounds.expanded(ratio: Double = BoundsMarginRatio): MapBounds {
+    val latMargin = (neLat - swLat) * ratio
+    val lngMargin = (neLng - swLng) * ratio
+    return MapBounds(
+        swLat = (swLat - latMargin).coerceAtLeast(-90.0),
+        swLng = (swLng - lngMargin).coerceAtLeast(-180.0),
+        neLat = (neLat + latMargin).coerceAtMost(90.0),
+        neLng = (neLng + lngMargin).coerceAtMost(180.0),
+    )
+}
+
 @Immutable
 data class MapBounds(
     val swLat: Double,
