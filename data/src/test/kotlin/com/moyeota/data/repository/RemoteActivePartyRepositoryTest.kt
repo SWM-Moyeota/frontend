@@ -2,6 +2,7 @@ package com.moyeota.data.repository
 
 import com.moyeota.data.local.ActivePartyStorage
 import com.moyeota.data.local.RememberedParty
+import com.moyeota.domain.model.MemberLocation
 import com.moyeota.domain.model.AssignedDriver
 import com.moyeota.domain.model.AuthState
 import com.moyeota.domain.model.ChatMember
@@ -19,6 +20,8 @@ import com.moyeota.domain.model.User
 import com.moyeota.domain.repository.ChatRepository
 import com.moyeota.domain.repository.RideRepository
 import com.moyeota.domain.session.UserSession
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -282,6 +285,8 @@ private class FakeRideRepository(
     override suspend fun getAssignedDriver(partyId: Long): AssignedDriver = error("쓰이지 않는다")
     override suspend fun reportEmergency(partyId: Long?): Long = error("쓰이지 않는다")
     override suspend fun confirmEmergencyCall(called: Boolean) = error("쓰이지 않는다")
+    override suspend fun reportMyLocation(partyId: Long, latitude: Double, longitude: Double) = error("쓰이지 않는다")
+    override suspend fun getMemberLocations(partyId: Long): List<MemberLocation> = error("쓰이지 않는다")
     override suspend fun previewRoute(
         departureLat: Double,
         departureLng: Double,
@@ -303,6 +308,7 @@ private class FakeChatRepository(
         return rooms
     }
 
+    override fun observeMessages(chatRoomId: Long): Flow<ChatMessage> = emptyFlow()
     override suspend fun getChatRoom(chatRoomId: Long): ChatRoom = error("쓰이지 않는다")
     override suspend fun createChatRoom(partyId: Long, departure: String, destination: String): ChatRoom =
         error("쓰이지 않는다")

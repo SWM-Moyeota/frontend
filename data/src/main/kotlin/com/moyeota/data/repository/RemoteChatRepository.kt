@@ -3,6 +3,7 @@ package com.moyeota.data.repository
 import com.moyeota.data.remote.ChatApi
 import com.moyeota.data.remote.ChatIdentity
 import com.moyeota.data.remote.chatCall
+import com.moyeota.data.remote.dto.ChatMemberResponse
 import com.moyeota.data.remote.dto.ChatMessageResponse
 import com.moyeota.data.remote.dto.CreateChatRoomRequestDto
 import com.moyeota.data.remote.dto.SendMessageRequestDto
@@ -16,6 +17,15 @@ import com.moyeota.domain.model.ChatMessage
 import com.moyeota.domain.model.ChatMessagePage
 import com.moyeota.domain.model.ChatRoom
 import com.moyeota.domain.model.MyChatRoom
+import com.moyeota.data.remote.dto.ChatRoomUserResponse
+import com.moyeota.data.remote.toChatRoomOrNull
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import com.moyeota.data.remote.chat.ChatSocket
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.map
 import com.moyeota.domain.repository.ChatRepository
 import com.moyeota.domain.session.UserSession
 import kotlinx.coroutines.CancellationException
@@ -43,6 +53,11 @@ import java.util.concurrent.ConcurrentHashMap
 class RemoteChatRepository(
     private val api: ChatApi,
     private val session: UserSession,
+    /**
+     * 실시간 수신 통로. 미주입(테스트·더미 구동)이면 빈 흐름이라 **폴링만으로 동작한다** —
+     * 소켓은 있으면 빠르고 없으면 느릴 뿐, 없다고 채팅이 멈추지 않는다.
+     */
+    private val socket: ChatSocket? = null,
 ) : ChatRepository {
 
     // 방 id → 그 방의 참여자 사전. 캐시가 어느 계정의 것인지는 cacheOwnerUuid 가 들고 있다.
@@ -52,14 +67,44 @@ class RemoteChatRepository(
     private var cacheOwnerUuid: String? = null
 
     // /chat-rooms/me 는 방 이름을 주지 않아 방마다 상세를 한 번 더 부른다(N+1).
+    /**
+     * 목록 한 번으로 끝낸다 — 응답에 방 정보(출발·도착·상태)와 참여자가 함께 온다(서버 2026-09-14).
+     *
+     * 그 전에는 방마다 `GET /chat-rooms/{id}`(이름) + `/users`(참여자)를 더 불러 **요청이 1+2N 회**였고,
+     * 게다가 방 상세는 순차로 돌아 방 3개에 5초 가까이 걸렸다(실측). 지금은 1회다.
+     * 필드를 주지 않는 구버전 서버에서는 예전처럼 방별 상세를 채워 넣는다 — 서버 배포 순서와 무관하게 동작한다.
+     */
     override suspend fun getMyChatRooms(): List<MyChatRoom> = chatCall {
         // 마지막 메시지의 isMine 판정용. 목록 조회 시점의 세션 하나로 전 방을 매핑한다.
         val myUuid = session.currentUserUuid
-        api.getMyRooms().mapNotNull { membership ->
-            val room = runCatching { api.getRoom(membership.chatRoomId) }.getOrNull() ?: return@mapNotNull null
-            MyChatRoom(room = room.toChatRoom(), membership = membership.toMembership(myUuid))
+        coroutineScope {
+            api.getMyRooms()
+                .map { membership -> async { membership.toMyChatRoom(myUuid) } }
+                .awaitAll()
+                .filterNotNull()
         }
     }
+
+    /**
+     * 목록 항목 하나 → 화면이 쓰는 모델. 방 정보가 함께 왔으면 그대로 쓰고, 없으면 방 상세를 한 번 더 읽는다.
+     * 상세 조회에 실패한 방은 null 로 떨어뜨린다 — 종료된 방 하나 때문에 목록 전체가 깨지지 않게.
+     */
+    private suspend fun ChatRoomUserResponse.toMyChatRoom(myUuid: String?): MyChatRoom? {
+        val membership = toMembership(myUuid)
+        // 참여자가 함께 왔으면 사전에 채워 둔다 — 방을 열 때 /users 를 다시 부르지 않아도 이름이 보인다
+        members?.let { cacheMembers(chatRoomId, it, myUuid) }
+        val room = toChatRoomOrNull()
+            ?: runCatching { api.getRoom(chatRoomId) }.getOrNull()?.toChatRoom()
+            ?: return null
+        return MyChatRoom(room = room, membership = membership)
+    }
+
+    // 소켓이 밀어 준 프레임도 조회와 **같은 경로로 신원을 푼다** — 모르는 발신자가 오면 참여자 사전을
+    // 한 번 새로 읽는다(중간 합류자). 그래야 실시간으로 온 메시지도 이름과 좌우 정렬이 맞는다.
+    override fun observeMessages(chatRoomId: Long): Flow<ChatMessage> =
+        socket?.messages(chatRoomId)
+            ?.map { response -> response.toChatMessage(resolveIdentity(chatRoomId, listOf(response), priorRefresh = null)) }
+            ?: emptyFlow()
 
     override suspend fun getChatRoom(chatRoomId: Long): ChatRoom = chatCall {
         api.getRoom(chatRoomId).toChatRoom()
@@ -101,6 +146,13 @@ class RemoteChatRepository(
         val slice = api.getMessagesAfter(chatRoomId, cursor, size)
         slice.toPage(resolveIdentity(chatRoomId, slice.messages, priorRefresh = null))
     }
+
+    // 소켓이 이 방에 붙어 있을 때만 참. 저장 결과는 응답이 아니라 observeMessages 로 돌아온다.
+    override suspend fun trySendMessage(chatRoomId: Long, content: String): Boolean =
+        socket?.sendMessage(chatRoomId, content) ?: false
+
+    override suspend fun tryMarkAsRead(chatRoomId: Long, readMessageId: Long): Boolean =
+        socket?.markAsRead(chatRoomId, readMessageId) ?: false
 
     // 전송 응답도 조회와 같은 shape 이라 발신자 publicId 가 들어 있다 — 방금 보낸 메시지가
     // 그 자리에서 바로 내 것으로 판정된다(화면이 전송 결과를 그대로 목록에 붙이기 때문에 중요하다).
@@ -169,6 +221,11 @@ class RemoteChatRepository(
         } catch (_: Throwable) {
             false
         }
+
+    /** 목록 응답에 실려 온 참여자를 사전에 채운다 — 방을 열 때 /users 를 다시 부르지 않아도 이름이 보인다 */
+    private fun cacheMembers(chatRoomId: Long, members: List<ChatMemberResponse>, myUuid: String?) {
+        storeMembers(chatRoomId, members.map { it.toChatMember(myUuid) })
+    }
 
     private suspend fun fetchMembers(chatRoomId: Long): List<ChatMember> {
         val myUuid = session.currentUserUuid

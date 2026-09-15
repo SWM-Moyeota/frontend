@@ -33,6 +33,14 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import com.naver.maps.map.NaverMap
+import com.naver.maps.map.CameraUpdate
+import com.moyeota.presentation.core.location.UserCoordinates
+import com.moyeota.core.designsystem.component.latLngOrNull
+import com.moyeota.core.designsystem.component.MyLocationOverlay
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.runtime.setValue
@@ -56,6 +64,9 @@ private val GraySlate = Color(0xFF4B5563)
 private val GrayDeep = Color(0xFF54637D)
 private val GrayMute = Color(0xFF8A93A0)
 private val GrayAsh = Color(0xFF9AA1AC)
+
+/** 첫 실위치로 옮길 때의 줌 — 동네 단위가 보이는 수준(26 운행 중과 같은 값) */
+private const val HomeMyLocationZoom = 15.0
 
 /** 펼친 시트 위로 남기는 지도 높이 — 예전 홈의 「화면 약 30%」 지도 노출과 비슷한 값 */
 private val HomeMapRevealHeight = 200.dp
@@ -93,6 +104,8 @@ fun HomeScreen(
     userName: String? = null,
     /** 지금 진행 중인 내 방. null 이면 지도 위 배너를 그리지 않는다 */
     activeRide: Ride? = null,
+    /** 기기 실위치. null(권한 없음·아직 fix 없음)이면 파란 점을 그리지 않고 카메라도 옮기지 않는다 */
+    myLocation: UserCoordinates? = null,
     favoritePlaces: List<FavoritePlace> = listOf(
         FavoritePlace("집", "서면 롯데"),
         FavoritePlace("학교", "부산대 정문"),
@@ -123,11 +136,34 @@ fun HomeScreen(
                 // 배너 아래로 내려가게 한다(작은 폰에서 배너와 줌 버튼이 겹치던 문제)
                 var bannerHeightPx by remember { mutableIntStateOf(0) }
                 val bannerHeight = with(LocalDensity.current) { bannerHeightPx.toDp() }
+                var map by remember { mutableStateOf<NaverMap?>(null) }
+                val myPosition = latLngOrNull(myLocation?.latitude, myLocation?.longitude)
                 NaverMapView(
                     modifier = Modifier.fillMaxSize(),
                     // 앵커 기준 시트 높이를 빼 카메라 중심이 시트 뒤가 아니라 실제 보이는 영역에 잡히게 한다
                     contentPadding = PaddingValues(top = bannerHeight, bottom = sheet.settledSheetHeight),
+                    onMapReady = { map = it },
                 )
+
+                // 첫 실위치로 **한 번만** 옮긴다. 주기 갱신(1초)마다 카메라를 되돌리면 지도를 팬·줌할 수
+                // 없다(합승 탭·26 과 같은 규칙). 그 뒤로는 파란 점만 최신 좌표를 따라간다.
+                // NaverMapView 의 center 는 기본값(상수)이라 이 이동을 되돌리지 않는다.
+                var centeredOnMe by rememberSaveable { mutableStateOf(false) }
+                LaunchedEffect(map, myPosition) {
+                    val naverMap = map ?: return@LaunchedEffect
+                    val fix = myPosition ?: return@LaunchedEffect
+                    if (centeredOnMe) return@LaunchedEffect
+                    naverMap.moveCamera(CameraUpdate.scrollAndZoomTo(fix, HomeMyLocationZoom))
+                    centeredOnMe = true
+                }
+                if (myPosition != null) {
+                    MyLocationOverlay(
+                        map = map,
+                        position = myPosition,
+                        accuracyMeters = myLocation?.accuracyMeters,
+                        bearingDegrees = myLocation?.bearingDegrees,
+                    )
+                }
                 // 진행 중인 방이 있으면 지도 위에 복귀 배너 하나만 얹는다 — 배너 밖은 여전히 지도의 것이다
                 if (activeRide != null) {
                     Column(

@@ -48,3 +48,19 @@ data class Ride(
     val departureRadiusMeters: Int? = null,
     val destinationRadiusMeters: Int? = null,
 )
+
+/**
+ * 동승자 한 명의 실시간 위치(서버 `GET /matching/rooms/{id}/locations`).
+ *
+ * 탑승 지점에서 서로를 찾기 위한 값이라 **오래 살지 않는다** — 서버가 60초 TTL 안에 보고가 있는
+ * 멤버만 돌려주므로, 목록에서 빠진 사람은 앱을 껐거나 신호가 끊긴 것이다.
+ *
+ * [publicId] 는 방 상세 [User.id] 와 같은 체계라 이름·프로필로 이을 수 있다. 서버가 유저 요약을
+ * 못 찾으면(탈퇴 등) publicId·nickname 이 null 이고, 그때는 좌표만 쓴다.
+ */
+data class MemberLocation(
+    val publicId: String?,
+    val nickname: String?,
+    val latitude: Double,
+    val longitude: Double,
+)

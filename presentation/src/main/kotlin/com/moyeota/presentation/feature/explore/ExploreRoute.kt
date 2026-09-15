@@ -114,8 +114,11 @@ class ExploreViewModel(private val repository: RideRepository) : ViewModel() {
 
     // 인자 순서(남서 위도 → 남서 경도 → 북동 위도 → 북동 경도)를 한 곳에서만 쓴다.
     // 뒤바뀌면 서버가 오류 대신 빈 목록을 돌려주므로 호출부마다 풀어 쓰면 눈에 띄지 않는 버그가 된다.
-    private suspend fun MapBounds.query(): List<Ride> =
-        repository.getPartiesWithin(swLat, swLng, neLat, neLng)
+    // 가시 영역보다 넓게 묻는다 — 경계에 걸친 방이 카메라가 조금 움직일 때마다 빠졌다 들어오며
+    // 마커가 깜빡이는 것을 막는다([MapBounds.expanded] 설명 참고).
+    private suspend fun MapBounds.query(): List<Ride> = expanded().let { area ->
+        repository.getPartiesWithin(area.swLat, area.swLng, area.neLat, area.neLng)
+    }
 
     private fun hasParties() = _uiState.value is UiState.Success
 

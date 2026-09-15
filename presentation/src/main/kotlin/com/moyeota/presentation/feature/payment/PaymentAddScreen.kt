@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -138,7 +139,7 @@ fun PaymentAddScreen(
         AddMethodType.CARD -> cardOk && expiryOk && cvcOk
     }
 
-    Column(modifier = Modifier.fillMaxSize().background(MoyeotaColor.SurfaceSoft)) {
+    Column(modifier = Modifier.fillMaxSize().imePadding().background(MoyeotaColor.SurfaceSoft)) {
         StatusBarSpacer()
         PaymentAddHeader(title = "결제 수단 추가", onBack = onBack)
 

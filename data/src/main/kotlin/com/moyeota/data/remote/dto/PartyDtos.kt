@@ -153,3 +153,22 @@ data class RouteEstimateResponse(
     /** Google Encoded Polyline. 서버 필드명이 path 다(방 상세의 route 와 같은 형식). */
     val path: String? = null,
 )
+
+/** POST /api/v1/matching/rooms/{partyId}/location 요청 */
+@Serializable
+data class MemberLocationRequestDto(
+    val latitude: Double,
+    val longitude: Double,
+)
+
+/**
+ * GET /api/v1/matching/rooms/{partyId}/locations 항목.
+ * 서버가 유저 요약을 못 찾으면(탈퇴 등) publicId·nickname 이 null 로 온다 — 좌표만 쓴다.
+ */
+@Serializable
+data class MemberLocationResponse(
+    val publicId: String? = null,
+    val nickname: String? = null,
+    val latitude: Double,
+    val longitude: Double,
+)

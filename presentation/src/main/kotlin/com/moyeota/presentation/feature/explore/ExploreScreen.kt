@@ -1,7 +1,6 @@
 package com.moyeota.presentation.feature.explore
 
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -67,6 +66,7 @@ import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.AvatarCircle
 import com.moyeota.core.designsystem.component.MoyeotaBottomBar
 import com.moyeota.core.designsystem.component.MoyeotaTab
+import com.moyeota.core.designsystem.component.MyLocationOverlay
 import com.moyeota.core.designsystem.component.NaverMapView
 import com.moyeota.core.designsystem.component.SheetHandle
 import com.moyeota.core.designsystem.component.StatusBarSpacer
@@ -80,7 +80,6 @@ import com.moyeota.presentation.feature.home.DemoOrigin
 import com.naver.maps.geometry.LatLng
 import com.naver.maps.geometry.LatLngBounds
 import com.naver.maps.map.NaverMap
-import com.naver.maps.map.overlay.LocationOverlay
 import com.naver.maps.map.overlay.Marker
 import com.naver.maps.map.util.MarkerIcons
 
@@ -117,6 +116,31 @@ data class MyLocationFix(
  * 위도·경도가 뒤바뀌어도 서버는 오류가 아니라 **빈 목록**을 돌려주므로,
  * 순서를 틀리면 「이 근처엔 방이 없네」로 보여 발견이 늦는다.
  */
+/**
+ * 조회 영역을 가시 영역보다 이만큼 넓힌다(각 변의 폭·높이 대비 비율).
+ *
+ * 서버는 **출발지가 영역 안**인 방만 돌려주므로, 보이는 만큼만 물으면 카메라가 조금만 움직여도
+ * 가장자리의 방이 목록에서 빠져 **마커가 깜빡인다**(실기 QA: 확대·축소 중 출발지가 화면에 있는데도
+ * 사라졌다 나타남). 조회 영역이 화면보다 넓으면 그 경계가 화면 밖에 있어 눈에 띄지 않는다.
+ * 지도 앱이 뷰포트보다 넓게 미리 받아 두는 것과 같은 이유다.
+ */
+private const val BoundsMarginRatio = 0.3
+
+/**
+ * 가시 영역을 [BoundsMarginRatio] 만큼 넓힌 조회용 영역.
+ * 위도는 ±90, 경도는 ±180 을 넘지 않게 자른다.
+ */
+internal fun MapBounds.expanded(ratio: Double = BoundsMarginRatio): MapBounds {
+    val latMargin = (neLat - swLat) * ratio
+    val lngMargin = (neLng - swLng) * ratio
+    return MapBounds(
+        swLat = (swLat - latMargin).coerceAtLeast(-90.0),
+        swLng = (swLng - lngMargin).coerceAtLeast(-180.0),
+        neLat = (neLat + latMargin).coerceAtMost(90.0),
+        neLng = (neLng + lngMargin).coerceAtMost(180.0),
+    )
+}
+
 @Immutable
 data class MapBounds(
     val swLat: Double,
@@ -823,9 +847,13 @@ private fun ExploreMap(
     )
 
     if (myLocation != null) {
-        // 실위치가 있으면 SDK 내장 위치 오버레이(파란 점 + 오차 원)를 쓴다 —
-        // 일반 마커를 옮겨 찍는 것보다 네이버 지도 앱과 같은 인상을 준다
-        MyLocationOverlay(map = map, fix = myLocation)
+        // 실위치가 있으면 SDK 내장 위치 오버레이(파란 점 + 오차 원 + 방향)를 쓴다 — 14 홈과 같은 컴포넌트
+        MyLocationOverlay(
+            map = map,
+            position = myLocation.position,
+            accuracyMeters = myLocation.accuracyMeters,
+            bearingDegrees = myLocation.bearingDegrees,
+        )
     } else {
         // 실위치가 아직 없을 때만 기준점 마커. 「내 위치」라고 단정하지 않는다
         ExploreMarker(
@@ -937,91 +965,6 @@ private fun ExploreMarker(
     }
 }
 
-// ─── 내 위치 오버레이 (네이버 SDK 내장 파란 점) ────────────────────────────────
-
-/** 새 좌표까지 미끄러져 가는 시간. 갱신 주기(1초)보다 짧아야 다음 fix 전에 도착한다 */
-private const val MyLocationGlideMs = 800
-
-/** 이 이상 튀면 보간하지 않고 순간이동한다 — 지도를 가로질러 기어가는 점이 더 이상하다 */
-private const val MyLocationSnapDistanceM = 200.0
-
-/** 이 이하의 미세 이동은 애니메이션 없이 반영한다 (GPS 지터로 계속 애니메이션이 걸리는 것 방지) */
-private const val MyLocationMinMoveM = 0.5
-
-/** 오차 원이 화면을 통째로 덮어 렌더러를 괴롭히지 않도록 두는 상한(px) */
-private const val MaxAccuracyRadiusPx = 4000
-
-/**
- * 기기 실위치 — 네이버 SDK 의 [LocationOverlay](파란 점 + 오차 원)로 그린다.
- *
- * 일반 [Marker] 를 옮겨 찍지 않는 이유: 위치 표시는 「지도 위의 어떤 지점」이 아니라
- * 「지금 내가 여기 있다」는 상태 표시라 SDK 가 그리는 모습이 사용자의 기대(네이버 지도 앱)와
- * 같아야 한다. 오버레이는 [NaverMap] 당 하나뿐이라 [NaverMap.getLocationOverlay] 로 얻어
- * 보이기/숨기기만 제어한다.
- *
- * `LocationTrackingMode`·`FusedLocationSource` 는 쓰지 않는다 — Activity 권한 콜백 포워딩을
- * 요구해 Compose 권한 런처와 맞지 않는다(07 리포트). 좌표는 `rememberMyLocationState` 가 준다.
- */
-@Composable
-private fun MyLocationOverlay(map: NaverMap?, fix: MyLocationFix) {
-    // 1초마다 좌표를 그대로 찍으면 점이 뚝뚝 끊겨 「위치가 튄다」로 읽힌다.
-    // 이전 좌표에서 새 좌표까지 보간해 미끄러지듯 이동시킨다.
-    var rendered by remember { mutableStateOf(fix.position) }
-    LaunchedEffect(fix.position) {
-        val from = rendered
-        val to = fix.position
-        val moved = from.distanceTo(to)
-        if (moved < MyLocationMinMoveM || moved > MyLocationSnapDistanceM || !moved.isFinite()) {
-            rendered = to
-            return@LaunchedEffect
-        }
-        // 등속 보간 — 걷는 사람의 이동은 가감속이 없어 보이는 편이 자연스럽다.
-        // 다음 fix 가 오면 이 이펙트가 취소되고 현재 위치에서 새 목표로 다시 출발한다.
-        Animatable(0f).animateTo(1f, tween(MyLocationGlideMs, easing = LinearEasing)) {
-            rendered = LatLng(
-                from.latitude + (to.latitude - from.latitude) * value,
-                from.longitude + (to.longitude - from.longitude) * value,
-            )
-        }
-    }
-
-    // 오버레이는 지도에 붙어 있는 싱글턴이라 화면을 떠날 때 반드시 숨긴다.
-    // 남겨 두면 같은 NaverMap 을 쓰는 다음 화면에 낡은 점이 그대로 뜬다.
-    DisposableEffect(map) {
-        map?.locationOverlay?.isVisible = true
-        onDispose { map?.locationOverlay?.isVisible = false }
-    }
-
-    LaunchedEffect(map, rendered, fix.bearingDegrees) {
-        val overlay = map?.locationOverlay ?: return@LaunchedEffect
-        overlay.position = rendered
-        // 방향을 모르는 fix 는 0도로 두고 화살표도 띄우지 않는다 — 없는 방향을 북쪽이라고
-        // 그리면 사용자가 반대로 걸어간다
-        overlay.bearing = fix.bearingDegrees ?: 0f
-        overlay.subIcon =
-            if (fix.bearingDegrees != null) LocationOverlay.DEFAULT_SUB_ICON_ARROW else null
-    }
-
-    // 오차 원 — 반경 단위가 픽셀이라 같은 오차(m)라도 줌에 따라 화면 크기가 달라진다.
-    // 카메라가 움직일 때마다 다시 환산해야 원이 지면에 붙어 있는 것처럼 보인다.
-    val accuracyMeters = fix.accuracyMeters
-    DisposableEffect(map, accuracyMeters) {
-        val naverMap = map
-        if (naverMap == null) {
-            onDispose {}
-        } else {
-            val overlay = naverMap.locationOverlay
-            val applyRadius = {
-                overlay.circleRadius = accuracyRadiusPx(naverMap, accuracyMeters)
-            }
-            applyRadius()
-            val listener = NaverMap.OnCameraChangeListener { _, _ -> applyRadius() }
-            naverMap.addOnCameraChangeListener(listener)
-            onDispose { naverMap.removeOnCameraChangeListener(listener) }
-        }
-    }
-}
-
 @Composable
 private fun ChevronUpIcon(color: Color, modifier: Modifier = Modifier) {
     Canvas(modifier = modifier.size(18.dp)) {
@@ -1031,20 +974,6 @@ private fun ChevronUpIcon(color: Color, modifier: Modifier = Modifier) {
         drawLine(color, Offset(w * 0.2f, h * 0.62f), Offset(w * 0.5f, h * 0.34f), stroke, StrokeCap.Round)
         drawLine(color, Offset(w * 0.8f, h * 0.62f), Offset(w * 0.5f, h * 0.34f), stroke, StrokeCap.Round)
     }
-}
-
-/**
- * 오차 반경(m)을 현재 줌의 화면 픽셀로 환산한다.
- *
- * 정확도를 모르면 [LocationOverlay.SIZE_AUTO](=0)를 돌려 원을 그리지 않는다 —
- * 모르는 오차를 임의의 크기로 그리면 실제보다 정확하거나 부정확해 보인다.
- */
-private fun accuracyRadiusPx(map: NaverMap, accuracyMeters: Float?): Int {
-    if (accuracyMeters == null || accuracyMeters <= 0f) return LocationOverlay.SIZE_AUTO
-    val metersPerPixel = map.projection.metersPerPixel
-    // 지도가 아직 레이아웃되지 않으면 0·NaN 이 나온다 — 다음 카메라 변화 때 다시 계산된다
-    if (!metersPerPixel.isFinite() || metersPerPixel <= 0.0) return LocationOverlay.SIZE_AUTO
-    return (accuracyMeters / metersPerPixel).toInt().coerceIn(0, MaxAccuracyRadiusPx)
 }
 
 @Preview(showBackground = true, widthDp = 393, heightDp = 852)

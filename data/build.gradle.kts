@@ -26,6 +26,9 @@ dependencies {
     implementation(libs.okhttp.logging.interceptor)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.core)
+    // 채팅 실시간 수신(STOMP over WebSocket). 전송 계층은 이미 쓰는 OkHttp 를 그대로 쓴다
+    implementation(libs.krossbow.stomp.core)
+    implementation(libs.krossbow.websocket.okhttp)
     // 토큰 영속화(access/refresh/userUuid).
     implementation(libs.androidx.datastore.preferences)
     coreLibraryDesugaring(libs.desugar.jdk.libs)

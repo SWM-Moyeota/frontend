@@ -43,8 +43,28 @@ import java.time.OffsetDateTime
 import java.time.ZoneId
 import com.moyeota.domain.model.ChatMessage as DomainChatMessage
 
-// STOMP 미구현 — 실시간 수신 대신 getMessagesAfter(cursor) 를 이 주기로 폴링한다.
+/**
+ * 폴링 주기. 실시간(STOMP)이 **앞서고** 폴링은 뒤를 받친다.
+ * 소켓이 붙어 있으면 재연결 사이의 구멍만 메우면 되므로 [POLL_INTERVAL_REALTIME_MS] 로 늦춘다.
+ */
 private const val POLL_INTERVAL_MS = 3_000L
+
+/** 소켓이 붙어 있는 동안의 안전망 주기 — 놓친 메시지가 있어도 이 주기 안에 들어온다 */
+private const val POLL_INTERVAL_REALTIME_MS = 20_000L
+
+/**
+ * 소켓으로 보낸 메시지가 **되돌아오기를** 기다리는 시간. 서버는 전송에 답하지 않고 저장된 메시지를
+ * 구독으로 밀어 주므로, 이 시간이 지나도록 오지 않으면 실패로 본다.
+ * 안전망 폴링 주기([POLL_INTERVAL_REALTIME_MS])보다 짧게 둬 사용자가 먼저 눈치채게 한다.
+ */
+private const val PENDING_TIMEOUT_MS = 8_000L
+
+/** 서버 한도(`SendMessageRequest @Size(max = 1000)`)와 같은 값 */
+private const val MAX_CONTENT_LENGTH = 1_000
+
+/** 아직 확인이 오지 않은 내 말풍선에 붙이는 표기 */
+private const val PENDING_LABEL = "보내는 중"
+private const val PENDING_FAILED_LABEL = "전송 실패"
 
 // 발신자 닉네임이 없을 때 상대 말풍선에 붙이는 표기.
 private const val PEER_FALLBACK_NAME = "동승자"
@@ -127,12 +147,20 @@ class ChatListViewModel(
      */
     private suspend fun loadRooms(): List<ChatRoomListItem> {
         val rooms = repository.getMyChatRooms().sortedByDescending(::chatRoomSortKey)
+        // 목록 응답에 참여자가 함께 오면(서버 2026-09-14) **추가 조회 없이** 제목을 짓는다.
+        // 다 채워져 있으면 화면 하나에 요청 1회로 끝난다 — 예전엔 1+2N 회였다.
+        if (rooms.all { it.membership.members.isNotEmpty() }) {
+            return rooms.map { ChatRoomListItem(room = it, peerTitle = chatRoomPeerTitle(it.membership.members)) }
+        }
+        // 구버전 서버 폴백 — 방마다 참여자를 따로 읽는다. 순차로 돌면 방 수만큼 왕복이 쌓여 병렬로 돌린다.
+        // 조회 실패는 **그 방만** null 로 떨어뜨린다(목록 전체를 에러로 만들지 않는다).
         return coroutineScope {
             rooms.map { room ->
                 async {
-                    val title = runCatching { repository.getChatRoomMembers(room.room.id) }
-                        .getOrNull()
-                        ?.let(::chatRoomPeerTitle)
+                    val title = room.membership.members.takeIf { it.isNotEmpty() }?.let(::chatRoomPeerTitle)
+                        ?: runCatching { repository.getChatRoomMembers(room.room.id) }
+                            .getOrNull()
+                            ?.let(::chatRoomPeerTitle)
                     ChatRoomListItem(room = room, peerTitle = title)
                 }
             }.awaitAll()
@@ -159,10 +187,31 @@ class ChatRoomViewModel(
 
     sealed interface UiState {
         data object Loading : UiState
-        data class Success(val messages: List<DomainChatMessage>) : UiState
+        data class Success(
+            val messages: List<DomainChatMessage>,
+            /**
+             * 아직 서버에서 되돌아오지 않은 내 메시지. 소켓 전송(`/pub/…/messages`)은 **응답이 없어서**
+             * 화면이 먼저 그려 두고, 같은 내용이 [messages] 로 돌아오면 지운다.
+             */
+            val pending: List<PendingMessage> = emptyList(),
+        ) : UiState
         /** @param notParticipant 403 CHAT_NOT_PARTICIPANT — 이 방에 더는 참여자가 아니다(나갔거나 빠졌다). 호출자가 캐시를 버린다 */
         data class Error(val message: String, val notParticipant: Boolean = false) : UiState
     }
+
+    /**
+     * 보내 놓고 확인을 기다리는 메시지.
+     *
+     * @param localId 화면에서 구분하기 위한 임시 id(음수 — 서버 id 와 겹치지 않는다)
+     * @param sinceId 보낼 때 이미 있던 마지막 메시지 id. 예전에 보낸 **같은 문장**을 확인으로 착각하지 않게 한다
+     * @param failed 확인이 [PENDING_TIMEOUT_MS] 안에 오지 않았다
+     */
+    data class PendingMessage(
+        val localId: Long,
+        val content: String,
+        val sinceId: Long,
+        val failed: Boolean = false,
+    )
 
     data class InputState(
         val text: String = "",
@@ -194,16 +243,22 @@ class ChatRoomViewModel(
     val muted: StateFlow<Boolean> = _muted.asStateFlow()
 
     private var lastMessageId: Long? = null
+    private var nextLocalId = -1L
     private var chatRoomId: Long? = null
     private var pollingJob: Job? = null
+    private var socketJob: Job? = null
     private var loadJob: Job? = null
+
+    /** 소켓이 메시지를 한 번이라도 밀어 준 적이 있는가 — 폴링 주기를 늦출지 판단하는 근거 */
+    @Volatile
+    private var realtimeAlive = false
 
     /**
      * 화면이 보이기 시작할 때 호출한다(최초 진입·뒤로 돌아옴·앱 복귀·다른 방으로 전환).
      * 방이 바뀌었으면 상태를 갈아엎고, 같은 방이면 조용히 다시 읽는다 —
      * 재진입 시 재조회가 없으면 내가 보낸 뒤 학습된 「내 메시지」 판정이 교정되지 않는다(QA 결함-2).
      */
-    fun onScreenStart(roomId: Long) {
+    fun onScreenStart(roomId: Long, knownMuted: Boolean? = null) {
         val roomChanged = chatRoomId != roomId
         if (roomChanged) {
             stopPolling()
@@ -220,7 +275,8 @@ class ChatRoomViewModel(
         // 이미 대화를 그리고 있으면 스피너로 되돌리지 않는다(깜빡임 방지)
         load(showLoading = roomChanged || _uiState.value !is UiState.Success)
         loadPeerTitle(roomId)
-        if (roomChanged) loadMuted(roomId)
+        if (roomChanged) loadMuted(roomId, knownMuted)
+        startRealtime(roomId)
         startPolling()
     }
 
@@ -229,7 +285,16 @@ class ChatRoomViewModel(
      * 방을 처음 열 때 한 번이면 된다 — 이후 변경은 이 화면의 토글이 유일한 출처라 응답을 기다리지 않고 반영한다.
      * 실패는 삼킨다(기본 「켜짐」으로 남을 뿐).
      */
-    private fun loadMuted(roomId: Long) {
+    /**
+     * 음소거 상태. 서버에 방 단건으로 묻는 길이 없어 **내 방 목록**에서 이 방을 찾아 읽는다.
+     * 목록에서 들어온 경우엔 그 값을 그대로 받아(knownMuted) 호출 자체를 생략한다 —
+     * 목록 API 는 방 정보·참여자까지 다 담고 있어 방을 열 때마다 다시 부르기엔 무겁다.
+     */
+    private fun loadMuted(roomId: Long, knownMuted: Boolean?) {
+        if (knownMuted != null) {
+            _muted.value = knownMuted
+            return
+        }
         viewModelScope.launch {
             val rooms = runCatching { repository.getMyChatRooms() }.getOrNull() ?: return@launch
             if (chatRoomId != roomId) return@launch
@@ -284,7 +349,7 @@ class ChatRoomViewModel(
                 val page = repository.getMessages(roomId)
                 // 서버 정렬을 신뢰하지 않고 id 오름차순으로 맞춘다 (커서 페이징은 최신부터 올 수 있다)
                 val ordered = page.messages.sortedBy { it.id }
-                _uiState.value = UiState.Success(ordered)
+                publish(ordered)
                 markLastAsRead(ordered.lastOrNull()?.id)
             } catch (e: Exception) {
                 // 이미 대화가 떠 있는데(조용한 재조회) 실패하면 화면을 에러로 갈아치우지 않는다
@@ -298,28 +363,61 @@ class ChatRoomViewModel(
         }
     }
 
-    /** 화면이 가려지면(탭 이동·백그라운드·이탈) 폴링을 멈춘다. 멈추지 않으면 로그아웃 뒤에도 계속 쏜다. */
+    /**
+     * 실시간 수신(STOMP) 구독. 화면이 보이는 동안만 연결한다.
+     *
+     * 실패·끊김은 [com.moyeota.domain.repository.ChatRepository.observeMessages] 안에서 재시도로 삼켜지므로
+     * 여기서는 화면에 아무것도 알리지 않는다 — **폴링이 뒤를 받치고 있어** 사용자는 늦어질 뿐 놓치지 않는다.
+     */
+    private fun startRealtime(roomId: Long) {
+        socketJob?.cancel()
+        realtimeAlive = false
+        socketJob = viewModelScope.launch {
+            repository.observeMessages(roomId).collect { message ->
+                realtimeAlive = true
+                if (chatRoomId != roomId) return@collect
+                val current = _uiState.value as? UiState.Success ?: return@collect
+                val merged = (current.messages + message).distinctBy { it.id }.sortedBy { it.id }
+                publish(merged, current.pending)
+                markLastAsRead(merged.lastOrNull()?.id)
+            }
+        }
+    }
+
+    /** 화면이 가려지면(탭 이동·백그라운드·이탈) 폴링과 소켓을 함께 멈춘다. 안 그러면 로그아웃 뒤에도 계속 쏜다. */
     fun stopPolling() {
         pollingJob?.cancel()
         pollingJob = null
+        socketJob?.cancel()
+        socketJob = null
+        realtimeAlive = false
     }
 
     private fun startPolling() {
         if (pollingJob?.isActive == true) return
         pollingJob = viewModelScope.launch {
             while (true) {
-                delay(POLL_INTERVAL_MS)
+                delay(if (realtimeAlive) POLL_INTERVAL_REALTIME_MS else POLL_INTERVAL_MS)
                 val roomId = chatRoomId ?: continue
-                val cursor = lastMessageId ?: continue
                 val current = _uiState.value as? UiState.Success ?: continue
+                // 커서(마지막 메시지 id)가 없으면 **첫 페이지를 다시 읽는다**.
+                //
+                // 예전엔 여기서 continue 했는데, 그러면 **메시지가 하나도 없는 방**은 커서가 영영 null 이라
+                // 폴링이 한 번도 돌지 않았다 — 매칭 직후 새로 열린 방이 정확히 그 상태다. 상대가 보낸 첫
+                // 메시지가 안 보이고 나갔다 들어와야(재조회) 보이던 원인이다(실기 QA).
+                // `after` 에 0 을 넘기는 방법은 못 쓴다 — 서버가 cursor < 1 을 400 CHAT_INVALID_CURSOR 로 막는다.
+                // 첫 메시지가 들어오면 커서가 잡혀 다음 주기부터는 가벼운 after 조회로 돌아간다.
+                val cursor = lastMessageId
                 // 폴링 실패는 화면을 깨지 않는다 — 다음 주기에 다시 시도한다
-                runCatching { repository.getMessagesAfter(roomId, cursor) }
+                runCatching {
+                    if (cursor == null) repository.getMessages(roomId) else repository.getMessagesAfter(roomId, cursor)
+                }
                     .onSuccess { page ->
                         if (page.messages.isEmpty()) return@onSuccess
                         val merged = (current.messages + page.messages)
                             .distinctBy { it.id }
                             .sortedBy { it.id }
-                        _uiState.value = UiState.Success(merged)
+                        publish(merged, current.pending)
                         markLastAsRead(merged.lastOrNull()?.id)
                     }
             }
@@ -330,27 +428,76 @@ class ChatRoomViewModel(
         _inputState.update { it.copy(text = text, errorMessage = null) }
     }
 
+    /**
+     * 전송. **소켓이 붙어 있으면 소켓으로**(`/pub/chat-rooms/{id}/messages`), 아니면 REST 로 보낸다.
+     *
+     * 둘 중 하나만 쓴다 — 소켓으로 보낸 뒤 확인이 늦다고 REST 로 다시 보내면 같은 메시지가 두 번 저장된다.
+     * 그래서 소켓 경로의 실패는 재전송이 아니라 **실패 표시**로 끝난다(사용자가 다시 보낼지 정한다).
+     */
     fun send() {
         val roomId = chatRoomId ?: return
         val content = _inputState.value.text.trim()
         if (content.isEmpty() || _inputState.value.sending) return
+        if (content.length > MAX_CONTENT_LENGTH) {
+            // 서버도 같은 한도로 거절한다(SendMessageRequest @Size). 프레임을 띄우기 전에 여기서 막는다.
+            _inputState.update { it.copy(errorMessage = "메시지는 ${MAX_CONTENT_LENGTH}자까지 보낼 수 있어요") }
+            return
+        }
         viewModelScope.launch {
             _inputState.update { it.copy(sending = true, errorMessage = null) }
-            try {
-                val sent = repository.sendMessage(roomId, content)
-                val current = _uiState.value as? UiState.Success
-                if (current != null) {
-                    val merged = (current.messages + sent).distinctBy { it.id }.sortedBy { it.id }
-                    _uiState.value = UiState.Success(merged)
-                    markLastAsRead(merged.lastOrNull()?.id)
-                }
-                _inputState.update { InputState() } // 성공 시에만 입력창을 비운다
-            } catch (e: Exception) {
-                _inputState.update {
-                    it.copy(sending = false, errorMessage = e.toChatMessage("메시지를 보내지 못했어요"))
-                }
+            val overSocket = runCatching { repository.trySendMessage(roomId, content) }.getOrDefault(false)
+            if (overSocket) addPending(content) else sendOverRest(roomId, content)
+        }
+    }
+
+    // 서버가 답을 주지 않는 전송이라 화면이 먼저 그린다. 같은 내용이 구독으로 돌아오면(또는 폴링이 물어 오면)
+    // publish 가 이 말풍선을 걷어낸다.
+    private fun addPending(content: String) {
+        val current = _uiState.value as? UiState.Success
+        val entry = PendingMessage(
+            localId = nextLocalId--,
+            content = content,
+            sinceId = current?.messages?.lastOrNull()?.id ?: 0L,
+        )
+        if (current != null) _uiState.value = current.copy(pending = current.pending + entry)
+        _inputState.value = InputState() // 프레임은 이미 나갔다 — 입력창은 바로 비운다
+        watchPending(entry.localId)
+    }
+
+    /** 확인이 끝내 오지 않으면 실패로 바꿔 보여 준다. 그 전에 돌아오면 이미 목록에서 사라져 있다. */
+    private fun watchPending(localId: Long) {
+        viewModelScope.launch {
+            delay(PENDING_TIMEOUT_MS)
+            val current = _uiState.value as? UiState.Success ?: return@launch
+            if (current.pending.none { it.localId == localId }) return@launch
+            _uiState.value = current.copy(
+                pending = current.pending.map { if (it.localId == localId) it.copy(failed = true) else it },
+            )
+            _inputState.update { it.copy(errorMessage = "메시지를 보내지 못했어요") }
+        }
+    }
+
+    // 소켓이 없을 때의 경로. 이쪽은 저장 결과가 응답으로 와서 그 자리에서 붙일 수 있다.
+    private suspend fun sendOverRest(roomId: Long, content: String) {
+        try {
+            val sent = repository.sendMessage(roomId, content)
+            val current = _uiState.value as? UiState.Success
+            if (current != null) {
+                val merged = (current.messages + sent).distinctBy { it.id }.sortedBy { it.id }
+                publish(merged, current.pending)
+                markLastAsRead(merged.lastOrNull()?.id)
+            }
+            _inputState.update { InputState() } // 성공 시에만 입력창을 비운다
+        } catch (e: Exception) {
+            _inputState.update {
+                it.copy(sending = false, errorMessage = e.toChatMessage("메시지를 보내지 못했어요"))
             }
         }
+    }
+
+    /** 목록을 새로 그린다. 서버에서 돌아온 메시지와 짝지어진 대기 말풍선은 여기서 사라진다. */
+    private fun publish(messages: List<DomainChatMessage>, pending: List<PendingMessage> = emptyList()) {
+        _uiState.value = UiState.Success(messages, reconcilePending(messages, pending))
     }
 
     // 채팅방 나가기(DELETE /chat-rooms/{id}/users). 실패하면 화면에 남기고 사유를 알린다.
@@ -366,14 +513,17 @@ class ChatRoomViewModel(
         }
     }
 
-    // 읽음 처리 실패는 사용자에게 알리지 않는다 (배지 정확도보다 대화 흐름이 우선)
+    // 읽음 처리 실패는 사용자에게 알리지 않는다 (배지 정확도보다 대화 흐름이 우선).
+    // 메시지마다 한 번씩 일어나는 일이라 소켓이 붙어 있으면 그쪽으로 보내 REST 왕복을 아낀다.
     private fun markLastAsRead(messageId: Long?) {
         val roomId = chatRoomId ?: return
         val id = messageId ?: return
         if (id == lastMessageId) return
         lastMessageId = id
         viewModelScope.launch {
-            runCatching { repository.markAsRead(roomId, id) }
+            runCatching {
+                if (!repository.tryMarkAsRead(roomId, id)) repository.markAsRead(roomId, id)
+            }
         }
     }
 
@@ -406,6 +556,8 @@ fun ChatRoute(
     onNotParticipant: () -> Unit = {},
 ) {
     var openedRoom by rememberSaveable(stateSaver = ChatRoomSaver) { mutableStateOf<ChatRoom?>(null) }
+    // 목록에서 고른 방의 음소거 상태 — 방 화면이 목록 API 를 다시 부르지 않게 함께 들고 간다
+    var openedMuted by rememberSaveable { mutableStateOf<Boolean?>(null) }
     // 방이 열린 상태의 시스템 뒤로가기는 탭을 빠져나가지 않고 목록으로 돌아간다 (화면 ← 와 동일)
     BackHandler(enabled = openedRoom != null) { openedRoom = null }
 
@@ -413,13 +565,17 @@ fun ChatRoute(
     if (room == null) {
         ChatListRoute(
             repository = repository,
-            onRoomClick = { openedRoom = it.room },
+            onRoomClick = {
+                openedMuted = it.membership.notificationMuted
+                openedRoom = it.room
+            },
             onTabSelect = onTabSelect,
         )
     } else {
         ChatRoomRoute(
             repository = repository,
             room = room,
+            knownMuted = openedMuted,
             onBack = { openedRoom = null },
             onOpenMatching = onOpenMatching.takeIf { room.isActiveParty(activePartyId) },
             onOpenRideOngoing = onOpenRideOngoing,
@@ -467,6 +623,8 @@ private fun ChatListRoute(
 private fun ChatRoomRoute(
     repository: ChatRepository,
     room: ChatRoom,
+    /** 목록에서 들어왔다면 이미 알고 있는 음소거 상태 — 방을 열 때 목록 API 를 다시 부르지 않는다 */
+    knownMuted: Boolean? = null,
     onBack: () -> Unit,
     onOpenMatching: (() -> Unit)?,
     onOpenRideOngoing: () -> Unit,
@@ -490,7 +648,7 @@ private fun ChatRoomRoute(
     // 화면이 보이는 동안만 조회·폴링한다. 탭을 옮기거나 앱이 백그라운드로 가면 즉시 멈춘다.
     // 같은 구간 동안 「이 방을 보고 있다」를 알려 푸시 알림이 겹치지 않게 한다([ChatForeground]).
     LifecycleStartEffect(room.id) {
-        viewModel.onScreenStart(room.id)
+        viewModel.onScreenStart(room.id, knownMuted)
         ChatForeground.visibleRoomId = room.id
         onStopOrDispose {
             viewModel.stopPolling()
@@ -526,7 +684,8 @@ private fun ChatRoomRoute(
             roomTitle = roomTitle,
             roomSubtitle = if (peerTitle != null) routeLabel else "메시지 ${current.messages.size}개",
             hasOngoingRide = false,
-            messages = current.messages.map { it.toUiMessage() },
+            // 아직 확인이 안 온 내 메시지는 목록 끝에 「보내는 중」으로 붙는다 — 소켓 전송은 응답이 없다.
+            messages = current.messages.map { it.toUiMessage() } + current.pending.map { it.toUiMessage() },
             input = input.text,
             sending = input.sending,
             errorMessage = input.errorMessage,
@@ -620,6 +779,38 @@ private fun DomainChatMessage.toUiMessage(): ChatUiMessage = ChatUiMessage(
     senderName = if (isMine) null else (senderName ?: PEER_FALLBACK_NAME),
     timeLabel = createdAt.toTimeLabel(),
 )
+
+// 확인을 기다리는(또는 실패한) 내 메시지 → 말풍선. 시간 대신 상태를 메타로 보여 준다.
+private fun ChatRoomViewModel.PendingMessage.toUiMessage(): ChatUiMessage = ChatUiMessage(
+    text = content,
+    isMine = true,
+    meta = if (failed) PENDING_FAILED_LABEL else PENDING_LABEL,
+)
+
+/**
+ * 서버에서 돌아온 메시지와 짝지어진 대기 말풍선을 걷어낸다.
+ *
+ * 짝의 조건은 **내 메시지 + 보낸 뒤에 생긴 id + 같은 내용**이다. id 조건이 없으면 예전에 보낸 같은 문장
+ * (“네”, “도착했어요”)이 확인으로 오해된다. 같은 문장을 연달아 두 번 보낼 수도 있으므로
+ * 서버 메시지 하나는 대기 하나만 지운다.
+ */
+internal fun reconcilePending(
+    messages: List<DomainChatMessage>,
+    pending: List<ChatRoomViewModel.PendingMessage>,
+): List<ChatRoomViewModel.PendingMessage> {
+    if (pending.isEmpty()) return pending
+    val matched = mutableSetOf<Long>()
+    return pending.filterNot { waiting ->
+        val echo = messages.firstOrNull { message ->
+            message.isMine &&
+                message.id > waiting.sinceId &&
+                message.content == waiting.content &&
+                message.id !in matched
+        }
+        if (echo != null) matched += echo.id
+        echo != null
+    }
+}
 
 // 채팅 서버 실패 → 사용자 문구. 코드 문자열 비교는 도메인(ChatException)에 두고
 // 화면은 의미만 본다. 매핑이 없는 실패는 호출부의 기본 문구를 쓴다.

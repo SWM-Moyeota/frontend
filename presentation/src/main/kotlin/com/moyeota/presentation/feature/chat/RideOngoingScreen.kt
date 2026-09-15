@@ -48,6 +48,10 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.runtime.key
+import androidx.compose.ui.graphics.toArgb
+import com.moyeota.core.designsystem.component.MapMarker
+import com.moyeota.domain.model.MemberLocation
 import com.moyeota.core.designsystem.component.BackArrowIcon
 import com.moyeota.core.designsystem.component.MapSheetScaffold
 import com.moyeota.core.designsystem.component.MoyeotaDefaultCamera
@@ -102,6 +106,11 @@ fun RideOngoingScreen(
     destinationPosition: LatLng? = null,
     routePath: List<LatLng> = emptyList(),
     myLocation: UserCoordinates? = null,
+    /**
+     * 동승자들의 실시간 위치(서버 TTL 60초). 빈 목록이 정상이다 — 상대가 앱을 껐거나 아직 화면을
+     * 열지 않았을 때. 각 사람은 닉네임 캡션이 붙은 마커로 그린다.
+     */
+    memberLocations: List<MemberLocation> = emptyList(),
     onBack: () -> Unit = {},
     onOpenChat: () -> Unit = {},
     onReport: () -> Unit = {},
@@ -151,6 +160,7 @@ fun RideOngoingScreen(
                     destinationPosition = destinationPosition,
                     routePath = routePath,
                     myLocation = myLocation,
+                    memberLocations = memberLocations,
                     // 앵커 기준 시트 높이 — fitBounds·카메라 중심이 시트에 가리지 않는 영역을 쓰게 한다
                     bottomInset = sheet.settledSheetHeight,
                 )
@@ -269,11 +279,16 @@ fun RideOngoingScreen(
                         ) { onReport() },
                 )
                 Spacer(Modifier.height(10.dp))
-                Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                // 고정폭(112·176dp)이면 좁은 폰에서 Row 가 넘쳐 버튼이 찌그러진다 — 남는 폭을 비율로 나눈다
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp),
+                ) {
                     // 「신고」 → 27 긴급 신고
                     Row(
                         modifier = Modifier
-                            .size(width = 112.dp, height = 52.dp)
+                            .weight(0.39f)
+                            .height(52.dp)
                             .background(ReportBg, RoundedCornerShape(16.dp))
                             .clickable { onReport() },
                         verticalAlignment = Alignment.CenterVertically,
@@ -283,11 +298,11 @@ fun RideOngoingScreen(
                         Spacer(Modifier.width(6.dp))
                         Text(text = "신고", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = ReportRed)
                     }
-                    Spacer(Modifier.weight(1f))
                     // 「채팅 열기」 → 24 채팅
                     Row(
                         modifier = Modifier
-                            .size(width = 176.dp, height = 52.dp)
+                            .weight(0.61f)
+                            .height(52.dp)
                             .shadow(4.dp, RoundedCornerShape(16.dp), spotColor = CardShadow)
                             .clip(RoundedCornerShape(16.dp))
                             .background(RouteCardBg)
@@ -381,6 +396,7 @@ private fun RideOngoingMap(
     destinationPosition: LatLng?,
     routePath: List<LatLng>,
     myLocation: UserCoordinates?,
+    memberLocations: List<MemberLocation> = emptyList(),
     /** 시트에 가리는 아래쪽 높이. 지도 contentPadding 으로 넘겨 fitBounds·중심이 보이는 영역 기준이 되게 한다 */
     bottomInset: Dp = 0.dp,
 ) {
@@ -428,6 +444,20 @@ private fun RideOngoingMap(
         if (boundsFitted || centeredOnMe) return@LaunchedEffect
         naverMap.moveCamera(CameraUpdate.scrollAndZoomTo(fix, MyLocationZoom))
         centeredOnMe = true
+    }
+
+    // 동승자 마커 — 닉네임을 캡션으로 단다. 색은 **초록**(MarkerPickup) 이다:
+    // 파랑은 내 위치 점·출발 마커, 빨강은 도착 마커라 겹치면 누가 누군지 알 수 없다.
+    // 좌표 검증은 마커마다 한다(서버 위경도 전치 결함 방어 — 25·26 의 다른 마커와 같은 판정).
+    memberLocations.forEach { member ->
+        key(member.publicId ?: "${member.latitude},${member.longitude}") {
+            MapMarker(
+                map = map,
+                position = latLngOrNull(member.latitude, member.longitude),
+                tint = MoyeotaColor.MarkerPickup.toArgb(),
+                caption = member.nickname ?: "동승자",
+            )
+        }
     }
 
     if (myPosition != null) {

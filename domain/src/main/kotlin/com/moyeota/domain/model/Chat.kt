@@ -45,6 +45,11 @@ data class ChatRoomMembership(
      * 필드를 안 주는 구버전 서버면 null 이고, 그때는 [hasUnread] 가 마지막 메시지로 유무만 가린다.
      */
     val unreadCount: Int? = null,
+    /**
+     * 방 참여자(서버 2026-09-14 부터 목록 응답에 함께 온다). 안 오는 구버전 서버면 빈 목록이고,
+     * 그때는 화면이 방마다 `GET /chat-rooms/{id}/users` 를 따로 불러 제목을 짓는다.
+     */
+    val members: List<ChatMember> = emptyList(),
 ) {
     /**
      * 안 읽은 메시지가 있는가. 서버가 개수를 주면 그 값이 **유일한 근거**다(0 이면 없음).

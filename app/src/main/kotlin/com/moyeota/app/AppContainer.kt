@@ -6,6 +6,7 @@ import com.moyeota.data.push.FcmTokenRegistrar
 import com.moyeota.data.remote.NetworkModule
 import com.moyeota.data.repository.RemoteActivePartyRepository
 import com.moyeota.data.repository.RemoteAuthRepository
+import com.moyeota.data.remote.chat.ChatSocket
 import com.moyeota.data.repository.RemoteChatRepository
 import com.moyeota.data.repository.RemoteDispatchRepository
 import com.moyeota.data.repository.RemotePlaceRepository
@@ -69,7 +70,12 @@ class AppContainer(context: Context, debugLogging: Boolean) {
     )
     val placeRepository: PlaceRepository = RemotePlaceRepository(apis.place)
     // 세션을 넘기는 건 메시지의 "내 것" 판정 때문이다(RemoteChatRepository KDoc).
-    val chatRepository: ChatRepository = RemoteChatRepository(apis.chat, sessionManager)
+    // 채팅은 실시간(STOMP) + 폴링을 함께 쓴다 — 소켓이 앞서고, 끊긴 구간은 폴링이 메운다.
+    val chatRepository: ChatRepository = RemoteChatRepository(
+        apis.chat,
+        sessionManager,
+        ChatSocket(BuildConfig.BASE_URL, apis.socketClient, sessionManager),
+    )
     val dispatchRepository: DispatchRepository = RemoteDispatchRepository(apis.dispatch)
 
     /**

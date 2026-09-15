@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -134,7 +135,7 @@ fun DestinationScreen(
         )
     val ctaEnabled = selectedPlace != null && !tooClose
 
-    Column(modifier = Modifier.fillMaxSize().background(CanvasBg)) {
+    Column(modifier = Modifier.fillMaxSize().imePadding().background(CanvasBg)) {
         StatusBarSpacer()
 
         // 헤더 — 뒤로 + 좌측 정렬 타이틀

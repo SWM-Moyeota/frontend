@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -74,7 +75,7 @@ fun LoginFormScreen(
     // 형식 오류를 필드 에러로 단정하지 않고 CTA 활성 조건으로만 쓴다.
     val canSubmit = loginId.isNotBlank() && password.isNotBlank() && !submitting
 
-    Column(modifier = modifier.fillMaxSize().background(MoyeotaColor.SurfaceSoft)) {
+    Column(modifier = modifier.fillMaxSize().imePadding().background(MoyeotaColor.SurfaceSoft)) {
         StatusBarSpacer()
         MoyeotaTopBar(title = "로그인", onBack = onBack)
 
