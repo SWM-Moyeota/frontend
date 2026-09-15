@@ -58,7 +58,7 @@ class JoinConfirmViewModel(
             _uiState.value = try {
                 UiState.Success(repository.getPartyDetail(partyId))
             } catch (e: Exception) {
-                UiState.Error("합승 정보를 불러오지 못했어요")
+                UiState.Error("동승 정보를 불러오지 못했어요")
             }
         }
     }

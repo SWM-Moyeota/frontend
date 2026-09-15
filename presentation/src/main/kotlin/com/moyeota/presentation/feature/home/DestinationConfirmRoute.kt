@@ -74,7 +74,7 @@ class CreatePartyViewModel(private val repository: RideRepository) : ViewModel()
                 )
                 _uiState.update { it.copy(creating = false, createdParty = party) }
             } catch (e: Exception) {
-                _uiState.update { it.copy(creating = false, errorMessage = "합승 방을 만들지 못했어요. 잠시 후 다시 시도해 주세요") }
+                _uiState.update { it.copy(creating = false, errorMessage = "동승 방을 만들지 못했어요. 잠시 후 다시 시도해 주세요") }
             }
         }
     }
