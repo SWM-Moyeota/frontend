@@ -147,6 +147,13 @@ class RemoteChatRepository(
         slice.toPage(resolveIdentity(chatRoomId, slice.messages, priorRefresh = null))
     }
 
+    // 소켓이 이 방에 붙어 있을 때만 참. 저장 결과는 응답이 아니라 observeMessages 로 돌아온다.
+    override suspend fun trySendMessage(chatRoomId: Long, content: String): Boolean =
+        socket?.sendMessage(chatRoomId, content) ?: false
+
+    override suspend fun tryMarkAsRead(chatRoomId: Long, readMessageId: Long): Boolean =
+        socket?.markAsRead(chatRoomId, readMessageId) ?: false
+
     // 전송 응답도 조회와 같은 shape 이라 발신자 publicId 가 들어 있다 — 방금 보낸 메시지가
     // 그 자리에서 바로 내 것으로 판정된다(화면이 전송 결과를 그대로 목록에 붙이기 때문에 중요하다).
     override suspend fun sendMessage(chatRoomId: Long, content: String): ChatMessage = chatCall {

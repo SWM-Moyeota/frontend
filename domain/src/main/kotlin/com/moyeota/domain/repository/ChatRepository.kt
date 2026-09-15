@@ -8,7 +8,9 @@ import com.moyeota.domain.model.ChatRoom
 import com.moyeota.domain.model.MyChatRoom
 
 /**
- * REST 전용. STOMP(WebSocket) 실시간 수신은 이번 범위 밖이라 폴링/재조회로 대체한다.
+ * 조회·상태 변경은 REST, 대화의 실시간 구간(수신·전송·읽음)은 STOMP(WebSocket)다.
+ * 소켓이 붙어 있지 않을 때를 위해 같은 일을 하는 REST 경로를 함께 둔다 — [trySendMessage] 가
+ * 거짓을 돌려주면 [sendMessage] 로 보낸다.
  *
  * 요청 주체는 전부 **Bearer 토큰**이 정한다 — 채팅 컨트롤러도 `@CurrentUser` 로 전환돼
  * 더 이상 userId 를 파라미터로 받지 않는다. 실패는 전부
@@ -77,7 +79,7 @@ interface ChatRepository {
 
     /**
      * GET /api/v1/chat-rooms/{chatRoomId}/messages/after — cursor 이후(신규) 방향.
-     * STOMP 미구현 상태에서 새 메시지를 받아오는 수단이다(마지막 메시지 id 를 cursor 로 폴링).
+     * 소켓이 끊겼거나 재연결 사이에 오간 메시지를 메우는 수단이다(마지막 메시지 id 를 cursor 로 폴링).
      */
     suspend fun getMessagesAfter(
         chatRoomId: Long,
@@ -86,7 +88,28 @@ interface ChatRepository {
     ): ChatMessagePage
 
     /**
+     * 실시간 연결로 메시지를 보낸다 — STOMP SEND `/pub/chat-rooms/{id}/messages`.
+     *
+     * **응답이 없다.** 서버 핸들러는 void 라 저장 결과가 프레임으로 돌아오지 않고, 저장된 메시지가
+     * [observeMessages] 로 온다(보낸 사람도 같은 구독을 받는다). 그래서 참을 돌려줘도 "저장됐다"가 아니라
+     * **"살아 있는 연결에 써 넣었다"**는 뜻이다 — 화면은 되돌아온 메시지를 확인으로 삼고, 오지 않으면
+     * 실패로 보여야 한다.
+     *
+     * 연결이 없으면 거짓을 돌려준다. 그때는 [sendMessage] 로 보낸다 — **둘 중 하나만** 써야 한다.
+     * 보낸 뒤 확인이 늦다고 REST 로 다시 보내면 같은 메시지가 두 번 저장된다.
+     */
+    suspend fun trySendMessage(chatRoomId: Long, content: String): Boolean = false
+
+    /**
+     * 읽음 지점을 실시간 연결로 알린다 — STOMP SEND `/pub/chat-rooms/{id}/read`.
+     * 새 메시지마다 한 번씩 일어나는 일이라 소켓이 붙어 있으면 REST 왕복을 아낀다.
+     * 연결이 없으면 거짓 — 그때는 [markAsRead] 를 쓴다.
+     */
+    suspend fun tryMarkAsRead(chatRoomId: Long, readMessageId: Long): Boolean = false
+
+    /**
      * POST /api/v1/chat-rooms/{chatRoomId}/messages (201). 내용은 1~1000자, 빈 문자열이면 400.
+     * 실시간 연결이 없을 때의 경로다 — 연결돼 있으면 [trySendMessage] 가 먼저다.
      *
      * 응답은 다른 조회와 같은 메시지 shape 이며 발신자 publicId 가 실려 있으므로
      * 방금 보낸 메시지부터 [ChatMessage.isMine] 이 참이다(예전의 "내 id 학습" 부수효과는 사라졌다).
