@@ -44,7 +44,14 @@ import java.time.ZoneId
 import com.moyeota.domain.model.ChatMessage as DomainChatMessage
 
 // STOMP 미구현 — 실시간 수신 대신 getMessagesAfter(cursor) 를 이 주기로 폴링한다.
+/**
+ * 폴링 주기. 실시간(STOMP)이 **앞서고** 폴링은 뒤를 받친다.
+ * 소켓이 붙어 있으면 재연결 사이의 구멍만 메우면 되므로 [POLL_INTERVAL_REALTIME_MS] 로 늦춘다.
+ */
 private const val POLL_INTERVAL_MS = 3_000L
+
+/** 소켓이 붙어 있는 동안의 안전망 주기 — 놓친 메시지가 있어도 이 주기 안에 들어온다 */
+private const val POLL_INTERVAL_REALTIME_MS = 20_000L
 
 // 발신자 닉네임이 없을 때 상대 말풍선에 붙이는 표기.
 private const val PEER_FALLBACK_NAME = "동승자"
@@ -204,7 +211,12 @@ class ChatRoomViewModel(
     private var lastMessageId: Long? = null
     private var chatRoomId: Long? = null
     private var pollingJob: Job? = null
+    private var socketJob: Job? = null
     private var loadJob: Job? = null
+
+    /** 소켓이 메시지를 한 번이라도 밀어 준 적이 있는가 — 폴링 주기를 늦출지 판단하는 근거 */
+    @Volatile
+    private var realtimeAlive = false
 
     /**
      * 화면이 보이기 시작할 때 호출한다(최초 진입·뒤로 돌아옴·앱 복귀·다른 방으로 전환).
@@ -229,6 +241,7 @@ class ChatRoomViewModel(
         load(showLoading = roomChanged || _uiState.value !is UiState.Success)
         loadPeerTitle(roomId)
         if (roomChanged) loadMuted(roomId, knownMuted)
+        startRealtime(roomId)
         startPolling()
     }
 
@@ -315,17 +328,41 @@ class ChatRoomViewModel(
         }
     }
 
-    /** 화면이 가려지면(탭 이동·백그라운드·이탈) 폴링을 멈춘다. 멈추지 않으면 로그아웃 뒤에도 계속 쏜다. */
+    /**
+     * 실시간 수신(STOMP) 구독. 화면이 보이는 동안만 연결한다.
+     *
+     * 실패·끊김은 [com.moyeota.domain.repository.ChatRepository.observeMessages] 안에서 재시도로 삼켜지므로
+     * 여기서는 화면에 아무것도 알리지 않는다 — **폴링이 뒤를 받치고 있어** 사용자는 늦어질 뿐 놓치지 않는다.
+     */
+    private fun startRealtime(roomId: Long) {
+        socketJob?.cancel()
+        realtimeAlive = false
+        socketJob = viewModelScope.launch {
+            repository.observeMessages(roomId).collect { message ->
+                realtimeAlive = true
+                if (chatRoomId != roomId) return@collect
+                val current = _uiState.value as? UiState.Success ?: return@collect
+                val merged = (current.messages + message).distinctBy { it.id }.sortedBy { it.id }
+                _uiState.value = UiState.Success(merged)
+                markLastAsRead(merged.lastOrNull()?.id)
+            }
+        }
+    }
+
+    /** 화면이 가려지면(탭 이동·백그라운드·이탈) 폴링과 소켓을 함께 멈춘다. 안 그러면 로그아웃 뒤에도 계속 쏜다. */
     fun stopPolling() {
         pollingJob?.cancel()
         pollingJob = null
+        socketJob?.cancel()
+        socketJob = null
+        realtimeAlive = false
     }
 
     private fun startPolling() {
         if (pollingJob?.isActive == true) return
         pollingJob = viewModelScope.launch {
             while (true) {
-                delay(POLL_INTERVAL_MS)
+                delay(if (realtimeAlive) POLL_INTERVAL_REALTIME_MS else POLL_INTERVAL_MS)
                 val roomId = chatRoomId ?: continue
                 val cursor = lastMessageId ?: continue
                 val current = _uiState.value as? UiState.Success ?: continue

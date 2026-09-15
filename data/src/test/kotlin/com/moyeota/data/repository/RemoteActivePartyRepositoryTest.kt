@@ -20,6 +20,8 @@ import com.moyeota.domain.model.User
 import com.moyeota.domain.repository.ChatRepository
 import com.moyeota.domain.repository.RideRepository
 import com.moyeota.domain.session.UserSession
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -306,6 +308,7 @@ private class FakeChatRepository(
         return rooms
     }
 
+    override fun observeMessages(chatRoomId: Long): Flow<ChatMessage> = emptyFlow()
     override suspend fun getChatRoom(chatRoomId: Long): ChatRoom = error("쓰이지 않는다")
     override suspend fun createChatRoom(partyId: Long, departure: String, destination: String): ChatRoom =
         error("쓰이지 않는다")
