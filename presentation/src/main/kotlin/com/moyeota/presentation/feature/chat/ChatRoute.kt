@@ -62,6 +62,15 @@ private const val PENDING_TIMEOUT_MS = 8_000L
 /** 서버 한도(`SendMessageRequest @Size(max = 1000)`)와 같은 값 */
 private const val MAX_CONTENT_LENGTH = 1_000
 
+/**
+ * 검색어를 치는 동안 서버를 두드리지 않고 기다리는 시간. 한 글자마다 요청하면 「부산역」 한 단어에
+ * 세 번 나간다. 이 시간 안에 더 안 치면 그때 한 번 묻는다.
+ */
+private const val SEARCH_DEBOUNCE_MS = 350L
+
+/** 서버 규칙(`ChatMessageService.MIN_KEYWORD_LENGTH`) — 미만이면 400 CHAT_INVALID_KEYWORD 라 여기서 먼저 막는다 */
+internal const val SEARCH_MIN_LENGTH = 2
+
 /** 아직 확인이 오지 않은 내 말풍선에 붙이는 표기 */
 private const val PENDING_LABEL = "보내는 중"
 private const val PENDING_FAILED_LABEL = "전송 실패"
@@ -219,11 +228,32 @@ class ChatRoomViewModel(
         val errorMessage: String? = null,
     )
 
+    /**
+     * 방 안 메시지 검색(`GET /chat-rooms/{id}/messages/search`). 헤더의 검색 아이콘으로 열고 닫는다.
+     *
+     * @param results null 이면 아직 검색하지 않았다(검색어가 짧거나 비어 있다). 빈 목록은 「결과 없음」이다 —
+     *   둘을 구분해야 안내 문구가 다르다.
+     * @param nextCursor 더 과거 결과를 받을 커서. 서버는 최신부터 준다(id 내림차순).
+     */
+    data class SearchState(
+        val open: Boolean = false,
+        val query: String = "",
+        val results: List<DomainChatMessage>? = null,
+        val loading: Boolean = false,
+        val loadingMore: Boolean = false,
+        val hasNext: Boolean = false,
+        val nextCursor: Long? = null,
+        val errorMessage: String? = null,
+    )
+
     private val _uiState = MutableStateFlow<UiState>(UiState.Loading)
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
 
     private val _inputState = MutableStateFlow(InputState())
     val inputState: StateFlow<InputState> = _inputState.asStateFlow()
+
+    private val _searchState = MutableStateFlow(SearchState())
+    val searchState: StateFlow<SearchState> = _searchState.asStateFlow()
 
     private val _leftRoom = MutableStateFlow(false)
     val leftRoom: StateFlow<Boolean> = _leftRoom.asStateFlow()
@@ -244,6 +274,7 @@ class ChatRoomViewModel(
 
     private var lastMessageId: Long? = null
     private var nextLocalId = -1L
+    private var searchJob: Job? = null
     private var chatRoomId: Long? = null
     private var pollingJob: Job? = null
     private var socketJob: Job? = null
@@ -269,6 +300,8 @@ class ChatRoomViewModel(
             _muted.value = false
             _uiState.value = UiState.Loading
             _inputState.value = InputState()
+            searchJob?.cancel()
+            _searchState.value = SearchState()
         }
         // 나가기 신호는 화면이 다시 열릴 때마다 내린다 — 남겨두면 재진입 즉시 또 나가진 것처럼 튕긴다.
         _leftRoom.value = false
@@ -513,6 +546,80 @@ class ChatRoomViewModel(
         }
     }
 
+    fun openSearch() {
+        _searchState.update { it.copy(open = true) }
+    }
+
+    /** 닫으면 검색어·결과를 다 버린다 — 다시 열 때 지난 검색이 남아 있으면 「방금 친 것」으로 오해한다 */
+    fun closeSearch() {
+        searchJob?.cancel()
+        _searchState.value = SearchState()
+    }
+
+    /**
+     * 검색어 변경. [SEARCH_MIN_LENGTH] 이상이면 [SEARCH_DEBOUNCE_MS] 뒤 첫 페이지를 묻는다.
+     * 짧아지면 결과를 비우고(null) 요청도 보내지 않는다 — 서버가 어차피 400 으로 거절한다.
+     */
+    fun onSearchQueryChange(text: String) {
+        searchJob?.cancel()
+        val keyword = text.trim()
+        if (keyword.length < SEARCH_MIN_LENGTH) {
+            _searchState.update { it.copy(query = text, results = null, loading = false, loadingMore = false, hasNext = false, nextCursor = null, errorMessage = null) }
+            return
+        }
+        _searchState.update { it.copy(query = text, loading = true, errorMessage = null) }
+        searchJob = viewModelScope.launch {
+            delay(SEARCH_DEBOUNCE_MS)
+            runSearch(keyword, cursor = null)
+        }
+    }
+
+    /** 에러 화면의 「다시 시도」 — 디바운스 없이 바로 */
+    fun retrySearch() {
+        val keyword = _searchState.value.query.trim()
+        if (keyword.length < SEARCH_MIN_LENGTH) return
+        searchJob?.cancel()
+        _searchState.update { it.copy(loading = true, errorMessage = null) }
+        searchJob = viewModelScope.launch { runSearch(keyword, cursor = null) }
+    }
+
+    /** 다음 페이지(더 과거). 이미 받는 중이거나 더 없으면 무시한다 */
+    fun loadMoreSearch() {
+        val current = _searchState.value
+        val cursor = current.nextCursor ?: return
+        if (!current.hasNext || current.loading || current.loadingMore) return
+        val keyword = current.query.trim()
+        if (keyword.length < SEARCH_MIN_LENGTH) return
+        searchJob?.cancel()
+        _searchState.update { it.copy(loadingMore = true, errorMessage = null) }
+        searchJob = viewModelScope.launch { runSearch(keyword, cursor) }
+    }
+
+    // cursor == null 이면 첫 페이지(결과 교체), 아니면 이어 붙인다. 응답이 오기 전에 검색어가 바뀌면
+    // 이 코루틴은 onSearchQueryChange 가 취소하므로 낡은 결과가 새 검색어 위에 덮이지 않는다.
+    private suspend fun runSearch(keyword: String, cursor: Long?) {
+        val roomId = chatRoomId ?: return
+        try {
+            val page = repository.searchMessages(roomId, keyword, cursor)
+            _searchState.update { state ->
+                val merged = if (cursor == null) page.messages
+                else ((state.results ?: emptyList()) + page.messages).distinctBy { it.id }
+                state.copy(
+                    results = merged,
+                    loading = false,
+                    loadingMore = false,
+                    hasNext = page.hasNext,
+                    nextCursor = page.nextCursor,
+                    errorMessage = null,
+                )
+            }
+        } catch (e: Exception) {
+            _searchState.update {
+                it.copy(loading = false, loadingMore = false, errorMessage = e.toChatMessage("검색하지 못했어요"))
+            }
+        }
+    }
+
     // 읽음 처리 실패는 사용자에게 알리지 않는다 (배지 정확도보다 대화 흐름이 우선).
     // 메시지마다 한 번씩 일어나는 일이라 소켓이 붙어 있으면 그쪽으로 보내 REST 왕복을 아낀다.
     private fun markLastAsRead(messageId: Long?) {
@@ -644,6 +751,7 @@ private fun ChatRoomRoute(
     val leftRoom by viewModel.leftRoom.collectAsState()
     val peerTitle by viewModel.peerTitle.collectAsState()
     val muted by viewModel.muted.collectAsState()
+    val search by viewModel.searchState.collectAsState()
 
     // 화면이 보이는 동안만 조회·폴링한다. 탭을 옮기거나 앱이 백그라운드로 가면 즉시 멈춘다.
     // 같은 구간 동안 「이 방을 보고 있다」를 알려 푸시 알림이 겹치지 않게 한다([ChatForeground]).
@@ -697,6 +805,20 @@ private fun ChatRoomRoute(
             // 진행 중인 내 방의 채팅방에서는 「나가기」를 두지 않는다 — 서버가 나간 참여자를 되살리지 못해
             // (chat_room_user 복합키에 leftAt 만 찍힘) 한 번 나가면 운행 내내 대화에 못 돌아온다(실기 QA)
             canLeave = onOpenMatching == null,
+            search = ChatSearchUi(
+                open = search.open,
+                query = search.query,
+                results = search.results?.map { it.toUiMessage() },
+                loading = search.loading,
+                loadingMore = search.loadingMore,
+                hasMore = search.hasNext,
+                errorMessage = search.errorMessage,
+            ),
+            onOpenSearch = viewModel::openSearch,
+            onCloseSearch = viewModel::closeSearch,
+            onSearchQueryChange = viewModel::onSearchQueryChange,
+            onSearchRetry = viewModel::retrySearch,
+            onSearchLoadMore = viewModel::loadMoreSearch,
             onOpenMatching = onOpenMatching,
             onOpenRideOngoing = onOpenRideOngoing,
             onStartLocationShare = onStartLocationShare,
