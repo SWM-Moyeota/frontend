@@ -24,7 +24,19 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.input.ImeAction
+import com.moyeota.presentation.core.ErrorBox
+import com.moyeota.presentation.core.LoadingBox
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
@@ -78,6 +90,20 @@ data class ChatUiMessage(
     val isLocationShare: Boolean = false, // 위치 공유 안내 말풍선
 )
 
+/**
+ * 검색 바·결과 목록 상태. [results] 가 null 이면 아직 묻지 않았다(검색어가 짧다) — 빈 목록(결과 없음)과 구분한다.
+ * 기본값은 「닫힘」이라 검색을 안 쓰는 Preview 는 이 인자를 넘기지 않아도 된다.
+ */
+data class ChatSearchUi(
+    val open: Boolean = false,
+    val query: String = "",
+    val results: List<ChatUiMessage>? = null,
+    val loading: Boolean = false,
+    val loadingMore: Boolean = false,
+    val hasMore: Boolean = false,
+    val errorMessage: String? = null,
+)
+
 // 서버 연동 전 미리보기용 더미 대화
 private val DummyMessages = listOf(
     ChatUiMessage(text = "정문 앞 편의점에 있어요", isMine = false, senderName = "김OO", timeLabel = "오후 6:39"),
@@ -99,7 +125,10 @@ private val DummyMessages = listOf(
  * - 24a 「채팅방 나가기」 → 14 홈 (onLeaveChat) — 진행 중 탑승이 있으면 재확인 다이얼로그
  * - 24b 「실시간 위치 공유 시작」 → 26 운행 중 (onStartLocationShare)
  * - 하단탭 → 14/17/35 (onTabSelect)
- * - [미연결] 없음 (헤더 검색 아이콘은 스펙 미정 — 무동작)
+ * - 헤더 검색 아이콘 → 상단이 검색 바로 바뀌고 본문이 결과 목록이 된다(onOpenSearch / onCloseSearch).
+ *   검색어 2자 이상부터 서버(GET …/messages/search)에 묻고, 결과는 최신순 · 「이전 결과 더 보기」로 페이징.
+ *   결과를 눌러 그 메시지로 점프하는 건 아직 없다 — 서버가 위치(오프셋)를 주지 않아 커서 페이징으로는
+ *   해당 메시지까지 몇 페이지를 더 받아야 하는지 모른다.
  *
  * 유효값: 메시지 1~500자, 공백만 입력 시 전송 비활성.
  */
@@ -134,12 +163,21 @@ fun ChatScreen(
     onToggleMute: () -> Unit = {},
     /** 24a 「채팅방 나가기」를 보여 줄지. 진행 중인 내 방의 채팅방이면 false(되돌아올 길이 없다) */
     canLeave: Boolean = true,
+    search: ChatSearchUi = ChatSearchUi(),
+    onOpenSearch: () -> Unit = {},
+    onCloseSearch: () -> Unit = {},
+    onSearchQueryChange: (String) -> Unit = {},
+    onSearchRetry: () -> Unit = {},
+    onSearchLoadMore: () -> Unit = {},
 ) {
     var menuOpen by remember { mutableStateOf(false) } // 24a
     var shareSheetOpen by remember { mutableStateOf(false) } // 24b
     var leaveConfirmOpen by remember { mutableStateOf(false) }
 
     val sendEnabled = input.isNotBlank() && input.length <= 500 && !sending
+
+    // 검색 중 뒤로가기는 방을 나가는 게 아니라 검색을 닫는다 — 카카오톡·기본 메시지 앱과 같은 기대
+    BackHandler(enabled = search.open) { onCloseSearch() }
 
     // 키보드가 올라온 만큼 화면을 줄인다. enableEdgeToEdge() 로 창이 IME 에 맞춰 리사이즈되지 않아
     // imePadding 이 없으면 입력 바와 하단탭이 키보드 뒤로 숨는다(실기 QA).
@@ -153,10 +191,17 @@ fun ChatScreen(
 
     Box(modifier = Modifier.fillMaxSize().background(CanvasBg)) {
         Column(modifier = Modifier.fillMaxSize().imePadding()) {
-            // 헤더 (흰 배경)
+            // 헤더 (흰 배경). 검색을 열면 제목 줄이 통째로 검색 바로 바뀐다 — 제목 아래에 한 줄 더 얹는
+            // 것보다 대화가 보이는 높이를 안 뺏고, 「지금 검색 중」이 분명하다.
             Column(modifier = Modifier.fillMaxWidth().background(MoyeotaColor.SurfaceCanvas)) {
                 StatusBarSpacer()
-                Row(
+                if (search.open) {
+                    SearchHeader(
+                        query = search.query,
+                        onQueryChange = onSearchQueryChange,
+                        onClose = onCloseSearch,
+                    )
+                } else Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -190,7 +235,14 @@ fun ChatScreen(
                         )
                     }
                     Spacer(Modifier.width(8.dp))
-                    SearchBoxIcon() // 스펙 미정 — 무동작
+                    Box(
+                        modifier = Modifier.clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                        ) { onOpenSearch() },
+                    ) {
+                        SearchBoxIcon()
+                    }
                     Spacer(Modifier.width(14.dp))
                     Box(
                         modifier = Modifier
@@ -206,8 +258,18 @@ fun ChatScreen(
                 }
             }
 
+            // 검색 중에는 배너·대화·입력 바 대신 결과 목록만. 닫으면 원래 화면으로 돌아온다.
+            if (search.open) {
+                SearchResults(
+                    search = search,
+                    onRetry = onSearchRetry,
+                    onLoadMore = onSearchLoadMore,
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                )
+            }
+
             // 「매칭 화면으로 →」 — 진행 중인 방의 채팅방에서만 뜬다
-            if (onOpenMatching != null) {
+            if (!search.open && onOpenMatching != null) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -241,7 +303,7 @@ fun ChatScreen(
             // 「실시간 위치 공유 중」 배너 — 탭 → 26 운행 중.
             // 문구 두 개가 weight 없이 나란히 있으면 좁은 폰에서 Row 가 넘쳐 **마지막 자식인 토글이
             // 0dp 로 찌그러진다**(실기 QA: 토글이 작게 보이는 문제). 문구 묶음만 남는 폭을 쓰고 줄어들게 한다.
-            Row(
+            if (!search.open) Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(44.dp)
@@ -280,7 +342,7 @@ fun ChatScreen(
             }
 
             // 메시지 리스트 + (24a/24b 오버레이 영역)
-            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            if (!search.open) Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
@@ -417,8 +479,8 @@ fun ChatScreen(
                 }
             }
 
-            // 입력 바
-            Column(modifier = Modifier.fillMaxWidth().background(MoyeotaColor.SurfaceCanvas)) {
+            // 입력 바 — 검색 중엔 숨긴다(결과 목록 위에서 전송할 일이 없고, 키보드는 검색 바가 쓴다)
+            if (!search.open) Column(modifier = Modifier.fillMaxWidth().background(MoyeotaColor.SurfaceCanvas)) {
                 HorizontalDivider(color = MoyeotaColor.Hairline)
                 // 전송·수신 실패 안내 — 입력한 내용은 지우지 않는다
                 if (errorMessage != null) {
@@ -653,6 +715,195 @@ private fun TogglePill(on: Boolean, onColor: Color, modifier: Modifier = Modifie
 }
 
 // ─── 아이콘 (material-icons 미사용 — Canvas 직접 드로잉) ─────────────────────
+
+/**
+ * 검색 모드 헤더 — 뒤로가기(닫기) · 입력 · 지우기. 열리자마자 포커스를 잡아 키보드를 올린다.
+ * 검색은 입력하는 동안 자동으로 나가므로(ViewModel 디바운스) IME 「검색」 버튼은 키보드만 내린다.
+ */
+@Composable
+private fun SearchHeader(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    onClose: () -> Unit,
+) {
+    val focus = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+    LaunchedEffect(Unit) { focus.requestFocus() }
+
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier.clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+            ) { onClose() },
+        ) {
+            BackArrowIcon(modifier = Modifier.size(22.dp))
+        }
+        Spacer(Modifier.width(12.dp))
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .height(40.dp)
+                .background(InputPillBg, RoundedCornerShape(20.dp))
+                .padding(horizontal = 16.dp),
+            contentAlignment = Alignment.CenterStart,
+        ) {
+            BasicTextField(
+                value = query,
+                onValueChange = { if (it.length <= 100) onQueryChange(it) }, // 서버 한도 1000자 — 검색어로는 100자면 넉넉하다
+                textStyle = MoyeotaType.BodyMd.copy(color = MoyeotaColor.InkPrimary),
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { keyboard?.hide() }),
+                modifier = Modifier.fillMaxWidth().focusRequester(focus),
+            )
+            if (query.isEmpty()) {
+                Text(text = "대화 내용 검색", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = GrayAsh)
+            }
+        }
+        if (query.isNotEmpty()) {
+            Spacer(Modifier.width(10.dp))
+            Text(
+                text = "지우기",
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                color = MoyeotaColor.Primary600,
+                modifier = Modifier.clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                ) { onQueryChange("") },
+            )
+        }
+    }
+}
+
+/**
+ * 결과 목록. 네 가지 상태를 문구로 구분한다 — 안 물어봄(짧은 검색어) / 찾는 중 / 없음 / 실패.
+ * 결과는 서버 순서 그대로(최신 → 과거). 말풍선이 아니라 한 줄 카드다 — 누가·언제·무엇을 한눈에 훑는 용도라
+ * 대화 레이아웃(좌우 정렬)을 그대로 쓰면 오히려 읽기 어렵다.
+ */
+@Composable
+private fun SearchResults(
+    search: ChatSearchUi,
+    onRetry: () -> Unit,
+    onLoadMore: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val results = search.results
+    val keyword = search.query.trim()
+    Box(modifier = modifier) {
+        when {
+            search.errorMessage != null && results.isNullOrEmpty() ->
+                ErrorBox(message = search.errorMessage, onRetry = onRetry)
+            search.loading && results == null -> LoadingBox()
+            keyword.length < SEARCH_MIN_LENGTH -> SearchHint("검색어를 ${SEARCH_MIN_LENGTH}글자 이상 입력해 주세요")
+            results != null && results.isEmpty() -> SearchHint("「$keyword」에 맞는 메시지가 없어요")
+            results != null -> Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+            ) {
+                Text(
+                    text = "검색 결과 ${results.size}개${if (search.hasMore) " 이상" else ""}",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MoyeotaColor.TextMute,
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp),
+                )
+                results.forEach { message ->
+                    SearchResultRow(message = message, keyword = keyword)
+                    Spacer(Modifier.height(8.dp))
+                }
+                if (search.errorMessage != null) {
+                    NoticeBanner(kind = NoticeKind.ERROR, text = search.errorMessage, modifier = Modifier.padding(vertical = 6.dp))
+                }
+                if (search.hasMore) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(44.dp)
+                            .background(MoyeotaColor.SurfaceCanvas, RoundedCornerShape(12.dp))
+                            .clickable(enabled = !search.loadingMore) { onLoadMore() },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = if (search.loadingMore) "불러오는 중…" else "이전 결과 더 보기",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (search.loadingMore) GrayMute else MoyeotaColor.Primary600,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SearchHint(text: String) {
+    Box(modifier = Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+        Text(text = text, fontSize = 14.sp, fontWeight = FontWeight.Medium, color = GrayMute)
+    }
+}
+
+@Composable
+private fun SearchResultRow(message: ChatUiMessage, keyword: String) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MoyeotaColor.SurfaceCanvas, RoundedCornerShape(14.dp))
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+    ) {
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = if (message.isMine) "나" else (message.senderName ?: "동승자"),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = if (message.isMine) MoyeotaColor.Primary600 else MoyeotaColor.TextBody,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            message.timeLabel?.let {
+                Text(text = it, fontSize = 11.sp, fontWeight = FontWeight.Medium, color = GrayAsh)
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = highlightKeyword(message.text, keyword),
+            fontSize = 14.sp,
+            color = MoyeotaColor.InkPrimary,
+            maxLines = 3,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+/** 본문에서 검색어와 겹치는 구간 전부를 굵게·파랗게. 대소문자를 가리지 않는다(서버 LIKE 도 그렇다) */
+internal fun highlightKeyword(text: String, keyword: String): AnnotatedString = buildAnnotatedString {
+    append(text)
+    for (range in keywordRanges(text, keyword)) {
+        addStyle(SpanStyle(color = MoyeotaColor.Primary600, fontWeight = FontWeight.Bold), range.first, range.last + 1)
+    }
+}
+
+/** [text] 안에서 [keyword] 가 나오는 모든 [start, end) 구간. 겹치지 않게 앞에서부터 찾는다. 빈 검색어면 없음 */
+internal fun keywordRanges(text: String, keyword: String): List<IntRange> {
+    if (keyword.isEmpty()) return emptyList()
+    val ranges = mutableListOf<IntRange>()
+    var from = 0
+    while (true) {
+        val at = text.indexOf(keyword, from, ignoreCase = true)
+        if (at < 0) break
+        ranges += at until at + keyword.length
+        from = at + keyword.length
+    }
+    return ranges
+}
 
 @Composable
 private fun SearchBoxIcon(modifier: Modifier = Modifier) {
