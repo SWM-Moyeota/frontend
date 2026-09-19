@@ -5,6 +5,7 @@ import com.moyeota.data.local.DataStoreActivePartyStorage
 import com.moyeota.data.push.FcmTokenRegistrar
 import com.moyeota.data.remote.NetworkModule
 import com.moyeota.data.repository.RemoteActivePartyRepository
+import com.moyeota.data.repository.RemoteAppConfigRepository
 import com.moyeota.data.repository.RemoteAuthRepository
 import com.moyeota.data.remote.chat.ChatSocket
 import com.moyeota.data.repository.RemoteChatRepository
@@ -14,6 +15,7 @@ import com.moyeota.data.repository.RemoteRideRepository
 import com.moyeota.data.session.DataStoreTokenStorage
 import com.moyeota.data.session.SessionManager
 import com.moyeota.domain.repository.ActivePartyRepository
+import com.moyeota.domain.repository.AppConfigRepository
 import com.moyeota.domain.repository.AuthRepository
 import com.moyeota.domain.repository.ChatRepository
 import com.moyeota.domain.repository.DispatchRepository
@@ -61,6 +63,8 @@ class AppContainer(context: Context, debugLogging: Boolean) {
 
     val authRepository: AuthRepository =
         RemoteAuthRepository(apis.auth, apis.user, sessionManager, fcmTokenRegistrar)
+    /** 택시 모드 등 서버 운영 설정. 앱 시작 시 한 번 읽고([AppConfigViewModel]), 실패하면 기본값(기사 모드) */
+    val appConfigRepository: AppConfigRepository = RemoteAppConfigRepository(apis.config)
     // 세션을 넘기는 건 방 상세 멤버 중 "나"를 매퍼가 판정하기 위해서다(RemoteRideRepository KDoc).
     val rideRepository: RideRepository = RemoteRideRepository(
         apis.matching,

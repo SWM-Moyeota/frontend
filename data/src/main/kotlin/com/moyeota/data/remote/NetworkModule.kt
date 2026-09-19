@@ -47,7 +47,10 @@ object NetworkModule {
             }
             .build()
 
-        val authApi = retrofit(baseUrl, baseClient).create(AuthApi::class.java)
+        val publicRetrofit = retrofit(baseUrl, baseClient)
+        val authApi = publicRetrofit.create(AuthApi::class.java)
+        // 앱 설정은 permitAll — 토큰을 붙이지 않는다. 만료 토큰이 붙으면 401 재발급이 끼어들어 앱 시작이 늦어진다.
+        val configApi = publicRetrofit.create(ConfigApi::class.java)
 
         val apiClient = baseClient.newBuilder()
             .addInterceptor(AuthHeaderInterceptor(tokenHolder))
@@ -66,6 +69,7 @@ object NetworkModule {
         return Apis(
             socketClient = socketClient,
             auth = authApi,
+            config = configApi,
             matching = retrofit.create(MatchingApi::class.java),
             place = retrofit.create(PlaceApi::class.java),
             chat = retrofit.create(ChatApi::class.java),
@@ -87,6 +91,8 @@ object NetworkModule {
         /** 채팅 실시간 수신(STOMP)이 쓰는 OkHttp. 인증 인터셉터가 붙지 않은 순정 클라이언트다 */
         val socketClient: OkHttpClient,
         val auth: AuthApi,
+        /** 서버 운영 설정(택시 모드 등). 토큰 없는 클라이언트 */
+        val config: ConfigApi,
         val matching: MatchingApi,
         val place: PlaceApi,
         val chat: ChatApi,

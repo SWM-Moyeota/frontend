@@ -61,6 +61,15 @@ interface RideRepository {
     suspend fun leaveParty(partyId: Long)
 
     /**
+     * POST /api/v1/matching/rooms/{partyId}/finish (204) — **기사 없이** 합승을 끝낸다.
+     * 1차 배포 모드([AppConfig.taxiEnabled][com.moyeota.domain.model.AppConfig.taxiEnabled] = false)에서
+     * 정원이 찬(`COMPLETED`) 방을 참여자 **누구든 한 명**이 닫는다 — 모두의 방이 `FINISHED` 가 된다.
+     * 정원이 안 찼으면 409 PARTY_NOT_COMPLETED, 기사가 이미 배정됐으면 409 DRIVER_ALREADY_ASSIGNED,
+     * 참여자가 아니면 403 NOT_PARTY_MEMBER.
+     */
+    suspend fun finishParty(partyId: Long)
+
+    /**
      * GET /api/v1/matching/rooms/{partyId}/driver — 배정된 기사 요약.
      * 기사 미배정(taxiDriverId == null)이면 서버가 예외를 던지므로 status 가
      * DRIVER_ASSIGNED/IN_RIDE 일 때만 호출한다. 기사명·별점은 서버에 아직 없다.

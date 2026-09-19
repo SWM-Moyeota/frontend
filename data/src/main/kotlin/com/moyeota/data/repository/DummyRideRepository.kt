@@ -89,6 +89,8 @@ class DummyRideRepository : RideRepository {
 
     override suspend fun leaveParty(partyId: Long) = Unit
 
+    override suspend fun finishParty(partyId: Long) = Unit
+
     override suspend fun getAssignedDriver(partyId: Long): AssignedDriver =
         AssignedDriver(seats = 4, plateNumber = "12가 3456", vehicleType = "쏘나타")
 
