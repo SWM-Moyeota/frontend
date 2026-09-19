@@ -52,6 +52,7 @@ import com.moyeota.core.designsystem.component.MapSheetScaffold
 import com.moyeota.core.designsystem.component.NavigationBarSpacer
 import com.moyeota.core.designsystem.component.NoticeBanner
 import com.moyeota.core.designsystem.component.NoticeKind
+import com.moyeota.core.designsystem.component.PrimaryCtaButton
 import com.moyeota.core.designsystem.component.RouteMapView
 import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.component.circleBoundsPoints
@@ -135,9 +136,16 @@ fun MatchWaitingScreen(
     radiusLabel: String = "—",
     /** 내 현재 위치(파란 점). 권한이 없거나 아직 못 받았으면 null — 지도에 점을 찍지 않는다 */
     myLocation: UserCoordinates? = null,
+    /**
+     * 택시 모드(서버 설정). false = 1차 배포 — 정원이 차도 기사를 부르지 않는다.
+     * 문구(「기사님을 찾아요」 → 「채팅으로 만나요」)와 정원 찼을 때의 CTA(「합승 완료」)가 갈린다.
+     */
+    taxiEnabled: Boolean = true,
     actionInProgress: Boolean = false,
     actionErrorMessage: String? = null,
     onCancelSearch: () -> Unit = {},
+    /** 1차 배포 모드 「합승 완료」 — 참여자 누구든 한 명이 누르면 모두의 방이 닫힌다. 확인 다이얼로그 뒤에만 호출된다 */
+    onFinish: () -> Unit = {},
     /** 방을 **유지한 채** 화면만 벗어난다. 나가기가 막힌 단계의 뒤로가기가 여기로 온다 */
     onExitKeepingParty: () -> Unit = {},
     onCardClick: () -> Unit = {},
@@ -147,11 +155,15 @@ fun MatchWaitingScreen(
     // 나가기 확인 다이얼로그. 화면 안에서만 쓰는 UI 상태라 ViewModel 로 올리지 않는다
     // (12 마이페이지의 로그아웃 확인과 같은 패턴).
     var cancelConfirming by remember { mutableStateOf(false) }
+    var finishConfirming by remember { mutableStateOf(false) }
 
-    // 서버가 나가기를 허용하는 단계인가(ACTIVE = 모집 중). KDoc 참고.
-    val canLeave = ride.status == RideStatus.RECRUITING
+    // 서버가 나가기를 허용하는 단계인가. 모드에 따라 다르다 — canLeaveParty KDoc 참고.
+    val canLeave = canLeaveParty(ride.status, taxiEnabled)
+    // 1차 배포 모드에서 정원이 찼다 — 「합승 완료」를 보여 준다
+    val canFinish = canFinishParty(ride.status, taxiEnabled)
 
-    // 정원 도달 = 서버가 기사 매칭을 시작하는 시점. 문구·진행바가 이 경계로 갈린다.
+    // 정원 도달. 기사 모드에선 서버가 기사 매칭을 시작하는 시점이고, 1차 배포 모드에선 채팅으로 만나는 시점이다.
+    // 문구·진행바가 이 경계로 갈린다.
     val isFull = foundCount >= ride.capacity
     // 나를 뺀 인원. members 가 비어 있는 응답(더미 경로)에서는 0 이다.
     val otherCount = ride.members.count { !it.isMe }
@@ -192,7 +204,8 @@ fun MatchWaitingScreen(
                 onClick = { if (canLeave) cancelConfirming = true else onExitKeepingParty() },
             ) { BackArrowIcon() }
             Text(
-                text = "같이 탈 사람 찾는 중",
+                // 1차 배포 모드에서 정원이 찼으면 더는 「찾는 중」이 아니다 — 만나는 단계다
+                text = if (canFinish) "같이 탈 사람이 모였어요" else "같이 탈 사람 찾는 중",
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
                 color = MoyeotaColor.InkPrimary,
@@ -267,13 +280,17 @@ fun MatchWaitingScreen(
                 // 레이더 애니메이션을 대신하는 상태 배지. 지도가 배경이 된 이상 큰 레이더는
                 // 지도를 가리기만 해서 「찾는 중」이라는 사실만 남긴다.
                 MapOverlayPill(modifier = Modifier.align(Alignment.TopStart).padding(16.dp)) {
-                    SearchingBadgeContent(isFull = isFull)
+                    SearchingBadgeContent(isFull = isFull, taxiEnabled = taxiEnabled)
                 }
             },
             sheetTop = {
                 Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp)) {
                     Text(
-                        text = if (isFull) "정원이 다 찼어요" else "보통 2분 안에 모여요",
+                        text = when {
+                            isFull && !taxiEnabled -> "같이 탈 사람이 다 모였어요"
+                            isFull -> "정원이 다 찼어요"
+                            else -> "보통 2분 안에 모여요"
+                        },
                         fontSize = 22.sp,
                         fontWeight = FontWeight.Bold,
                         color = MoyeotaColor.InkPrimary,
@@ -313,13 +330,16 @@ fun MatchWaitingScreen(
             },
             sheetDetail = {
                 Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-                    // 앱이 매칭을 트리거하지 않는다는 사실을 사용자에게 알려주는 유일한 지점
+                    // 정원이 찬 뒤 무슨 일이 일어나는지 알려주는 유일한 지점 — 모드에 따라 다르다.
+                    // 기사 모드: 서버가 스스로 기사 매칭을 시작한다(앱이 트리거하지 않는다).
+                    // 1차 배포 모드: 기사가 없다. 채팅으로 만날 곳을 정하고, 다 탔으면 「합승 완료」로 닫는다.
                     NoticeBanner(
                         kind = if (isFull) NoticeKind.WAITING else NoticeKind.INFO,
-                        text = if (isFull) {
-                            "곧 기사님을 찾기 시작해요"
-                        } else {
-                            "정원이 차면 기사님을 자동으로 찾아요"
+                        text = when {
+                            isFull && !taxiEnabled -> "채팅으로 만날 곳을 정해요. 다 타면 「합승 완료」를 눌러 주세요"
+                            isFull -> "곧 기사님을 찾기 시작해요"
+                            !taxiEnabled -> "정원이 차면 채팅으로 만날 곳을 정해요"
+                            else -> "정원이 차면 기사님을 자동으로 찾아요"
                         },
                     )
                     Spacer(Modifier.height(16.dp))
@@ -389,13 +409,24 @@ fun MatchWaitingScreen(
                     Spacer(Modifier.height(8.dp))
                 }
 
-                // 남은 액션은 나가기 하나뿐 — 매칭 시작·준비 버튼은 도메인에서 사라졌다.
-                // 접힘 상태에서도 보이도록 시트 하단에 고정한다.
-                // 정원이 차 매칭이 시작되면 서버가 나가기를 막으므로 버튼을 비활성 문구로 바꾼다.
+                // 1차 배포 모드 · 정원이 찼을 때만 — 기사 없이 합승을 끝내는 버튼. 접힘 상태에서도 보이게 시트 하단.
+                if (canFinish) {
+                    PrimaryCtaButton(
+                        text = if (actionInProgress) "완료하는 중…" else "합승 완료",
+                        onClick = { finishConfirming = true },
+                        enabled = !actionInProgress,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
+
+                // 나가기 — 매칭 시작·준비 버튼은 도메인에서 사라졌다. 접힘 상태에서도 보이도록 시트 하단에 고정한다.
+                // 기사 모드에서 정원이 차 매칭이 시작되면 서버가 나가기를 막으므로 버튼을 비활성 문구로 바꾼다.
                 GrayActionButton(
                     text = when {
                         !canLeave -> "기사님을 찾는 중…"
                         actionInProgress -> "나가는 중…"
+                        canFinish -> "방 나가기"
                         else -> "그만 찾기"
                     },
                     onClick = { cancelConfirming = true },
@@ -405,6 +436,29 @@ fun MatchWaitingScreen(
                 Spacer(Modifier.height(12.dp))
                 NavigationBarSpacer()
             },
+        )
+    }
+
+    // 「합승 완료」 확인 — 나 혼자가 아니라 **모두의** 방이 닫히는 행동이라 반드시 한 번 묻는다
+    if (finishConfirming) {
+        AlertDialog(
+            onDismissRequest = { finishConfirming = false },
+            title = { Text(text = "합승을 완료할까요?", fontSize = 17.sp, fontWeight = FontWeight.Bold) },
+            text = { Text(text = "같이 탄 사람 모두의 방이 종료돼요. 다 타고 나서 눌러 주세요", fontSize = 14.sp) },
+            confirmButton = {
+                TextButton(onClick = {
+                    finishConfirming = false
+                    onFinish()
+                }) {
+                    Text(text = "합승 완료", fontWeight = FontWeight.Bold, color = MoyeotaColor.Primary600)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { finishConfirming = false }) {
+                    Text(text = "아직이요", color = MoyeotaColor.TextMute)
+                }
+            },
+            containerColor = MoyeotaColor.SurfaceCanvas,
         )
     }
 
@@ -498,7 +552,7 @@ private fun ConditionRow(label: String, value: String) {
  * 남길 가치가 있던 건 「지금도 돌아가고 있다」는 신호 하나라, 점 하나의 펄스로 줄였다.
  */
 @Composable
-private fun SearchingBadgeContent(isFull: Boolean) {
+private fun SearchingBadgeContent(isFull: Boolean, taxiEnabled: Boolean) {
     val transition = rememberInfiniteTransition(label = "searching")
     val pulse by transition.animateFloat(
         initialValue = 0.25f,
@@ -521,7 +575,11 @@ private fun SearchingBadgeContent(isFull: Boolean) {
         )
         Spacer(Modifier.width(8.dp))
         Text(
-            text = if (isFull) "정원이 다 찼어요" else "같이 탈 사람 찾는 중",
+            text = when {
+                isFull && !taxiEnabled -> "채팅으로 만나요"
+                isFull -> "정원이 다 찼어요"
+                else -> "같이 탈 사람 찾는 중"
+            },
             fontSize = 13.sp,
             fontWeight = FontWeight.Bold,
             color = MoyeotaColor.InkPrimary,

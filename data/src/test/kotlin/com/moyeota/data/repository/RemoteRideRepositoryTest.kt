@@ -233,6 +233,8 @@ class RemoteRideRepositoryTest {
             return detail(partyId)
         }
 
+        override suspend fun finishParty(partyId: Long) = error("쓰이지 않는다")
+
         override suspend fun leaveParty(partyId: Long) {
             leaveCall = partyId
         }

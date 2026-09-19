@@ -79,6 +79,13 @@ interface MatchingApi {
     suspend fun leaveParty(@Path("partyId") partyId: Long)
 
     /**
+     * 기사 없이 합승 종료 — 1차 배포 모드 전용. 204. `PartyController.finish`.
+     * COMPLETED(정원 참) 방에서만 되고, 참여자 누구든 한 명이 부르면 방 전체가 FINISHED 다.
+     */
+    @POST("api/v1/matching/rooms/{partyId}/finish")
+    suspend fun finishParty(@Path("partyId") partyId: Long)
+
+    /**
      * 200 / 404 `PARTY_NOT_FOUND`·`ASSIGNED_DRIVER_NOT_FOUND` / **409 `DRIVER_NOT_ASSIGNED`**(배정 전).
      * 예전 주석의 「IllegalArgumentException → 500」은 옛 서버 얘기다 — 지금은 `PartyApplicationService.getAssignDriver`
      * 가 `BusinessException(MatchingErrorCode.DRIVER_NOT_ASSIGNED)` 를 던지고 전역 핸들러가 409 로 답한다.

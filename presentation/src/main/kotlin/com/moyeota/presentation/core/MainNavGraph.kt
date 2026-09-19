@@ -24,6 +24,7 @@ import com.moyeota.domain.model.Place
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.User
 import com.moyeota.domain.repository.ActivePartyRepository
+import com.moyeota.domain.repository.AppConfigRepository
 import com.moyeota.domain.repository.AuthRepository
 import com.moyeota.domain.repository.ChatRepository
 import com.moyeota.domain.repository.DispatchRepository
@@ -74,6 +75,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun MainNavGraph(
     authRepository: AuthRepository,
+    appConfigRepository: AppConfigRepository,
     rideRepository: RideRepository,
     placeRepository: PlaceRepository,
     chatRepository: ChatRepository,
@@ -96,6 +98,7 @@ fun MainNavGraph(
     MainNavHost(
         loggedIn = authState is AuthState.Authenticated,
         authRepository = authRepository,
+        appConfigRepository = appConfigRepository,
         rideRepository = rideRepository,
         placeRepository = placeRepository,
         chatRepository = chatRepository,
@@ -119,6 +122,7 @@ private val TabRoutes = listOf(Routes.HOME, Routes.EXPLORE, Routes.CHAT, Routes.
 private fun MainNavHost(
     loggedIn: Boolean,
     authRepository: AuthRepository,
+    appConfigRepository: AppConfigRepository,
     rideRepository: RideRepository,
     placeRepository: PlaceRepository,
     chatRepository: ChatRepository,
@@ -135,6 +139,11 @@ private fun MainNavHost(
     val profileViewModel: UserProfileViewModel =
         viewModel(factory = UserProfileViewModel.factory(authRepository))
     val userName by profileViewModel.userName.collectAsState()
+
+    // 서버 운영 설정(택시 모드). 앱 시작 시 한 번 받아 21 대기 화면이 기사 대기 / 합승 완료를 고른다.
+    val appConfigViewModel: AppConfigViewModel =
+        viewModel(factory = AppConfigViewModel.factory(appConfigRepository))
+    val appConfig by appConfigViewModel.config.collectAsState()
 
     // 「지금 내가 타고 있는 방」 — 홈·합승 배너, 34 내 탑승, 앱 시작 시 단계 복귀가 같은 값을 본다.
     // profileViewModel 과 같은 이유로 NavHost 바깥에 둔다(탭을 옮길 때마다 재조회하지 않게).
@@ -531,8 +540,14 @@ private fun MainNavHost(
             MatchWaitingRoute(
                 repository = rideRepository,
                 partyId = createdPartyId,
+                taxiEnabled = appConfig.taxiEnabled,
                 // 나가기 성공 후 14 홈 — 방에서 빠졌으니 진행 중 기억도 함께 지운다
                 onCancelSearch = {
+                    activePartyViewModel.clearParty()
+                    navigateTab(MoyeotaTab.HOME)
+                },
+                // 방이 닫혔다(내·남의 「합승 완료」, 30분 스윕). 끝난 방이라 진행 중 기억을 지우고 홈으로.
+                onPartyClosed = {
                     activePartyViewModel.clearParty()
                     navigateTab(MoyeotaTab.HOME)
                 },
