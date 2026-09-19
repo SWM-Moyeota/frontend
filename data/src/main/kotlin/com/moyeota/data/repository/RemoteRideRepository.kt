@@ -69,6 +69,8 @@ class RemoteRideRepository(
 
     override suspend fun leaveParty(partyId: Long) = api.leaveParty(partyId)
 
+    override suspend fun finishParty(partyId: Long) = api.finishParty(partyId)
+
     override suspend fun getAssignedDriver(partyId: Long): AssignedDriver =
         api.getAssignedDriver(partyId).toAssignedDriver()
 

@@ -72,7 +72,9 @@ val Ride.activeStage: ActiveStage
 /** 배너·카드에 쓰는 단계 문구. 각 단계 화면의 헤더 제목과 같은 말을 쓴다. */
 val Ride.activeStageLabel: String
     get() = when (activeStage) {
-        ActiveStage.WAITING -> "같이 탈 사람 찾는 중"
+        // 정원이 찬 방(COMPLETED)은 「찾는 중」이 아니다. 기사 모드에선 순간이라 거의 안 보이고,
+        // 1차 배포 모드에선 채팅으로 만나는 동안 계속 이 문구다.
+        ActiveStage.WAITING -> if (status == RideStatus.MATCHED) "같이 탈 사람이 모였어요" else "같이 탈 사람 찾는 중"
         ActiveStage.DRIVER_SEARCH -> "기사님 찾는 중"
         ActiveStage.DRIVER_COMING -> "택시 오는 중"
         ActiveStage.ONGOING -> "운행 중"

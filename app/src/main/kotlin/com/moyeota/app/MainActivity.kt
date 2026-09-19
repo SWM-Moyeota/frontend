@@ -42,6 +42,7 @@ class MainActivity : ComponentActivity() {
             MoyeotaTheme {
                 MainNavGraph(
                     authRepository = container.authRepository,
+                    appConfigRepository = container.appConfigRepository,
                     rideRepository = container.rideRepository,
                     placeRepository = container.placeRepository,
                     chatRepository = container.chatRepository,

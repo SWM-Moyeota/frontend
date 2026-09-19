@@ -282,6 +282,7 @@ private class FakeRideRepository(
     override suspend fun createParty(request: NewParty): Ride = error("쓰이지 않는다")
     override suspend fun joinParty(partyId: Long): Ride = error("쓰이지 않는다")
     override suspend fun leaveParty(partyId: Long) = error("쓰이지 않는다")
+    override suspend fun finishParty(partyId: Long) = error("쓰이지 않는다")
     override suspend fun getAssignedDriver(partyId: Long): AssignedDriver = error("쓰이지 않는다")
     override suspend fun reportEmergency(partyId: Long?): Long = error("쓰이지 않는다")
     override suspend fun confirmEmergencyCall(called: Boolean) = error("쓰이지 않는다")
