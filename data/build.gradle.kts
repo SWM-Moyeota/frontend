@@ -24,6 +24,7 @@ dependencies {
     implementation(libs.retrofit)
     implementation(libs.retrofit.converter.kotlinx.serialization)
     implementation(libs.okhttp.logging.interceptor)
+    implementation(libs.okhttp.sse)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.core)
     // 채팅 실시간 수신(STOMP over WebSocket). 전송 계층은 이미 쓰는 OkHttp 를 그대로 쓴다

@@ -1,6 +1,7 @@
 package com.moyeota.data.repository
 
 import com.moyeota.data.remote.MatchingApi
+import com.moyeota.data.remote.matching.PartyEventSource
 import com.moyeota.data.remote.ReportApi
 import com.moyeota.data.remote.dto.MemberLocationRequestDto
 import com.moyeota.data.remote.dto.CallResultRequestDto
@@ -14,9 +15,12 @@ import com.moyeota.data.remote.toRouteEstimate
 import com.moyeota.domain.model.MemberLocation
 import com.moyeota.domain.model.AssignedDriver
 import com.moyeota.domain.model.NewParty
+import com.moyeota.domain.model.PartyEvent
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RouteEstimate
 import com.moyeota.domain.repository.RideRepository
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 import com.moyeota.domain.session.UserSession
 import kotlin.coroutines.cancellation.CancellationException
 
@@ -39,7 +43,12 @@ class RemoteRideRepository(
     private val local: RideRepository = DummyRideRepository(),
     private val reportApi: ReportApi? = null,
     private val currentLocation: suspend () -> Pair<Double, Double>? = { null },
+    /** 매칭방 변화 신호(SSE). null 이면 신호 없이 폴링만 한다(테스트·더미) */
+    private val partyEvents: PartyEventSource? = null,
 ) : RideRepository {
+
+    override fun observePartyEvents(partyId: Long): Flow<PartyEvent> =
+        partyEvents?.events(partyId) ?: emptyFlow()
 
     override fun getNearbyParties(): List<Ride> = local.getNearbyParties()
 
