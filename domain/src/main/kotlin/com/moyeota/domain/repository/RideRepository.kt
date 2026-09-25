@@ -3,8 +3,11 @@ package com.moyeota.domain.repository
 import com.moyeota.domain.model.AssignedDriver
 import com.moyeota.domain.model.MemberLocation
 import com.moyeota.domain.model.NewParty
+import com.moyeota.domain.model.PartyEvent
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RouteEstimate
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 
 interface RideRepository {
     fun getNearbyParties(): List<Ride>
@@ -29,6 +32,17 @@ interface RideRepository {
     ): List<Ride>
 
     suspend fun getPartyDetail(partyId: Long): Ride
+
+    /**
+     * 이 방의 **변화 신호** 스트림(SSE `GET /api/v1/matching/rooms/{partyId}/events`).
+     *
+     * 수집하는 동안만 연결되고, 끊기면 알아서 다시 붙으며 그때 [PartyEvent.Connected] 를 다시 낸다.
+     * 신호에는 상태가 없다 — [PartyEvent.Changed]·[PartyEvent.Connected] 를 받으면 [getPartyDetail] 로 읽는다.
+     * 멤버가 아니면(403) 스트림이 끝난다(재시도하지 않는다).
+     * 실시간은 **폴링을 앞설 뿐 대체하지 않는다** — Redis Pub/Sub 이 at-most-once 라 신호가 유실될 수 있다.
+     * 기본 구현은 아무것도 내지 않는다(더미·테스트 저장소).
+     */
+    fun observePartyEvents(partyId: Long): Flow<PartyEvent> = emptyFlow()
 
     // 액션 — 성공 후 화면이 갱신해야 하는 대상은 아래 주석 참고.
     /**

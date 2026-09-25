@@ -58,6 +58,12 @@ object NetworkModule {
             .build()
         val retrofit = retrofit(baseUrl, apiClient)
 
+        // SSE(매칭방 변화 신호) 전용 — 보통 API 와 같은 인증(Bearer + 401 재발급)을 쓰되 readTimeout 만 끈다.
+        // 상시 연결이라 "응답이 늦다"는 개념이 없고, 살아있음은 서버 heartbeat(15초)가 알린다.
+        val streamClient = apiClient.newBuilder()
+            .readTimeout(0, java.util.concurrent.TimeUnit.MILLISECONDS)
+            .build()
+
         // 웹소켓 전용 클라이언트. 인증 인터셉터를 붙이지 않는다 — STOMP 인증은 CONNECT **프레임** 헤더이고,
         // 401 재발급 Authenticator 가 업그레이드 요청에 끼어들 이유도 없다.
         // readTimeout 은 끈다(상시 연결이라 "응답이 늦다"는 개념이 없다). 대신 ping 으로 살아있음을 확인한다.
@@ -68,6 +74,7 @@ object NetworkModule {
 
         return Apis(
             socketClient = socketClient,
+            streamClient = streamClient,
             auth = authApi,
             config = configApi,
             matching = retrofit.create(MatchingApi::class.java),
@@ -90,6 +97,8 @@ object NetworkModule {
     data class Apis(
         /** 채팅 실시간 수신(STOMP)이 쓰는 OkHttp. 인증 인터셉터가 붙지 않은 순정 클라이언트다 */
         val socketClient: OkHttpClient,
+        /** SSE 수신이 쓰는 OkHttp. 인증은 붙어 있고 readTimeout 만 없다 */
+        val streamClient: OkHttpClient,
         val auth: AuthApi,
         /** 서버 운영 설정(택시 모드 등). 토큰 없는 클라이언트 */
         val config: ConfigApi,

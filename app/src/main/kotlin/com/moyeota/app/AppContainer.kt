@@ -4,6 +4,7 @@ import android.content.Context
 import com.moyeota.data.local.DataStoreActivePartyStorage
 import com.moyeota.data.push.FcmTokenRegistrar
 import com.moyeota.data.remote.NetworkModule
+import com.moyeota.data.remote.matching.PartyEventSource
 import com.moyeota.data.repository.RemoteActivePartyRepository
 import com.moyeota.data.repository.RemoteAppConfigRepository
 import com.moyeota.data.repository.RemoteAuthRepository
@@ -71,6 +72,7 @@ class AppContainer(context: Context, debugLogging: Boolean) {
         sessionManager,
         reportApi = apis.report,
         currentLocation = reportLocationProvider::current,
+        partyEvents = PartyEventSource(BuildConfig.BASE_URL, apis.streamClient),
     )
     val placeRepository: PlaceRepository = RemotePlaceRepository(apis.place)
     // 세션을 넘기는 건 메시지의 "내 것" 판정 때문이다(RemoteChatRepository KDoc).
