@@ -20,15 +20,17 @@ private const val TAG = "PartyEvents"
 /** 끊긴 뒤 다시 붙기까지. 재시작 중인 서버를 연달아 두드리지 않을 만큼만 */
 private const val RECONNECT_DELAY_MS = 3_000L
 
-/** 서버 이벤트 이름(`PartySseListener`). 문자열이 계약이다 */
+/** 서버 이벤트 이름(`PartySseListener` · `PartySseRegistry`). 문자열이 계약이다 */
+private const val EVENT_CONNECTED = "connected"
 private const val EVENT_CHANGED = "changed"
 private const val EVENT_CLOSED = "closed"
 
 /**
  * 매칭방 변화 신호 — SSE(`GET /matching/rooms/{id}/events`, `text/event-stream`).
  *
- * 서버는 `changed`/`closed` 이벤트에 partyId 만 싣고, 15초마다 `:ping` 주석으로 살아있음을 알린다
- * (CloudFront 오리진 타임아웃 30초 대응). `closed` 뒤에는 서버가 연결을 끝낸다.
+ * 서버는 구독 직후 `connected`, 멤버 변화에 `changed`, 방이 닫히면 `closed` 이벤트에 partyId 만 싣고,
+ * 15초마다 `:ping` 주석으로 살아있음을 알린다(CloudFront 오리진 타임아웃 30초 대응). `closed` 뒤에는 서버가 연결을 끝낸다.
+ * `connected` 는 응답 헤더를 즉시 내보내기 위한 것이다 — 그게 없으면 첫 `:ping` 까지 최대 15초 동안 연결이 안 열린다.
  *
  * 인증은 보통 API 와 같은 Bearer 헤더다 — [okHttpClient] 는 인증 인터셉터·401 재발급이 붙은 클라이언트에
  * readTimeout 만 끈 것이어야 한다(상시 연결이라 "응답이 늦다"는 개념이 없다).
@@ -87,6 +89,8 @@ class PartyEventSource(
 
                 override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
                     when (type) {
+                        // 헤더가 온 순간 onOpen 이 이미 Connected 를 냈다. 여기서 또 내면 상세를 두 번 읽는다
+                        EVENT_CONNECTED -> Unit
                         EVENT_CHANGED -> trySend(Signal.Event(PartyEvent.Changed))
                         EVENT_CLOSED -> {
                             trySend(Signal.Event(PartyEvent.Closed))
