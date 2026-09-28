@@ -28,7 +28,7 @@ import kotlinx.coroutines.launch
 /**
  * 방 상세 폴링 간격. 실시간 신호(SSE)가 **앞서고** 폴링은 뒤를 받친다 —
  * 서버의 Redis Pub/Sub 이 at-most-once 라 신호가 유실될 수 있고, 프록시가 스트림을 막는 환경도 있다.
- * 신호가 붙어 있으면 [PARTY_POLL_INTERVAL_REALTIME_MS] 로 늦춘다(채팅과 같은 규칙).
+ * 신호가 붙어 있으면 [PARTY_POLL_INTERVAL_REALTIME_MS] 로 늦춘다 — 백엔드가 SSE 폴백으로 폴링을 남겨 달라고 했다(#135).
  */
 private const val PARTY_POLL_INTERVAL_MS = 4_000L
 
