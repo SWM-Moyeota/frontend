@@ -7,6 +7,7 @@ import com.moyeota.domain.model.AssignedDriver
 import com.moyeota.domain.model.AuthState
 import com.moyeota.domain.model.ChatMember
 import com.moyeota.domain.model.ChatMessage
+import com.moyeota.domain.model.ChatRealtimeEvent
 import com.moyeota.domain.model.ChatMessagePage
 import com.moyeota.domain.model.ChatRoom
 import com.moyeota.domain.model.ChatRoomMembership
@@ -309,7 +310,7 @@ private class FakeChatRepository(
         return rooms
     }
 
-    override fun observeMessages(chatRoomId: Long): Flow<ChatMessage> = emptyFlow()
+    override fun observeRoom(chatRoomId: Long): Flow<ChatRealtimeEvent> = emptyFlow()
     override suspend fun getChatRoom(chatRoomId: Long): ChatRoom = error("쓰이지 않는다")
     override suspend fun createChatRoom(partyId: Long, departure: String, destination: String): ChatRoom =
         error("쓰이지 않는다")

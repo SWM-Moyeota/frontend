@@ -19,6 +19,7 @@ import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.moyeota.core.designsystem.component.MoyeotaTab
 import com.moyeota.domain.model.ChatException
+import com.moyeota.domain.model.ChatRealtimeEvent
 import com.moyeota.domain.model.ChatMember
 import com.moyeota.domain.model.ChatRoom
 import com.moyeota.domain.model.ChatRoomStatus
@@ -44,18 +45,18 @@ import java.time.ZoneId
 import com.moyeota.domain.model.ChatMessage as DomainChatMessage
 
 /**
- * 폴링 주기. 실시간(STOMP)이 **앞서고** 폴링은 뒤를 받친다.
- * 소켓이 붙어 있으면 재연결 사이의 구멍만 메우면 되므로 [POLL_INTERVAL_REALTIME_MS] 로 늦춘다.
+ * 폴링 주기 — **소켓이 안 붙어 있을 때만** 돈다(미로그인·업그레이드 차단·재연결 중).
+ *
+ * 소켓이 붙어 있으면 폴링하지 않는다. 서버가 지난 메시지를 다시 주지 않아 생기는 구멍(재연결 사이)은
+ * 연결될 때마다 한 번 `after` 조회로 메운다([ChatRealtimeEvent.Connected]) — heartbeat 는 끊김을
+ * 알려 줄 뿐 그 구멍을 메우지 못한다.
  */
 private const val POLL_INTERVAL_MS = 3_000L
-
-/** 소켓이 붙어 있는 동안의 안전망 주기 — 놓친 메시지가 있어도 이 주기 안에 들어온다 */
-private const val POLL_INTERVAL_REALTIME_MS = 20_000L
 
 /**
  * 소켓으로 보낸 메시지가 **되돌아오기를** 기다리는 시간. 서버는 전송에 답하지 않고 저장된 메시지를
  * 구독으로 밀어 주므로, 이 시간이 지나도록 오지 않으면 실패로 본다.
- * 안전망 폴링 주기([POLL_INTERVAL_REALTIME_MS])보다 짧게 둬 사용자가 먼저 눈치채게 한다.
+ * 확인은 거의 즉시(수십 ms) 오므로 넉넉한 값이다. 놓쳤으면 다음 재연결의 공백 조회나 재진입이 실제 결과로 바로잡는다.
  */
 private const val PENDING_TIMEOUT_MS = 8_000L
 
@@ -280,7 +281,7 @@ class ChatRoomViewModel(
     private var socketJob: Job? = null
     private var loadJob: Job? = null
 
-    /** 소켓이 메시지를 한 번이라도 밀어 준 적이 있는가 — 폴링 주기를 늦출지 판단하는 근거 */
+    /** 소켓 구독이 살아 있는가 — 살아 있으면 폴링하지 않는다 */
     @Volatile
     private var realtimeAlive = false
 
@@ -384,6 +385,8 @@ class ChatRoomViewModel(
                 val ordered = page.messages.sortedBy { it.id }
                 publish(ordered)
                 markLastAsRead(ordered.lastOrNull()?.id)
+                // 소켓이 이 조회보다 먼저 붙었으면 그 순간의 공백 조회는 화면이 아직 없어 건너뛰었다 — 지금 메운다
+                if (realtimeAlive) fetchNew(roomId)
             } catch (e: Exception) {
                 // 이미 대화가 떠 있는데(조용한 재조회) 실패하면 화면을 에러로 갈아치우지 않는다
                 if (showLoading || _uiState.value !is UiState.Success) {
@@ -399,20 +402,29 @@ class ChatRoomViewModel(
     /**
      * 실시간 수신(STOMP) 구독. 화면이 보이는 동안만 연결한다.
      *
-     * 실패·끊김은 [com.moyeota.domain.repository.ChatRepository.observeMessages] 안에서 재시도로 삼켜지므로
-     * 여기서는 화면에 아무것도 알리지 않는다 — **폴링이 뒤를 받치고 있어** 사용자는 늦어질 뿐 놓치지 않는다.
+     * 연결될 때마다(처음·재연결) 마지막 id 이후를 **한 번** 조회해 끊긴 사이의 공백을 메운다 — 서버 브로커는
+     * 지금 구독 중인 사람에게만 밀고 지난 메시지를 다시 주지 않는다. 연결이 살아 있는 동안은 폴링하지 않는다.
+     * 실패·끊김은 저장소가 재시도로 삼키므로 화면엔 아무것도 띄우지 않는다 — 끊긴 동안은 폴링이 메운다.
      */
     private fun startRealtime(roomId: Long) {
         socketJob?.cancel()
         realtimeAlive = false
         socketJob = viewModelScope.launch {
-            repository.observeMessages(roomId).collect { message ->
-                realtimeAlive = true
+            repository.observeRoom(roomId).collect { event ->
                 if (chatRoomId != roomId) return@collect
-                val current = _uiState.value as? UiState.Success ?: return@collect
-                val merged = (current.messages + message).distinctBy { it.id }.sortedBy { it.id }
-                publish(merged, current.pending)
-                markLastAsRead(merged.lastOrNull()?.id)
+                when (event) {
+                    ChatRealtimeEvent.Connected -> {
+                        realtimeAlive = true
+                        fetchNew(roomId) // 구독이 걸린 뒤에 조회 — 겹치는 메시지는 id 로 합쳐진다
+                    }
+                    ChatRealtimeEvent.Disconnected -> realtimeAlive = false
+                    is ChatRealtimeEvent.Message -> {
+                        val current = _uiState.value as? UiState.Success ?: return@collect
+                        val merged = (current.messages + event.message).distinctBy { it.id }.sortedBy { it.id }
+                        publish(merged, current.pending)
+                        markLastAsRead(merged.lastOrNull()?.id)
+                    }
+                }
             }
         }
     }
@@ -426,35 +438,39 @@ class ChatRoomViewModel(
         realtimeAlive = false
     }
 
+    // 소켓이 안 붙어 있을 때만 조회한다. 붙어 있으면 새 메시지는 소켓으로 오고, 공백은 연결 순간에 메웠다.
     private fun startPolling() {
         if (pollingJob?.isActive == true) return
         pollingJob = viewModelScope.launch {
             while (true) {
-                delay(if (realtimeAlive) POLL_INTERVAL_REALTIME_MS else POLL_INTERVAL_MS)
+                delay(POLL_INTERVAL_MS)
+                if (realtimeAlive) continue
                 val roomId = chatRoomId ?: continue
-                val current = _uiState.value as? UiState.Success ?: continue
-                // 커서(마지막 메시지 id)가 없으면 **첫 페이지를 다시 읽는다**.
-                //
-                // 예전엔 여기서 continue 했는데, 그러면 **메시지가 하나도 없는 방**은 커서가 영영 null 이라
-                // 폴링이 한 번도 돌지 않았다 — 매칭 직후 새로 열린 방이 정확히 그 상태다. 상대가 보낸 첫
-                // 메시지가 안 보이고 나갔다 들어와야(재조회) 보이던 원인이다(실기 QA).
-                // `after` 에 0 을 넘기는 방법은 못 쓴다 — 서버가 cursor < 1 을 400 CHAT_INVALID_CURSOR 로 막는다.
-                // 첫 메시지가 들어오면 커서가 잡혀 다음 주기부터는 가벼운 after 조회로 돌아간다.
-                val cursor = lastMessageId
-                // 폴링 실패는 화면을 깨지 않는다 — 다음 주기에 다시 시도한다
-                runCatching {
-                    if (cursor == null) repository.getMessages(roomId) else repository.getMessagesAfter(roomId, cursor)
-                }
-                    .onSuccess { page ->
-                        if (page.messages.isEmpty()) return@onSuccess
-                        val merged = (current.messages + page.messages)
-                            .distinctBy { it.id }
-                            .sortedBy { it.id }
-                        publish(merged, current.pending)
-                        markLastAsRead(merged.lastOrNull()?.id)
-                    }
+                fetchNew(roomId)
             }
         }
+    }
+
+    /**
+     * 마지막 메시지 이후를 한 번 읽어 합친다 — 소켓 (재)연결 순간과, 소켓이 없을 때의 폴링이 같이 쓴다.
+     *
+     * 커서(마지막 메시지 id)가 없으면 **첫 페이지를 다시 읽는다**. 메시지가 하나도 없는 방은 커서가 영영 null 인데,
+     * `after` 에 0 을 넘기면 서버가 cursor < 1 을 400 CHAT_INVALID_CURSOR 로 막는다(#30).
+     *
+     * 합칠 때는 응답이 온 **뒤의** 상태를 다시 읽는다 — 조회하는 동안 소켓으로 들어온 메시지를 덮어쓰지 않게.
+     * 실패는 화면을 깨지 않는다 — 다음 연결·다음 주기가 메운다.
+     */
+    private suspend fun fetchNew(roomId: Long) {
+        if (_uiState.value !is UiState.Success) return
+        val cursor = lastMessageId
+        val page = runCatching {
+            if (cursor == null) repository.getMessages(roomId) else repository.getMessagesAfter(roomId, cursor)
+        }.getOrNull() ?: return
+        if (page.messages.isEmpty() || chatRoomId != roomId) return
+        val latest = _uiState.value as? UiState.Success ?: return
+        val merged = (latest.messages + page.messages).distinctBy { it.id }.sortedBy { it.id }
+        publish(merged, latest.pending)
+        markLastAsRead(merged.lastOrNull()?.id)
     }
 
     fun onInputChange(text: String) {

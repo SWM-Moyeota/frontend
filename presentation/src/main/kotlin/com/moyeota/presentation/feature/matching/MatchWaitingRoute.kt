@@ -9,6 +9,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import com.moyeota.domain.model.PartyEvent
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.repository.RideRepository
@@ -24,8 +25,15 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-/** 방 상세 폴링 간격. 매칭은 서버가 알아서 시작하므로 앱은 전이만 지켜본다. */
+/**
+ * 방 상세 폴링 간격. 실시간 신호(SSE)가 **앞서고** 폴링은 뒤를 받친다 —
+ * 서버의 Redis Pub/Sub 이 at-most-once 라 신호가 유실될 수 있고, 프록시가 스트림을 막는 환경도 있다.
+ * 신호가 붙어 있으면 [PARTY_POLL_INTERVAL_REALTIME_MS] 로 늦춘다 — 백엔드가 SSE 폴백으로 폴링을 남겨 달라고 했다(#135).
+ */
 private const val PARTY_POLL_INTERVAL_MS = 4_000L
+
+/** 신호가 살아 있는 동안의 안전망 주기 — 놓친 변화가 있어도 이 주기 안에 들어온다 */
+private const val PARTY_POLL_INTERVAL_REALTIME_MS = 20_000L
 
 class MatchWaitingViewModel(
     private val repository: RideRepository,
@@ -55,8 +63,13 @@ class MatchWaitingViewModel(
     private val _actionState = MutableStateFlow(ActionState())
     val actionState: StateFlow<ActionState> = _actionState.asStateFlow()
 
+    /** 신호 연결이 살아 있는가 — 폴링 주기를 늦출지 판단하는 근거. 끊기면 다시 4초로 돌아간다 */
+    @Volatile
+    private var realtimeAlive = false
+
     init {
         refresh()
+        observeEvents()
         observeAutoMatching()
     }
 
@@ -71,14 +84,39 @@ class MatchWaitingViewModel(
         }
     }
 
+    /**
+     * 실시간 신호(SSE) 구독. 서버는 상태를 싣지 않고 「바뀌었다」만 알리므로 신호마다 상세를 **다시 읽는다** —
+     * 연결됐을 때도 읽는다(끊긴 사이 놓친 변화). 연결 실패·끊김은 저장소가 재시도로 삼키고 [PartyEvent.Disconnected]
+     * 로만 알리므로 화면엔 아무것도 띄우지 않는다 — 폴링이 뒤를 받친다.
+     */
+    private fun observeEvents() {
+        viewModelScope.launch {
+            repository.observePartyEvents(partyId).collect { event ->
+                when (event) {
+                    PartyEvent.Connected -> { realtimeAlive = true; refreshQuietly() }
+                    PartyEvent.Changed -> refreshQuietly()
+                    // 닫힘도 상세로 확인한다 — FINISHED/CANCELED 가 읽히면 Route 가 홈으로 보낸다
+                    PartyEvent.Closed -> { realtimeAlive = false; refreshQuietly() }
+                    PartyEvent.Disconnected -> realtimeAlive = false
+                }
+            }
+        }
+    }
+
+    // 화면을 Loading 으로 덮지 않고 조용히 다시 읽는다. 실패는 다음 신호·폴링이 메운다.
+    private suspend fun refreshQuietly() {
+        val ride = runCatching { repository.getPartyDetail(partyId) }.getOrNull() ?: return
+        _uiState.value = UiState.Success(ride)
+    }
+
     // 정원이 차면 서버가 스스로 기사 매칭을 시작한다(PartyApplicationService.join 내부) — 기사 모드일 때.
     // 1차 배포 모드에선 COMPLETED 에 머물다가 누군가의 「합승 완료」나 30분 스윕으로 FINISHED 가 된다.
-    // 앱은 트리거하지 않고 상세를 주기적으로 다시 읽어 인원 현황과 status 전이만 관찰한다.
-    // 폴링 실패는 일시적 네트워크 문제일 뿐이라 화면을 에러로 덮지 않고 다음 주기를 기다린다.
+    // 앱은 트리거하지 않고 상세를 주기적으로 다시 읽어 인원 현황과 status 전이만 관찰한다 —
+    // 신호가 붙어 있으면 20초, 아니면 4초. 폴링 실패는 일시적 네트워크 문제일 뿐이라 다음 주기를 기다린다.
     private fun observeAutoMatching() {
         viewModelScope.launch {
             while (isActive) {
-                delay(PARTY_POLL_INTERVAL_MS)
+                delay(if (realtimeAlive) PARTY_POLL_INTERVAL_REALTIME_MS else PARTY_POLL_INTERVAL_MS)
                 val ride = runCatching { repository.getPartyDetail(partyId) }.getOrNull() ?: continue
                 _uiState.value = UiState.Success(ride)
                 // 배차 이후는 25 배차 현황이, 닫힌 방은 Route 의 onPartyClosed 가 이어받는다 — 폴링은 여기서 끝낸다

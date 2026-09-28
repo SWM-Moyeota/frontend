@@ -55,7 +55,7 @@ class ChatSocket(
     private val client = StompClient(OkHttpWebSocketClient(okHttpClient))
 
     /**
-     * 지금 붙어 있는 세션. [messages] 를 수집하는 동안에만 채워지고, 전송이 **같은 세션**을 쓴다 —
+     * 지금 붙어 있는 세션. [room] 을 수집하는 동안에만 채워지고, 전송이 **같은 세션**을 쓴다 —
      * 보내려고 따로 연결하면 서버 입장에서 세션이 둘이 되고, 전송 결과를 되돌려받을 구독도 없다.
      */
     @Volatile
@@ -73,7 +73,14 @@ class ChatSocket(
      * 이 방의 새 메시지 흐름. 수집이 취소될 때까지 유지되고, 끊기면 [RECONNECT_DELAY_MS] 뒤 다시 붙는다.
      * 미로그인이면 연결하지 않고 다음 주기를 기다린다(로그인 뒤 자연히 붙는다).
      */
-    fun messages(chatRoomId: Long): Flow<ChatMessageResponse> = flow {
+    /** 연결 하나에서 오는 신호. 구독이 걸린 순간([Connected])을 알려야 호출부가 그 전의 공백을 메울 수 있다 */
+    sealed interface RoomSignal {
+        data object Connected : RoomSignal
+        data class Message(val response: ChatMessageResponse) : RoomSignal
+        data object Disconnected : RoomSignal
+    }
+
+    fun room(chatRoomId: Long): Flow<RoomSignal> = flow {
         while (true) {
             try {
                 collectRoom(chatRoomId) { emit(it) }
@@ -82,6 +89,7 @@ class ChatSocket(
             } catch (e: Exception) {
                 Log.d(TAG, "연결 끊김 roomId=$chatRoomId — ${RECONNECT_DELAY_MS}ms 뒤 재시도: ${e.message}")
             }
+            emit(RoomSignal.Disconnected)
             delay(RECONNECT_DELAY_MS)
         }
     }
@@ -89,8 +97,8 @@ class ChatSocket(
     /**
      * 이 방으로 메시지를 **보낸다**(SEND `/pub/chat-rooms/{id}/messages`).
      *
-     * 서버 핸들러는 `void` 다 — 성공 여부가 프레임으로 돌아오지 않고, 저장된 메시지가 [messages] 구독으로
-     * 온다. 그래서 여기서 참을 돌려줘도 "서버가 저장했다"는 뜻이 아니라 **"살아 있는 세션에 써 넣었다"**는
+     * 서버 핸들러는 `void` 다 — 성공 여부가 프레임으로 돌아오지 않고, 저장된 메시지가 구독([room])으로
+     * 온다([room] 의 Message). 그래서 여기서 참을 돌려줘도 "서버가 저장했다"는 뜻이 아니라 **"살아 있는 세션에 써 넣었다"**는
      * 뜻이다. 호출부는 되돌아오는 메시지를 확인으로 삼아야 한다.
      *
      * 연결이 없거나(미로그인·끊김) 다른 방에 붙어 있으면 false — 그때는 호출부가 REST 로 보낸다.
@@ -119,7 +127,7 @@ class ChatSocket(
         }
     }
 
-    private suspend fun collectRoom(chatRoomId: Long, emit: suspend (ChatMessageResponse) -> Unit) {
+    private suspend fun collectRoom(chatRoomId: Long, emit: suspend (RoomSignal) -> Unit) {
         val token = tokens.currentAccessToken()
         if (token == null) {
             Log.d(TAG, "토큰이 없어 연결하지 않는다(미로그인)")
@@ -139,10 +147,14 @@ class ChatSocket(
                 try {
                     // 프레임 본문을 직접 받아 파싱한다 — 서버가 보내는 JSON 이 REST 응답과 같은 shape 이라
                     // 변환 계층을 따로 끼우지 않는다. 모르는 필드는 무시하므로 서버가 필드를 늘려도 깨지지 않는다.
-                    session.subscribeText("/sub/chat-rooms/$chatRoomId").collect { body ->
+                    // subscribeText 는 suspend 라 반환 시점에 SUBSCRIBE 가 이미 나갔다. 그 **뒤에** Connected 를 내야
+                    // 호출부의 공백 조회와 소켓 수신 사이에 틈이 없다(겹치는 메시지는 호출부가 id 로 합친다).
+                    val messages = session.subscribeText("/sub/chat-rooms/$chatRoomId")
+                    emit(RoomSignal.Connected)
+                    messages.collect { body ->
                         val response = runCatching { json.decodeFromString<ChatMessageResponse>(body) }.getOrNull()
-                            ?: return@collect // 파싱 못 한 프레임은 흘려보낸다 — 폴링이 같은 메시지를 메운다
-                        emit(response)
+                            ?: return@collect // 파싱 못 한 프레임은 흘려보낸다 — 다음 연결의 공백 조회가 메운다
+                        emit(RoomSignal.Message(response))
                     }
                 } finally {
                     errors.cancel()
