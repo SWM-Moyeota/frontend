@@ -154,7 +154,7 @@ private fun MainNavHost(
     val activeChatRoomId by activePartyViewModel.chatRoomId.collectAsState()
     val activeResolved by activePartyViewModel.resolvedOnce.collectAsState()
 
-    // 정원이 찬 뒤 생기는 채팅방을 뒤늦게라도 잡는다(21·25 의 「채팅 열기」가 이 값으로 뜬다).
+    // 합류 시점에 생기는 채팅방을 뒤늦게라도 잡는다(21·25 의 「채팅 열기」가 이 값으로 뜬다).
     // 컴포지션 스코프라 화면이 사라지면 함께 멈춘다.
     LaunchedEffect(activePartyViewModel) { activePartyViewModel.pollChatRoom() }
 
