@@ -1,6 +1,7 @@
 package com.moyeota.domain.repository
 
 import com.moyeota.domain.model.ChatMember
+import com.moyeota.domain.model.ChatRealtimeEvent
 import com.moyeota.domain.model.ChatMessage
 import kotlinx.coroutines.flow.Flow
 import com.moyeota.domain.model.ChatMessagePage
@@ -69,13 +70,13 @@ interface ChatRepository {
     ): ChatMessagePage
 
     /**
-     * 이 방의 **새 메시지 실시간 스트림**(STOMP `/sub/chat-rooms/{id}`).
+     * 이 방의 **실시간 연결**(STOMP `/sub/chat-rooms/{id}`) — 연결됨·새 메시지·끊김 신호.
      *
-     * 수집하는 동안만 연결되고, 끊기면 알아서 다시 붙는다. 실패는 흐름을 끝내지 않고 재시도로 삼킨다 —
-     * 실시간은 **폴링을 앞설 뿐 대체하지 않는다.** 재연결 사이에 오간 메시지는 이 흐름으로 오지 않으므로
-     * 호출부는 [getMessagesAfter] 로 메워야 한다.
+     * 수집하는 동안만 연결되고, 끊기면 알아서 다시 붙는다. 실패는 흐름을 끝내지 않고 재시도로 삼킨다.
+     * 서버는 지난 메시지를 다시 주지 않으므로 호출부는 [ChatRealtimeEvent.Connected] 마다 [getMessagesAfter] 로
+     * 공백을 메워야 한다 — 이것만 하면 연결이 살아 있는 동안은 폴링이 필요 없다.
      */
-    fun observeMessages(chatRoomId: Long): Flow<ChatMessage>
+    fun observeRoom(chatRoomId: Long): Flow<ChatRealtimeEvent>
 
     /**
      * GET /api/v1/chat-rooms/{chatRoomId}/messages/after — cursor 이후(신규) 방향.
@@ -91,7 +92,7 @@ interface ChatRepository {
      * 실시간 연결로 메시지를 보낸다 — STOMP SEND `/pub/chat-rooms/{id}/messages`.
      *
      * **응답이 없다.** 서버 핸들러는 void 라 저장 결과가 프레임으로 돌아오지 않고, 저장된 메시지가
-     * [observeMessages] 로 온다(보낸 사람도 같은 구독을 받는다). 그래서 참을 돌려줘도 "저장됐다"가 아니라
+     * [observeRoom] 으로 온다(보낸 사람도 같은 구독을 받는다). 그래서 참을 돌려줘도 "저장됐다"가 아니라
      * **"살아 있는 연결에 써 넣었다"**는 뜻이다 — 화면은 되돌아온 메시지를 확인으로 삼고, 오지 않으면
      * 실패로 보여야 한다.
      *

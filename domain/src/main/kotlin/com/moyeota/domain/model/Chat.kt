@@ -120,3 +120,20 @@ data class ChatMessagePage(
     val nextCursor: Long?,
     val hasNext: Boolean,
 )
+
+/**
+ * 채팅방 실시간 연결(STOMP `/sub/chat-rooms/{id}`)에서 오는 신호.
+ *
+ * 서버 브로커는 **지금 구독 중인 사람에게만** 밀고 지난 메시지를 다시 주지 않는다. 그래서 끊겼다 다시 붙으면
+ * 그 사이 메시지가 빠진다 — [Connected] 를 받을 때마다 마지막 id 이후를 한 번 조회해 메워야 한다.
+ */
+sealed interface ChatRealtimeEvent {
+    /** 구독이 (다시) 걸렸다. 이 시점 이후 메시지는 [Message] 로 오고, 그 전의 공백은 조회로 메운다 */
+    data object Connected : ChatRealtimeEvent
+
+    /** 새 메시지(보낸 사람 자신에게도 온다 — 소켓 전송의 확인이 이것이다) */
+    data class Message(val message: ChatMessage) : ChatRealtimeEvent
+
+    /** 연결이 끊겼다. 곧 다시 붙는다 — 그동안은 폴링이 메운다 */
+    data object Disconnected : ChatRealtimeEvent
+}

@@ -26,6 +26,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.domain.model.ChatRoomStatus
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.repository.ActivePartyRepository
@@ -190,7 +191,8 @@ class ActivePartyViewModel(
             delay(CHAT_ROOM_POLL_INTERVAL_MS)
             val current = _ride.value ?: continue
             if (_chatRoomId.value != null) continue
-            if (current.activeStage == ActiveStage.WAITING) continue
+            // 대기(21) 중에도 찾는다 — 서버가 채팅방을 **합류 시점에** 만든다(Backend #109). 예전엔 정원이 차야
+            // 생겨서 대기 중엔 건너뛰었는데, 그대로 두면 1차 배포 모드(정원 차도 대기 단계)에선 영영 안 뜬다.
             lookupChatRoom(current)
         }
     }
@@ -205,7 +207,7 @@ class ActivePartyViewModel(
             chatRoomPartyId = null
         }
         if (resolved == null) return
-        if (_chatRoomId.value == null && resolved.activeStage != ActiveStage.WAITING) {
+        if (_chatRoomId.value == null && resolved.activeStage != ActiveStage.NONE) {
             lookupChatRoom(resolved)
         }
     }
@@ -217,9 +219,18 @@ class ActivePartyViewModel(
     private suspend fun lookupChatRoom(ride: Ride) {
         val partyId = ride.id.toLongOrNull() ?: return
         val rooms = runCatching { chatRepository.getMyChatRooms() }.getOrNull() ?: return
-        val room = rooms.firstOrNull { it.room.partyId == partyId } ?: return
+        // 목록 응답에는 partyId 가 없다(서버 ChatRoomUserResult) — 목록만 보면 0 이라 영영 못 찾는다.
+        // 목록에 이미 값이 있으면 그걸 쓰고, 없으면 **닫히지 않은 방만** 상세를 읽어 partyId 를 확인한다.
+        // 찾는 순간 채팅방 id 를 기억하고 이후 폴링은 멈추므로(pollChatRoom) 상세 조회는 몇 번 안 된다.
+        val roomId = rooms.firstOrNull { it.room.partyId == partyId }?.room?.id
+            ?: rooms.asSequence()
+                .filter { it.room.partyId == 0L && it.room.status != ChatRoomStatus.CLOSED }
+                .firstOrNull { candidate ->
+                    runCatching { chatRepository.getChatRoom(candidate.room.id) }.getOrNull()?.partyId == partyId
+                }?.room?.id
+            ?: return
         chatRoomPartyId = partyId
-        _chatRoomId.value = room.room.id
+        _chatRoomId.value = roomId
     }
 
     companion object {

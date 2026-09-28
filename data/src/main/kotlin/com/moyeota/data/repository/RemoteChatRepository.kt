@@ -13,6 +13,7 @@ import com.moyeota.data.remote.toChatRoom
 import com.moyeota.data.remote.toMembership
 import com.moyeota.data.remote.toPage
 import com.moyeota.domain.model.ChatMember
+import com.moyeota.domain.model.ChatRealtimeEvent
 import com.moyeota.domain.model.ChatMessage
 import com.moyeota.domain.model.ChatMessagePage
 import com.moyeota.domain.model.ChatRoom
@@ -101,9 +102,19 @@ class RemoteChatRepository(
 
     // 소켓이 밀어 준 프레임도 조회와 **같은 경로로 신원을 푼다** — 모르는 발신자가 오면 참여자 사전을
     // 한 번 새로 읽는다(중간 합류자). 그래야 실시간으로 온 메시지도 이름과 좌우 정렬이 맞는다.
-    override fun observeMessages(chatRoomId: Long): Flow<ChatMessage> =
-        socket?.messages(chatRoomId)
-            ?.map { response -> response.toChatMessage(resolveIdentity(chatRoomId, listOf(response), priorRefresh = null)) }
+    override fun observeRoom(chatRoomId: Long): Flow<ChatRealtimeEvent> =
+        socket?.room(chatRoomId)
+            ?.map { signal ->
+                when (signal) {
+                    ChatSocket.RoomSignal.Connected -> ChatRealtimeEvent.Connected
+                    ChatSocket.RoomSignal.Disconnected -> ChatRealtimeEvent.Disconnected
+                    is ChatSocket.RoomSignal.Message -> ChatRealtimeEvent.Message(
+                        signal.response.toChatMessage(
+                            resolveIdentity(chatRoomId, listOf(signal.response), priorRefresh = null),
+                        ),
+                    )
+                }
+            }
             ?: emptyFlow()
 
     override suspend fun getChatRoom(chatRoomId: Long): ChatRoom = chatCall {
@@ -147,7 +158,7 @@ class RemoteChatRepository(
         slice.toPage(resolveIdentity(chatRoomId, slice.messages, priorRefresh = null))
     }
 
-    // 소켓이 이 방에 붙어 있을 때만 참. 저장 결과는 응답이 아니라 observeMessages 로 돌아온다.
+    // 소켓이 이 방에 붙어 있을 때만 참. 저장 결과는 응답이 아니라 observeRoom 으로 돌아온다.
     override suspend fun trySendMessage(chatRoomId: Long, content: String): Boolean =
         socket?.sendMessage(chatRoomId, content) ?: false
 
