@@ -95,7 +95,7 @@ private val CardShadow = Color(0x1A1B2A4A)
  * 플로우 진행 화면 — 하단탭 없음 (공통 규칙).
  *
  * 지도: 출발·도착 마커 + 서버 확정 경로([routePath]) + 내 현재 위치(파란 점, [myLocation]).
- * 좌표는 [RideOngoingRoute] 의 방 상세 폴링·위치 구독이 내려준다 — null 이면 그 요소만 빠진 지도를 그린다.
+ * 좌표는 [RideOngoingRoute] 가 진입 때 한 번 읽는 방 상세·위치 구독이 내려준다 — null 이면 그 요소만 빠진 지도를 그린다.
  */
 @Composable
 fun RideOngoingScreen(

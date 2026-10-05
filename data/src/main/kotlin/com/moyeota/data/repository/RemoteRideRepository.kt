@@ -10,12 +10,14 @@ import com.moyeota.data.remote.routeRequestDto
 import com.moyeota.data.remote.toMemberLocation
 import com.moyeota.data.remote.toAssignedDriver
 import com.moyeota.data.remote.toRequestDto
+import com.moyeota.data.remote.toPartyStatus
 import com.moyeota.data.remote.toRide
 import com.moyeota.data.remote.toRouteEstimate
 import com.moyeota.domain.model.MemberLocation
 import com.moyeota.domain.model.AssignedDriver
 import com.moyeota.domain.model.NewParty
 import com.moyeota.domain.model.PartyEvent
+import com.moyeota.domain.model.PartyStatus
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RouteEstimate
 import com.moyeota.domain.repository.RideRepository
@@ -67,6 +69,13 @@ class RemoteRideRepository(
     // currentUserUuid 는 호출 시점에 읽는다 — 재로그인으로 주체가 바뀌어도 다음 조회부터 바로 반영된다.
     override suspend fun getPartyDetail(partyId: Long): Ride =
         api.getPartyDetail(partyId).toRide(session.currentUserUuid)
+
+    /**
+     * 인터페이스의 기본 구현(상세에서 깎기)을 **덮어쓴다** — 가벼운 전용 API 를 부르는 게 이 구현의 존재 이유다.
+     * 세션은 보지 않는다: 응답에 멤버 목록이 없어 "누가 나인지"를 판정할 거리가 애초에 없다.
+     */
+    override suspend fun getPartyStatus(partyId: Long): PartyStatus =
+        api.getPartyStatus(partyId).toPartyStatus()
 
     // 생성자는 서버가 토큰에서 정한다 — 요청 본문에도 응답에도 id 가 없다.
     override suspend fun createParty(request: NewParty): Ride =

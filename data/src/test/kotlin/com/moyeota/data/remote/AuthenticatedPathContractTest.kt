@@ -114,6 +114,19 @@ class AuthenticatedPathContractTest {
         assertEquals("api/v1/matching/leave/{partyId}", MatchingApi::class.java.path("leaveParty"))
     }
 
+    /**
+     * 방 상태 조회는 상세와 **경로가 한 세그먼트 차이**다. `/status` 를 빠뜨리면 404 가 아니라
+     * 상세 응답이 와서 전 필드 기본값으로 조용히 파싱되고(status·currentMembers 는 상세에도 있다),
+     * 지문만 null 이 되어 폴링이 매번 "바뀌었다"로 판정한다 — 상세 폴링으로 되돌아간 셈이다.
+     * 컨트롤러 `@GetMapping("/matching/rooms/{partyId}/status")` 기준이고 실측으로 확인했다
+     * (`/rooms/1/status` → 200 상태 3필드, `/rooms/999999/status` → 404 PARTY_NOT_FOUND).
+     */
+    @Test
+    fun `방 상태 조회는 상세 경로 뒤에 status 를 붙인다`() {
+        assertEquals("api/v1/matching/rooms/{partyId}/status", MatchingApi::class.java.path("getPartyStatus"))
+        assertEquals("api/v1/matching/rooms/{partyId}", MatchingApi::class.java.path("getPartyDetail"))
+    }
+
     @Test
     fun `기사 위치 조회는 partyId 만 담은 경로를 쓴다`() {
         assertEquals("api/v1/dispatch/rides/{partyId}", DispatchApi::class.java.path("getDriverLocation"))

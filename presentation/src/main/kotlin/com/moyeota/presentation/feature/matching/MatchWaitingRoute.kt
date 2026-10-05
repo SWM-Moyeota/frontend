@@ -10,6 +10,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.moyeota.domain.model.PartyEvent
+import com.moyeota.domain.model.PartyStatus
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.repository.RideRepository
@@ -26,7 +27,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
- * 방 상세 폴링 간격. 실시간 신호(SSE)가 **앞서고** 폴링은 뒤를 받친다 —
+ * 방 상태 폴링 간격. 실시간 신호(SSE)가 **앞서고** 폴링은 뒤를 받친다 —
  * 서버의 Redis Pub/Sub 이 at-most-once 라 신호가 유실될 수 있고, 프록시가 스트림을 막는 환경도 있다.
  * 신호가 붙어 있으면 [PARTY_POLL_INTERVAL_REALTIME_MS] 로 늦춘다 — 백엔드가 SSE 폴백으로 폴링을 남겨 달라고 했다(#135).
  */
@@ -109,18 +110,39 @@ class MatchWaitingViewModel(
         _uiState.value = UiState.Success(ride)
     }
 
-    // 정원이 차면 서버가 스스로 기사 매칭을 시작한다(PartyApplicationService.join 내부) — 기사 모드일 때.
-    // 1차 배포 모드에선 COMPLETED 에 머물다가 누군가의 「합승 완료」나 30분 스윕으로 FINISHED 가 된다.
-    // 앱은 트리거하지 않고 상세를 주기적으로 다시 읽어 인원 현황과 status 전이만 관찰한다 —
-    // 신호가 붙어 있으면 20초, 아니면 4초. 폴링 실패는 일시적 네트워크 문제일 뿐이라 다음 주기를 기다린다.
+    /**
+     * 정원이 차면 서버가 스스로 기사 매칭을 시작한다(PartyApplicationService.join 내부) — 기사 모드일 때.
+     * 1차 배포 모드에선 COMPLETED 에 머물다가 누군가의 「합승 완료」나 30분 스윕으로 FINISHED 가 된다.
+     * 앱은 트리거하지 않고 주기적으로 **「바뀌었나」만** 물어 인원 현황과 status 전이를 관찰한다 —
+     * 신호가 붙어 있으면 20초, 아니면 4초.
+     *
+     * 묻는 대상은 방 상세가 아니라 가벼운 상태 조회([RideRepository.getPartyStatus], `GET /rooms/{id}/status`)다 —
+     * 상세는 쿼리 3개에 경로 폴리라인까지 실려 오는데, 대기 화면은 대부분의 주기에서 **아무것도 안 바뀐 걸** 확인할
+     * 뿐이다. 부하테스트에서 이 상세 폴링이 전체 요청의 45% 였다(Backend #177). 상태 응답은 쿼리 1개이고,
+     * [PartyStatus.isSameAs] 로 들고 있는 방과 같다고 판정되면 상세 호출은 **0** 이다.
+     * 달라졌을 때만 상세를 읽어 화면(인원·요금·경로)을 갱신한다.
+     *
+     * 폴링 실패(상태든 상세든)는 일시적 네트워크 문제일 뿐이라 조용히 다음 주기를 기다린다.
+     */
     private fun observeAutoMatching() {
         viewModelScope.launch {
             while (isActive) {
                 delay(if (realtimeAlive) PARTY_POLL_INTERVAL_REALTIME_MS else PARTY_POLL_INTERVAL_MS)
+                val held = (_uiState.value as? UiState.Success)?.ride
+                if (held != null) {
+                    val status = runCatching { repository.getPartyStatus(partyId) }.getOrNull() ?: continue
+                    if (!shouldFetchPartyDetail(status, held)) {
+                        // 바뀐 게 없다 — 상세를 읽지 않는다. 다만 신호(SSE)가 이미 대기 밖 상태를 반영해 뒀다면
+                        // 더 볼 게 없으니 폴링을 끝낸다(화면 전환은 Route 의 LaunchedEffect(status) 가 이미 맡았다).
+                        if (!isWaitingForMembers(status.status)) return@launch
+                        continue
+                    }
+                }
+                // 들고 있는 방이 없거나(Loading·Error — 비교 기준이 없다) 상태가 달라졌다 → 상세를 읽는다
                 val ride = runCatching { repository.getPartyDetail(partyId) }.getOrNull() ?: continue
                 _uiState.value = UiState.Success(ride)
                 // 배차 이후는 25 배차 현황이, 닫힌 방은 Route 의 onPartyClosed 가 이어받는다 — 폴링은 여기서 끝낸다
-                if (ride.status !in WAITING_STATUSES) return@launch
+                if (!isWaitingForMembers(ride.status)) return@launch
             }
         }
     }
@@ -155,14 +177,28 @@ class MatchWaitingViewModel(
     }
 
     companion object {
-        // 아직 사람을 모으는 중이거나(ACTIVE) 정원이 찬(COMPLETED) 상태. 이 밖으로 나가면 배차가 시작됐거나 방이 닫힌 것이다.
-        private val WAITING_STATUSES = setOf(RideStatus.RECRUITING, RideStatus.MATCHED)
-
         fun factory(repository: RideRepository, partyId: Long) = viewModelFactory {
             initializer { MatchWaitingViewModel(repository, partyId) }
         }
     }
 }
+
+/**
+ * 21 대기 화면이 머무는 단계 — 아직 사람을 모으는 중(서버 ACTIVE)이거나 정원이 찬(서버 COMPLETED) 상태.
+ * 이 밖으로 나가면 배차가 시작됐거나(25 배차 현황) 방이 닫힌 것이라 폴링을 끝낸다.
+ */
+internal fun isWaitingForMembers(status: RideStatus): Boolean =
+    status == RideStatus.RECRUITING || status == RideStatus.MATCHED
+
+/**
+ * 가벼운 상태 응답([PartyStatus])을 받았을 때 **방 상세를 다시 읽어야 하나**.
+ *
+ * 들고 있는 방([held])이 없으면(Loading·Error) 비교 기준이 없으니 읽어야 한다. 있으면
+ * [PartyStatus.isSameAs] 에 맡긴다 — 지문이 양쪽에 있으면 지문으로(인원수가 같은 멤버 교체도 잡는다),
+ * 없으면 상태·인원수로 판단한다. 같다고 나오면 상세(쿼리 3개 + 경로)를 읽을 이유가 없다.
+ */
+internal fun shouldFetchPartyDetail(status: PartyStatus, held: Ride?): Boolean =
+    held == null || !status.isSameAs(held)
 
 /**
  * 서버가 나가기를 허용하는가. 서버 `ensureRecruiting` = ACTIVE 또는 COMPLETED.
