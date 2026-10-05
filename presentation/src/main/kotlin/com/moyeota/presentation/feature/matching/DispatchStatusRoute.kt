@@ -15,6 +15,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.moyeota.domain.model.AssignedDriver
 import com.moyeota.domain.model.DriverLocation
+import com.moyeota.domain.model.PartyStatus
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.repository.DispatchRepository
@@ -79,7 +80,7 @@ class DispatchStatusViewModel(
             _uiState.value = try {
                 val ride = rideRepository.getPartyDetail(partyId)
                 loadDriverIfAssigned(ride)
-                markStartedIfInRide(ride)
+                markStartedIfInRide(ride.status)
                 UiState.Success(ride)
             } catch (e: Exception) {
                 UiState.Error("배차 정보를 불러오지 못했어요")
@@ -88,13 +89,22 @@ class DispatchStatusViewModel(
     }
 
     /**
-     * 방 상세·기사 정보·기사 위치 폴링. **호출자(Route)의 코루틴 스코프에서 돌린다** —
+     * 방 상태·기사 정보·기사 위치 폴링. **호출자(Route)의 코루틴 스코프에서 돌린다** —
      * LaunchedEffect 가 화면 이탈 시 이 함수를 취소해 폴링이 함께 멈춘다.
      *
-     * 방 상세는 **매 주기 무조건** 다시 읽는다. 기사 배정 여부로 건너뛰면 안 된다 —
-     * 이 화면이 기다리는 마지막 신호(기사측 board → IN_RIDE)는 **배정된 뒤에** 오기 때문에,
-     * 배정을 조건으로 상세 조회를 멈추면 탑승 시작을 영영 못 본다 (결함 D-9 의 원인).
-     * 기사 **정보** 조회만 이미 받아온 뒤 건너뛴다 — 그 값은 배차 동안 바뀌지 않는다.
+     * 매 주기 읽는 건 **가벼운 상태 조회**([RideRepository.getPartyStatus], 쿼리 1개)다.
+     * 방 상세(쿼리 3개 · route 포함)는 [shouldReloadDetail] 이 참일 때 — 즉 지문이 달라져
+     * **실제로 뭔가 바뀐 주기에만** 읽는다. 부하테스트에서 방 상세 폴링이 전체 요청의 45% 였다(Backend #177).
+     *
+     * 상세 조회를 건너뛰어도 이 화면이 기다리는 전이를 놓치지 않는다(결함 D-9 가 재발하지 않는 이유):
+     * - 기사 배정: 서버 status 가 `MATCHING` → `DRIVER_ASSIGNED` 로 바뀌고 taxiDriverId 가 채워지므로
+     *   **지문이 달라진다** → 그 주기에 상세를 읽어 [Ride.driverId] 가 들어온다.
+     * - 탑승 시작: 상태 응답의 status 가 [RideStatus.ONGOING](서버 `IN_RIDE`)이 되는 것으로 바로 본다.
+     *   상세를 기다리지 않는다 — 전이에 필요한 값은 status 하나다.
+     *
+     * 기사 **정보** 조회는 이미 받아온 뒤 건너뛴다 — 그 값은 배차 동안 바뀌지 않는다.
+     * 기사 **위치**(`GET /dispatch/rides/{id}`)는 방 상세가 아닌 별도 API 라 예전처럼 매 주기 묻는다
+     * — 택시가 오는 동안 마커가 움직여야 한다.
      *
      * 기사 미배정·위치 미보고는 서버가 거절하는 정상 상황이라 실패를 삼키고 다음 주기를 기다린다.
      */
@@ -102,15 +112,23 @@ class DispatchStatusViewModel(
         Log.d(TAG, "배차 폴링 시작 partyId=$partyId")
         try {
             while (currentCoroutineContext().isActive) {
-                val previous = (_uiState.value as? UiState.Success)?.ride
-                // 방 상세를 다시 읽어 배차 전이(MATCHING → DRIVER_ASSIGNED → IN_RIDE)를 따라잡는다
-                val latest = runCatching { rideRepository.getPartyDetail(partyId) }.getOrNull()
-                if (latest != null) _uiState.value = UiState.Success(latest)
-                loadDriverIfAssigned(latest ?: previous)
-                if (markStartedIfInRide(latest)) return
+                val held = (_uiState.value as? UiState.Success)?.ride
+                // 「바뀌었나」만 묻는다. 실패하면(null) 이 주기는 상세도 읽지 않고 넘긴다 —
+                // 들고 있는 값이 그대로 화면에 남으므로 깜빡임이 없다.
+                val status = runCatching { rideRepository.getPartyStatus(partyId) }.getOrNull()
+                val ride = if (status != null && shouldReloadDetail(held, status)) {
+                    runCatching { rideRepository.getPartyDetail(partyId) }
+                        .getOrNull()
+                        ?.also { _uiState.value = UiState.Success(it) }
+                        ?: held // 상세만 실패 — 마지막 성공값 유지
+                } else {
+                    held
+                }
+                loadDriverIfAssigned(ride)
+                if (markStartedIfInRide(status?.status)) return
                 // 기사 위치는 배정된 뒤에만 묻는다 — 배정 전 호출은 서버가 DRIVER_NOT_ASSIGNED 로 거절하며
                 // 폴링 주기마다 서버 WARN 로그만 쌓는다. 조회 주체는 Bearer 토큰이 정한다(22 보고서 §2).
-                if (shouldFetchDriverLocation(latest ?: previous)) {
+                if (shouldFetchDriverLocation(ride)) {
                     runCatching { dispatchRepository.getDriverLocation(partyId) }
                         .onSuccess { _driverLocation.value = it }
                 }
@@ -132,9 +150,12 @@ class DispatchStatusViewModel(
     /**
      * 서버 status IN_RIDE([RideStatus.ONGOING]) = 기사가 탑승 처리를 마쳤다는 뜻.
      * 25 가 26 으로 넘어가는 유일한 서버 신호다. 감지하면 true 를 돌려줘 폴링을 끝낸다.
+     *
+     * 받는 값은 **status 하나**다 — 가벼운 상태 조회로도, 방 상세로도 똑같이 판정하려고
+     * [Ride] 가 아니라 [RideStatus] 를 받는다. 조회가 실패한 주기(null)는 "아직 아니다"로 본다.
      */
-    private fun markStartedIfInRide(ride: Ride?): Boolean {
-        if (ride?.status != RideStatus.ONGOING) return false
+    private fun markStartedIfInRide(status: RideStatus?): Boolean {
+        if (status != RideStatus.ONGOING) return false
         if (!_rideStarted.value) Log.d(TAG, "탑승 시작 감지 partyId=$partyId → 26 운행 중")
         _rideStarted.value = true
         return true
@@ -262,6 +283,27 @@ fun DispatchStatusRoute(
             }
         }
     }
+}
+
+/**
+ * 가벼운 상태 조회 결과([status])를 보고 **방 상세를 다시 읽어야 하는가**.
+ *
+ * 기본 규칙은 21 대기 화면과 **공유한다**([shouldFetchPartyDetail]) — 「바뀌었나」의 정의가 화면마다
+ * 갈리면 한쪽만 고쳐지는 일이 생긴다([shouldFetchDriverLocation] 이 두 게이트를 한 곳으로 모은 것과 같은 이유).
+ * 지문(서버 fingerprint)이 그대로면 쿼리 3개짜리 상세를 다시 읽을 이유가 없고, 상세를 아직 못 받았으면
+ * (첫 조회 실패로 [DispatchStatusViewModel.UiState.Error] 였던 경우 포함) 읽어서 그 자리에서 복구한다.
+ *
+ * 25 에만 조건이 하나 더 붙는 이유: 지문이 없는 서버·더미에서는 [PartyStatus.isSameAs] 가 상태와
+ * 인원수만 보는데, 「기사 찾는 중」(서버 `MATCHING`)과 「배정 완료」(`DRIVER_ASSIGNED`)는 앱에서
+ * 둘 다 [RideStatus.DISPATCHING] 이고 인원도 같다 → 배정을 영영 못 본다(25b 레이더에 갇힌다).
+ * 그래서 **지문이 없고 아직 미배정인 동안**에는 예전처럼 매 주기 상세를 읽는다.
+ * 배정된 뒤 남은 전이(DRIVER_ASSIGNED → IN_RIDE)는 상태 응답만으로 보이므로 이 예외가 필요 없다.
+ */
+internal fun shouldReloadDetail(held: Ride?, status: PartyStatus): Boolean {
+    if (shouldFetchPartyDetail(status, held)) return true
+    return status.fingerprint == null &&
+        status.status == RideStatus.DISPATCHING &&
+        held?.driverId == null
 }
 
 /**

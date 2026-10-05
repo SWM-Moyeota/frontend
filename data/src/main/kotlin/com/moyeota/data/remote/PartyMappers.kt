@@ -6,11 +6,13 @@ import com.moyeota.data.remote.dto.OpenPartyRequestDto
 import com.moyeota.data.remote.dto.OpenPartyResponse
 import com.moyeota.data.remote.dto.PartyDetailResponse
 import com.moyeota.data.remote.dto.PartyListResponse
+import com.moyeota.data.remote.dto.PartyStatusResponse
 import com.moyeota.data.remote.dto.RouteEstimateResponse
 import com.moyeota.data.remote.dto.RouteRequestDto
 import com.moyeota.domain.model.MemberLocation
 import com.moyeota.domain.model.AssignedDriver
 import com.moyeota.domain.model.NewParty
+import com.moyeota.domain.model.PartyStatus
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.model.RouteEstimate
@@ -109,8 +111,24 @@ fun PartyDetailResponse.toRide(currentUuid: String? = null): Ride {
         driverId = taxiDriverId,
         departureRadiusMeters = departureRadius.takeIf { it > 0 },
         destinationRadiusMeters = destinationRadius.takeIf { it > 0 },
+        // 지문은 그대로 옮긴다 — 해석하지 않는다. 빈 문자열은 null 로 접어 "값 없음"과 같이 다룬다
+        // (구버전 서버의 누락과 섞이지 않게 하려면 비교 가능한 값만 들고 있어야 한다).
+        fingerprint = fingerprint?.takeIf { it.isNotBlank() },
     )
 }
+
+/**
+ * 방 상태 응답 → 도메인 [PartyStatus]. 상태 문자열 변환은 상세·목록과 **같은 표**를 쓴다
+ * ([partyStatusToRideStatus]) — 두 경로가 갈리면 같은 방이 화면에서 다른 단계로 보인다.
+ *
+ * [PartyStatus.isSameAs] 가 지문이 양쪽에 다 있을 때만 지문으로 판정하므로,
+ * 상세 매핑과 똑같이 빈 문자열을 null 로 접어 둔다.
+ */
+fun PartyStatusResponse.toPartyStatus(): PartyStatus = PartyStatus(
+    status = partyStatusToRideStatus(status),
+    currentMembers = currentMembers,
+    fingerprint = fingerprint?.takeIf { it.isNotBlank() },
+)
 
 // 생성 응답에는 members 목록이 없고 currentMembers 개수만 있다(생성 직후엔 보통 1 = 생성자).
 // 목록 응답과 같은 방식으로 자리 표시용 멤버를 만든다 — 식별자는 상세 조회에서 채워진다.

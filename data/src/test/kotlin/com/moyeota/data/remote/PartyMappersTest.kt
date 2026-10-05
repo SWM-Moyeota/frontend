@@ -5,6 +5,7 @@ import com.moyeota.data.remote.dto.OpenPartyRequestDto
 import com.moyeota.data.remote.dto.OpenPartyResponse
 import com.moyeota.data.remote.dto.PartyDetailResponse
 import com.moyeota.data.remote.dto.PartyListResponse
+import com.moyeota.data.remote.dto.PartyStatusResponse
 import com.moyeota.data.remote.dto.RouteEstimateResponse
 import com.moyeota.data.remote.dto.RouteRequestDto
 import com.moyeota.domain.model.NewParty
@@ -446,11 +447,128 @@ class PartyMappersTest {
         assertEquals("", estimate.encodedPath)
     }
 
+    // ---- 방 상태 조회(GET /matching/rooms/{partyId}/status) ----
+
+    /**
+     * 상태 응답은 상세와 **같은 상태 변환표**를 써야 한다 — 갈리면 같은 방이 폴링 결과와 상세에서
+     * 서로 다른 단계로 보인다(21 대기 화면이 배차로 넘어가지 못하는 식).
+     */
+    @Test
+    fun `방 상태 응답을 도메인 PartyStatus 로 매핑한다`() {
+        val status = PartyStatusResponse(
+            status = "DRIVER_ASSIGNED",
+            currentMembers = 3,
+            fingerprint = FINGERPRINT,
+        ).toPartyStatus()
+
+        assertEquals(RideStatus.DISPATCHING, status.status)
+        assertEquals(3, status.currentMembers)
+        assertEquals(FINGERPRINT, status.fingerprint)
+    }
+
+    @Test
+    fun `방 상태 응답 JSON 을 실제 서버 shape 그대로 역직렬화한다`() {
+        // 백엔드 PartyStatusResponse(String status, Integer currentMembers, String fingerprint).
+        // 실측(localhost:8080): {"status":"ACTIVE","currentMembers":1,"fingerprint":"4aa5adb7bd31ea6d"}
+        // — 지문은 16진수 16글자(HMAC-SHA256 앞 8바이트)였다.
+        val body = """{"status":"MATCHING","currentMembers":3,"fingerprint":"$FINGERPRINT"}"""
+
+        val status = json.decodeFromString<PartyStatusResponse>(body).toPartyStatus()
+
+        assertEquals(RideStatus.DISPATCHING, status.status)
+        assertEquals(3, status.currentMembers)
+        assertEquals(FINGERPRINT, status.fingerprint)
+    }
+
+    /**
+     * 지문은 Backend #177 에서 생긴 필드다 — 구버전 서버는 아예 내려보내지 않는다.
+     * 그때 폴링이 전부 실패하면(논-널 선언) 안 되고, [com.moyeota.domain.model.PartyStatus.isSameAs]
+     * 가 상태·인원 비교로 내려갈 수 있도록 null 이어야 한다.
+     */
+    @Test
+    fun `지문이 빠진 상태 응답도 파싱되고 지문은 null 이다`() {
+        val status = json.decodeFromString<PartyStatusResponse>(
+            """{"status":"ACTIVE","currentMembers":1}""",
+        ).toPartyStatus()
+
+        assertEquals(RideStatus.RECRUITING, status.status)
+        assertEquals(1, status.currentMembers)
+        assertNull(status.fingerprint)
+    }
+
+    /** 빈 문자열은 "값 없음"과 같이 다룬다 — 빈 값끼리 같다고 판정해 변화를 놓치면 안 된다. */
+    @Test
+    fun `지문이 빈 문자열이면 null 로 접는다`() {
+        assertNull(PartyStatusResponse(status = "ACTIVE", currentMembers = 1, fingerprint = "").toPartyStatus().fingerprint)
+        assertNull(detailResponse(fingerprint = "  ").toRide().fingerprint)
+    }
+
+    @Test
+    fun `모르는 필드가 섞여도 상태 응답 파싱이 깨지지 않는다`() {
+        val status = json.decodeFromString<PartyStatusResponse>(
+            """{"status":"FINISHED","currentMembers":3,"fingerprint":"$FINGERPRINT","memberIds":[1,2,3]}""",
+        ).toPartyStatus()
+
+        assertEquals(RideStatus.COMPLETED, status.status)
+    }
+
+    // ---- 상세 응답의 지문 ----
+
+    @Test
+    fun `상세 응답의 지문을 Ride 로 옮긴다`() {
+        assertEquals(FINGERPRINT, detailResponse().toRide().fingerprint)
+        assertEquals(FINGERPRINT, detailResponse().toRide(currentUuid = UUID_ME).fingerprint)
+    }
+
+    @Test
+    fun `상세 응답 JSON 의 지문을 Ride 로 옮긴다`() {
+        val body = """
+            {"id":7,"departure":"서울시청","destination":"강남역","capacity":3,"currentMembers":3,
+             "status":"MATCHING","fingerprint":"$FINGERPRINT"}
+        """.trimIndent()
+
+        val ride = json.decodeFromString<PartyDetailResponse>(body).toRide()
+
+        assertEquals(FINGERPRINT, ride.fingerprint)
+    }
+
+    /** 목록·생성 응답에는 지문 필드가 **서버에도 없다** — 매핑이 null 로 남는 걸 못박는다. */
+    @Test
+    fun `목록과 생성 응답의 Ride 에는 지문이 없다`() {
+        assertNull(PartyListResponse.PartyItem(partyId = 7, capacity = 3, status = "ACTIVE").toRide().fingerprint)
+        assertNull(OpenPartyResponse(id = 12, capacity = 3, status = "ACTIVE").toRide().fingerprint)
+    }
+
+    @Test
+    fun `구버전 서버의 상세 응답에 지문이 없어도 매핑이 깨지지 않는다`() {
+        val ride = json.decodeFromString<PartyDetailResponse>(
+            """{"id":9,"departure":"성결대 정문","destination":"안양역","capacity":3,"status":"ACTIVE"}""",
+        ).toRide()
+
+        assertNull(ride.fingerprint)
+    }
+
+    /**
+     * 두 매퍼가 지문을 **비교 가능한 자리**에 넣는지 — 폴링의 존재 이유가 이 비교다.
+     * 한쪽만 빈 문자열을 접거나 한쪽이 상태 변환표를 달리 쓰면 여기서 깨진다.
+     */
+    @Test
+    fun `같은 방의 상세와 상태를 매핑하면 서로 같다고 판정한다`() {
+        val ride = detailResponse().toRide(currentUuid = UUID_ME)
+        val same = PartyStatusResponse("MATCHING", ride.members.size, FINGERPRINT).toPartyStatus()
+        val changed = PartyStatusResponse("MATCHING", ride.members.size, "0000000000000000").toPartyStatus()
+
+        assertTrue(same.isSameAs(ride))
+        // 인원수가 같아도 지문이 다르면 바뀐 것이다(한 명 나가고 한 명 들어온 경우).
+        assertFalse(changed.isSameAs(ride))
+    }
+
     private fun detailResponse(
         members: List<PartyDetailResponse.MemberInfo> = listOf(
             member(publicId = UUID_ME, nickname = "성윤", joinedAt = "2026-08-17T09:00:00Z"),
             member(publicId = UUID_OTHER, nickname = "다른사람", joinedAt = "2026-08-17T09:01:00Z"),
         ),
+        fingerprint: String? = FINGERPRINT,
     ) = PartyDetailResponse(
         id = 7,
         departureLat = 37.5665,
@@ -470,6 +588,7 @@ class PartyMappersTest {
         estimateTime = 14,
         route = "_p~iF~ps|U",
         taxiDriverId = 42,
+        fingerprint = fingerprint,
     )
 
     private fun member(
@@ -491,5 +610,8 @@ class PartyMappersTest {
         /** 서버가 내려보내는 UUID v7 문자열 형식 그대로. 로그인 세션의 `sub` 와 같은 값을 가정한다. */
         const val UUID_ME = "01a06145-3caf-7614-a3bd-cee6e25316b1"
         const val UUID_OTHER = "01a06145-3caf-7614-a3bd-cee6e2531999"
+
+        /** 서버가 내려보내는 지문 형식 그대로 — HMAC-SHA256 앞 8바이트의 16진수 16글자. */
+        const val FINGERPRINT = "9f3c1a7b4e2d0586"
     }
 }
