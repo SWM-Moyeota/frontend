@@ -53,10 +53,8 @@ jobs:
           distribution: 'temurin'
 
       - name: Setup Gradle
+        # v6 기본값(cache-cleanup: on-success)이 빌드 성공 시 안 쓰는 캐시 항목을 정리해 10GB 한도를 넘지 않게 한다
         uses: gradle/actions/setup-gradle@v6
-        with:
-          # 캐시에 안 쓰는 항목이 쌓여 10GB 한도를 넘지 않게 저장 전에 정리한다
-          gradle-home-cache-cleanup: true
 
       # org.gradle.caching(gradle.properties)으로 태스크 출력도 캐시된다 — 바뀌지 않은 모듈(domain·core·data)의
       # 컴파일은 캐시에서 꺼내 온다. 캐시 디렉터리는 setup-gradle 이 Gradle User Home 과 함께 보존한다.
