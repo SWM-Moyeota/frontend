@@ -56,7 +56,11 @@ interface ChatRepository {
      */
     suspend fun setNotificationMuted(chatRoomId: Long, muted: Boolean)
 
-    /** POST /api/v1/chat-rooms/{chatRoomId}/users/read/{readMessageId}. 성공 후 목록의 안읽음 배지 갱신 필요. */
+    /**
+     * POST /api/v1/chat-rooms/{chatRoomId}/users/read/{readMessageId}. 성공 후 목록의 안읽음 배지 갱신 필요.
+     * 서버는 읽음 위치를 **5초 모았다가 한 번에** 반영한다(Backend #188) — 바로 저장되지 않아도 정상이다.
+     * 내 목록 조회(`GET /chat-rooms/me`) 직전에는 내 것만 먼저 반영하므로 방금 읽은 방이 안 읽음으로 보이진 않는다.
+     */
     suspend fun markAsRead(chatRoomId: Long, readMessageId: Long)
 
     /**
