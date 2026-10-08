@@ -47,7 +47,7 @@ import com.moyeota.core.designsystem.theme.MoyeotaType
 /**
  * 12 · 매너 서약 [S07]
  *
- * 진입: 11 안심 설정 / 뒤로 → 11 / 「동의하고 가입 완료」 → 13 가입 완료
+ * 진입: 10 프로필 만들기 / 뒤로 → 10 / 「동의하고 가입 완료」 → 13 가입 완료
  * 개별 항목 탭 → 해당 정책 상세 (미연결)
  *
  * **가입 플로우의 유일한 서버 제출 지점**이다 — [onComplete] 가 회원가입 + 자동 로그인을
@@ -81,7 +81,7 @@ fun MannerPledgeScreen(
             onBack = onBack,
             actions = {
                 Text(
-                    text = "3 / 3",
+                    text = "2 / 2",
                     style = MoyeotaType.BodySm,
                     fontWeight = FontWeight.Medium,
                     color = Color(0xFF8A93A0),
@@ -137,7 +137,7 @@ fun MannerPledgeScreen(
 
             Spacer(Modifier.height(6.dp))
             Text(
-                text = "동의한 내용과 노쇼 차감 고지는 계정에 기록돼요",
+                text = "동의 내용은 가입 시점 기준으로 적용돼요",
                 style = MoyeotaType.CaptionMd,
                 fontWeight = FontWeight.Medium,
                 color = Color(0xFF9AA1AC),
@@ -210,9 +210,10 @@ private val pledgeItems = listOf(
     // — 무엇에 동의했는지는 제출 버튼이 있는 이 화면에 모여 있어야 한다.
     PledgeItem("이용약관 · 개인정보 수집에 동의해요", "실명·생년월일·연락처는 본인 확인과 매칭 안전에만 써요"),
     PledgeItem("약속한 시간과 장소를 지킬게요", "무단 취소가 반복되면 이용이 제한돼요"),
-    PledgeItem("요금은 내릴 때 바로 정산할게요", "미정산이 쌓이면 매칭이 막혀요"),
     PledgeItem("불쾌한 말과 행동을 하지 않을게요", "신고가 들어오면 24시간 안에 확인해요"),
-    PledgeItem("무단 노쇼는 요금이 차감돼요", "매칭 확정 후 오지 않으면 1인 부담금이 등록한 결제 수단에서 청구돼요"),
+    PledgeItem("매칭이 확정되면 꼭 나갈게요", "매칭 확정 후 오지 않으면 이용이 제한될 수 있어요"),
+    // 위치 공유 동의 — 백엔드에 동의 저장 필드가 없어 제출하지 않는다(가입 진행 조건으로만 쓴다).
+    PledgeItem("운행 중 내 위치를 동승자와 공유하는 데 동의해요", "매칭된 운행 동안에만 위치를 쓰고, 운행이 끝나면 공유도 함께 끝나요"),
 )
 
 @Composable

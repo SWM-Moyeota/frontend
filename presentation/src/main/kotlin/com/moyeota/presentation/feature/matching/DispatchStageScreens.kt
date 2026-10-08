@@ -432,7 +432,7 @@ private fun androidx.compose.foundation.layout.ColumnScope.StageSheet(
 
 internal val stageRideDummy = Ride(
     id = "ride-25b",
-    origin = "부산대학교 정문",
+    origin = "센텀시티역 3번 출구",
     destination = "서면역 1번 출구",
     departureLabel = "지금 출발",
     capacity = 2,

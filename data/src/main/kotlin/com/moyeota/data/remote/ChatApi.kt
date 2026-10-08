@@ -5,7 +5,6 @@ import com.moyeota.data.remote.dto.ChatMessageResponse
 import com.moyeota.data.remote.dto.ChatMessageSliceResponse
 import com.moyeota.data.remote.dto.ChatRoomResponse
 import com.moyeota.data.remote.dto.ChatRoomUserResponse
-import com.moyeota.data.remote.dto.CreateChatRoomRequestDto
 import com.moyeota.data.remote.dto.SendMessageRequestDto
 import retrofit2.http.Body
 import retrofit2.http.DELETE
@@ -35,13 +34,6 @@ interface ChatApi {
     // --- ChatRoomController ---
     @GET("api/v1/chat-rooms/{chatRoomId}")
     suspend fun getRoom(@Path("chatRoomId") chatRoomId: Long): ChatRoomResponse
-
-    @POST("api/v1/chat-rooms")
-    suspend fun createRoom(@Body request: CreateChatRoomRequestDto): ChatRoomResponse
-
-    // 204 No Content
-    @DELETE("api/v1/chat-rooms/{chatRoomId}")
-    suspend fun deleteRoom(@Path("chatRoomId") chatRoomId: Long)
 
     // --- ChatRoomUserController ---
     // 방 이름 없이 내 참여 정보만 배열로 내려온다(래핑 객체 아님).

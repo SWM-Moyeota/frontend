@@ -233,7 +233,7 @@ fun DispatchStatusRoute(
     LaunchedEffect(viewModel) {
         viewModel.pollDriver()
     }
-    // 기사측 탑승 처리를 잡으면 26 운행 중으로 자동 전이한다 (26→28 의 onRideFinished 와 같은 모양)
+    // 기사측 탑승 처리를 잡으면 26 운행 중으로 자동 전이한다 (26→33 의 onRideFinished 와 같은 모양)
     LaunchedEffect(rideStarted) {
         if (rideStarted) onStartRide()
     }

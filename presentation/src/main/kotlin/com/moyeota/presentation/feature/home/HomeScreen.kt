@@ -1,9 +1,9 @@
 package com.moyeota.presentation.feature.home
 
+import android.location.Location
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -24,11 +24,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
@@ -54,8 +51,11 @@ import com.moyeota.core.designsystem.component.MoyeotaTab
 import com.moyeota.core.designsystem.component.NaverMapView
 import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.domain.model.FavoritePlace
 import com.moyeota.domain.model.Ride
 import com.moyeota.presentation.core.ActiveRideBanner
+import java.util.Locale
+import kotlin.math.roundToInt
 
 // 와이어프레임 그레이 (core token 미정의 색 — 화면 재현용)
 private val CanvasBg = Color(0xFFF5F7FA)
@@ -64,6 +64,8 @@ private val GraySlate = Color(0xFF4B5563)
 private val GrayDeep = Color(0xFF54637D)
 private val GrayMute = Color(0xFF8A93A0)
 private val GrayAsh = Color(0xFF9AA1AC)
+private val RowDot = Color(0xFFC3CCDA)
+private val CardShadow = Color(0x1A1B2A4A)
 
 /** 첫 실위치로 옮길 때의 줌 — 동네 단위가 보이는 수준(26 운행 중과 같은 값) */
 private const val HomeMyLocationZoom = 15.0
@@ -77,11 +79,6 @@ private val HomeMapRevealHeight = 200.dp
  */
 private val HomeCollapsedSheetHeight = 226.dp
 
-// 홈·목적지 화면 공용 더미 모델
-data class FavoritePlace(val label: String, val address: String)
-
-data class RecentPlace(val name: String, val address: String, val distanceLabel: String)
-
 /**
  * 14 · 홈 — 어디로 갈까요 [S09]
  *
@@ -89,14 +86,17 @@ data class RecentPlace(val name: String, val address: String, val distanceLabel:
  * - 상단 「{단계} · {목적지} 보기 ›」 배너 → 진행 중인 방의 단계 화면 21/25/26 (onActiveRideClick)
  *   — 진행 중인 방이 없으면([activeRide] null) 배너 자체가 없다
  * - 「목적지 검색」 바 탭 → 15 (onSearchClick)
- * - 「자주 가는 곳」 카드 탭 → 15, 도착지 자동 입력 (onFavoritePlaceClick)
- * - 「최근 목적지」 행 탭 → 15 (onRecentPlaceClick)
+ * - 「즐겨찾기」 행 탭 → 15, 도로명주소로 검색어 자동 입력 (onFavoritePlaceClick)
  * - 하단탭 합승/채팅/마이 → 17/24/35 (onTabSelect)
- * - [미연결] 자주 가는 곳 편집 · 최근 목적지 「전체」 (onRecentAllClick)
+ *
+ * 상태:
+ * - 즐겨찾기는 서버 목록([favoritePlaces])을 sequence 순으로 전부 세로 카드에 그린다.
+ *   행 = 이름 · 도로명주소 · 내 위치 기준 직선 거리([myLocation] 이 null 이면 거리 생략)
+ * - 비어 있으면 카드 대신 「즐겨찾기를 등록하면…」 안내 문구 (등록은 15 의 ★)
  *
  * 레이아웃: 와이어프레임 B1「풀스크린 지도」 — 네이버 지도가 배경 레이어이고
  * 홈 UI 는 그 위 **드래그 시트**([MapSheetScaffold])다. 핸들·검색 카드는 항상 보이고,
- * 아래로 내리면 자주 가는 곳·최근 목적지가 접혀 지도가 검색 카드 위까지 전부 드러난다.
+ * 아래로 내리면 즐겨찾기 목록이 접혀 지도가 검색 카드 위까지 전부 드러난다.
  */
 @Composable
 fun HomeScreen(
@@ -106,27 +106,17 @@ fun HomeScreen(
     activeRide: Ride? = null,
     /** 기기 실위치. null(권한 없음·아직 fix 없음)이면 파란 점을 그리지 않고 카메라도 옮기지 않는다 */
     myLocation: UserCoordinates? = null,
-    favoritePlaces: List<FavoritePlace> = listOf(
-        FavoritePlace("집", "서면 롯데"),
-        FavoritePlace("학교", "부산대 정문"),
-        FavoritePlace("알바", "센텀시티"),
-    ),
-    recentPlaces: List<RecentPlace> = listOf(
-        RecentPlace("서면역 1번 출구", "부산진구 부전동", "6.2km"),
-        RecentPlace("사상역 환승센터", "사상구 괘법동", "8.4km"),
-        RecentPlace("부산역 광장", "동구 초량동", "11.0km"),
-    ),
+    /** 서버 즐겨찾기(GET /users/me/favorite-places). 호출부가 sequence 순으로 정렬해 넘긴다 */
+    favoritePlaces: List<FavoritePlace> = emptyList(),
     onSearchClick: () -> Unit = {},
     onActiveRideClick: () -> Unit = {},
     onFavoritePlaceClick: (FavoritePlace) -> Unit = {},
-    onRecentPlaceClick: (RecentPlace) -> Unit = {},
-    onRecentAllClick: () -> Unit = {}, // 미연결
     onTabSelect: (MoyeotaTab) -> Unit = {},
 ) {
     Column(modifier = Modifier.fillMaxSize().background(CanvasBg)) {
         // 배경 = 풀스크린 지도, 그 위에 **드래그로 접었다 펴는** 시트(16·21 과 같은 MapSheetScaffold).
-        // 펼침(기본)에서는 예전 홈처럼 지도 약 200dp + 검색·자주 가는 곳·최근 목적지,
-        // 핸들을 내리면 상세(자주 가는 곳·최근 목적지)가 접혀 **지도가 검색 카드 위까지 전부** 보인다.
+        // 펼침(기본)에서는 예전 홈처럼 지도 약 200dp + 검색·즐겨찾기,
+        // 핸들을 내리면 상세(즐겨찾기)가 접혀 **지도가 검색 카드 위까지 전부** 보인다.
         MapSheetScaffold(
             modifier = Modifier.weight(1f).fillMaxWidth(),
             mapRevealHeight = HomeMapRevealHeight,
@@ -185,14 +175,14 @@ fun HomeScreen(
             sheetTop = {
                 HeroSection(userName = userName, onSearchClick = onSearchClick)
             },
-            // 접히면 사라지는 상세 = 자주 가는 곳 · 최근 목적지
+            // 접히면 사라지는 상세 = 즐겨찾기 목록
             sheetDetail = {
                 Column(modifier = Modifier.fillMaxWidth().background(CanvasBg)) {
                     Spacer(Modifier.height(24.dp))
 
-                    // 자주 가는 곳
+                    // 즐겨찾기 — 서버 등록 순서(sequence) 그대로 전부
                     Text(
-                        text = "자주 가는 곳",
+                        text = "즐겨찾기",
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
                         color = GrayMute,
@@ -202,66 +192,33 @@ fun HomeScreen(
                     if (favoritePlaces.isEmpty()) {
                         // 서버에 등록된 즐겨찾기가 없을 때 (15 목적지 화면에서 ★ 로 등록한다)
                         Text(
-                            text = "자주 가는 곳을 등록하면 여기서 바로 부를 수 있어요",
+                            text = "즐겨찾기를 등록하면 여기서 바로 부를 수 있어요",
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Medium,
                             color = GrayAsh,
                             modifier = Modifier.padding(horizontal = 16.dp),
                         )
                     } else {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                            horizontalArrangement = Arrangement.spacedBy(9.dp),
+                        Column(
+                            modifier = Modifier
+                                .padding(horizontal = 16.dp)
+                                .fillMaxWidth()
+                                .shadow(4.dp, RoundedCornerShape(18.dp), spotColor = CardShadow)
+                                .clip(RoundedCornerShape(18.dp))
+                                .background(MoyeotaColor.SurfaceCanvas),
                         ) {
-                            favoritePlaces.take(3).forEachIndexed { index, place ->
-                                FavoritePlaceCard(
+                            favoritePlaces.forEachIndexed { index, place ->
+                                FavoritePlaceRow(
                                     place = place,
-                                    index = index,
-                                    modifier = Modifier.weight(1f),
+                                    distanceLabel = distanceLabel(myLocation, place),
                                     onClick = { onFavoritePlaceClick(place) },
                                 )
-                            }
-                        }
-                    }
-
-                    Spacer(Modifier.height(24.dp))
-
-                    // 최근 목적지
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = "최근 목적지",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = GrayMute,
-                        )
-                        Spacer(Modifier.weight(1f))
-                        Text(
-                            text = "전체",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = GrayAsh,
-                            modifier = Modifier.clickable { onRecentAllClick() },
-                        )
-                    }
-                    Spacer(Modifier.height(10.dp))
-                    Column(
-                        modifier = Modifier
-                            .padding(horizontal = 16.dp)
-                            .fillMaxWidth()
-                            .shadow(4.dp, RoundedCornerShape(18.dp), spotColor = Color(0x1A1B2A4A))
-                            .clip(RoundedCornerShape(18.dp))
-                            .background(MoyeotaColor.SurfaceCanvas),
-                    ) {
-                        recentPlaces.forEachIndexed { index, place ->
-                            RecentPlaceRow(place = place, onClick = { onRecentPlaceClick(place) })
-                            if (index != recentPlaces.lastIndex) {
-                                HorizontalDivider(
-                                    color = MoyeotaColor.Hairline,
-                                    modifier = Modifier.padding(start = 42.dp, end = 18.dp),
-                                )
+                                if (index != favoritePlaces.lastIndex) {
+                                    HorizontalDivider(
+                                        color = MoyeotaColor.Hairline,
+                                        modifier = Modifier.padding(start = 42.dp, end = 18.dp),
+                                    )
+                                }
                             }
                         }
                     }
@@ -285,7 +242,7 @@ private fun HeroSection(
         Spacer(Modifier.height(18.dp))
         Text(
             // 이름을 모르면 "OO님" 자리를 통째로 빼고 인사만 남긴다 — 빈 이름이 드러나지 않는다.
-            text = if (userName != null) "${userName}님, 좋은 저녁이에요" else "좋은 저녁이에요",
+            text = if (userName != null) "${userName}님, 반가워요" else "반가워요",
             fontSize = 15.sp,
             fontWeight = FontWeight.Medium,
             color = GraySlate,
@@ -345,54 +302,9 @@ private fun HeroSection(
     }
 }
 
+/** 즐겨찾기 한 행 — 점 · 이름/도로명주소 · (실위치가 있을 때만) 직선 거리 */
 @Composable
-private fun FavoritePlaceCard(
-    place: FavoritePlace,
-    index: Int,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit,
-) {
-    val iconBg = listOf(Color(0xFFDDE7F7), Color(0xFFD6F0E4), Color(0xFFFBE7D6))
-    val iconTint = listOf(Color(0xFF4A6FA5), Color(0xFF2F9E77), Color(0xFFC97B3D))
-    Column(
-        modifier = modifier
-            .height(100.dp)
-            .shadow(4.dp, RoundedCornerShape(18.dp), spotColor = Color(0x1A1B2A4A))
-            .clip(RoundedCornerShape(18.dp))
-            .background(MoyeotaColor.SurfaceCanvas)
-            .clickable { onClick() }
-            .padding(16.dp),
-    ) {
-        Box(
-            modifier = Modifier
-                .size(40.dp)
-                .background(iconBg[index % iconBg.size], RoundedCornerShape(13.dp)),
-            contentAlignment = Alignment.Center,
-        ) {
-            when (index % 3) {
-                0 -> HouseIcon(tint = iconTint[0])
-                1 -> SchoolIcon(tint = iconTint[1])
-                else -> BagIcon(tint = iconTint[2])
-            }
-        }
-        Spacer(Modifier.weight(1f))
-        Text(
-            text = place.label,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Bold,
-            color = MoyeotaColor.InkPrimary,
-        )
-        Text(
-            text = place.address,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Medium,
-            color = GrayMute,
-        )
-    }
-}
-
-@Composable
-private fun RecentPlaceRow(place: RecentPlace, onClick: () -> Unit) {
+private fun FavoritePlaceRow(place: FavoritePlace, distanceLabel: String?, onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -403,7 +315,7 @@ private fun RecentPlaceRow(place: RecentPlace, onClick: () -> Unit) {
         Box(
             modifier = Modifier
                 .size(8.dp)
-                .background(Color(0xFFC3CCDA), CircleShape),
+                .background(RowDot, CircleShape),
         )
         Spacer(Modifier.size(16.dp))
         Column(modifier = Modifier.weight(1f)) {
@@ -414,18 +326,39 @@ private fun RecentPlaceRow(place: RecentPlace, onClick: () -> Unit) {
                 color = MoyeotaColor.InkPrimary,
             )
             Text(
-                text = place.address,
+                text = place.roadName,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Medium,
                 color = GrayMute,
             )
         }
-        Text(
-            text = place.distanceLabel,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Bold,
-            color = GrayMute,
-        )
+        if (distanceLabel != null) {
+            Spacer(Modifier.size(12.dp))
+            Text(
+                text = distanceLabel,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                color = GrayMute,
+            )
+        }
+    }
+}
+
+/**
+ * 내 위치 → 즐겨찾기 직선 거리 라벨. 1km 미만은 "850m", 이상은 소수 첫째 자리 "6.2km".
+ * 실위치가 없거나 좌표가 유한하지 않으면 null — 행에서 거리 칸을 생략한다.
+ */
+private fun distanceLabel(from: UserCoordinates?, place: FavoritePlace): String? {
+    if (from == null) return null
+    if (!from.latitude.isFinite() || !from.longitude.isFinite()) return null
+    if (!place.latitude.isFinite() || !place.longitude.isFinite()) return null
+    val result = FloatArray(1)
+    Location.distanceBetween(from.latitude, from.longitude, place.latitude, place.longitude, result)
+    val meters = result[0]
+    return if (meters < 1000f) {
+        "${meters.roundToInt()}m"
+    } else {
+        String.format(Locale.US, "%.1fkm", meters / 1000f)
     }
 }
 
@@ -458,76 +391,21 @@ private fun ArrowRightIcon(modifier: Modifier = Modifier, color: Color = Color.W
     }
 }
 
+@Preview(showBackground = true, widthDp = 393, heightDp = 852)
 @Composable
-private fun HouseIcon(tint: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier.size(20.dp)) {
-        val w = size.width
-        val h = size.height
-        val path = Path().apply {
-            moveTo(w * 0.5f, h * 0.12f)
-            lineTo(w * 0.92f, h * 0.45f)
-            lineTo(w * 0.78f, h * 0.45f)
-            lineTo(w * 0.78f, h * 0.88f)
-            lineTo(w * 0.22f, h * 0.88f)
-            lineTo(w * 0.22f, h * 0.45f)
-            lineTo(w * 0.08f, h * 0.45f)
-            close()
-        }
-        drawPath(path, tint, style = Stroke(1.6.dp.toPx(), join = StrokeJoin.Round))
-    }
-}
-
-@Composable
-private fun SchoolIcon(tint: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier.size(20.dp)) {
-        val w = size.width
-        val h = size.height
-        val strokeWidth = 1.6.dp.toPx()
-        val cap = Path().apply {
-            moveTo(w * 0.5f, h * 0.15f)
-            lineTo(w * 0.95f, h * 0.4f)
-            lineTo(w * 0.5f, h * 0.65f)
-            lineTo(w * 0.05f, h * 0.4f)
-            close()
-        }
-        drawPath(cap, tint, style = Stroke(strokeWidth, join = StrokeJoin.Round))
-        val bottom = Path().apply {
-            moveTo(w * 0.25f, h * 0.52f)
-            lineTo(w * 0.25f, h * 0.75f)
-            quadraticTo(w * 0.5f, h * 0.95f, w * 0.75f, h * 0.75f)
-            lineTo(w * 0.75f, h * 0.52f)
-        }
-        drawPath(bottom, tint, style = Stroke(strokeWidth, join = StrokeJoin.Round))
-    }
-}
-
-@Composable
-private fun BagIcon(tint: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier.size(20.dp)) {
-        val w = size.width
-        val h = size.height
-        val strokeWidth = 1.6.dp.toPx()
-        drawRoundRect(
-            color = tint,
-            topLeft = Offset(w * 0.12f, h * 0.35f),
-            size = Size(w * 0.76f, h * 0.5f),
-            cornerRadius = androidx.compose.ui.geometry.CornerRadius(3.dp.toPx()),
-            style = Stroke(strokeWidth),
-        )
-        drawArc(
-            color = tint,
-            startAngle = 180f,
-            sweepAngle = 180f,
-            useCenter = false,
-            topLeft = Offset(w * 0.35f, h * 0.16f),
-            size = Size(w * 0.3f, h * 0.36f),
-            style = Stroke(strokeWidth, cap = StrokeCap.Round),
-        )
-    }
+private fun HomeScreenPreview() {
+    HomeScreen(
+        userName = "김성윤",
+        myLocation = UserCoordinates(latitude = 35.2316, longitude = 129.0846),
+        favoritePlaces = listOf(
+            FavoritePlace("집", "부산 부산진구 중앙대로 672", 35.1577, 129.0592, sequence = 1),
+            FavoritePlace("학교", "부산 금정구 부산대학로 63번길 2", 35.2334, 129.0798, sequence = 2),
+        ),
+    )
 }
 
 @Preview(showBackground = true, widthDp = 393, heightDp = 852)
 @Composable
-private fun HomeScreenPreview() {
+private fun HomeScreenEmptyFavoritesPreview() {
     HomeScreen(userName = "김성윤")
 }

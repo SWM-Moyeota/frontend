@@ -29,10 +29,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.TextStyle
@@ -85,18 +83,20 @@ private fun isSameSpot(originLatitude: Double?, originLongitude: Double?, destin
  * - 도착지 행 탭/입력 → 도착지 검색 모드 (onFieldFocus(DESTINATION))
  * - 두 필드 모두 서버 장소 검색(GET /places) 결과를 공유한다 (onQueryChange → searchResults)
  * - 자주 가는 곳 카드 탭 → 활성 필드에 장소 선택 (좌표까지 확정)
- * - 최근 검색 행 탭 → 활성 필드 검색어 채움 (서버 검색 재실행) — 최근 검색 API 는 서버에 없어 더미 유지
+ * - 최근 검색 목록은 두지 않는다 — 서버에 검색 기록 API 가 없다(develop 기준). 검색어가 비면 결과 영역도 비운다
  * - 검색 결과 행의 ★ → 자주 가는 곳 등록 (onAddFavorite)
  * - 「경로 확인하기」 → 16 도착지 확인 모달 (onConfirmRoute)
  *
  * 유효값 검증:
  * - 좌표가 있는 도착지를 고르기 전에는 CTA 비활성 (방 생성에 좌표가 필수)
  * - 출발지 = 도착지이면 「너무 가까워요」 로 차단 (이름이 같거나 50m 안)
- * - 출발지를 고르지 않으면 기본값 유지 — 기기 실위치("현재 위치"), 없으면 DemoOrigin(부산대 정문)
+ * - 출발지를 고르지 않으면 기기 실위치("현재 위치")를 쓴다. 실위치도 없으면([origin] null) 출발지 칸을
+ *   비워 두고 CTA 를 막은 채 「현재 위치를 확인하거나 출발지를 검색해 주세요」를 안내한다 — 고정 좌표로 채우지 않는다
  */
 @Composable
 fun DestinationScreen(
-    origin: String = "부산대학교 정문",
+    /** 출발지 이름. null = 실위치도 없고 고른 출발지도 없음 → 비워 두고 CTA 비활성 */
+    origin: String? = null,
     originIsDefault: Boolean = true, // true = 사용자가 고르지 않은 기본 출발지 → "현재 위치" 라벨
     // 출발지 좌표 — 「너무 가까워요」 판정용. 실위치 출발지는 이름이 "현재 위치" 라 이름 비교만으로는
     // 같은 자리를 못 걸러낸다 (null 이면 이름 비교만 한다)
@@ -115,12 +115,6 @@ fun DestinationScreen(
     favoritesErrorMessage: String? = null,
     selectedPlace: Place? = null,
     favoriteActionMessage: String? = null,
-    recentSearches: List<RecentPlace> = listOf(
-        RecentPlace("서면역 1번 출구", "부산진구 부전동", "6.2km"),
-        RecentPlace("사상역 환승센터", "사상구 괘법동", "8.4km"),
-        RecentPlace("부산역 광장", "동구 초량동", "11.0km"),
-        RecentPlace("해운대역", "해운대구 우동", "18.6km"),
-    ),
     onPlaceSelect: (Place) -> Unit = {},
     onAddFavorite: (Place) -> Unit = {},
     onBack: () -> Unit = {},
@@ -129,11 +123,12 @@ fun DestinationScreen(
     val originActive = activeField == DestinationField.ORIGIN
     // 활성 필드의 마커색 — 출발지는 Primary, 도착지는 MarkerDestination
     val activeMarkerColor = if (originActive) MoyeotaColor.Primary500 else MoyeotaColor.MarkerDestination
-    val tooClose = selectedPlace != null && (
+    val originMissing = origin == null
+    val tooClose = selectedPlace != null && origin != null && (
         selectedPlace.name.trim() == origin.trim() ||
             isSameSpot(originLatitude, originLongitude, selectedPlace)
         )
-    val ctaEnabled = selectedPlace != null && !tooClose
+    val ctaEnabled = selectedPlace != null && !originMissing && !tooClose
 
     Column(modifier = Modifier.fillMaxSize().imePadding().background(CanvasBg)) {
         StatusBarSpacer()
@@ -181,16 +176,21 @@ fun DestinationScreen(
                     if (searchLoading) FieldSpinner()
                 } else {
                     Text(
-                        text = origin,
+                        text = origin ?: "출발지를 검색해 주세요",
                         fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MoyeotaColor.InkPrimary,
+                        fontWeight = if (origin == null) FontWeight.Medium else FontWeight.Bold,
+                        color = if (origin == null) GrayAsh else MoyeotaColor.InkPrimary,
                         maxLines = 1,
                         modifier = Modifier.weight(1f),
                     )
                     Text(
-                        // 기본값일 때만 "현재 위치" — 사용자가 직접 고른 출발지는 "변경" 로 구분
-                        text = if (originIsDefault) "현재 위치" else "변경",
+                        // 기본값일 때만 "현재 위치" — 사용자가 직접 고른 출발지는 "변경" 로 구분.
+                        // 출발지가 비었으면 "검색" — 눌러서 채우라는 신호
+                        text = when {
+                            origin == null -> "검색"
+                            originIsDefault -> "현재 위치"
+                            else -> "변경"
+                        },
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Medium,
                         color = GrayMute,
@@ -314,21 +314,18 @@ fun DestinationScreen(
 
             Spacer(Modifier.height(26.dp))
 
-            // 검색 결과(서버) / 최근 검색(더미 — 서버 API 없음) — 활성 필드 기준
+            // 검색 결과(서버) — 활성 필드 기준. 검색어가 비어 있으면 아무것도 그리지 않는다
+            // (최근 검색 API 가 서버에 없어 더미 목록을 두지 않는다).
             val activeQuery = if (originActive) originQuery else query
             val showingSearch = activeQuery.isNotBlank()
-            Text(
-                text = when {
-                    showingSearch && originActive -> "출발지 검색 결과"
-                    showingSearch -> "검색 결과"
-                    else -> "최근 검색"
-                },
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Medium,
-                color = GrayMute,
-            )
-            Spacer(Modifier.height(10.dp))
             if (showingSearch) {
+                Text(
+                    text = if (originActive) "출발지 검색 결과" else "검색 결과",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = GrayMute,
+                )
+                Spacer(Modifier.height(10.dp))
                 when {
                     searchErrorMessage != null -> Text(
                         text = searchErrorMessage,
@@ -392,48 +389,6 @@ fun DestinationScreen(
                         }
                     }
                 }
-            } else {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .shadow(4.dp, RoundedCornerShape(18.dp), spotColor = Color(0x1A1B2A4A))
-                        .clip(RoundedCornerShape(18.dp))
-                        .background(MoyeotaColor.SurfaceCanvas),
-                ) {
-                    recentSearches.forEachIndexed { index, place ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                // 좌표가 없는 더미 항목 — 검색어만 채워 서버 검색을 태운다
-                                .clickable { onQueryChange(place.name) }
-                                .padding(horizontal = 20.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            ClockIcon()
-                            Spacer(Modifier.size(12.dp))
-                            Column {
-                                Text(
-                                    text = place.name,
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MoyeotaColor.InkPrimary,
-                                )
-                                Text(
-                                    text = "${place.address} · ${place.distanceLabel}",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = GrayMute,
-                                )
-                            }
-                        }
-                        if (index != recentSearches.lastIndex) {
-                            HorizontalDivider(
-                                color = MoyeotaColor.Hairline,
-                                modifier = Modifier.padding(start = 50.dp, end = 20.dp),
-                            )
-                        }
-                    }
-                }
             }
 
             Spacer(Modifier.height(24.dp))
@@ -448,6 +403,10 @@ fun DestinationScreen(
                 color = GrayAsh,
                 modifier = Modifier.align(Alignment.CenterHorizontally),
             )
+            if (originMissing) {
+                Spacer(Modifier.height(10.dp))
+                NoticeBanner(kind = NoticeKind.INFO, text = "현재 위치를 확인하거나 출발지를 검색해 주세요")
+            }
             if (tooClose) {
                 Spacer(Modifier.height(10.dp))
                 NoticeBanner(kind = NoticeKind.ERROR, text = "너무 가까워요")
@@ -554,17 +513,6 @@ private fun StarIcon(modifier: Modifier = Modifier, color: Color = GrayAsh) {
         }
         path.close()
         drawPath(path, color, style = Stroke(1.4.dp.toPx(), join = StrokeJoin.Round))
-    }
-}
-
-@Composable
-private fun ClockIcon(modifier: Modifier = Modifier, color: Color = GrayAsh) {
-    Canvas(modifier = modifier.size(18.dp)) {
-        val w = size.width
-        val strokeWidth = 1.5.dp.toPx()
-        drawCircle(color, radius = w * 0.42f, center = center, style = Stroke(strokeWidth))
-        drawLine(color, center, Offset(center.x, center.y - w * 0.24f), strokeWidth, StrokeCap.Round)
-        drawLine(color, center, Offset(center.x + w * 0.18f, center.y + w * 0.1f), strokeWidth, StrokeCap.Round)
     }
 }
 

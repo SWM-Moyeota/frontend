@@ -25,9 +25,8 @@ object Routes {
     const val WORK_VERIFY = "auth/work-verify"               // 08 S26 (미연결)
     const val IDENTITY_VERIFY = "auth/identity"              // 09 S04 (미연결)
 
-    // C · 가입 (3단계: 10 → 11 → 12 → 13 완료)
+    // C · 가입 (2단계: 10 → 12 → 13 완료)
     const val PROFILE_SETUP = "auth/profile"                 // 10 S05
-    const val SAFETY_SETTINGS = "auth/safety-settings"       // 11 S06
     const val MANNER_PLEDGE = "auth/manner-pledge"           // 12 S07
     const val SIGNUP_COMPLETE = "auth/signup-complete"       // 13 S08
 
@@ -63,15 +62,7 @@ object Routes {
     const val RIDE_ONGOING = "ride/ongoing"                  // 26 S15
     const val EMERGENCY = "ride/emergency"                   // 27 S17
 
-    // H · 요금 · 정산 · 결제
-    const val FARE_FINAL = "fare/final"                      // 28 S19a
-    const val SETTLEMENT = "fare/settlement"                 // 29 S19
-    const val PAYMENT_METHODS = "payment/methods"            // 30 S20
-    const val PAYMENT_ADD = "payment/add"                    // 31 신규
-    const val PAYMENT_RESULT = "payment/result"              // 32 S21
-
-    // I · 완료 · 평가 · 기록
+    // I · 완료 · 마이페이지
     const val RIDE_COMPLETE = "ride/complete"                // 33 S18
-    const val MY_RIDES = "my-rides"                          // 34 S22
     const val MYPAGE = "mypage"                              // 35 S24
 }

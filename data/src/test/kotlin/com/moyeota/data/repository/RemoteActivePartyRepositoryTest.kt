@@ -2,7 +2,6 @@ package com.moyeota.data.repository
 
 import com.moyeota.data.local.ActivePartyStorage
 import com.moyeota.data.local.RememberedParty
-import com.moyeota.domain.model.MemberLocation
 import com.moyeota.domain.model.AssignedDriver
 import com.moyeota.domain.model.AuthState
 import com.moyeota.domain.model.ChatMember
@@ -287,8 +286,6 @@ private class FakeRideRepository(
     override suspend fun getAssignedDriver(partyId: Long): AssignedDriver = error("쓰이지 않는다")
     override suspend fun reportEmergency(partyId: Long?): Long = error("쓰이지 않는다")
     override suspend fun confirmEmergencyCall(called: Boolean) = error("쓰이지 않는다")
-    override suspend fun reportMyLocation(partyId: Long, latitude: Double, longitude: Double) = error("쓰이지 않는다")
-    override suspend fun getMemberLocations(partyId: Long): List<MemberLocation> = error("쓰이지 않는다")
     override suspend fun previewRoute(
         departureLat: Double,
         departureLng: Double,
@@ -312,9 +309,6 @@ private class FakeChatRepository(
 
     override fun observeRoom(chatRoomId: Long): Flow<ChatRealtimeEvent> = emptyFlow()
     override suspend fun getChatRoom(chatRoomId: Long): ChatRoom = error("쓰이지 않는다")
-    override suspend fun createChatRoom(partyId: Long, departure: String, destination: String): ChatRoom =
-        error("쓰이지 않는다")
-    override suspend fun closeChatRoom(chatRoomId: Long) = error("쓰이지 않는다")
     override suspend fun joinChatRoom(chatRoomId: Long) = error("쓰이지 않는다")
     override suspend fun leaveChatRoom(chatRoomId: Long) = error("쓰이지 않는다")
     override suspend fun setNotificationMuted(chatRoomId: Long, muted: Boolean) = error("쓰이지 않는다")

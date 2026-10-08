@@ -2,7 +2,6 @@ package com.moyeota.presentation.feature.auth
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -24,7 +23,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -61,9 +59,9 @@ private val InfoCardBlue = Color(0xFFF1F5FD)
 private val TrackGray = Color(0xFFE6EAF0)
 
 /**
- * 10 · 프로필 만들기 [S05] — **가입 1단계(1/3), 가입 플로우의 첫 화면**
+ * 10 · 프로필 만들기 [S05] — **가입 1단계(1/2), 가입 플로우의 첫 화면**
  *
- * 진입: 04 「이메일로 시작하기」 · 04a 「가입하기」 / 뒤로 → 진입 화면 / 「다음」 → 11 안심 설정
+ * 진입: 04 「이메일로 시작하기」 · 04a 「가입하기」 / 뒤로 → 진입 화면 / 「다음」 → 12 매너 서약
  *
  * 이 화면 하나가 서버 가입(`POST /api/v1/users`)이 요구하는 7개 필드를 **모두** 받는다.
  * 원래 실명·생년월일·성별·휴대폰은 09 본인 인증에서 받았지만, 그 화면의 전제였던 통신사
@@ -71,7 +69,8 @@ private val TrackGray = Color(0xFFE6EAF0)
  * 들어내고 입력만 여기로 옮겼다 — 물어보는 값의 개수는 그대로고, 화면 하나가 줄었다.
  *
  * 필드가 8개라 세 절로 끊어 읽게 했다:
- * - **프로필** — 아바타 톤 · 닉네임 (상대에게 보이는 유일한 이름)
+ * - **프로필** — 닉네임 (상대에게 보이는 유일한 이름). 아바타는 단일 기본색 실루엣이다 —
+ *   아바타 색을 저장할 서버 필드가 없어 고르게 하지 않는다
  * - **기본 정보** — 이름(실명) · 생년월일 · 성별 · 휴대폰 번호 (서버 가입 필수값)
  * - **로그인 정보** — 아이디 · 비밀번호 · 이메일 (계정 자격증명)
  *
@@ -84,7 +83,7 @@ private val TrackGray = Color(0xFFE6EAF0)
  *
  * @param nicknameCheck 중복 확인 결과. 입력이 멈춘 뒤 [ProfileSetupRoute] 가 서버에 물어 갱신한다.
  * @param onNicknameChange 입력이 바뀔 때마다 호출 — 디바운스는 Route 가 한다.
- * @param onNext 「다음」 → 11 안심 설정. [SignupDraft] 가 서버로 갈 8개 값 전부다.
+ * @param onNext 「다음」 → 12 매너 서약. [SignupDraft] 가 서버로 갈 8개 값 전부다.
  */
 @Composable
 fun ProfileSetupScreen(
@@ -98,7 +97,6 @@ fun ProfileSetupScreen(
     // 「닉네임 바꾸기」가 이 화면으로 popBackStack 한다. 그 사이 이 엔트리는 컴포지션에서 빠져 있어
     // 평범한 remember 였다면 여기 여덟 값이 전부 날아가고 사용자는 가입 폼을 처음부터 다시 채워야 한다.
     var nickname by rememberSaveable { mutableStateOf("") }
-    var selectedColor by rememberSaveable { mutableIntStateOf(0) }
 
     var realName by rememberSaveable { mutableStateOf("") }
     var birthDigits by rememberSaveable { mutableStateOf("") }
@@ -185,16 +183,16 @@ fun ProfileSetupScreen(
             title = "",
             onBack = onBack,
             actions = {
-                // 가입은 10 → 11 → 12 세 단계다 (09 본인 인증은 MVP 범위에서 빠졌다)
+                // 가입은 10 → 12 두 단계다 (09 본인 인증은 MVP 범위에서 빠졌다)
                 Text(
-                    text = "1 / 3",
+                    text = "1 / 2",
                     style = MoyeotaType.BodySm,
                     fontWeight = FontWeight.Medium,
                     color = LabelGray,
                 )
             },
         )
-        ProfileStepProgressBar(progress = 1f / 3f)
+        ProfileStepProgressBar(progress = 1f / 2f)
 
         Column(
             modifier = Modifier
@@ -217,25 +215,7 @@ fun ProfileSetupScreen(
             )
 
             Spacer(Modifier.height(22.dp))
-            ProfileAvatarPlaceholder(
-                tint = profileAvatarPalette[selectedColor],
-                modifier = Modifier.align(Alignment.CenterHorizontally),
-            )
-            Spacer(Modifier.height(24.dp))
-            Row(
-                modifier = Modifier.align(Alignment.CenterHorizontally),
-                horizontalArrangement = Arrangement.spacedBy(22.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                profileAvatarPalette.forEachIndexed { index, swatch ->
-                    ProfileColorSwatch(
-                        swatch = swatch,
-                        selected = index == selectedColor,
-                        onClick = { selectedColor = index },
-                    )
-                }
-            }
-
+            ProfileAvatarPlaceholder(modifier = Modifier.align(Alignment.CenterHorizontally))
             Spacer(Modifier.height(28.dp))
             ProfileSectionHeader(
                 title = "프로필",
@@ -482,62 +462,28 @@ private fun ProfileSectionHeader(title: String, description: String) {
     }
 }
 
-private data class ProfileAvatarSwatch(val outer: Color, val inner: Color)
-
-private val profileAvatarPalette = listOf(
-    ProfileAvatarSwatch(outer = Color(0xFFD8E0F2), inner = Color(0xFF8296C8)),
-    ProfileAvatarSwatch(outer = Color(0xFFD5EEDF), inner = Color(0xFF41BA83)),
-    ProfileAvatarSwatch(outer = Color(0xFFE3DDF6), inner = Color(0xFF9A82DC)),
-    ProfileAvatarSwatch(outer = Color(0xFFF4E3D0), inner = Color(0xFFDFA366)),
-)
+// 아바타 기본색 (와이어프레임 톤 — core token 미정의)
+private val AvatarOuter = Color(0xFFD8E0F2)
+private val AvatarInner = Color(0xFF8296C8)
 
 // 와이어프레임의 사람 실루엣 아바타 (사진 업로드 없음 — 정책상 미지원)
 @Composable
-private fun ProfileAvatarPlaceholder(tint: ProfileAvatarSwatch, modifier: Modifier = Modifier) {
+private fun ProfileAvatarPlaceholder(modifier: Modifier = Modifier) {
     Box(modifier = modifier.size(88.dp).clip(CircleShape)) {
         Canvas(modifier = Modifier.fillMaxSize()) {
-            drawCircle(color = tint.outer)
+            drawCircle(color = AvatarOuter)
             // 머리
             drawCircle(
-                color = tint.inner,
+                color = AvatarInner,
                 radius = size.width * 0.155f,
                 center = Offset(size.width / 2f, size.height * 0.40f),
             )
             // 어깨
             drawCircle(
-                color = tint.inner,
+                color = AvatarInner,
                 radius = size.width * 0.30f,
                 center = Offset(size.width / 2f, size.height * 0.98f),
             )
-        }
-    }
-}
-
-@Composable
-private fun ProfileColorSwatch(
-    swatch: ProfileAvatarSwatch,
-    selected: Boolean,
-    onClick: () -> Unit,
-) {
-    Box(
-        modifier = Modifier
-            .size(44.dp)
-            .then(
-                if (selected) {
-                    Modifier.border(2.dp, MoyeotaColor.Primary500, CircleShape)
-                } else {
-                    Modifier
-                },
-            )
-            .clip(CircleShape)
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(
-            modifier = Modifier.size(34.dp).background(swatch.outer, CircleShape),
-            contentAlignment = Alignment.Center,
-        ) {
-            Box(Modifier.size(13.dp).background(swatch.inner, CircleShape))
         }
     }
 }
