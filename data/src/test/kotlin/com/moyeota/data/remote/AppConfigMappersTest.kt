@@ -18,9 +18,15 @@ class AppConfigMappersTest {
     }
 
     @Test
-    fun `필드가 빠지면 서버 기본값과 같은 true 다`() {
-        val response = json.decodeFromString<AppConfigResponse>("""{}""")
+    fun `taxiEnabled true 를 그대로 옮긴다`() {
+        val response = json.decodeFromString<AppConfigResponse>("""{"taxiEnabled":true}""")
         assertTrue(response.toAppConfig().taxiEnabled)
+    }
+
+    @Test
+    fun `필드가 빠지면 동승 모드(false) 다 — 모를 땐 실배포 모드`() {
+        val response = json.decodeFromString<AppConfigResponse>("""{}""")
+        assertFalse(response.toAppConfig().taxiEnabled)
     }
 
     @Test

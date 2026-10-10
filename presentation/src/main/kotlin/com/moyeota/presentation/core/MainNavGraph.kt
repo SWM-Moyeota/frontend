@@ -1,5 +1,7 @@
 package com.moyeota.presentation.core
 
+import android.content.pm.ApplicationInfo
+import android.util.Log
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -9,6 +11,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.compose.LifecycleResumeEffect
@@ -50,6 +53,7 @@ import com.moyeota.presentation.feature.matching.MatchWaitingRoute
 import com.moyeota.presentation.feature.matching.PartnerProfileScreen
 import com.moyeota.presentation.feature.matching.RideDetailRoute
 import com.moyeota.presentation.feature.mypage.MyPageScreen
+import com.moyeota.presentation.feature.mypage.ModeDebugOptions
 import com.moyeota.presentation.feature.mypage.RideCompleteScreen
 import com.moyeota.presentation.feature.onboarding.OnboardingSafetyScreen
 import com.moyeota.presentation.feature.onboarding.OnboardingSavingScreen
@@ -132,10 +136,16 @@ private fun MainNavHost(
         viewModel(factory = UserProfileViewModel.factory(authRepository))
     val userName by profileViewModel.userName.collectAsState()
 
-    // 서버 운영 설정(택시 모드). 앱 시작 시 한 번 받아 21 대기 화면이 기사 대기 / 합승 완료를 고른다.
+    // 서버 운영 설정(동승/택시 모드). 앱 시작 시 받아 21 대기 화면이 「합승 완료」 / 기사 대기를 고른다.
+    // 못 받으면 동승 모드(실배포)다. 모드별 화면 표는 docs/MODE-ROUTES.md.
     val appConfigViewModel: AppConfigViewModel =
         viewModel(factory = AppConfigViewModel.factory(appConfigRepository))
     val appConfig by appConfigViewModel.config.collectAsState()
+    val serverAppConfig by appConfigViewModel.serverConfig.collectAsState()
+    val appConfigResolved by appConfigViewModel.resolved.collectAsState()
+    val appModeOverride by appConfigViewModel.debugOverride.collectAsState()
+    // 개발자 옵션(모드 강제)은 디버그 빌드에서만 그린다 — presentation 모듈엔 BuildConfig 가 없어 플래그로 본다
+    val debuggable = (LocalContext.current.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
 
     // 「지금 내가 타고 있는 방」 — 홈·합승 배너, 앱 시작 시 단계 복귀가 같은 값을 본다.
     // profileViewModel 과 같은 이유로 NavHost 바깥에 둔다(탭을 옮길 때마다 재조회하지 않게).
@@ -154,6 +164,8 @@ private fun MainNavHost(
     // 탭 진입마다의 재조회는 각 화면(홈·합승)의 LaunchedEffect 가 따로 건다.
     LifecycleResumeEffect(Unit) {
         activePartyViewModel.refresh()
+        // 시작 시 설정 조회가 실패했으면(서버 장애 등) 복귀할 때 다시 받는다 — 그동안은 동승 모드 기본값
+        appConfigViewModel.loadIfUnresolved()
         onPauseOrDispose { }
     }
 
@@ -245,6 +257,12 @@ private fun MainNavHost(
         ride.id.toLongOrNull()?.let { id ->
             createdPartyId = id
             activePartyId = id
+        }
+        // 동승 모드인데 배차·운행 단계가 왔다 = 서버는 택시 모드, 앱 설정이 낡았다(조회 실패·운영 중 전환).
+        // 화면은 status 를 따라 25·26 으로 가고, 설정만 다시 읽어 문구를 맞춘다(docs/MODE-ROUTES.md).
+        if (isStageOutsideMode(ride.activeStage, appConfig.taxiEnabled)) {
+            Log.w("AppMode", "동승 모드에 ${ride.activeStage} 단계 — 서버 설정 재조회")
+            appConfigViewModel.load()
         }
         val route = when (ride.activeStage) {
             ActiveStage.WAITING -> Routes.MATCH_WAITING
@@ -551,6 +569,11 @@ private fun MainNavHost(
                 // 다시 앞으로 튕겨나가는 루프가 된다(공통 규칙: 배차 후 되돌리기 차단).
                 onMatchingStarted = {
                     activePartyId = createdPartyId
+                    // 동승 모드에선 올 수 없는 전이다 — 왔다면 서버가 택시 모드이니 설정을 다시 읽는다
+                    if (!appConfig.taxiEnabled) {
+                        Log.w("AppMode", "동승 모드에 배차 전이 — 서버 설정 재조회")
+                        appConfigViewModel.load()
+                    }
                     // 정원이 찼다 = 채팅방이 생기는 시점. 단계와 채팅방 id 를 같이 다시 읽는다
                     activePartyViewModel.refresh()
                     navController.navigate(Routes.DISPATCH_STATUS) {
@@ -726,6 +749,17 @@ private fun MainNavHost(
                     scope.launch { authRepository.logout() }
                 },
                 onTabSelect = ::navigateTab,
+                // 디버그 빌드 전용 — 서버 모드와 무관하게 동승/택시 화면을 강제해 본다. 릴리스엔 없다.
+                modeDebug = if (debuggable) {
+                    ModeDebugOptions(
+                        serverTaxiEnabled = serverAppConfig.taxiEnabled,
+                        serverResolved = appConfigResolved,
+                        override = appModeOverride,
+                        onOverride = appConfigViewModel::setDebugOverride,
+                    )
+                } else {
+                    null
+                },
             )
         }
     }
