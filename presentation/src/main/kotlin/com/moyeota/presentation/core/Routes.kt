@@ -65,4 +65,5 @@ object Routes {
     // I · 완료 · 마이페이지
     const val RIDE_COMPLETE = "ride/complete"                // 33 S18
     const val MYPAGE = "mypage"                              // 35 S24
+    const val PROFILE_EDIT = "mypage/profile-edit"           // 36 신규 (닉네임 수정)
 }

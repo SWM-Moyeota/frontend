@@ -54,6 +54,7 @@ import com.moyeota.presentation.feature.matching.PartnerProfileScreen
 import com.moyeota.presentation.feature.matching.RideDetailRoute
 import com.moyeota.presentation.feature.mypage.MyPageScreen
 import com.moyeota.presentation.feature.mypage.ModeDebugOptions
+import com.moyeota.presentation.feature.mypage.ProfileEditRoute
 import com.moyeota.presentation.feature.mypage.RideCompleteScreen
 import com.moyeota.presentation.feature.onboarding.OnboardingSafetyScreen
 import com.moyeota.presentation.feature.onboarding.OnboardingSavingScreen
@@ -728,7 +729,7 @@ private fun MainNavHost(
             )
         }
 
-        // I · 완료 33 · 마이페이지 35
+        // I · 완료 33 · 마이페이지 35 · 프로필 수정 36
         composable(Routes.RIDE_COMPLETE) {
             // 방금 끝난 방(finishedRide)이 있으면 그 값으로, 없으면(복원 진입 등) 해당 요소를 숨긴다
             val ride = finishedRide
@@ -742,6 +743,7 @@ private fun MainNavHost(
         composable(Routes.MYPAGE) {
             MyPageScreen(
                 userName = userName,
+                onEditProfile = { navController.navigate(Routes.PROFILE_EDIT) },
                 // logout() 은 실패하지 않는다 — 상태 전이는 위 LaunchedEffect 가 받아 04a 로 보낸다.
                 // logoutRequested 를 먼저 세워 두면 그 전이를 세션 만료로 오해하지 않는다.
                 onLogout = {
@@ -759,6 +761,20 @@ private fun MainNavHost(
                     )
                 } else {
                     null
+                },
+            )
+        }
+        composable(Routes.PROFILE_EDIT) {
+            // 36 프로필 수정 — 35 와 같은 이름 홀더를 쓴다. 저장이 끝나면 그 홀더를 다시 조회해
+            // 35 프로필 카드·14 홈 인사말이 새 닉네임으로 함께 바뀌게 한 뒤 되돌아간다
+            // (화면마다 따로 들고 있으면 한쪽만 옛 이름으로 남는다).
+            ProfileEditRoute(
+                repository = authRepository,
+                userName = userName,
+                onBack = ::back,
+                onSaved = {
+                    profileViewModel.refresh()
+                    back()
                 },
             )
         }
