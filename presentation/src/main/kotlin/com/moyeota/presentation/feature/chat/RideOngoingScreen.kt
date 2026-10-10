@@ -41,6 +41,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -48,10 +49,6 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.runtime.key
-import androidx.compose.ui.graphics.toArgb
-import com.moyeota.core.designsystem.component.MapMarker
-import com.moyeota.domain.model.MemberLocation
 import com.moyeota.core.designsystem.component.BackArrowIcon
 import com.moyeota.core.designsystem.component.MapSheetScaffold
 import com.moyeota.core.designsystem.component.MoyeotaDefaultCamera
@@ -88,34 +85,34 @@ private val CardShadow = Color(0x1A1B2A4A)
  * - 「채팅 열기」 → 24 채팅 (onOpenChat)
  * - 「신고」 / 「문제가 생기면 아래에서 바로 신고할 수 있어요」 → 27 긴급 신고 (onReport)
  *
- * 28 최종 요금으로의 전이는 이 화면에 없다. 기사측 운행 종료를 서버 status 로 관찰하는
+ * 33 도착 완료로의 전이는 이 화면에 없다. 기사측 운행 종료를 서버 status 로 관찰하는
  * [RideOngoingRoute] 가 넘긴다 — 화면은 수동 트리거를 두지 않는다(승객이 하차를 선언하는 개념이 아니다).
  *
- * 상태: 보호자 공유 토글은 로컬 상태. 심야(23:00~04:00)는 설정 무관 자동 공유(11 설정 기준).
+ * 시트 상단: 목적지와 예상 소요([estimatedMinutes])가 있으면 「{목적지}까지 약 N분」, 소요가 없으면
+ * 「{목적지}(으)로 이동 중」. 경유 순서는 출발지 → 목적지만 시각 없이 보여 준다 — 탑승·도착
+ * 시각은 서버가 주지 않는다. 보호자 공유 카드는 보호자 등록·공유 API 가 없어 두지 않는다.
  * 플로우 진행 화면 — 하단탭 없음 (공통 규칙).
  *
  * 지도: 출발·도착 마커 + 서버 확정 경로([routePath]) + 내 현재 위치(파란 점, [myLocation]).
- * 좌표는 [RideOngoingRoute] 가 진입 때 한 번 읽는 방 상세·위치 구독이 내려준다 — null 이면 그 요소만 빠진 지도를 그린다.
+ * 좌표는 [RideOngoingRoute] 가 진입 때 한 번 읽는 방 상세와 기기 위치가 내려준다 — null 이면 그 요소만 빠진 지도를 그린다.
  */
 @Composable
 fun RideOngoingScreen(
-    remainingLabel: String = "서면역까지 8분 남음",
-    arrivalLabel: String = "오후 6:57 도착 예정 · 위치가 실시간으로 반영돼요",
-    guardianLabel: String = "어머니 · 010-••••-1234 · 도착하면 자동으로 알려드려요",
+    /** 방 상세의 출발지 이름(Ride.origin). null 이면(방 상세 미수신) 경유 순서 카드를 그리지 않는다 */
+    originName: String? = null,
+    /** 방 상세의 목적지 이름(Ride.destination) */
+    destinationName: String? = null,
+    /** 방 상세의 예상 소요 분(Ride.estimatedMinutes). null 이면 「…(으)로 이동 중」만 보인다 */
+    estimatedMinutes: Int? = null,
     originPosition: LatLng? = null,
     destinationPosition: LatLng? = null,
     routePath: List<LatLng> = emptyList(),
     myLocation: UserCoordinates? = null,
-    /**
-     * 동승자들의 실시간 위치(서버 TTL 60초). 빈 목록이 정상이다 — 상대가 앱을 껐거나 아직 화면을
-     * 열지 않았을 때. 각 사람은 닉네임 캡션이 붙은 마커로 그린다.
-     */
-    memberLocations: List<MemberLocation> = emptyList(),
     onBack: () -> Unit = {},
     onOpenChat: () -> Unit = {},
     onReport: () -> Unit = {},
 ) {
-    var guardianSharing by remember { mutableStateOf(true) }
+    val headline = ongoingHeadline(destinationName, estimatedMinutes)
 
     Column(modifier = Modifier.fillMaxSize().background(ScreenBg)) {
         // 헤더 (흰 배경)
@@ -146,8 +143,8 @@ fun RideOngoingScreen(
         }
 
         // 지도(배경) + 드래그 시트(16·21·14 와 같은 MapSheetScaffold).
-        // 펼침(기본) = 예전과 같은 지도 190dp + 남은 시간 · 경유 순서 · 안심 공유 · 신고/채팅.
-        // 핸들을 내리면 경유 순서·안심 공유 카드가 접혀 **지도가 남은 시간 줄 위까지 전부** 보인다.
+        // 펼침(기본) = 예전과 같은 지도 190dp + 목적지·예상 소요 · 경유 순서 · 신고/채팅.
+        // 핸들을 내리면 경유 순서 카드가 접혀 **지도가 목적지 줄 위까지 전부** 보인다.
         // 신고·채팅 열기는 푸터라 접힘에서도 항상 보인다.
         MapSheetScaffold(
             modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -160,106 +157,47 @@ fun RideOngoingScreen(
                     destinationPosition = destinationPosition,
                     routePath = routePath,
                     myLocation = myLocation,
-                    memberLocations = memberLocations,
                     // 앵커 기준 시트 높이 — fitBounds·카메라 중심이 시트에 가리지 않는 영역을 쓰게 한다
                     bottomInset = sheet.settledSheetHeight,
                 )
             },
             sheetTop = {
                 Text(
-                    text = remainingLabel,
+                    text = headline,
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Bold,
                     color = MoyeotaColor.InkPrimary,
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = arrivalLabel,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = MuteGray,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(horizontal = 16.dp),
                 )
                 Spacer(Modifier.height(12.dp))
             },
             sheetDetail = {
-                Spacer(Modifier.height(6.dp))
                 // 경유 순서 카드 — 진행 상황 표시 전용. 탭 동작 없음(하차는 기사가 서버에 알린다).
-                Box(
-                    modifier = Modifier
-                        .padding(horizontal = 16.dp)
-                        .fillMaxWidth()
-                        .height(150.dp)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(RouteCardBg),
-                ) {
-                    // 타임라인 연결선
-                    Box(
-                        Modifier
-                            .offset(x = 30.dp, y = 30.dp)
-                            .size(width = 3.dp, height = 88.dp)
-                            .background(RouteLine, RoundedCornerShape(1.5.dp)),
-                    )
-                    Column(modifier = Modifier.fillMaxSize().padding(vertical = 18.dp)) {
-                        RouteStepRow(label = "부산대 정문 · 탑승 완료", time = "6:45", state = RouteStepState.DONE)
-                        Spacer(Modifier.weight(1f))
-                        RouteStepRow(label = "서면역 1번 출구로 이동 중", time = "6:57", state = RouteStepState.CURRENT)
-                        Spacer(Modifier.weight(1f))
-                        RouteStepRow(label = "내린 뒤 현장에서 1/N 정산", time = null, state = RouteStepState.PENDING)
-                    }
-                }
-
-                Spacer(Modifier.height(18.dp))
-                // 안심 공유 카드 — 보호자 실시간 공유 (11에서 등록·동의된 연락처에만 전송)
-                Row(
-                    modifier = Modifier
-                        .padding(horizontal = 16.dp)
-                        .fillMaxWidth()
-                        .shadow(4.dp, RoundedCornerShape(16.dp), spotColor = CardShadow)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(MoyeotaColor.SurfaceCanvas)
-                        .padding(horizontal = 20.dp, vertical = 16.dp),
-                    verticalAlignment = Alignment.Top,
-                ) {
-                    ShieldIcon(tint = MoyeotaColor.Success500, modifier = Modifier.padding(top = 2.dp))
-                    Spacer(Modifier.width(10.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "보호자에게 실시간 공유 중",
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MoyeotaColor.InkPrimary,
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            text = guardianLabel,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = MuteGray,
-                        )
-                    }
-                    Spacer(Modifier.width(10.dp))
-                    // 토글 (하차·도착 확인 시 자동 종료 + 도착 알림 발송)
+                // 시각은 서버가 주지 않아 표기하지 않는다. 방 상세를 못 받았으면(이름 없음) 카드째 뺀다.
+                if (originName != null && destinationName != null) {
+                    Spacer(Modifier.height(6.dp))
                     Box(
                         modifier = Modifier
-                            .size(width = 46.dp, height = 26.dp)
-                            .background(
-                                if (guardianSharing) MoyeotaColor.Success500 else MoyeotaColor.TextAsh,
-                                RoundedCornerShape(13.dp),
-                            )
-                            .clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null,
-                            ) { guardianSharing = !guardianSharing },
-                        contentAlignment = if (guardianSharing) Alignment.CenterEnd else Alignment.CenterStart,
+                            .padding(horizontal = 16.dp)
+                            .fillMaxWidth()
+                            .height(110.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(RouteCardBg),
                     ) {
+                        // 타임라인 연결선
                         Box(
                             Modifier
-                                .padding(horizontal = 3.dp)
-                                .size(20.dp)
-                                .background(MoyeotaColor.SurfaceCanvas, CircleShape),
+                                .offset(x = 30.dp, y = 30.dp)
+                                .size(width = 3.dp, height = 50.dp)
+                                .background(RouteLine, RoundedCornerShape(1.5.dp)),
                         )
+                        Column(modifier = Modifier.fillMaxSize().padding(vertical = 18.dp)) {
+                            RouteStepRow(label = "$originName · 탑승 완료", state = RouteStepState.DONE)
+                            Spacer(Modifier.weight(1f))
+                            RouteStepRow(label = "${withDirectionParticle(destinationName)} 이동 중", state = RouteStepState.CURRENT)
+                        }
                     }
                 }
                 Spacer(Modifier.height(18.dp))
@@ -326,15 +264,15 @@ fun RideOngoingScreen(
 private val OngoingMapRevealHeight = 190.dp
 
 /**
- * 접힘 높이 추정치 = 핸들(36) + 남은 시간·도착 예정(~60) + 푸터(안내 12 + 버튼 52 + 여백 40 + 내비바 ~24 ≈ 130).
+ * 접힘 높이 추정치 = 핸들(36) + 목적지·예상 소요 줄(~60) + 푸터(안내 12 + 버튼 52 + 여백 40 + 내비바 ~24 ≈ 130).
  * 앵커·카메라 계산용 추정치다(실제 높이는 콘텐츠가 정한다).
  */
 private val OngoingCollapsedSheetHeight = 230.dp
 
-private enum class RouteStepState { DONE, CURRENT, PENDING }
+private enum class RouteStepState { DONE, CURRENT }
 
 @Composable
-private fun RouteStepRow(label: String, time: String?, state: RouteStepState) {
+private fun RouteStepRow(label: String, state: RouteStepState) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 20.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -348,7 +286,6 @@ private fun RouteStepRow(label: String, time: String?, state: RouteStepState) {
                         .border(3.dp, MoyeotaColor.SurfaceCanvas, CircleShape),
                 )
                 RouteStepState.DONE -> Box(Modifier.size(14.dp).background(RouteDotGray, CircleShape))
-                RouteStepState.PENDING -> Box(Modifier.size(14.dp).background(RouteLine, CircleShape))
             }
         }
         Spacer(Modifier.width(16.dp))
@@ -357,17 +294,29 @@ private fun RouteStepRow(label: String, time: String?, state: RouteStepState) {
             fontSize = 14.sp,
             fontWeight = if (state == RouteStepState.CURRENT) FontWeight.Bold else FontWeight.Medium,
             color = if (state == RouteStepState.CURRENT) MoyeotaColor.InkPrimary else MuteGray,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
-        if (time != null) {
-            Text(
-                text = time,
-                fontSize = 14.sp,
-                fontWeight = if (state == RouteStepState.CURRENT) FontWeight.Bold else FontWeight.Medium,
-                color = if (state == RouteStepState.CURRENT) MoyeotaColor.InkPrimary else MuteGray,
-            )
-        }
     }
+}
+
+/**
+ * 시트 상단 한 줄. 목적지·예상 소요가 다 있으면 「{목적지}까지 약 N분」, 소요가 없으면 「{목적지}(으)로 이동 중」.
+ * 방 상세를 아직 못 받았으면(목적지 null) 「목적지로 이동 중」.
+ */
+internal fun ongoingHeadline(destination: String?, estimatedMinutes: Int?): String = when {
+    destination.isNullOrBlank() -> "목적지로 이동 중"
+    estimatedMinutes != null && estimatedMinutes > 0 -> "${destination}까지 약 ${estimatedMinutes}분"
+    else -> "${withDirectionParticle(destination)} 이동 중"
+}
+
+/** 방향 조사 「으로/로」를 붙인다 — 받침이 없거나 ㄹ 받침이면 「로」, 그 외 받침이면 「으로」. 한글이 아니면 「로」 */
+internal fun withDirectionParticle(word: String): String {
+    val last = word.trimEnd().lastOrNull() ?: return word
+    if (last !in '가'..'힣') return "${word}로"
+    val jong = (last - '가') % 28
+    return if (jong == 0 || jong == 8) "${word}로" else "${word}으로"
 }
 
 // ─── 지도 ────────────────────────────────────────────────────────────────────
@@ -396,7 +345,6 @@ private fun RideOngoingMap(
     destinationPosition: LatLng?,
     routePath: List<LatLng>,
     myLocation: UserCoordinates?,
-    memberLocations: List<MemberLocation> = emptyList(),
     /** 시트에 가리는 아래쪽 높이. 지도 contentPadding 으로 넘겨 fitBounds·중심이 보이는 영역 기준이 되게 한다 */
     bottomInset: Dp = 0.dp,
 ) {
@@ -444,20 +392,6 @@ private fun RideOngoingMap(
         if (boundsFitted || centeredOnMe) return@LaunchedEffect
         naverMap.moveCamera(CameraUpdate.scrollAndZoomTo(fix, MyLocationZoom))
         centeredOnMe = true
-    }
-
-    // 동승자 마커 — 닉네임을 캡션으로 단다. 색은 **초록**(MarkerPickup) 이다:
-    // 파랑은 내 위치 점·출발 마커, 빨강은 도착 마커라 겹치면 누가 누군지 알 수 없다.
-    // 좌표 검증은 마커마다 한다(서버 위경도 전치 결함 방어 — 25·26 의 다른 마커와 같은 판정).
-    memberLocations.forEach { member ->
-        key(member.publicId ?: "${member.latitude},${member.longitude}") {
-            MapMarker(
-                map = map,
-                position = latLngOrNull(member.latitude, member.longitude),
-                tint = MoyeotaColor.MarkerPickup.toArgb(),
-                caption = member.nickname ?: "동승자",
-            )
-        }
     }
 
     if (myPosition != null) {
@@ -586,5 +520,9 @@ private fun ChatBubbleIcon(tint: Color, modifier: Modifier = Modifier) {
 @Preview(showBackground = true, widthDp = 393, heightDp = 852)
 @Composable
 private fun RideOngoingScreenPreview() {
-    RideOngoingScreen()
+    RideOngoingScreen(
+        originName = "학교 정문",
+        destinationName = "역 광장",
+        estimatedMinutes = 12,
+    )
 }

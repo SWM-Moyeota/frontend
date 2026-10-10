@@ -128,12 +128,11 @@ private const val DefaultRadiusLabel = "300m"
  */
 @Composable
 fun DestinationConfirmModal(
-    destinationName: String = "서면역 1번 출구",
-    destinationAddress: String = "부산진구 부전동",
-    originStopName: String = "부산대학교 정문 버스정류장",
+    destinationName: String,
+    destinationAddress: String,
+    originStopName: String,
     departureTimeLabel: String = "지금",
     arrivalTimeLabel: String = "도착 계산 중",
-    walkLabel: String = "도보 2분 · 180m",
     // 이름 자리에는 검색 장소명 대신 **역지오코딩 실주소**가 들어올 수 있다(핀 조정·GPS 출발지).
     // 「부산광역시 금정구 부산대학로63번길 2 부산대학교」처럼 길어지므로 표기는 전부 1줄 말줄임이다 —
     // 시/도 접두 제거 같은 가공은 하지 않는다(서버가 조합해 준 값을 그대로 보여준다).
@@ -156,7 +155,7 @@ fun DestinationConfirmModal(
     var adjustTarget by remember { mutableStateOf<PinTarget?>(null) }
     val canAdjust = destinationPosition != null || originPosition != null
 
-    // 1인 요금 = 미터기 추정 총액 ÷ 인원, 10원 단위 반올림 (25/32 요금 화면과 같은 컨벤션).
+    // 1인 요금 = 미터기 추정 총액 ÷ 인원, 10원 단위 반올림 (25 요금 화면과 같은 컨벤션).
     // 추정이 아직 없거나 실패했으면 null — 문구를 감추되 CTA 는 살려둔다.
     val farePerPersonText = routePreview.estimatedFare?.let { total ->
         val perPerson = ((total.toDouble() / peopleCount) / 10.0).roundToInt() * 10
@@ -369,14 +368,7 @@ fun DestinationConfirmModal(
                                 Box(modifier = Modifier.size(width = 11.dp, height = 30.dp), contentAlignment = Alignment.Center) {
                                     DashedVerticalLine()
                                 }
-                                Spacer(Modifier.size(13.dp))
-                                Text(
-                                    text = walkLabel,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = GrayMute,
-                                    modifier = Modifier.align(Alignment.CenterVertically),
-                                )
+                                // 출발지 → 도착지 연결선만 그린다. 도보 거리·시간은 서버가 주지 않아 표기하지 않는다.
                             }
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Box(Modifier.size(11.dp).background(MoyeotaColor.MarkerDestination, CircleShape))
@@ -645,5 +637,9 @@ private fun ShieldIcon(modifier: Modifier = Modifier, color: Color = GrayDeep) {
 @Preview(showBackground = true, widthDp = 393, heightDp = 852)
 @Composable
 private fun DestinationConfirmModalPreview() {
-    DestinationConfirmModal()
+    DestinationConfirmModal(
+        destinationName = "도착지",
+        destinationAddress = "",
+        originStopName = "출발지",
+    )
 }

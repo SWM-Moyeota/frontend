@@ -29,12 +29,6 @@ interface ChatRepository {
     /** GET /api/v1/chat-rooms/{chatRoomId} */
     suspend fun getChatRoom(chatRoomId: Long): ChatRoom
 
-    /** POST /api/v1/chat-rooms (201). 같은 partyId 로 두 번 만들면 409 CHAT_ROOM_ALREADY_EXISTS. */
-    suspend fun createChatRoom(partyId: Long, departure: String, destination: String): ChatRoom
-
-    /** DELETE /api/v1/chat-rooms/{chatRoomId} (204). 방 자체를 CLOSED 로 만든다(탑승 종료 시). */
-    suspend fun closeChatRoom(chatRoomId: Long)
-
     /** POST /api/v1/chat-rooms/{chatRoomId}/users (201). 합류 시 호출. */
     suspend fun joinChatRoom(chatRoomId: Long)
 

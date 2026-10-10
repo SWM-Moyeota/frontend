@@ -233,8 +233,8 @@ class ReverseGeocodeViewModel(private val repository: PlaceRepository) : ViewMod
 fun DestinationConfirmRoute(
     repository: RideRepository,
     placeRepository: PlaceRepository,
-    // 15 에서 고른 출발지 — 고르지 않았으면 호출부가 DemoOrigin 을 넘긴다
-    origin: Place = DemoOrigin,
+    // 15 에서 확정한 출발지(고른 곳 또는 실위치). 15 를 거치지 않고 들어오면 null — 방을 만들지 않고 안내만 한다
+    origin: Place?,
     destination: Place?,
     onDismiss: () -> Unit = {},
     onPartyCreated: (Ride) -> Unit = {},
@@ -253,7 +253,7 @@ fun DestinationConfirmRoute(
     var adjustedDestination by rememberSaveable { mutableStateOf<LatLng?>(null) }
 
     // 조정값이 있으면 그것, 없으면 검색 좌표(범위 검증 통과분)
-    val originPosition = adjustedOrigin ?: latLngOrNull(origin.latitude, origin.longitude)
+    val originPosition = adjustedOrigin ?: latLngOrNull(origin?.latitude, origin?.longitude)
     val destinationPosition =
         adjustedDestination ?: latLngOrNull(destination?.latitude, destination?.longitude)
 
@@ -274,13 +274,13 @@ fun DestinationConfirmRoute(
     // 검색으로 고른 장소명(「CGV 서면」)은 사용자가 고른 정답이므로 건드리지 않는다.
     // 키가 origin 자체라 조정으로 좌표가 바뀌어도 재실행되지 않는다 — 조정 쪽은 onAdjustPositions 담당.
     LaunchedEffect(origin) {
-        if (origin.name == CurrentLocationName) {
+        if (origin != null && origin.name == CurrentLocationName) {
             reverseViewModel.resolve(PinTarget.ORIGIN, latLngOrNull(origin.latitude, origin.longitude))
         }
     }
 
     // 주소를 받아냈으면 표시·전송 이름을 그것으로 바꾼다. 못 받았으면 원래 이름 그대로.
-    val originName = resolvedNames.originAddress ?: origin.name
+    val originName = resolvedNames.originAddress ?: origin?.name ?: "—"
     val destinationName = resolvedNames.destinationAddress ?: destination?.name ?: "—"
 
     val estimate = (routeState as? RoutePreviewViewModel.UiState.Success)?.estimate
@@ -295,7 +295,7 @@ fun DestinationConfirmRoute(
     }
 
     // 15 를 거치지 않고 들어오면 좌표가 없어 방을 만들 수 없다 — 안내만 하고 닫기 유도.
-    // 폴백으로 출발지(DemoOrigin)를 쓰면 도착지 칸에 출발지 이름이 떠서 더 헷갈린다 (QA F-2).
+    // 고정 좌표로 채우지 않는다 — 실제 출발 위치가 아닌 곳으로 방이 만들어진다.
     DestinationConfirmModal(
         destinationName = destinationName,
         // 이름 자리가 이미 실주소면 검색 당시의 도로명은 같은 값을 두 번 적는 꼴이라 비운다.
@@ -316,7 +316,8 @@ fun DestinationConfirmRoute(
         originPosition = originPosition,
         creating = state.creating,
         errorMessage = state.errorMessage
-            ?: "도착지 좌표가 없어요. 15 목적지 화면에서 장소를 다시 선택해 주세요".takeIf { destination == null },
+            ?: "도착지 좌표가 없어요. 15 목적지 화면에서 장소를 다시 선택해 주세요".takeIf { destination == null }
+            ?: "출발지가 없어요. 15 목적지 화면에서 출발지를 검색해 주세요".takeIf { origin == null },
         onDismiss = onDismiss,
         onAdjustPositions = { newOrigin, newDestination ->
             // 좌표가 **실제로 바뀐 쪽만** 역지오코딩한다. 조정 화면은 한쪽만 만져도 양쪽 좌표를
@@ -331,7 +332,7 @@ fun DestinationConfirmRoute(
             adjustedDestination = newDestination
         },
         onFindCompanions = { conditions ->
-            if (destination != null) {
+            if (origin != null && destination != null) {
                 // 조정한 좌표와 **갱신된 이름**을 그대로 방 생성 요청에 태운다.
                 // 주소를 못 받았으면 renamedTo(null) 이 원래 이름을 유지한다.
                 viewModel.createParty(

@@ -23,15 +23,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-// 실위치를 못 받았을 때(권한 거부 · GPS 미취득)의 출발지 폴백.
-// 방 생성(POST /matching/rooms)이 좌표를 필수로 받기 때문에 화면이 어떤 좌표든 갖고 있어야 한다.
-val DemoOrigin = Place(
-    name = "부산대학교 정문",
-    roadName = "부산 금정구 부산대학로63번길 2",
-    latitude = 35.2313,
-    longitude = 129.0838,
-)
-
 // 실위치로 만든 출발지의 표기 이름. 좌표만 실값이고 이름은 고정 문구다.
 // 16 이 이 문구를 보고 「아직 주소를 모르는 GPS 출발지」를 식별해 역지오코딩으로 실주소를 채운다
 // (검색으로 고른 장소명은 사용자가 고른 정답이라 건드리지 않는다). 그래서 internal.
@@ -61,14 +52,16 @@ class DestinationViewModel(
         val favoritesLoading: Boolean = false,
         val favoritesErrorMessage: String? = null,
         val favoriteActionMessage: String? = null,
-        // null = 사용자가 고르지 않음 → 실위치, 그것도 없으면 DemoOrigin
+        // null = 사용자가 고르지 않음 → 실위치를 쓴다
         val selectedOrigin: Place? = null,
         // 기기 GPS 로 받은 현재 위치. 권한 거부·미취득이면 null
         val currentLocation: Place? = null,
         val selectedPlace: Place? = null,
     ) {
-        // 우선순위: 사용자가 고른 출발지 > 실위치 > DemoOrigin 폴백
-        val origin: Place get() = selectedOrigin ?: currentLocation ?: DemoOrigin
+        // 우선순위: 사용자가 고른 출발지 > 실위치. 둘 다 없으면 null — 고정 좌표로 채우지 않는다.
+        // 방 생성(POST /matching/rooms)은 실제 출발 좌표가 필요하므로 15 가 「경로 확인하기」를 막고
+        // 출발지 검색을 안내한다.
+        val origin: Place? get() = selectedOrigin ?: currentLocation
     }
 
     private val _uiState = MutableStateFlow(UiState())
@@ -193,7 +186,7 @@ fun DestinationRoute(
     repository: PlaceRepository,
     initialQuery: String = "", // 14 홈에서 넘어온 검색어 (자주 가는 곳 · 최근 목적지 탭)
     onBack: () -> Unit = {},
-    // (출발지, 도착지) — 출발지를 고르지 않았으면 DemoOrigin 이 넘어간다
+    // (출발지, 도착지) — 출발지는 사용자가 고른 곳 또는 실위치. 둘 다 없으면 CTA 가 비활성이라 호출되지 않는다
     onConfirmRoute: (Place, Place) -> Unit = { _, _ -> },
 ) {
     val viewModel: DestinationViewModel = viewModel(factory = DestinationViewModel.factory(repository))
@@ -204,7 +197,8 @@ fun DestinationRoute(
     }
 
     // 여기서는 권한 다이얼로그를 띄우지 않는다 — 검색이 본체인 화면이라 진입하자마자 막아서면 방해가 된다.
-    // 합승 탭(17)에서 이미 허용했으면 그 좌표가 그대로 출발지 기본값이 되고, 아니면 DemoOrigin 으로 남는다.
+    // 합승 탭(17)에서 이미 허용했으면 그 좌표가 그대로 출발지 기본값이 되고, 아니면 출발지가 비어
+    // 사용자가 출발지를 검색해 채운다.
     // 지도가 없어 출발지 좌표 한 번이면 충분하다 — 지도용 1초 주기를 여기까지 끌고 오지 않는다
     val myLocation = rememberMyLocationState(
         autoRequestPermission = false,
@@ -215,10 +209,10 @@ fun DestinationRoute(
     }
 
     DestinationScreen(
-        origin = state.origin.name,
+        origin = state.origin?.name,
         originIsDefault = state.selectedOrigin == null,
-        originLatitude = state.origin.latitude,
-        originLongitude = state.origin.longitude,
+        originLatitude = state.origin?.latitude,
+        originLongitude = state.origin?.longitude,
         originQuery = state.originQuery,
         activeField = state.activeField,
         onFieldFocus = viewModel::focusField,
@@ -235,6 +229,6 @@ fun DestinationRoute(
         onPlaceSelect = viewModel::selectPlace,
         onAddFavorite = viewModel::addFavorite,
         onBack = onBack,
-        onConfirmRoute = { destination -> onConfirmRoute(state.origin, destination) },
+        onConfirmRoute = { destination -> state.origin?.let { onConfirmRoute(it, destination) } },
     )
 }

@@ -14,9 +14,9 @@ import java.time.LocalDate
  *
  * | 필드 | 수집 화면 |
  * |---|---|
- * | [nickname] | 10 프로필 만들기 (1/3, 「프로필」 절) |
- * | [name] · [birthDate] · [gender] · [phoneNumber] | 10 프로필 만들기 (1/3, 「기본 정보」 절) |
- * | [loginId] · [password] · [email] | 10 프로필 만들기 (1/3, 「로그인 정보」 절) |
+ * | [nickname] | 10 프로필 만들기 (1/2, 「프로필」 절) |
+ * | [name] · [birthDate] · [gender] · [phoneNumber] | 10 프로필 만들기 (1/2, 「기본 정보」 절) |
+ * | [loginId] · [password] · [email] | 10 프로필 만들기 (1/2, 「로그인 정보」 절) |
  *
  * 09 본인 인증이 앞 절반을 받던 시절의 흔적으로 필드가 화면을 넘나드는 구조가 남아 있다.
  * 지금은 10 이 한 번에 다 채우지만, 실제 본인 인증이 붙으면 다시 나뉠 자리라 그대로 뒀다.

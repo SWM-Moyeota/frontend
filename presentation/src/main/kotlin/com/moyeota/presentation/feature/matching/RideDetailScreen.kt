@@ -25,15 +25,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
@@ -64,30 +59,12 @@ import com.moyeota.presentation.core.rideCountLabel
 // 와이어프레임 그레이 (core token 미정의 색 — 화면 재현용)
 private val CanvasBg = Color(0xFFF5F7FA)
 private val GraySlate = Color(0xFF4B5563)
-private val GrayDeep = Color(0xFF54637D)
 private val GrayMute = Color(0xFF8A93A0)
 private val GrayAsh = Color(0xFF9AA1AC)
 private val ChipBg = Color(0xFFF1F5FD)
 private val CardSoft = Color(0xFFF6F8FB)
 private val GrayButtonBg = Color(0xFFEEF1F6)
-private val MapBg = Color(0xFFE9EDF3)
-private val MapBlock = Color(0xFFDDE3EC)
 private val DashGray = Color(0xFFB9C3D6)
-
-private val recruitingRideDummy = Ride(
-    id = "ride-22",
-    origin = "부산대학교 정문 버스정류장",
-    destination = "서면역 1번 출구",
-    departureLabel = "오후 6:45",
-    capacity = 3,
-    members = listOf(
-        User("partner-1", "부산불곰", "", 0.0, 12),
-        User("me", "부산가자", "", 0.0, 0, isMe = true),
-    ),
-    farePerPerson = 5100,
-    totalFare = 9600,
-    status = RideStatus.RECRUITING,
-)
 
 /**
  * 22 · 탑승 상세 — 모집 중 [S12]
@@ -107,16 +84,17 @@ private val recruitingRideDummy = Ride(
  *
  * 서버 계약(2026-09): 멤버가 publicId·nickname·rideCount 를 함께 준다. 「나」 판정은 [User.isMe]
  * 하나로 끝난다 — 예전에는 앱이 자기 내부 Long id 를 몰라 고정값 1 과 비교하던 자리였다.
- * 평가(별점·매너 점수) API 는 아직 없어 그 줄은 표시하지 않는다.
+ * 평가 API 는 아직 없어 그 줄은 표시하지 않는다.
+ *
+ * 서버가 주지 않는 값(성별 조건·도착 시각·서비스 요금)은 지어내지 않고 요소를 두지 않는다.
+ * 출발 표기는 [Ride.departureLabel] 이 있을 때만, 도착 쪽은 [Ride.estimatedMinutes] 가 있을 때만
+ * 「약 N분」으로 보이고, 1인 부담은 서버 매핑 값 [Ride.farePerPerson] 을 그대로 쓴다.
  */
 @Composable
 fun RideDetailScreen(
-    ride: Ride = recruitingRideDummy,
-    genderLabel: String = "여성만",
+    ride: Ride,
     /** 내 위치 → 탑승 위치 거리(m). 모르면 null 이고 그 줄을 감춘다 */
     pickupDistanceMeters: Double? = null,
-    arrivalLabel: String = "오후 6:57 도착",
-    serviceFee: Int = 600,
     onBack: () -> Unit = {},
     onPartnerClick: (User) -> Unit = {},
     onLeave: () -> Unit = {},
@@ -133,12 +111,8 @@ fun RideDetailScreen(
     val etaLabel = buildRouteChipLabel(ride.estimatedMinutes, routeKm)
 
     val partners = ride.members.filter { !it.isMe }
-    // 인원 변동 시 1인 부담 즉시 재계산 — 수수료 포함 10원 단위
-    val perPersonFare = if (ride.members.isNotEmpty()) {
-        (ride.totalFare + serviceFee) / ride.members.size / 10 * 10
-    } else {
-        0
-    }
+    val departureLabel = ride.departureLabel.takeIf { it.isNotBlank() }
+    val durationLabel = ride.estimatedMinutes?.let { "약 ${it}분" }
 
     Column(modifier = Modifier.fillMaxSize().background(CanvasBg)) {
         // 상단 흰색 헤더
@@ -155,8 +129,6 @@ fun RideDetailScreen(
                     fontWeight = FontWeight.Bold,
                     color = MoyeotaColor.InkPrimary,
                 )
-                Spacer(Modifier.weight(1f))
-                ShieldIcon()
             }
         }
 
@@ -210,14 +182,6 @@ fun RideDetailScreen(
                         fontWeight = FontWeight.Medium,
                         color = GrayMute,
                     )
-                    Spacer(Modifier.weight(1f))
-                    Box(
-                        modifier = Modifier
-                            .background(ChipBg, CircleShape)
-                            .padding(horizontal = 14.dp, vertical = 5.dp),
-                    ) {
-                        Text(text = genderLabel, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = GrayDeep)
-                    }
                 }
                 Spacer(Modifier.height(16.dp))
 
@@ -244,14 +208,16 @@ fun RideDetailScreen(
                                 color = MoyeotaColor.InkPrimary,
                                 modifier = Modifier.weight(1f),
                             )
-                            Text(
-                                text = ride.departureLabel,
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MoyeotaColor.InkPrimary,
-                            )
+                            if (departureLabel != null) {
+                                Text(
+                                    text = departureLabel,
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MoyeotaColor.InkPrimary,
+                                )
+                            }
                         }
-                        // 내 위치를 모르면 이 줄은 비운다 — 「도보 2분」 같은 지어낸 값을 채우지 않는다
+                        // 내 위치를 모르면 이 줄은 비운다 — 보행 시간 같은 지어낸 값을 채우지 않는다
                         if (pickupDistanceMeters != null) {
                             Text(
                                 text = "내 위치에서 ${pickupDistanceLabel(pickupDistanceMeters)}",
@@ -269,12 +235,14 @@ fun RideDetailScreen(
                                 color = MoyeotaColor.InkPrimary,
                                 modifier = Modifier.weight(1f),
                             )
-                            Text(
-                                text = arrivalLabel,
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MoyeotaColor.InkPrimary,
-                            )
+                            if (durationLabel != null) {
+                                Text(
+                                    text = durationLabel,
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MoyeotaColor.InkPrimary,
+                                )
+                            }
                         }
                     }
                 }
@@ -288,8 +256,6 @@ fun RideDetailScreen(
                         .padding(horizontal = 20.dp, vertical = 18.dp),
                 ) {
                     FareRow(label = "총 예상 요금", value = wonLabel(ride.totalFare))
-                    Spacer(Modifier.height(12.dp))
-                    FareRow(label = "서비스 수수료 (2차)", value = wonLabel(serviceFee))
                     Spacer(Modifier.height(14.dp))
                     Row(
                         modifier = Modifier
@@ -301,20 +267,18 @@ fun RideDetailScreen(
                         Text(text = "1인 부담", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = MoyeotaColor.Primary600)
                         Spacer(Modifier.weight(1f))
                         Text(
-                            text = wonLabel(perPersonFare),
+                            text = wonLabel(ride.farePerPerson),
                             fontSize = 19.sp,
                             fontWeight = FontWeight.Bold,
                             color = MoyeotaColor.Primary500,
                         )
                     }
-                    Spacer(Modifier.height(14.dp))
-                    FareRow(label = "정산 방식", value = "10원 단위 · 1/N")
                     Spacer(Modifier.height(6.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         CheckSmallIcon(tint = MoyeotaColor.Success500)
                         Spacer(Modifier.width(5.dp))
                         Text(
-                            text = "수수료 포함 · 1원 단위 없이 10원 단위로 나눠요",
+                            text = "총 예상 요금을 정원 ${ride.capacity}명으로 나눈 금액이에요",
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Medium,
                             color = GrayMute,
@@ -366,7 +330,7 @@ fun RideDetailScreen(
                                     MeBadge()
                                 }
                             }
-                            // 매너 점수는 평가 API 가 생길 때까지 쓰지 않는다 — 없는 수치를 지어내면
+                            // 평가 수치는 평가 API 가 생길 때까지 쓰지 않는다 — 없는 수치를 지어내면
                             // 사용자가 그걸 근거로 사람을 고른다
                             Text(
                                 text = if (member.isWithdrawn) "탈퇴한 회원" else member.rideCountLabel,
@@ -449,27 +413,6 @@ private fun DashedRouteLine(modifier: Modifier = Modifier) {
 // ─── 아이콘 (material-icons 미사용 — Canvas 직접 드로잉) ─────────────────────
 
 @Composable
-private fun ShieldIcon(modifier: Modifier = Modifier, tint: Color = GrayDeep) {
-    Canvas(modifier = modifier.size(22.dp)) {
-        val w = size.width
-        val h = size.height
-        val stroke = Stroke(width = 1.6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
-        val shield = Path().apply {
-            moveTo(w * 0.5f, h * 0.08f)
-            lineTo(w * 0.88f, h * 0.22f)
-            lineTo(w * 0.88f, h * 0.52f)
-            quadraticTo(w * 0.88f, h * 0.78f, w * 0.5f, h * 0.94f)
-            quadraticTo(w * 0.12f, h * 0.78f, w * 0.12f, h * 0.52f)
-            lineTo(w * 0.12f, h * 0.22f)
-            close()
-        }
-        drawPath(shield, tint, style = stroke)
-        drawLine(tint, Offset(w * 0.34f, h * 0.5f), Offset(w * 0.46f, h * 0.62f), stroke.width, StrokeCap.Round)
-        drawLine(tint, Offset(w * 0.46f, h * 0.62f), Offset(w * 0.68f, h * 0.36f), stroke.width, StrokeCap.Round)
-    }
-}
-
-@Composable
 private fun CheckSmallIcon(tint: Color, modifier: Modifier = Modifier) {
     Canvas(modifier = modifier.size(14.dp)) {
         val w = size.width
@@ -509,7 +452,24 @@ private fun GrayActionButton(text: String, onClick: () -> Unit, modifier: Modifi
 @Preview(showBackground = true, widthDp = 393, heightDp = 852)
 @Composable
 private fun RideDetailScreenPreview() {
-    RideDetailScreen()
+    // 프리뷰 전용 더미 — 실행 경로에는 흘러가지 않는다
+    RideDetailScreen(
+        ride = Ride(
+            id = "preview",
+            origin = "출발지",
+            destination = "도착지",
+            departureLabel = "",
+            capacity = 3,
+            members = listOf(
+                User("u-1", "동승자", "", 0.0, 3),
+                User("me", "나", "", 0.0, 0, isMe = true),
+            ),
+            farePerPerson = 3000,
+            totalFare = 9000,
+            status = RideStatus.RECRUITING,
+            estimatedMinutes = 20,
+        ),
+    )
 }
 
 /**

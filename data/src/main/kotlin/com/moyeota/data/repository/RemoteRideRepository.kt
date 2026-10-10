@@ -3,17 +3,14 @@ package com.moyeota.data.repository
 import com.moyeota.data.remote.MatchingApi
 import com.moyeota.data.remote.matching.PartyEventSource
 import com.moyeota.data.remote.ReportApi
-import com.moyeota.data.remote.dto.MemberLocationRequestDto
 import com.moyeota.data.remote.dto.CallResultRequestDto
 import com.moyeota.data.remote.dto.ReportRequestDto
 import com.moyeota.data.remote.routeRequestDto
-import com.moyeota.data.remote.toMemberLocation
 import com.moyeota.data.remote.toAssignedDriver
 import com.moyeota.data.remote.toRequestDto
 import com.moyeota.data.remote.toPartyStatus
 import com.moyeota.data.remote.toRide
 import com.moyeota.data.remote.toRouteEstimate
-import com.moyeota.domain.model.MemberLocation
 import com.moyeota.domain.model.AssignedDriver
 import com.moyeota.domain.model.NewParty
 import com.moyeota.domain.model.PartyEvent
@@ -132,12 +129,6 @@ class RemoteRideRepository(
     } catch (e: Exception) {
         throw IllegalStateException(message, e)
     }
-
-    override suspend fun reportMyLocation(partyId: Long, latitude: Double, longitude: Double) =
-        api.reportMyLocation(partyId, MemberLocationRequestDto(latitude, longitude))
-
-    override suspend fun getMemberLocations(partyId: Long): List<MemberLocation> =
-        api.getMemberLocations(partyId).map { it.toMemberLocation() }
 
     // 백엔드가 POST 로 바뀌어 열린 엔드포인트. 응답 폴리라인 필드는 route 가 아니라 path 다.
     override suspend fun previewRoute(
