@@ -34,7 +34,6 @@ import com.moyeota.presentation.feature.auth.LoginFormRoute
 import com.moyeota.presentation.feature.auth.LoginScreen
 import com.moyeota.presentation.feature.auth.MannerPledgeRoute
 import com.moyeota.presentation.feature.auth.ProfileSetupRoute
-import com.moyeota.presentation.feature.auth.SafetySettingsScreen
 import com.moyeota.presentation.feature.auth.SignupCompleteScreen
 import com.moyeota.presentation.feature.auth.SignupDraft
 import com.moyeota.presentation.feature.chat.ChatRoomDestinationRoute
@@ -43,7 +42,6 @@ import com.moyeota.presentation.feature.chat.EmergencyRoute
 import com.moyeota.presentation.feature.chat.RideOngoingRoute
 import com.moyeota.presentation.feature.explore.ExploreRoute
 import com.moyeota.presentation.feature.explore.JoinConfirmRoute
-import com.moyeota.presentation.feature.home.DemoOrigin
 import com.moyeota.presentation.feature.home.DestinationConfirmRoute
 import com.moyeota.presentation.feature.home.DestinationRoute
 import com.moyeota.presentation.feature.home.HomeRoute
@@ -52,16 +50,10 @@ import com.moyeota.presentation.feature.matching.MatchWaitingRoute
 import com.moyeota.presentation.feature.matching.PartnerProfileScreen
 import com.moyeota.presentation.feature.matching.RideDetailRoute
 import com.moyeota.presentation.feature.mypage.MyPageScreen
-import com.moyeota.presentation.feature.mypage.MyRidesScreen
 import com.moyeota.presentation.feature.mypage.RideCompleteScreen
 import com.moyeota.presentation.feature.onboarding.OnboardingSafetyScreen
 import com.moyeota.presentation.feature.onboarding.OnboardingSavingScreen
 import com.moyeota.presentation.feature.onboarding.OnboardingTrustScreen
-import com.moyeota.presentation.feature.payment.FareFinalScreen
-import com.moyeota.presentation.feature.payment.PaymentAddScreen
-import com.moyeota.presentation.feature.payment.PaymentMethodsScreen
-import com.moyeota.presentation.feature.payment.PaymentResultScreen
-import com.moyeota.presentation.feature.payment.SettlementScreen
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -145,7 +137,7 @@ private fun MainNavHost(
         viewModel(factory = AppConfigViewModel.factory(appConfigRepository))
     val appConfig by appConfigViewModel.config.collectAsState()
 
-    // 「지금 내가 타고 있는 방」 — 홈·합승 배너, 34 내 탑승, 앱 시작 시 단계 복귀가 같은 값을 본다.
+    // 「지금 내가 타고 있는 방」 — 홈·합승 배너, 앱 시작 시 단계 복귀가 같은 값을 본다.
     // profileViewModel 과 같은 이유로 NavHost 바깥에 둔다(탭을 옮길 때마다 재조회하지 않게).
     val activePartyViewModel: ActivePartyViewModel = viewModel(
         factory = ActivePartyViewModel.factory(activePartyRepository, chatRepository),
@@ -159,7 +151,7 @@ private fun MainNavHost(
     LaunchedEffect(activePartyViewModel) { activePartyViewModel.pollChatRoom() }
 
     // 앱을 다시 앞으로 가져올 때마다 재조회한다 — 배경에 있는 동안 방이 끝났을 수 있다.
-    // 탭 진입마다의 재조회는 각 화면(홈·합승·34)의 LaunchedEffect 가 따로 건다.
+    // 탭 진입마다의 재조회는 각 화면(홈·합승)의 LaunchedEffect 가 따로 건다.
     LifecycleResumeEffect(Unit) {
         activePartyViewModel.refresh()
         onPauseOrDispose { }
@@ -173,9 +165,11 @@ private fun MainNavHost(
     var logoutRequested by remember { mutableStateOf(false) }
     var searchInitialQuery by remember { mutableStateOf("") }
     // 15 에서 고른 출발지·도착지(좌표 포함) — 16 방 생성에 필요하다.
-    // 출발지는 고르지 않으면 null 이고 16 이 DemoOrigin 으로 떨어진다.
+    // 15 는 출발지(고른 곳 또는 실위치)가 있어야만 16 으로 넘긴다. 15 를 거치지 않은 복원 진입이면 null — 16 이 안내만 한다.
     var confirmedOrigin by remember { mutableStateOf<Place?>(null) }
     var confirmedDestination by remember { mutableStateOf<Place?>(null) }
+    // 26 에서 방금 끝난 방 — 33 도착 완료 요약용. 전이 직전 clearParty() 가 activeRide 를 비우므로 따로 잡아 둔다
+    var finishedRide by remember { mutableStateOf<Ride?>(null) }
     var selectedPartyId by remember { mutableStateOf<Long?>(null) }
     // 20·22 에서 탭한 동승자 — 23 프로필이 이 값을 그린다.
     // 라우트 인자로 넘기지 않는 이유: User 는 방 상세 응답의 일부라 id 만 넘기면 23 이 방을 다시
@@ -234,7 +228,7 @@ private fun MainNavHost(
     }
 
     /**
-     * 진행 중인 방의 **지금 단계 화면**으로 보낸다. 배너·34·채팅방 헤더·앱 시작 복귀가 모두 여기로 모인다.
+     * 진행 중인 방의 **지금 단계 화면**으로 보낸다. 배너·채팅방 헤더·앱 시작 복귀가 모두 여기로 모인다.
      *
      * | [Ride] | 목적지 |
      * |---|---|
@@ -367,7 +361,7 @@ private fun MainNavHost(
         // B · 로그인 04 · 04a
         composable(Routes.LOGIN) {
             LoginScreen(
-                // 「이메일로 시작하기」 = 가입 시작. 카카오는 백엔드에 없어 화면 안에서 「준비 중」만 안내한다
+                // 「이메일로 시작하기」 = 가입 시작 → 10 프로필 설정. 소셜(카카오) 로그인은 백엔드에 없어 제공하지 않는다
                 onEmailStart = {
                     signupDraft = SignupDraft() // 새 가입은 빈 초안에서 시작
                     navController.navigate(Routes.PROFILE_SETUP)
@@ -395,7 +389,7 @@ private fun MainNavHost(
             )
         }
 
-        // C · 가입 10–13 (3단계)
+        // C · 가입 10 · 12 · 13 (2단계 — 11 안심 설정은 삭제)
         //
         // 05 계정 유형 · 06 학교 이메일 · 07 인증 코드 · 08 재직 인증 · 09 본인 인증은 여기 없다.
         // 가입 API 에 계정 유형이 없고, 학교·재직 인증은 마이페이지에서 나중에 붙이는 컨셉이며,
@@ -411,14 +405,8 @@ private fun MainNavHost(
                 onNext = { info ->
                     // 닉네임을 포함한 서버 가입 8개 값이 이 화면에서 한 번에 채워진다
                     signupDraft = info
-                    navController.navigate(Routes.SAFETY_SETTINGS)
+                    navController.navigate(Routes.MANNER_PLEDGE)
                 },
-            )
-        }
-        composable(Routes.SAFETY_SETTINGS) {
-            SafetySettingsScreen(
-                onBack = ::back,
-                onContinue = { _, _ -> navController.navigate(Routes.MANNER_PLEDGE) },
             )
         }
         composable(Routes.MANNER_PLEDGE) {
@@ -481,7 +469,7 @@ private fun MainNavHost(
                 repository = rideRepository,
                 // 핀 조정·GPS 출발지의 좌표를 실주소로 되짚는다 (GET /places/reverse)
                 placeRepository = placeRepository,
-                origin = confirmedOrigin ?: DemoOrigin,
+                origin = confirmedOrigin,
                 destination = confirmedDestination,
                 onDismiss = ::back,
                 onPartyCreated = { ride ->
@@ -507,7 +495,7 @@ private fun MainNavHost(
                     selectedPartyId = ride.id.toLongOrNull()
                     navController.navigate(Routes.JOIN_CONFIRM)
                 },
-                // 배너는 34 목업이 아니라 **지금 단계 화면**으로 간다 — 34 를 거치면 한 번 더 눌러야 한다
+                // 배너는 **지금 단계 화면**으로 바로 간다
                 onOngoingRideClick = { activeRide?.let(::navigateToStage) },
                 onCreateRoomClick = { navController.navigate(Routes.DESTINATION) },
                 onTabSelect = ::navigateTab,
@@ -635,7 +623,6 @@ private fun MainNavHost(
                 activePartyId = activeRide?.id,
                 onOpenMatching = { activeRide?.let(::navigateToStage) },
                 onOpenRideOngoing = { navController.navigate(Routes.RIDE_ONGOING) },
-                onStartLocationShare = { navController.navigate(Routes.RIDE_ONGOING) },
                 onLeaveChat = {
                     // 나간 방 id 를 진행 화면이 들고 있으면 「채팅 열기」가 죽은 방으로 간다 — 캐시를 버린다
                     activePartyViewModel.forgetChatRoom()
@@ -665,7 +652,6 @@ private fun MainNavHost(
                     onBack = ::back,
                     onOpenMatching = { activeRide?.let(::navigateToStage) },
                     onOpenRideOngoing = { navController.navigate(Routes.RIDE_ONGOING) },
-                    onStartLocationShare = { navController.navigate(Routes.RIDE_ONGOING) },
                     onLeaveChat = {
                     // 나간 방 id 를 진행 화면이 들고 있으면 「채팅 열기」가 죽은 방으로 간다 — 캐시를 버린다
                     activePartyViewModel.forgetChatRoom()
@@ -677,7 +663,7 @@ private fun MainNavHost(
             }
         }
         composable(Routes.RIDE_ONGOING) {
-            // 28 로의 전이는 기사측 운행 종료(FINISHED)를 폴링으로 잡아 자동으로 넘어간다.
+            // 33 으로의 전이는 기사측 운행 종료(FINISHED)를 폴링으로 잡아 자동으로 넘어간다.
             // 임시 수동 트리거였던 경유 카드 탭은 서버가 IN_RIDE→FINISHED 를 실제로 저장하게 되면서(D-2 해소) 걷어냈다.
             // 데모용 15초 자동 전환 타이머도 이전에 제거된 상태다 — 26 은 27 신고 진입점이라
             // 사용자가 머무는 동안 화면이 제멋대로 바뀌면 안 된다(QA D-3).
@@ -692,12 +678,14 @@ private fun MainNavHost(
                     if (roomId != null) openActiveChatRoom(roomId) else navigateTab(MoyeotaTab.CHAT)
                 },
                 onReport = { navController.navigate(Routes.EMERGENCY) },
-                // 운행이 끝났으니 26 은 스택에서 지운다. 남겨두면 28 에서 뒤로 왔을 때
-                // status 가 여전히 FINISHED 라 폴링이 다시 28 로 튕겨내는 루프가 된다(21→25 와 같은 이유).
+                // 운행이 끝나면 33 도착 완료로 직행하고 26 은 스택에서 지운다. 남겨두면 33 에서 뒤로 왔을 때
+                // status 가 여전히 FINISHED 라 폴링이 다시 33 으로 튕겨내는 루프가 된다(21→25 와 같은 이유).
                 onRideFinished = {
-                    // 운행이 끝났다(서버 FINISHED) — 진행 중 기억을 지워 배너·34 가 따라 사라지게 한다
+                    // 운행이 끝났다(서버 FINISHED) — 33 요약용으로 방을 잡아 둔 뒤
+                    // 진행 중 기억을 지워 홈 배너가 따라 사라지게 한다
+                    finishedRide = activeRide
                     activePartyViewModel.clearParty()
-                    navController.navigate(Routes.FARE_FINAL) {
+                    navController.navigate(Routes.RIDE_COMPLETE) {
                         popUpTo(Routes.RIDE_ONGOING) { inclusive = true }
                     }
                 },
@@ -710,72 +698,27 @@ private fun MainNavHost(
             EmergencyRoute(
                 repository = rideRepository,
                 partyId = activePartyId ?: selectedPartyId ?: createdPartyId,
+                // 27 「지금 타고 있는 차」 카드 — 진행 중 방이 없으면 카드를 숨긴다(번호판은 모델에 없다)
+                rideSummary = activeRide?.let { "${it.origin} → ${it.destination}" },
                 onBack = ::back,
                 onReportSubmitted = ::back,
             )
         }
 
-        // H · 요금 · 정산 · 결제 28–32
-        composable(Routes.FARE_FINAL) {
-            FareFinalScreen(
-                onBack = ::back,
-                onConfirm = { navController.navigate(Routes.SETTLEMENT) },
-            )
-        }
-        composable(Routes.SETTLEMENT) {
-            SettlementScreen(
-                onBack = ::back,
-                onChangeMethod = { navController.navigate(Routes.PAYMENT_METHODS) },
-                onPay = { navController.navigate(Routes.PAYMENT_RESULT) },
-            )
-        }
-        composable(Routes.PAYMENT_METHODS) {
-            PaymentMethodsScreen(
-                onBack = ::back,
-                onAddMethod = { navController.navigate(Routes.PAYMENT_ADD) },
-                onSaveDefault = { back() },
-            )
-        }
-        composable(Routes.PAYMENT_ADD) {
-            PaymentAddScreen(
-                onBack = ::back,
-                onAdded = ::back,
-            )
-        }
-        composable(Routes.PAYMENT_RESULT) {
-            PaymentResultScreen(
-                onBack = ::back,
-                onConfirm = { navController.navigate(Routes.RIDE_COMPLETE) },
-            )
-        }
-
-        // I · 완료 · 평가 · 기록 33–35
+        // I · 완료 33 · 마이페이지 35
         composable(Routes.RIDE_COMPLETE) {
+            // 방금 끝난 방(finishedRide)이 있으면 그 값으로, 없으면(복원 진입 등) 해당 요소를 숨긴다
+            val ride = finishedRide
             RideCompleteScreen(
-                onSubmit = { _, _ -> resetTo(Routes.HOME) },
-                onSkip = { resetTo(Routes.HOME) },
-            )
-        }
-        composable(Routes.MY_RIDES) {
-            LaunchedEffect(Unit) { activePartyViewModel.refresh() }
-            MyRidesScreen(
-                // 목업(7월 25일 · 3,200원)을 걷어냈다 — 진행 중 방이 없으면 빈 상태만 뜬다
-                ongoingRide = activeRide,
-                // 「예정 탑승」에 해당하는 개념이 서버에 없다(방은 만들어지는 순간 진행 중이다)
-                upcomingRides = emptyList(),
-                onRideClick = { ride ->
-                    selectedPartyId = ride.id.toLongOrNull()
-                    navController.navigate(Routes.RIDE_DETAIL)
-                },
-                onOpenStage = ::navigateToStage,
-                onHistoryClick = { navController.navigate(Routes.MYPAGE) },
-                onTabSelect = ::navigateTab,
+                routeLabel = ride?.let { "${it.origin} → ${it.destination}" },
+                paidAmount = ride?.farePerPerson?.takeIf { it > 0 },
+                companionCount = ride?.members?.count { !it.isMe }?.takeIf { it > 0 },
+                onDone = { resetTo(Routes.HOME) },
             )
         }
         composable(Routes.MYPAGE) {
             MyPageScreen(
                 userName = userName,
-                onRideHistoryClick = { navController.navigate(Routes.MY_RIDES) },
                 // logout() 은 실패하지 않는다 — 상태 전이는 위 LaunchedEffect 가 받아 04a 로 보낸다.
                 // logoutRequested 를 먼저 세워 두면 그 전이를 세션 만료로 오해하지 않는다.
                 onLogout = {

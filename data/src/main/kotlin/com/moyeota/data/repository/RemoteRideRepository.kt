@@ -3,19 +3,18 @@ package com.moyeota.data.repository
 import com.moyeota.data.remote.MatchingApi
 import com.moyeota.data.remote.matching.PartyEventSource
 import com.moyeota.data.remote.ReportApi
-import com.moyeota.data.remote.dto.MemberLocationRequestDto
 import com.moyeota.data.remote.dto.CallResultRequestDto
 import com.moyeota.data.remote.dto.ReportRequestDto
 import com.moyeota.data.remote.routeRequestDto
-import com.moyeota.data.remote.toMemberLocation
 import com.moyeota.data.remote.toAssignedDriver
 import com.moyeota.data.remote.toRequestDto
+import com.moyeota.data.remote.toPartyStatus
 import com.moyeota.data.remote.toRide
 import com.moyeota.data.remote.toRouteEstimate
-import com.moyeota.domain.model.MemberLocation
 import com.moyeota.domain.model.AssignedDriver
 import com.moyeota.domain.model.NewParty
 import com.moyeota.domain.model.PartyEvent
+import com.moyeota.domain.model.PartyStatus
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RouteEstimate
 import com.moyeota.domain.repository.RideRepository
@@ -67,6 +66,13 @@ class RemoteRideRepository(
     // currentUserUuid 는 호출 시점에 읽는다 — 재로그인으로 주체가 바뀌어도 다음 조회부터 바로 반영된다.
     override suspend fun getPartyDetail(partyId: Long): Ride =
         api.getPartyDetail(partyId).toRide(session.currentUserUuid)
+
+    /**
+     * 인터페이스의 기본 구현(상세에서 깎기)을 **덮어쓴다** — 가벼운 전용 API 를 부르는 게 이 구현의 존재 이유다.
+     * 세션은 보지 않는다: 응답에 멤버 목록이 없어 "누가 나인지"를 판정할 거리가 애초에 없다.
+     */
+    override suspend fun getPartyStatus(partyId: Long): PartyStatus =
+        api.getPartyStatus(partyId).toPartyStatus()
 
     // 생성자는 서버가 토큰에서 정한다 — 요청 본문에도 응답에도 id 가 없다.
     override suspend fun createParty(request: NewParty): Ride =
@@ -123,12 +129,6 @@ class RemoteRideRepository(
     } catch (e: Exception) {
         throw IllegalStateException(message, e)
     }
-
-    override suspend fun reportMyLocation(partyId: Long, latitude: Double, longitude: Double) =
-        api.reportMyLocation(partyId, MemberLocationRequestDto(latitude, longitude))
-
-    override suspend fun getMemberLocations(partyId: Long): List<MemberLocation> =
-        api.getMemberLocations(partyId).map { it.toMemberLocation() }
 
     // 백엔드가 POST 로 바뀌어 열린 엔드포인트. 응답 폴리라인 필드는 route 가 아니라 path 다.
     override suspend fun previewRoute(

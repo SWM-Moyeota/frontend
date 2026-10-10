@@ -83,7 +83,7 @@ private val ProgressTrack = Color(0xFFE6EAF0)
 
 private val waitingRideDummy = Ride(
     id = "ride-21",
-    origin = "부산대학교 정문",
+    origin = "센텀시티역 3번 출구",
     destination = "서면역 1번 출구",
     departureLabel = "지금 출발",
     capacity = 3,

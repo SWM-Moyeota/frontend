@@ -52,6 +52,15 @@ data class PartyDetailResponse(
     /** Google Encoded Polyline. 서버가 방 생성 시 네이버 경로 API 로 산출해 저장해 둔 값. */
     val route: String? = null,
     val taxiDriverId: Long? = null,
+    /**
+     * 방의 **지문** — 상태·멤버 구성이 바뀌면 달라지는 16진수 16글자(HMAC-SHA256 앞 8바이트).
+     * [PartyStatusResponse.fingerprint] 와 같은 재료로 만들어지므로 둘을 비교해 "바뀌었나"를 판단한다.
+     * 값을 해석하면 안 된다 — 같은지만 본다.
+     *
+     * 구버전 서버(Backend #177 이전)에는 없는 필드라 nullable 이다. 상세 응답에만 있고
+     * 목록·생성 응답에는 **없다**(서버 `PartyResult`·`OpenPartyResponse` 에 필드 자체가 없음).
+     */
+    val fingerprint: String? = null,
 ) {
     /**
      * 서버 `PartyDetailResult.MemberInfo(UUID publicId, String nickname, String imageUrl,
@@ -82,6 +91,25 @@ data class PartyDetailResponse(
         val joinedAt: String? = null,
     )
 }
+
+/**
+ * GET /api/v1/matching/rooms/{partyId}/status 응답 — 백엔드 `PartyStatusResponse(String status,
+ * Integer currentMembers, String fingerprint)`.
+ *
+ * 방 상세(쿼리 3개 · members · route)를 주기적으로 읽는 대신 이걸 읽는다 — 서버 쪽은 쿼리 1개이고
+ * 멤버 ID 만 훑는다(`PartyStatusSnapshot`). 지문이 상세의 것과 다를 때만 상세를 다시 읽는다.
+ *
+ * 세 필드 모두 박싱 타입이라 nullable + 기본값으로 방어한다. 특히 [fingerprint] 는
+ * 구버전 서버에는 아예 없는 필드다 — 논-널로 선언하면 그 순간 폴링이 전부 실패한다.
+ */
+@Serializable
+data class PartyStatusResponse(
+    /** 서버 `PartyStatus` enum 이름(ACTIVE/COMPLETED/MATCHING/DRIVER_ASSIGNED/IN_RIDE/FINISHED/CANCELED). */
+    val status: String = "",
+    val currentMembers: Int = 0,
+    /** 16진수 16글자. 해석하지 말고 상세 응답의 값과 같은지만 비교한다. */
+    val fingerprint: String? = null,
+)
 
 /**
  * POST /api/v1/matching/rooms 요청 본문 (백엔드 `OpenPartyRequest`).
@@ -152,23 +180,4 @@ data class RouteEstimateResponse(
     val estimateTime: Int? = null,
     /** Google Encoded Polyline. 서버 필드명이 path 다(방 상세의 route 와 같은 형식). */
     val path: String? = null,
-)
-
-/** POST /api/v1/matching/rooms/{partyId}/location 요청 */
-@Serializable
-data class MemberLocationRequestDto(
-    val latitude: Double,
-    val longitude: Double,
-)
-
-/**
- * GET /api/v1/matching/rooms/{partyId}/locations 항목.
- * 서버가 유저 요약을 못 찾으면(탈퇴 등) publicId·nickname 이 null 로 온다 — 좌표만 쓴다.
- */
-@Serializable
-data class MemberLocationResponse(
-    val publicId: String? = null,
-    val nickname: String? = null,
-    val latitude: Double,
-    val longitude: Double,
 )

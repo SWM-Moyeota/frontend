@@ -74,7 +74,7 @@ class RideDetailViewModel(
     }
 }
 
-// 22 탑승 상세 — 서버 상세 연동 진입점. partyId 없으면 기존 더미 화면 유지.
+// 22 탑승 상세 — 서버 상세 연동 진입점. partyId 없으면 오류 안내 후 되돌린다.
 //
 // UserSession 을 더 이상 받지 않는다: 「나」 판정이 매퍼(publicId == 세션 uuid)로 내려가
 // 화면은 User.isMe 만 보면 된다. 예전에는 여기서 고정 memberId 1 을 내려보내야 했다.
@@ -86,12 +86,11 @@ fun RideDetailRoute(
     onPartnerClick: (User) -> Unit = {},
     onLeave: () -> Unit = {},
 ) {
+    // 방 id 없이 닿을 길은 없다. 그래도 null 이면 예시 방을 그리는 대신 사실대로 말하고 되돌린다.
     if (partyId == null) {
-        RideDetailScreen(
-            onBack = onBack,
-            onPartnerClick = onPartnerClick,
-            onLeave = onLeave,
-        )
+        BackStateScaffold("탑승 상세", onBack) {
+            ErrorBox(message = "탑승 정보를 불러오지 못했어요", onRetry = onBack)
+        }
         return
     }
 

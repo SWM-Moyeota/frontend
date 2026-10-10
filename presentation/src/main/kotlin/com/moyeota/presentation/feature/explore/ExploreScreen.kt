@@ -65,6 +65,7 @@ import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.AvatarCircle
 import com.moyeota.core.designsystem.component.MoyeotaBottomBar
+import com.moyeota.core.designsystem.component.MoyeotaDefaultCamera
 import com.moyeota.core.designsystem.component.MoyeotaTab
 import com.moyeota.core.designsystem.component.MyLocationOverlay
 import com.moyeota.core.designsystem.component.NaverMapView
@@ -76,7 +77,6 @@ import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.model.User
 import com.moyeota.presentation.core.ActiveRideBanner
-import com.moyeota.presentation.feature.home.DemoOrigin
 import com.naver.maps.geometry.LatLng
 import com.naver.maps.geometry.LatLngBounds
 import com.naver.maps.map.NaverMap
@@ -202,9 +202,6 @@ private val DefaultParties = listOf(
     Ride("ride-5", "온천장역", "서면역", "12분 후 출발 예정 · 7.3km", 2, listOf(dummyUser("u8", "윤OO")), 4800, 9600, RideStatus.RECRUITING),
 )
 
-// 「여성만」 방 (Ride 도메인 모델에 없는 속성 — 카드 배지 재현용)
-private val FemaleOnlyRideIds = setOf("ride-1", "ride-3", "ride-5")
-
 /** 접힘(17) 시트 높이 — 핸들 + 한 줄 요약 */
 private val PeekSheetHeight = 96.dp
 
@@ -223,7 +220,7 @@ private const val SheetFlingVelocity = 400f
 private val ListHeaderGap = 12.dp
 
 /**
- * 17·18·19 · 합승 — 내 주변 [V07/V07b/V07c]
+ * 17·18·19 · 근처 동승 찾기 [V07/V07b/V07c]
  *
  * **지도는 하나다.** 시트 단계(PEEK/HALF/FULL)는 지도 위에 얹힌 시트의 **높이**만 바꾼다 —
  * 예전에는 단계마다 다른 컴포저블(전체 지도 / 320dp 지도 / 지도 없음)로 갈아끼워서
@@ -243,7 +240,7 @@ private val ListHeaderGap = 12.dp
  *
  * 검증·상태:
  * - 방 목록은 **지도에 보이는 범위**로 조회한 결과다([onVisibleBoundsChange]) — 마커·리스트·**헤더의 N개**가 같은 목록
- * - 지도는 네이버 실지도. 내 위치는 기기 GPS([myLocation]) — 못 받으면 [DemoOrigin] 기준점으로 폴백
+ * - 지도는 네이버 실지도. 내 위치는 기기 GPS([myLocation]) — 못 받으면 기본 카메라([MoyeotaDefaultCamera]) 범위를 보여준다
  * - 위치 권한 없으면 지도 대신 권한 요청 안내 + 「위치 권한 허용」 버튼 (locationGranted)
  * - 후보 0건이면 peek 문구 자리에 빈 상태 + 지도를 움직여 보라는 안내
  * - 진행 중 탑승 없으면 상단 배너 숨김 ([activeRide] 가 null). 배너가 있으면 지도 줌 컨트롤이 그 아래로 내려간다
@@ -255,7 +252,7 @@ fun ExploreScreen(
     /** 지금 진행 중인 내 방. null 이면 상단 배너를 그리지 않는다 */
     activeRide: Ride? = null,
     locationGranted: Boolean = true,
-    // 기기 실위치. null = 권한 없음 · 아직 fix 없음 → 지도는 DemoOrigin 기준점으로 떨어진다
+    // 기기 실위치. null = 권한 없음 · 아직 fix 없음 → 지도는 기본 카메라 위치에서 시작한다
     myLocation: MyLocationFix? = null,
     initialSheetState: ExploreSheetState = ExploreSheetState.PEEK,
     onJoinParty: (Ride) -> Unit = {},
@@ -280,7 +277,7 @@ fun ExploreScreen(
             contentAlignment = Alignment.CenterStart,
         ) {
             Text(
-                text = "동승 — 내 주변",
+                text = "근처 동승 찾기",
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
                 color = MoyeotaColor.InkPrimary,
@@ -563,9 +560,6 @@ private fun PartyCard(
             )
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 CapacityBadge(text = "${ride.members.size}/${ride.capacity}명")
-                if (ride.id in FemaleOnlyRideIds) {
-                    GrayBadge(text = "여성만")
-                }
             }
         }
         Spacer(Modifier.width(8.dp))
@@ -617,16 +611,6 @@ private fun CapacityBadge(text: String) {
     }
 }
 
-@Composable
-private fun GrayBadge(text: String) {
-    Box(
-        modifier = Modifier
-            .background(BadgeGrayBg, CircleShape)
-            .padding(horizontal = 10.dp, vertical = 3.dp),
-    ) {
-        Text(text = text, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = GrayMute)
-    }
-}
 
 // 정원 찬 방(3/3)은 「합류」 비활성 + 「마감」 표기 (스펙 18)
 @Composable
@@ -745,15 +729,6 @@ private fun EmptyListNotice() {
 
 // ─── 지도 (네이버 실지도 + 내 위치·합승 마커) ────────────────────────────────
 
-/**
- * 실위치를 못 받았을 때의 기준점.
- *
- * 권한 거부·GPS 미취득 상황에서도 지도가 서울 한복판(SDK 기본 카메라)으로 튀지 않게,
- * 앱 공통 컨벤션인 [DemoOrigin](부산대 정문 · 15 목적지 입력과 동일 좌표)으로 떨어진다.
- * 실위치가 아니므로 마커 캡션도 「내 위치(기준점)」으로 구분한다.
- */
-private val FallbackOrigin = LatLng(DemoOrigin.latitude, DemoOrigin.longitude)
-
 /** 내 주변 1km 남짓이 한 화면에 들어오는 줌 — 첫 범위 조회가 이 정도를 훑는다 */
 private const val ExploreZoom = 15.0
 
@@ -767,13 +742,13 @@ private const val ExploreZoom = 15.0
 private const val DefaultBoundsHalfSpanDeg = 0.006
 
 /**
- * 기준점 중심의 조회 범위.
+ * 지도가 범위를 알려주기 전의 첫 조회 범위.
  *
- * [center] 가 null(위치 권한 거부·아직 fix 없음)이면 [FallbackOrigin](부산대 정문)을 쓴다 —
- * 첫 조회가 서울 한복판을 훑고 빈 목록을 보여주는 것보다 낫다.
+ * [center] 가 null(위치 권한 거부·아직 fix 없음)이면 지도가 처음 보여주는 기본 카메라
+ * ([MoyeotaDefaultCamera]) 주변을 조회한다 — 지도에 보이는 곳과 목록이 어긋나지 않게.
  */
 fun defaultExploreBounds(center: LatLng?): MapBounds {
-    val origin = center ?: FallbackOrigin
+    val origin = center ?: MoyeotaDefaultCamera
     return MapBounds(
         swLat = origin.latitude - DefaultBoundsHalfSpanDeg,
         swLng = origin.longitude - DefaultBoundsHalfSpanDeg,
@@ -791,7 +766,7 @@ fun defaultExploreBounds(center: LatLng?): MapBounds {
  * 합승 마커는 서버가 좌표를 준 방만 찍는다 — 좌표가 없거나 범위를 벗어난 값은
  * [latLngOrNull] 이 걸러 렌더를 건너뛴다. 마커가 없어도 리스트의 「합류」로 같은 곳에 갈 수 있다.
  *
- * @param myLocation 기기 실위치. null 이면 [FallbackOrigin] 기준점으로 그린다
+ * @param myLocation 기기 실위치. null 이면 기본 카메라([MoyeotaDefaultCamera])에서 시작하고 내 위치 표시는 없다
  * @param onVisibleBoundsChange 카메라가 멈출 때 보이는 영역. 이 범위로 방 목록을 다시 읽는다
  * @param contentPadding 시트가 지도를 덮는 영역. 카메라 중심이 시트 뒤로 밀리지 않게 한다
  */
@@ -815,7 +790,7 @@ private fun ExploreMap(
     // 사용자가 움직인 카메라는 [cameraState] 에만 적어 두고, 시트 단계가 바뀌어 지도가
     // 새로 만들어질 때 그 값에서 시작한다.
     var mapCamera by remember {
-        mutableStateOf(cameraState.camera ?: MapCamera(myPosition ?: FallbackOrigin, ExploreZoom))
+        mutableStateOf(cameraState.camera ?: MapCamera(myPosition ?: MoyeotaDefaultCamera, ExploreZoom))
     }
 
     // 카메라를 **처음 잡힌 실위치로 한 번만** 옮긴다.
@@ -853,14 +828,6 @@ private fun ExploreMap(
             position = myLocation.position,
             accuracyMeters = myLocation.accuracyMeters,
             bearingDegrees = myLocation.bearingDegrees,
-        )
-    } else {
-        // 실위치가 아직 없을 때만 기준점 마커. 「내 위치」라고 단정하지 않는다
-        ExploreMarker(
-            map = map,
-            position = FallbackOrigin,
-            tint = MoyeotaColor.MarkerOrigin.toArgb(),
-            caption = "내 위치(기준점)",
         )
     }
     rides.forEach { ride ->

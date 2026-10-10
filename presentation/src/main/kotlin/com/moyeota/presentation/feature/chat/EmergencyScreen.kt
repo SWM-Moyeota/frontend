@@ -156,7 +156,11 @@ class EmergencyViewModel(
 fun EmergencyRoute(
     repository: RideRepository,
     partyId: Long?,
-    rideSummary: String = "부산대 정문 → 서면역 · 12가 3456",
+    /**
+     * 「지금 타고 있는 차」 카드에 보일 「출발지 → 목적지」. null 이면 카드를 숨긴다(진행 중 운행을 모를 때).
+     * 번호판은 모델에 없어 넣지 않는다.
+     */
+    rideSummary: String? = null,
     onBack: () -> Unit = {},
     onReportSubmitted: () -> Unit = {},
 ) {
@@ -210,12 +214,13 @@ fun EmergencyRoute(
  * - 「3초간 길게 눌러 신고」 3초 유지 성공 → onHoldCompleted (신고 발사 + 112 다이얼)
  *   · 3초 롱프레스 유지 실패 시 미전송 (오작동 방지)
  * - 사유 선택 없음 — 서버가 사유를 받지 않는다 (partyId/위치만 전송)
+ * - 「지금 타고 있는 차」 카드는 [rideSummary] 가 있을 때만 보인다(번호판 표기 없음)
  *
  * Safety500/600 색상은 이 화면(신고) 전용.
  */
 @Composable
 fun EmergencyScreen(
-    rideSummary: String = "부산대 정문 → 서면역 · 12가 3456",
+    rideSummary: String? = null,
     dialLaunched: Boolean = false,
     onBack: () -> Unit = {},
     onHoldCompleted: () -> Unit = {},
@@ -264,29 +269,31 @@ fun EmergencyScreen(
                 color = EmTextMute,
             )
 
-            Spacer(Modifier.height(22.dp))
-            // 지금 타고 있는 차 카드
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .shadow(4.dp, RoundedCornerShape(18.dp), spotColor = EmCardShadow)
-                    .clip(RoundedCornerShape(18.dp))
-                    .background(MoyeotaColor.SurfaceCanvas)
-                    .padding(horizontal = 20.dp, vertical = 16.dp),
-            ) {
-                Text(
-                    text = "지금 타고 있는 차",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = EmMuteGray,
-                )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = rideSummary,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MoyeotaColor.InkPrimary,
-                )
+            if (rideSummary != null) {
+                Spacer(Modifier.height(22.dp))
+                // 지금 타고 있는 차 카드 — 운행 정보를 모르면 숨긴다
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .shadow(4.dp, RoundedCornerShape(18.dp), spotColor = EmCardShadow)
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(MoyeotaColor.SurfaceCanvas)
+                        .padding(horizontal = 20.dp, vertical = 16.dp),
+                ) {
+                    Text(
+                        text = "지금 타고 있는 차",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = EmMuteGray,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = rideSummary,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MoyeotaColor.InkPrimary,
+                    )
+                }
             }
             Spacer(Modifier.height(16.dp))
         }
@@ -463,5 +470,5 @@ private fun CloseIcon(modifier: Modifier = Modifier) {
 @Preview(showBackground = true, widthDp = 393, heightDp = 852)
 @Composable
 private fun EmergencyScreenPreview() {
-    EmergencyScreen()
+    EmergencyScreen(rideSummary = "학교 정문 → 역 광장")
 }

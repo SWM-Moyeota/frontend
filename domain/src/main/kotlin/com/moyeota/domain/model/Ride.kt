@@ -47,20 +47,34 @@ data class Ride(
      */
     val departureRadiusMeters: Int? = null,
     val destinationRadiusMeters: Int? = null,
+    /**
+     * 방의 **지문**(서버 `fingerprint`) — 방 번호·상태·멤버 구성을 HMAC 한 값의 앞 8바이트. 상태나 멤버가 바뀌면 달라진다.
+     * 상세 응답에만 있다(목록·생성 응답은 null). [PartyStatus.fingerprint] 와 비교해 「바뀌었나」를 가볍게 판단한다.
+     */
+    val fingerprint: String? = null,
 )
 
 /**
- * 동승자 한 명의 실시간 위치(서버 `GET /matching/rooms/{id}/locations`).
+ * 방의 **상태만** 담은 가벼운 조회 결과(서버 `GET /matching/rooms/{id}/status`, 쿼리 1개).
  *
- * 탑승 지점에서 서로를 찾기 위한 값이라 **오래 살지 않는다** — 서버가 60초 TTL 안에 보고가 있는
- * 멤버만 돌려주므로, 목록에서 빠진 사람은 앱을 껐거나 신호가 끊긴 것이다.
- *
- * [publicId] 는 방 상세 [User.id] 와 같은 체계라 이름·프로필로 이을 수 있다. 서버가 유저 요약을
- * 못 찾으면(탈퇴 등) publicId·nickname 이 null 이고, 그때는 좌표만 쓴다.
+ * 방 상세(쿼리 3개 · route 포함)를 주기적으로 읽는 대신 이걸 읽고, [isSameAs] 가 거짓일 때만 상세를 다시 읽는다 —
+ * 부하테스트에서 방 상세 폴링이 전체 요청의 45% 였다(Backend #177).
  */
-data class MemberLocation(
-    val publicId: String?,
-    val nickname: String?,
-    val latitude: Double,
-    val longitude: Double,
-)
+data class PartyStatus(
+    val status: RideStatus,
+    val currentMembers: Int,
+    /** 서버 지문. 구버전 서버·더미는 null 이며 그때는 상태·인원으로만 비교한다 */
+    val fingerprint: String?,
+) {
+    /**
+     * 들고 있는 [ride] 가 아직 이 상태와 같은가 — 같으면 상세를 다시 읽을 이유가 없다.
+     * 지문이 양쪽에 다 있으면 지문이 최종 판정이고(멤버 교체처럼 인원수가 같아도 잡는다),
+     * 한쪽이라도 없으면 상태·인원수로 판단한다.
+     */
+    fun isSameAs(ride: Ride): Boolean {
+        val mine = fingerprint
+        val theirs = ride.fingerprint
+        if (mine != null && theirs != null) return mine == theirs
+        return status == ride.status && currentMembers == ride.members.size
+    }
+}

@@ -16,14 +16,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
@@ -41,12 +39,12 @@ import com.moyeota.core.designsystem.theme.MoyeotaType
 // 13 · 가입 완료 [S08]
 // 진입: 12 동의 완료 — 뒤로가기로 가입 플로우 재진입 불가 (스택 초기화는 호출부 책임)
 // 「탑승할 사람 찾기」 → 14 홈 / 「앱 먼저 둘러보기」 → 17 합승 지도 (peek)
+// 첫 탑승 할인 배너는 뺐다 — 백엔드에 발급·차감 API 가 없다.
 @Composable
 fun SignupCompleteScreen(
     onStart: () -> Unit,
     onExplore: () -> Unit = {},
     modifier: Modifier = Modifier,
-    couponIssued: Boolean = true, // 쿠폰 발급 실패해도 화면 진행은 막지 않음 (배너만 숨김)
 ) {
     Column(modifier = modifier.fillMaxSize().background(MoyeotaColor.SurfaceSoft)) {
         StatusBarSpacer()
@@ -74,33 +72,7 @@ fun SignupCompleteScreen(
                 modifier = Modifier.align(Alignment.CenterHorizontally),
             )
 
-            Spacer(Modifier.height(30.dp))
-            if (couponIssued) {
-                // 첫 탑승 3,000원 지원: 발급 시점 = 가입 완료, 만료 30일, 첫 결제 1회 자동 차감
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .shadow(4.dp, RoundedCornerShape(18.dp), spotColor = Color(0x0F1B2A4A))
-                        .background(MoyeotaColor.SurfaceCanvas, RoundedCornerShape(18.dp))
-                        .padding(horizontal = 20.dp, vertical = 20.dp),
-                ) {
-                    Text(
-                        text = "첫 탑승 3,000원 지원",
-                        style = MoyeotaType.HeadingLg,
-                        fontWeight = FontWeight.Bold,
-                        color = MoyeotaColor.Primary500,
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        text = "첫 탑승 요금에서 자동으로 빠져요 · 30일 안에 사용",
-                        style = MoyeotaType.CaptionMd,
-                        fontWeight = FontWeight.Medium,
-                        color = Color(0xFF8A93A0),
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(32.dp))
+            Spacer(Modifier.height(40.dp))
             Text(
                 text = "이렇게 이용해요",
                 style = MoyeotaType.BodySm.copy(fontSize = 14.sp),

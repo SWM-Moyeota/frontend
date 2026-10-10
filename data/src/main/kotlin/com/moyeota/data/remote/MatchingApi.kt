@@ -1,12 +1,11 @@
 package com.moyeota.data.remote
 
-import com.moyeota.data.remote.dto.MemberLocationResponse
-import com.moyeota.data.remote.dto.MemberLocationRequestDto
 import com.moyeota.data.remote.dto.DriverSummaryResponse
 import com.moyeota.data.remote.dto.OpenPartyRequestDto
 import com.moyeota.data.remote.dto.OpenPartyResponse
 import com.moyeota.data.remote.dto.PartyDetailResponse
 import com.moyeota.data.remote.dto.PartyListResponse
+import com.moyeota.data.remote.dto.PartyStatusResponse
 import com.moyeota.data.remote.dto.RouteEstimateResponse
 import com.moyeota.data.remote.dto.RouteRequestDto
 import retrofit2.http.Body
@@ -46,6 +45,28 @@ interface MatchingApi {
 
     @GET("api/v1/matching/rooms/{partyId}")
     suspend fun getPartyDetail(@Path("partyId") partyId: Long): PartyDetailResponse
+
+    /**
+     * 방 상태만 — 상태·현재 인원·지문(`PartyController.status`).
+     *
+     * 실측(localhost:8080, 2026-10-06): 200
+     * `{"status":"ACTIVE","currentMembers":1,"fingerprint":"4aa5adb7bd31ea6d"}` /
+     * 없는 방 404 `{"code":"PARTY_NOT_FOUND","message":"존재하지 않는 방입니다."}` /
+     * 토큰 없이 401 `{"code":"USER005","message":"로그인이 필요합니다."}`.
+     * 지문은 같은 방 상세의 `fingerprint` 와 **글자까지 같았다** — 두 응답을 바로 비교할 수 있다.
+     *
+     * 상세([getPartyDetail])와 **같은 경로에 `/status` 가 붙는다** — 세그먼트를 빠뜨리면 404 가 아니라
+     * 상세 응답이 와서 역직렬화가 조용히 성공하고(필드 기본값), 인원·지문만 맞는 것처럼 보인다.
+     * 그래서 경로 문자열을 AuthenticatedPathContractTest 에서 못 박는다.
+     *
+     * 서버 메서드에 `@CurrentUser` 가 없지만 **토큰은 필수다** — Security 가 `/api/v1/auth/` 밖
+     * 전 경로에 `anyRequest().authenticated()` 를 건다. 참여자 검사는 없다
+     * (실측: 그 방에 들어가 본 적 없는 계정으로도 200 — 403 이 나지 않는다).
+     * SSE 신호를 놓쳤을 때를 대비한 느린 주기(권장 30초) 확인용이고, 상세 폴링의 대체다
+     * (부하테스트에서 방 상세 폴링이 전체 요청의 45% — Backend #177).
+     */
+    @GET("api/v1/matching/rooms/{partyId}/status")
+    suspend fun getPartyStatus(@Path("partyId") partyId: Long): PartyStatusResponse
 
     /**
      * 방 생성. **방장은 이제 Bearer 토큰이 정한다**
@@ -91,20 +112,6 @@ interface MatchingApi {
      * 가 `BusinessException(MatchingErrorCode.DRIVER_NOT_ASSIGNED)` 를 던지고 전역 핸들러가 409 로 답한다.
      * 호출자는 배정 전에 부르지 말아야 한다([com.moyeota.presentation.feature.matching.shouldFetchDriverInfo]).
      */
-    /**
-     * 내 위치 보고(204). 방 화면이 열려 있는 동안 주기 호출(권장 5초) — 서버 TTL 60초.
-     * 403 NOT_PARTY_MEMBER / 404 PARTY_NOT_FOUND.
-     */
-    @POST("api/v1/matching/rooms/{partyId}/location")
-    suspend fun reportMyLocation(
-        @Path("partyId") partyId: Long,
-        @Body request: MemberLocationRequestDto,
-    )
-
-    /** **나를 뺀** 동승자 위치. 보고가 없거나 TTL 이 지난 멤버는 빠진다(빈 배열 정상). */
-    @GET("api/v1/matching/rooms/{partyId}/locations")
-    suspend fun getMemberLocations(@Path("partyId") partyId: Long): List<MemberLocationResponse>
-
     @GET("api/v1/matching/rooms/{partyId}/driver")
     suspend fun getAssignedDriver(@Path("partyId") partyId: Long): DriverSummaryResponse
 

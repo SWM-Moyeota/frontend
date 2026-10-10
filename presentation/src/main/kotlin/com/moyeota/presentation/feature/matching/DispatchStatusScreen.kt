@@ -63,7 +63,7 @@ private val DividerGray = Color(0xFFE7EAF0)
 
 private val dispatchRideDummy = Ride(
     id = "ride-25",
-    origin = "부산대학교 정문",
+    origin = "센텀시티역 3번 출구",
     destination = "서면역 1번 출구",
     departureLabel = "지금 출발",
     capacity = 3,
@@ -94,7 +94,8 @@ private val dispatchRideDummy = Ride(
  * - 배차 실패 시 21 매칭 대기로 되돌리고 재탐색 (호출부 처리)
  *
  * 서버 제약: 백엔드 `DriverSummary` 는 (좌석수 · 번호판 · 차종) 뿐이라
- * **기사 이름·별점을 내려주지 않는다**. 그 자리는 하드코딩 대신 플레이스홀더로 둔다(백엔드 요청 대기).
+ * **기사 이름·별점·연락처를 내려주지 않는다**. 차량 카드는 서버 값(번호판 · 차종 · 좌석수)만 보여 주고,
+ * 기사 정보 자리표시와 전화 버튼은 두지 않는다.
  */
 @Composable
 fun DispatchStatusScreen(
@@ -221,20 +222,6 @@ fun DispatchStatusScreen(
                             color = MoyeotaColor.InkPrimary,
                         )
                         Text(text = vehicleModel, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = GraySlate)
-                        // 기사명·별점은 백엔드 DriverSummary 에 필드가 없다 (백엔드 요청 2번)
-                        Text(
-                            text = "기사 정보 준비 중",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = GrayMute,
-                        )
-                    }
-                    // 기사 전화 (미연결 — 무동작)
-                    Box(
-                        modifier = Modifier.size(44.dp).background(MoyeotaColor.Primary50, RoundedCornerShape(14.dp)),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        PhoneIcon()
                     }
                 }
                 Spacer(Modifier.height(16.dp))
@@ -330,28 +317,6 @@ internal fun CarIcon(modifier: Modifier = Modifier, tint: Color = Color(0xFF5463
         // 바퀴
         drawCircle(tint, 2.5.dp.toPx(), Offset(w * 0.25f, h * 0.86f))
         drawCircle(tint, 2.5.dp.toPx(), Offset(w * 0.75f, h * 0.86f))
-    }
-}
-
-@Composable
-private fun PhoneIcon(modifier: Modifier = Modifier, tint: Color = MoyeotaColor.Primary500) {
-    Canvas(modifier = modifier.size(20.dp)) {
-        val w = size.width
-        val h = size.height
-        drawRoundRect(
-            color = tint,
-            topLeft = Offset(w * 0.28f, h * 0.1f),
-            size = Size(w * 0.44f, h * 0.8f),
-            cornerRadius = CornerRadius(3.dp.toPx()),
-            style = Stroke(width = 1.8.dp.toPx()),
-        )
-        drawLine(
-            color = tint,
-            start = Offset(w * 0.42f, h * 0.76f),
-            end = Offset(w * 0.58f, h * 0.76f),
-            strokeWidth = 1.8.dp.toPx(),
-            cap = StrokeCap.Round,
-        )
     }
 }
 

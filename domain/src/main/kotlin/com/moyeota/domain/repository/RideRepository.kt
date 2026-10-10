@@ -1,9 +1,9 @@
 package com.moyeota.domain.repository
 
 import com.moyeota.domain.model.AssignedDriver
-import com.moyeota.domain.model.MemberLocation
 import com.moyeota.domain.model.NewParty
 import com.moyeota.domain.model.PartyEvent
+import com.moyeota.domain.model.PartyStatus
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RouteEstimate
 import kotlinx.coroutines.flow.Flow
@@ -32,6 +32,15 @@ interface RideRepository {
     ): List<Ride>
 
     suspend fun getPartyDetail(partyId: Long): Ride
+
+    /**
+     * GET /api/v1/matching/rooms/{partyId}/status — 상태·현재 인원·지문만(쿼리 1개).
+     * 주기적으로 「바뀌었나」를 볼 때 [getPartyDetail] 대신 쓴다. 참여자가 아니어도 되고(403 없음),
+     * 방이 없으면 404 PARTY_NOT_FOUND.
+     * 기본 구현은 상세에서 깎아 만든다(더미·테스트 저장소용) — 원격 구현은 가벼운 API 를 부른다.
+     */
+    suspend fun getPartyStatus(partyId: Long): PartyStatus =
+        getPartyDetail(partyId).let { PartyStatus(it.status, it.members.size, it.fingerprint) }
 
     /**
      * 이 방의 **변화 신호** 스트림(SSE `GET /api/v1/matching/rooms/{partyId}/events`).
@@ -117,19 +126,6 @@ interface RideRepository {
      * 예상 요금·소요시간과 인코딩 폴리라인([RouteEstimate.encodedPath])을 돌려준다.
      * 이미 만들어진 방의 경로는 [getPartyDetail] 의 `routePolyline` 으로 얻는다.
      */
-    /**
-     * POST /api/v1/matching/rooms/{partyId}/location — 내 위치 보고(204).
-     * 방 화면이 열려 있는 동안 주기적으로 부른다(권장 5초). 서버는 60초 TTL 로 보관하므로
-     * 보고가 끊기면 동승자 화면에서 내 점이 사라진다. 참여자가 아니면 403.
-     */
-    suspend fun reportMyLocation(partyId: Long, latitude: Double, longitude: Double)
-
-    /**
-     * GET /api/v1/matching/rooms/{partyId}/locations — **나를 뺀** 동승자들의 최근 위치.
-     * 보고가 없거나 TTL 이 지난 멤버는 빠진다(빈 목록이 정상). 참여자가 아니면 403.
-     */
-    suspend fun getMemberLocations(partyId: Long): List<MemberLocation>
-
     suspend fun previewRoute(
         departureLat: Double,
         departureLng: Double,

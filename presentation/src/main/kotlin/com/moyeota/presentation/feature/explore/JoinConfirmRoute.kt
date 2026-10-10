@@ -86,7 +86,7 @@ class JoinConfirmViewModel(
     }
 }
 
-// 20 합류 확인 — 서버 상세 조회 + 합류 액션 진입점. partyId 없으면 기존 더미 화면 유지.
+// 20 합류 확인 — 서버 상세 조회 + 합류 액션 진입점. partyId 없으면 오류 안내 후 되돌린다.
 // 합류 성공 시 서버가 돌려준 최신 [Ride] 를 그대로 넘겨, 다음 화면(21 매칭 대기)이 재조회 없이 이어받는다.
 @Composable
 fun JoinConfirmRoute(
@@ -96,12 +96,12 @@ fun JoinConfirmRoute(
     onJoined: (Ride) -> Unit = {},
     onMemberClick: (User) -> Unit = {},
 ) {
+    // 목록에서 방을 고르지 않고 닿을 길은 없다. 그래도 null 이면 예시 방을 그리는 대신
+    // 사실대로 말하고 되돌린다 — 존재하지 않는 방에 합류 버튼을 보여 줄 수는 없다.
     if (partyId == null) {
-        JoinConfirmScreen(
-            onDismiss = onDismiss,
-            onConfirmJoin = onJoined,
-            onMemberClick = onMemberClick,
-        )
+        BackStateScaffold("합류할까요?", onDismiss) {
+            ErrorBox(message = "동승 정보를 불러오지 못했어요", onRetry = onDismiss)
+        }
         return
     }
 

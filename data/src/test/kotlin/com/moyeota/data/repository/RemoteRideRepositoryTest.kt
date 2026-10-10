@@ -1,13 +1,12 @@
 package com.moyeota.data.repository
 
 import com.moyeota.data.remote.MatchingApi
-import com.moyeota.data.remote.dto.MemberLocationResponse
-import com.moyeota.data.remote.dto.MemberLocationRequestDto
 import com.moyeota.data.remote.dto.DriverSummaryResponse
 import com.moyeota.data.remote.dto.OpenPartyRequestDto
 import com.moyeota.data.remote.dto.OpenPartyResponse
 import com.moyeota.data.remote.dto.PartyDetailResponse
 import com.moyeota.data.remote.dto.PartyListResponse
+import com.moyeota.data.remote.dto.PartyStatusResponse
 import com.moyeota.data.remote.dto.RouteEstimateResponse
 import com.moyeota.data.remote.dto.RouteRequestDto
 import com.moyeota.domain.model.AuthState
@@ -175,6 +174,50 @@ class RemoteRideRepositoryTest {
         assertEquals("sb`vEwtzrWbiMnwC", estimate.encodedPath)
     }
 
+    /**
+     * 이 구현의 존재 이유가 "상세를 부르지 않는 것"이다 — 인터페이스 기본 구현은 상세에서 깎아 만드는데,
+     * 원격 저장소가 그걸 물려받으면 가벼운 API 를 만든 의미가 사라진다(상세 폴링이 서버 요청의 45%).
+     */
+    @Test
+    fun `방 상태 조회는 상세를 부르지 않고 가벼운 상태 API 만 부른다`() = runBlocking {
+        val api = FakeMatchingApi()
+
+        val status = RemoteRideRepository(api, session()).getPartyStatus(partyId = 7)
+
+        assertEquals(7L, api.statusCall)
+        assertEquals(0, api.detailCallCount)
+        assertEquals(RideStatus.DISPATCHING, status.status)
+        assertEquals(3, status.currentMembers)
+        assertEquals(FINGERPRINT, status.fingerprint)
+    }
+
+    /** 상세의 지문과 상태의 지문이 같은 자리에 담겨야 폴링이 "안 바뀌었다"를 판정할 수 있다. */
+    @Test
+    fun `같은 방의 상세와 상태 지문을 비교해 변화 없음을 판정한다`() = runBlocking {
+        val repository = RemoteRideRepository(FakeMatchingApi(), session())
+
+        val ride = repository.getPartyDetail(partyId = 7)
+        val status = repository.getPartyStatus(partyId = 7)
+
+        assertEquals(FINGERPRINT, ride.fingerprint)
+        // 방 상태는 MATCHING(3명), 상세는 COMPLETED(2명)라 상태·인원으로는 다르다 —
+        // 지문이 양쪽에 다 있으면 지문이 최종 판정이라는 계약을 못박는다.
+        assertTrue(status.isSameAs(ride))
+    }
+
+    /** 더미 저장소는 기본 구현(상세에서 깎기)을 그대로 쓴다 — 지문이 없어 상태·인원으로 비교된다. */
+    @Test
+    fun `더미 저장소의 방 상태는 상세에서 깎아 만든다`() = runBlocking {
+        val repository = DummyRideRepository()
+        val ride = repository.getPartyDetail(partyId = 1)
+
+        val status = repository.getPartyStatus(partyId = 1)
+
+        assertEquals(ride.status, status.status)
+        assertEquals(ride.members.size, status.currentMembers)
+        assertTrue(status.isSameAs(ride))
+    }
+
     private class FakeMatchingApi : MatchingApi {
         var joinCall: Long? = null
         var leaveCall: Long? = null
@@ -182,6 +225,7 @@ class RemoteRideRepositoryTest {
         var detailCallCount = 0
         var withinCall: List<Double>? = null
         var routeRequest: RouteRequestDto? = null
+        var statusCall: Long? = null
 
         override suspend fun getParties(): PartyListResponse = PartyListResponse()
 
@@ -211,6 +255,11 @@ class RemoteRideRepositoryTest {
         override suspend fun getPartyDetail(partyId: Long): PartyDetailResponse {
             detailCallCount++
             return detail(partyId)
+        }
+
+        override suspend fun getPartyStatus(partyId: Long): PartyStatusResponse {
+            statusCall = partyId
+            return PartyStatusResponse(status = "MATCHING", currentMembers = 3, fingerprint = FINGERPRINT)
         }
 
         override suspend fun openParty(request: OpenPartyRequestDto): OpenPartyResponse {
@@ -243,8 +292,6 @@ class RemoteRideRepositoryTest {
             DriverSummaryResponse(seats = 4, plateNumber = "12가 3456", type = "쏘나타")
 
         // 실서버(localhost:8080) 응답을 축약한 값 — 폴리라인 필드명이 path 다.
-        override suspend fun reportMyLocation(partyId: Long, request: MemberLocationRequestDto) = Unit
-        override suspend fun getMemberLocations(partyId: Long): List<MemberLocationResponse> = emptyList()
         override suspend fun previewRoute(request: RouteRequestDto): RouteEstimateResponse {
             routeRequest = request
             return RouteEstimateResponse(
@@ -278,6 +325,7 @@ class RemoteRideRepositoryTest {
             estimateFare = 9600,
             estimateTime = 14,
             route = "_p~iF~ps|U",
+            fingerprint = FINGERPRINT,
         )
     }
 
@@ -285,5 +333,8 @@ class RemoteRideRepositoryTest {
         /** 세션 uuid 와 첫 멤버의 publicId 가 같은 값이어야 "나" 판정이 성립한다. */
         const val UUID_ME = "01a06145-3caf-7614-a3bd-cee6e25316b1"
         const val UUID_OTHER = "01a06145-3caf-7614-a3bd-cee6e2531999"
+
+        /** 상세와 상태 응답이 **같은 값**을 줄 때 "안 바뀌었다"로 판정돼야 한다. */
+        const val FINGERPRINT = "9f3c1a7b4e2d0586"
     }
 }

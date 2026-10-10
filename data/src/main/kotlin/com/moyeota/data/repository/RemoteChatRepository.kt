@@ -5,7 +5,6 @@ import com.moyeota.data.remote.ChatIdentity
 import com.moyeota.data.remote.chatCall
 import com.moyeota.data.remote.dto.ChatMemberResponse
 import com.moyeota.data.remote.dto.ChatMessageResponse
-import com.moyeota.data.remote.dto.CreateChatRoomRequestDto
 import com.moyeota.data.remote.dto.SendMessageRequestDto
 import com.moyeota.data.remote.toChatMember
 import com.moyeota.data.remote.toChatMessage
@@ -120,11 +119,6 @@ class RemoteChatRepository(
     override suspend fun getChatRoom(chatRoomId: Long): ChatRoom = chatCall {
         api.getRoom(chatRoomId).toChatRoom()
     }
-
-    override suspend fun createChatRoom(partyId: Long, departure: String, destination: String): ChatRoom =
-        chatCall { api.createRoom(CreateChatRoomRequestDto(partyId, departure, destination)).toChatRoom() }
-
-    override suspend fun closeChatRoom(chatRoomId: Long) = chatCall { api.deleteRoom(chatRoomId) }
 
     override suspend fun joinChatRoom(chatRoomId: Long) = chatCall { api.joinRoom(chatRoomId) }
 

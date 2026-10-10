@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -39,7 +38,7 @@ import com.moyeota.core.designsystem.theme.MoyeotaType
  * 03 · 온보딩 — 안심 [O03]
  *
  * 진입: 02에서 다음
- * 목적: 위치 공유 · 자동 정산 안내 후 가입 유도
+ * 목적: 운행 중 긴급 신고 · 인원수 분할 요금 안내 후 가입 유도
  *
  * 인터랙션
  * - 「시작하기」 → 04 시작(로그인 방식) (onStart)
@@ -102,7 +101,7 @@ fun OnboardingSafetyScreen(
         Spacer(Modifier.height(12.dp))
 
         Text(
-            text = "운행 중 위치를 지인과 공유하고\n1/N 정산도 자동으로 끝나요",
+            text = "운행 중 긴급 신고가 바로 되고\n요금은 인원수대로 나눠 안내해요",
             style = MoyeotaType.BodyMd.copy(lineHeight = 22.sp, letterSpacing = (-0.3).sp),
             color = MoyeotaColor.TextMute,
             textAlign = TextAlign.Center,
@@ -143,19 +142,17 @@ fun OnboardingSafetyScreen(
     }
 }
 
-// 일러스트 — 지도(경로: 파란 점 → 빨간 핀) + 「보호자에게 실시간 공유 중」 배지
+// 일러스트 — 지도(경로: 파란 점 → 빨간 핀). 공유 배지는 보호자 공유 기능이 없어 뺐고, 지도를 카드 가운데에 둔다
 @Composable
 private fun SafetyIllustration(modifier: Modifier = Modifier) {
-    Column(
+    Box(
         modifier = modifier.background(MoyeotaColor.Primary50, RoundedCornerShape(24.dp)),
-        horizontalAlignment = Alignment.CenterHorizontally,
+        contentAlignment = Alignment.Center,
     ) {
-        Spacer(Modifier.height(64.dp))
-
-        // 지도 목업 (경로 라인)
+        // 지도 목업 (경로 라인) — 배지가 빠진 만큼 키워 카드를 채운다
         Box(
             modifier = Modifier
-                .size(width = 240.dp, height = 150.dp)
+                .size(width = 260.dp, height = 180.dp)
                 .background(Color(0xFFE2E7EF), RoundedCornerShape(16.dp)),
         ) {
             Canvas(modifier = Modifier.fillMaxSize()) {
@@ -189,43 +186,6 @@ private fun SafetyIllustration(modifier: Modifier = Modifier) {
                 drawCircle(color = Color.White, radius = pinRadius * 0.35f, center = pinCenter)
             }
         }
-
-        Spacer(Modifier.height(24.dp))
-
-        // 실시간 공유 배지
-        Row(
-            modifier = Modifier
-                .background(MoyeotaColor.SurfaceCanvas, CircleShape)
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(18.dp)
-                    .background(MoyeotaColor.Success500, CircleShape),
-                contentAlignment = Alignment.Center,
-            ) {
-                SafetyCheckGlyph(Modifier.size(9.dp), color = MoyeotaColor.TextOnDark)
-            }
-            Text(
-                text = "보호자에게 실시간 공유 중",
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Bold,
-                color = MoyeotaColor.InkPrimary,
-            )
-        }
-    }
-}
-
-@Composable
-private fun SafetyCheckGlyph(modifier: Modifier = Modifier, color: Color) {
-    Canvas(modifier = modifier) {
-        val stroke = 2.dp.toPx()
-        val w = size.width
-        val h = size.height
-        drawLine(color, Offset(w * 0.1f, h * 0.55f), Offset(w * 0.4f, h * 0.85f), stroke, StrokeCap.Round)
-        drawLine(color, Offset(w * 0.4f, h * 0.85f), Offset(w * 0.9f, h * 0.2f), stroke, StrokeCap.Round)
     }
 }
 

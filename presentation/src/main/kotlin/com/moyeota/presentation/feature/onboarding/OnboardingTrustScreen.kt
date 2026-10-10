@@ -42,7 +42,7 @@ import com.moyeota.core.designsystem.theme.MoyeotaType
  * 02 · 온보딩 — 신뢰 [O02]
  *
  * 진입: 01에서 다음
- * 목적: 인증 사용자만 매칭된다는 신뢰 전달
+ * 목적: 같은 방향·같은 성별끼리 매칭된다는 신뢰 전달
  *
  * 인터랙션
  * - 「다음」 → 03 온보딩 안심 (onNext)
@@ -103,7 +103,7 @@ fun OnboardingTrustScreen(
         Spacer(Modifier.height(12.dp))
 
         Text(
-            text = "인증을 마친 이용자만 매칭되고\n같은 성별끼리만 함께 타요",
+            text = "같은 방향 사람과 매칭되고\n같은 성별끼리만 함께 타요",
             style = MoyeotaType.BodyMd.copy(lineHeight = 22.sp, letterSpacing = (-0.3).sp),
             color = MoyeotaColor.TextMute,
             textAlign = TextAlign.Center,
