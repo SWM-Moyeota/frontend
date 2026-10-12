@@ -81,9 +81,20 @@ private val TrackGray = Color(0xFFE6EAF0)
  * 자리가 없어 어디로도 가지 않는 값이었지만, 이제 [SignupDraft.nickname] 으로 그대로 서버에 간다.
  * 규칙도 서버 VO 와 같은 [NicknamePolicy] 로 맞췄다(2~10자 한글·영문·숫자).
  *
+ * 2026-10 서버 변경으로 **휴대폰 문자 인증이 가입 선행 조건**이 됐다. 인증을 별도 화면으로 빼지 않고
+ * 휴대폰 입력란 바로 아래 [PhoneVerificationBlock] 으로 넣었다 — 이유는 그 함수 KDoc 에 적었다.
+ * 그래서 이 화면은 서버 가입 **9개 값**(기존 8 + `verificationToken`)을 모두 책임지고,
+ * 인증을 끝내지 않으면 「다음」이 열리지 않는다(토큰 없이 제출하면 가입이 전부 400 이다).
+ *
  * @param nicknameCheck 중복 확인 결과. 입력이 멈춘 뒤 [ProfileSetupRoute] 가 서버에 물어 갱신한다.
  * @param onNicknameChange 입력이 바뀔 때마다 호출 — 디바운스는 Route 가 한다.
- * @param onNext 「다음」 → 12 매너 서약. [SignupDraft] 가 서버로 갈 8개 값 전부다.
+ * @param phoneVerify 문자 인증 상태. 전이 규칙은 [PhoneVerifyState] 의 순수 함수들이 갖고,
+ *   이 화면은 그 결과를 그리고 번호 입력란을 잠그는 일만 한다.
+ * @param nowMillis 카운트다운(인증번호 3분·재전송 1분) 기준 시각. Route 의 ViewModel 이 틱마다 올려 준다.
+ * @param onPhoneDigitsChange 번호가 바뀔 때마다 호출 — 다른 번호가 되면 인증이 무효가 된다.
+ * @param onRequestVerificationCode 「인증번호 받기」. 번호를 인자로 넘기는 이유는 입력값의 주인이
+ *   이 화면이기 때문이다 — ViewModel 이 번호를 따로 들고 있으면 두 곳이 어긋날 수 있다.
+ * @param onNext 「다음」 → 12 매너 서약. [SignupDraft] 가 서버로 갈 9개 값 전부다.
  */
 @Composable
 fun ProfileSetupScreen(
@@ -92,6 +103,14 @@ fun ProfileSetupScreen(
     modifier: Modifier = Modifier,
     nicknameCheck: NicknameCheckState = NicknameCheckState.Idle,
     onNicknameChange: (String) -> Unit = {},
+    phoneVerify: PhoneVerifyState = PhoneVerifyState(),
+    nowMillis: Long = 0L,
+    onPhoneDigitsChange: (String) -> Unit = {},
+    onRequestVerificationCode: (phoneDigits: String) -> Unit = {},
+    onVerificationCodeChange: (String) -> Unit = {},
+    onSubmitVerificationCode: () -> Unit = {},
+    onPhoneEditRequested: () -> Unit = {},
+    onGoToLogin: () -> Unit = {},
 ) {
     // rememberSaveable 이어야 하는 이유: 12 매너 서약에서 가입이 409(닉네임 중복)로 실패하면
     // 「닉네임 바꾸기」가 이 화면으로 popBackStack 한다. 그 사이 이 엔트리는 컴포지션에서 빠져 있어
@@ -135,14 +154,20 @@ fun ProfileSetupScreen(
 
     // 8자리를 채웠을 때만 실제로 있는 날짜인지까지 본다(20250230 같은 값 차단)
     val birthDate = parseBirthDate(birthDigits)
+    // 서버는 생년월일을 Instant 로 받아 @Past 로 검사하고, data 매퍼는 날짜를 UTC 자정으로 올려 보낸다
+    // — 그래서 "오늘"을 고르면 09:00 KST 이전에는 UTC 자정이 아직 미래라 가입이 400 으로 떨어진다.
+    // AuthPolicy.isValidBirthDate 가 그 틈(UTC 기준 오늘 이후)을 미리 막는다.
+    val birthValid = birthDate != null && AuthPolicy.isValidBirthDate(birthDate)
     val birthError = when {
         birthDigits.length < 8 -> null
         birthDate == null -> "실제로 있는 날짜를 YYYYMMDD 로 입력해 주세요"
+        !birthValid -> "생년월일은 오늘 이전 날짜로 입력해 주세요"
         else -> null
     }
 
-    // 휴대폰 — 010 + 숫자 8자리, 하이픈은 표시에만
-    val phoneValid = phoneDigits.length == 11 && phoneDigits.startsWith("010")
+    // 휴대폰 — 010 + 숫자 8자리, 하이픈은 표시에만. 판정은 인증 블록과 같은 함수를 쓴다
+    // (「인증번호 받기」는 활성인데 「다음」은 번호가 틀렸다고 막는 어긋남을 구조적으로 없앤다)
+    val phoneValid = isCompletePhoneDigits(phoneDigits)
     val phoneError = when {
         phoneDigits.isEmpty() -> null
         phoneDigits.length >= 3 && !phoneDigits.startsWith("010") ->
@@ -169,13 +194,16 @@ fun ProfileSetupScreen(
         else -> null
     }
 
-    val basicValid = realNameValid && birthDate != null && gender != null && phoneValid
+    val basicValid = realNameValid && birthValid && gender != null && phoneValid
+    // 문자 인증 없이 제출하면 서버가 가입을 400 으로 전부 거절한다 — 여기서 먼저 막는다
+    val phoneVerified = phoneVerify.stage == PhoneVerifyStage.Verified
     val accountValid = loginId.isNotEmpty() && loginIdError == null &&
         password.isNotEmpty() && passwordError == null &&
         email.isNotEmpty() && emailError == null
     // 중복 확인이 아직 진행 중이거나 네트워크로 실패했어도 다음 단계는 막지 않는다
     // — 서버가 가입 시점에 409 로 최종 판정하고, 12 화면이 그 실패를 배너로 되돌려 준다.
-    val isValid = NicknamePolicy.isValid(nickname) && nicknameError == null && basicValid && accountValid
+    val isValid = NicknamePolicy.isValid(nickname) && nicknameError == null &&
+        basicValid && phoneVerified && accountValid
 
     Column(modifier = modifier.fillMaxSize().imePadding().background(MoyeotaColor.SurfaceSoft)) {
         StatusBarSpacer()
@@ -320,12 +348,37 @@ fun ProfileSetupScreen(
             Spacer(Modifier.height(20.dp))
             MoyeotaTextField(
                 value = phoneDigits,
-                onValueChange = { new -> phoneDigits = new.filter { it.isDigit() }.take(11) },
+                onValueChange = { new ->
+                    phoneDigits = new.filter { it.isDigit() }.take(11)
+                    // 번호가 바뀌면 인증이 무효다 — 무효화 판정은 Route 의 순수 전이가 한다
+                    onPhoneDigitsChange(phoneDigits)
+                },
                 label = "휴대폰 번호",
                 placeholder = "010-1234-5678",
-                errorText = phoneError,
+                // 형식 오류(앱 판정)를 서버 응답 문구보다 앞세운다 — 고칠 곳이 더 구체적이다
+                errorText = phoneError ?: phoneVerify.phoneMessage,
+                // 「다음」이 왜 잠겨 있는지를 비활성 버튼만으로는 알 수 없다 — 아직 인증을 시작하지
+                // 않았을 때만 한 줄로 알려준다(인증 중·완료 상태는 블록이 스스로 말한다)
+                helperText = if (phoneVerify.stage == PhoneVerifyStage.Idle) {
+                    "인증번호를 받아 확인해야 가입할 수 있어요"
+                } else {
+                    null
+                },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
                 visualTransformation = PhoneNumberTransformation,
+                // 인증을 끝낸 번호는 잠근다: 서버가 토큰을 번호에 묶으므로 한 글자만 고쳐도 가입이 400 이다.
+                // 고치려면 블록의 「번호 변경」을 눌러 인증을 버리는 쪽으로만 길을 둔다.
+                enabled = !phoneVerified,
+            )
+            PhoneVerificationBlock(
+                state = phoneVerify,
+                nowMillis = nowMillis,
+                phoneDigits = phoneDigits,
+                onRequestCode = { onRequestVerificationCode(phoneDigits) },
+                onCodeChange = onVerificationCodeChange,
+                onSubmitCode = onSubmitVerificationCode,
+                onPhoneEditRequested = onPhoneEditRequested,
+                onGoToLogin = onGoToLogin,
             )
 
             Spacer(Modifier.height(28.dp))
@@ -418,12 +471,16 @@ fun ProfileSetupScreen(
                             email = email,
                             nickname = nickname.trim(),
                             name = realName.trim(),
-                            // 서버에는 하이픈이 든 형식으로 보낸다 — 표시용 포매터를 그대로 재사용
-                            phoneNumber = PhoneNumberTransformation.format(phoneDigits),
+                            // 하이픈 없는 숫자열로 넘긴다 — **문자 인증에 쓴 번호와 글자 단위로 같은 값**이다.
+                            // 서버는 번호를 해시해 토큰과 대조하므로(하이픈은 서버도 떼므로 결과는 같다)
+                            // 표기가 갈리면 "인증은 됐는데 가입이 400" 을 디버깅할 때 번호부터 의심하게 된다.
+                            phoneNumber = phoneDigits,
                             birthDate = birth,
                             gender = genderValue,
                             loginId = loginId,
                             password = password,
+                            // 인증 블록이 받아 둔 토큰. 비어 있으면 「다음」이 열리지 않는다(isValid)
+                            verificationToken = phoneVerify.token,
                         ),
                     )
                 },

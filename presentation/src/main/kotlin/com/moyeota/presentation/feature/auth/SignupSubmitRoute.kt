@@ -35,6 +35,15 @@ class SignupViewModel(private val repository: AuthRepository) : ViewModel() {
          * 이 화면에서는 고칠 수 없는 값이라 12 는 배너에 "닉네임 바꾸기" 를 함께 띄우고 10 으로 되돌린다.
          */
         val nicknameDuplicated: Boolean = false,
+        /**
+         * 400 `USER207` — 가입에 실은 `verificationToken` 이 거절됐다(만료·소진·번호 불일치).
+         *
+         * **가입 실패 중 유일하게 문자 인증을 다시 받아야 하는 경우**다
+         * ([signupErrorNeedsReverify]). 아이디·닉네임 중복(409)은 토큰을 태우지 않으므로
+         * 여기서 재시도하거나 10 으로 돌아가 입력만 고치면 된다 — 그 경우에까지 재인증을 시키면
+         * 고칠 곳이 닉네임 한 글자인데 문자부터 다시 받게 하는 셈이다.
+         */
+        val phoneNotVerified: Boolean = false,
     )
 
     private val _uiState = MutableStateFlow(UiState())
@@ -56,7 +65,14 @@ class SignupViewModel(private val repository: AuthRepository) : ViewModel() {
             return
         }
         viewModelScope.launch {
-            _uiState.update { it.copy(submitting = true, errorMessage = null, nicknameDuplicated = false) }
+            _uiState.update {
+                it.copy(
+                    submitting = true,
+                    errorMessage = null,
+                    nicknameDuplicated = false,
+                    phoneNotVerified = false,
+                )
+            }
             try {
                 if (!registered) {
                     repository.register(newUser)
@@ -66,13 +82,17 @@ class SignupViewModel(private val repository: AuthRepository) : ViewModel() {
                 repository.login(newUser.loginId, newUser.password)
                 _uiState.update { it.copy(submitting = false, done = true) }
             } catch (e: Exception) {
+                val error = (e as? AuthException)?.error
                 // 닉네임 중복만 따로 표시한다 — 이 화면에 없는 필드라 되돌아갈 경로를 함께 줘야 한다
-                val duplicated = (e as? AuthException)?.error == AuthError.NICKNAME_DUPLICATED
+                val duplicated = error == AuthError.NICKNAME_DUPLICATED
+                // 토큰이 거절된 경우도 이 화면에서 고칠 수 없다 — 10 의 인증 블록으로 되돌려야 한다
+                val needsReverify = signupErrorNeedsReverify(error)
                 _uiState.update {
                     it.copy(
                         submitting = false,
                         errorMessage = e.authUserMessage(),
                         nicknameDuplicated = duplicated,
+                        phoneNotVerified = needsReverify,
                     )
                 }
             }
@@ -94,6 +114,7 @@ fun MannerPledgeRoute(
     onBack: () -> Unit = {},
     onCompleted: () -> Unit = {},
     onEditNickname: () -> Unit = {},
+    onReverifyPhone: () -> Unit = {},
 ) {
     val viewModel: SignupViewModel = viewModel(factory = SignupViewModel.factory(repository))
     val state by viewModel.uiState.collectAsState()
@@ -109,5 +130,7 @@ fun MannerPledgeRoute(
         errorMessage = state.errorMessage,
         // 닉네임 중복일 때만 10 으로 돌아가는 길을 준다 — 다른 실패는 여기서 재시도하면 된다
         onEditNickname = if (state.nicknameDuplicated) onEditNickname else null,
+        // 토큰이 거절된 경우에만 인증을 다시 하러 보낸다(10 이 인증 블록을 초기화한다)
+        onReverifyPhone = if (state.phoneNotVerified) onReverifyPhone else null,
     )
 }

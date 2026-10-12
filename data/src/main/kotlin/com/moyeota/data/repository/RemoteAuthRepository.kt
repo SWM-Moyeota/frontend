@@ -8,6 +8,8 @@ import com.moyeota.data.remote.authCall
 import com.moyeota.data.remote.dto.LoginRequestDto
 import com.moyeota.data.remote.dto.NicknameCheckRequestDto
 import com.moyeota.data.remote.dto.RefreshTokenRequestDto
+import com.moyeota.data.remote.dto.SmsSendRequestDto
+import com.moyeota.data.remote.dto.SmsVerifyRequestDto
 import com.moyeota.data.remote.dto.UpdateProfileRequest
 import com.moyeota.data.remote.toDomain
 import com.moyeota.data.remote.toDto
@@ -15,6 +17,7 @@ import com.moyeota.data.session.SessionManager
 import com.moyeota.data.session.StoredSession
 import com.moyeota.domain.model.AuthError
 import com.moyeota.domain.model.AuthException
+import com.moyeota.domain.model.AuthPolicy
 import com.moyeota.domain.model.AuthState
 import com.moyeota.domain.model.NewUser
 import com.moyeota.domain.model.UserProfileInfo
@@ -43,6 +46,38 @@ class RemoteAuthRepository(
 
     // 세션 상태의 실체는 SessionManager 다. 여기서 별도 상태를 들면 두 출처가 어긋난다.
     override val authState: StateFlow<AuthState> = session.authState
+
+    /**
+     * 번호는 보내기 전에 숫자열로 정규화한다 — 발송·확인·가입이 **같은 형태**를 쓰게 하려는 것이고,
+     * 근거는 [AuthPolicy.normalizePhoneNumber] KDoc 에 있다.
+     *
+     * 204 라 돌려받을 값이 없다. "문자가 실제로 도착했는가"는 앱이 알 방법이 없고,
+     * 서버도 발송 사업자 호출이 실패하면 502 `USER201`([AuthError.SMS_UNAVAILABLE])로 알려 준다.
+     */
+    override suspend fun sendPhoneVerificationCode(phoneNumber: String) {
+        authCall { api.sendSmsCode(SmsSendRequestDto(AuthPolicy.normalizePhoneNumber(phoneNumber))) }
+    }
+
+    /**
+     * 빈 토큰을 끊는 이유는 [register]·[getMyProfile] 의 uuid 와 같다 — 여기서 통과시키면
+     * 화면은 "인증 완료"로 넘어가고, 400 은 한참 뒤 가입 제출에서야 터진다.
+     *
+     * 코드는 다듬기만 하고 형식 검사는 하지 않는다. 입력 단계에서 막는 건 화면 몫이고
+     * ([AuthPolicy.isValidVerificationCode]), 여기서 또 막으면 서버가 횟수를 세는
+     * "틀린 시도"와 앱이 삼킨 시도가 어긋나 남은 횟수를 설명할 수 없게 된다.
+     */
+    override suspend fun verifyPhoneCode(phoneNumber: String, code: String): String {
+        val response = authCall {
+            api.verifySmsCode(
+                SmsVerifyRequestDto(
+                    phoneNumber = AuthPolicy.normalizePhoneNumber(phoneNumber),
+                    code = code.trim(),
+                ),
+            )
+        }
+        return response.verificationToken.takeIf { it.isNotBlank() }
+            ?: throw AuthException(AuthError.UNKNOWN, "인증 응답에 verificationToken 이 없습니다.")
+    }
 
     override suspend fun register(newUser: NewUser): String {
         val response = authCall { api.register(newUser.toDto()) }

@@ -7,11 +7,17 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 26 운행 중의 폴링 판단 두 개.
+ * 26 운행 중이 **33 도착 완료로 넘어가는 신호**.
  *
- * 상세 폴링을 가벼운 상태 조회로 바꾸면서 "언제 끝났다고 보는가"와 "상세를 언제 읽는가"가
- * 루프 안의 조건문이 아니라 이름 있는 규칙이 됐다 — 둘 다 한 번 틀리면 화면이 영영 안 넘어가거나
- * 타지도 않은 운행의 최종 요금이 열린다.
+ * 화면 안에 수동 트리거가 없고 이 전이에는 SSE 이벤트도 FCM 도 없어서(서버 SSE 발행처가
+ * 참여·퇴장·종료뿐) 폴링이 유일한 근거다 — 한 번 틀리면 화면이 영영 안 넘어가거나, 타지도 않은
+ * 운행의 최종 요금이 열린다.
+ *
+ * 입력이 [Ride] 인 이유: 폴링 수단이 가벼운 상태 조회에서 **방 상세**로 바뀌었다(`/status` 가
+ * 백엔드에서 삭제됐다 — `04f6be7`). 25 의
+ * [com.moyeota.presentation.feature.matching.isRideStarted] 와 같은 모양이다.
+ *
+ * 「지도용 상세를 언제 읽는가」(`shouldLoadRideDetail`)는 사라졌다 — 폴링이 주는 게 곧 그 상세다.
  */
 class RideFinishSignalTest {
 
@@ -21,31 +27,25 @@ class RideFinishSignalTest {
     )
 
     @Test
-    fun `서버 FINISHED(COMPLETED)만 28 로 넘긴다`() {
-        assertTrue(isRideFinished(RideStatus.COMPLETED))
+    fun `서버 FINISHED(COMPLETED)만 33 으로 넘긴다`() {
+        assertTrue(isRideFinished(ride(RideStatus.COMPLETED)))
     }
 
     @Test
     fun `운행 중 상태들은 끝으로 보지 않는다`() {
-        assertFalse(isRideFinished(RideStatus.ONGOING))
-        assertFalse(isRideFinished(RideStatus.DISPATCHING))
-        assertFalse(isRideFinished(RideStatus.MATCHED))
-        assertFalse(isRideFinished(RideStatus.RECRUITING))
+        assertFalse(isRideFinished(ride(RideStatus.ONGOING)))
+        assertFalse(isRideFinished(ride(RideStatus.DISPATCHING)))
+        assertFalse(isRideFinished(ride(RideStatus.MATCHED)))
+        assertFalse(isRideFinished(ride(RideStatus.RECRUITING)))
     }
 
     @Test
     fun `CANCELED 는 완료가 아니다 - 타지 않은 운행의 최종 요금을 열면 안 된다`() {
-        assertFalse(isRideFinished(RideStatus.CANCELED))
+        assertFalse(isRideFinished(ride(RideStatus.CANCELED)))
     }
 
     @Test
-    fun `상태 조회가 실패한 주기는 아직 안 끝난 것으로 본다`() {
+    fun `상세 조회가 실패한 주기는 아직 안 끝난 것으로 본다`() {
         assertFalse(isRideFinished(null))
-    }
-
-    @Test
-    fun `지도용 상세는 못 받았을 때만 읽는다`() {
-        assertTrue(shouldLoadRideDetail(null))
-        assertFalse(shouldLoadRideDetail(ride()))
     }
 }

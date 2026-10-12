@@ -39,6 +39,23 @@ class AuthenticatedPathContractTest {
     }
 
     /**
+     * 문자 인증 컨트롤러는 별 파일(`user/verification/presentation/SmsVerificationController.java`)이지만
+     * 프리픽스가 `/api/v1/auth/sms` 다 — **그래야 permitAll 구간에 들어와 가입 전(무토큰)에 부를 수 있다.**
+     * `/api/v1/sms/...` 처럼 적으면 404 가 아니라 **401** 이 나서(Security 가 미매핑 경로도 보호한다)
+     * "세션이 만료됐나"로 오해하게 된다. 두 경로는 `POST` 이고, 발송만 204 다.
+     */
+    @Test
+    fun `문자 인증 두 경로는 auth sms 프리픽스를 쓴다`() {
+        assertEquals("api/v1/auth/sms/send", AuthApi::class.java.path("sendSmsCode"))
+        assertEquals("api/v1/auth/sms/verify", AuthApi::class.java.path("verifySmsCode"))
+
+        listOf("sendSmsCode", "verifySmsCode").forEach { name ->
+            val method = AuthApi::class.java.declaredMethods.single { it.name == name }
+            assertTrue("$name 이 POST 가 아니다", method.isAnnotationPresent(POST::class.java))
+        }
+    }
+
+    /**
      * 닉네임 중복 확인은 **가입 도중, 즉 토큰이 없는 상태에서** 불린다. permitAll 구간이 `/api/v1/auth/`
      * 하위뿐이라 경로도 그쪽이어야 하고, **[AuthApi] 에 있어야 한다** — [UserApi] 는 Bearer 부착
      * 인터셉터와 401 재발급 Authenticator 가 붙은 클라이언트로 만들어지므로, 만료된 토큰이 세션에
@@ -115,16 +132,24 @@ class AuthenticatedPathContractTest {
     }
 
     /**
-     * 방 상태 조회는 상세와 **경로가 한 세그먼트 차이**다. `/status` 를 빠뜨리면 404 가 아니라
-     * 상세 응답이 와서 전 필드 기본값으로 조용히 파싱되고(status·currentMembers 는 상세에도 있다),
-     * 지문만 null 이 되어 폴링이 매번 "바뀌었다"로 판정한다 — 상세 폴링으로 되돌아간 셈이다.
-     * 컨트롤러 `@GetMapping("/matching/rooms/{partyId}/status")` 기준이고 실측으로 확인했다
-     * (`/rooms/1/status` → 200 상태 3필드, `/rooms/999999/status` → 404 PARTY_NOT_FOUND).
+     * 방 상세 경로에 **세그먼트가 붙지 않는 것**을 못박는다.
+     *
+     * 예전에는 `/status` 가 붙은 가벼운 상태 조회가 따로 있었고, 이 테스트는 둘을 혼동하지 않게
+     * 두 경로를 함께 고정했다. 백엔드가 `GET /matching/rooms/{partyId}/status` 와 지문을
+     * **삭제했으므로**(`04f6be7` — 매칭방 변화가 SSE 전용이 되어 폴링용 조회가 쓰이지 않게 됐다)
+     * 지금은 상세 하나만 남는다. `/status` 를 되살리면 **404** 다.
+     *
+     * 25·26 의 주기 조회가 이 경로로 옮겨와 **폴링이 이 한 경로에 걸려 있다** — 틀리면 두 화면이
+     * 배차·운행 전이를 영영 못 잡는다(그 전이에는 SSE 도 FCM 도 없다).
      */
     @Test
-    fun `방 상태 조회는 상세 경로 뒤에 status 를 붙인다`() {
-        assertEquals("api/v1/matching/rooms/{partyId}/status", MatchingApi::class.java.path("getPartyStatus"))
+    fun `방 상세 조회 경로에는 뒤에 붙는 세그먼트가 없다`() {
         assertEquals("api/v1/matching/rooms/{partyId}", MatchingApi::class.java.path("getPartyDetail"))
+        // 삭제된 상태 조회가 되살아나면 여기서 먼저 걸린다.
+        assertTrue(
+            "MatchingApi 에 상태 조회(/status) 메서드가 되살아났다 — 서버에 없는 경로다",
+            MatchingApi::class.java.methods.none { it.name == "getPartyStatus" },
+        )
     }
 
     @Test

@@ -6,6 +6,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -173,6 +174,11 @@ private fun MainNavHost(
     // 화면 사이에 넘겨야 하는 값 (백엔드 없는 와이어프레임 데모용 간이 상태)
     // 10 프로필 만들기가 채우는 가입 정보 — 12 매너 서약에서 제출한다
     var signupDraft by remember { mutableStateOf(SignupDraft()) }
+    // 12 가 가입에서 PHONE_NOT_VERIFIED 를 받고 10 으로 되돌려 보낸 횟수.
+    // 10 은 이 값이 바뀔 때마다 문자 인증 블록을 초기화한다 — 토큰이 서버에서 이미 죽었기 때문이다.
+    // Boolean 이 아니라 카운터인 이유: 같은 일이 두 번 일어날 수 있고(새 토큰도 또 만료될 수 있다),
+    // Boolean 이면 두 번째 신호가 "이미 true" 에 묻혀 10 이 알아채지 못한다.
+    var reverifyPhoneRequest by remember { mutableIntStateOf(0) }
     // 로그인 화면으로 돌아온 이유. 세션 만료일 때만 채워지고 사용자가 스스로 로그아웃하면 비운다.
     var signOutNotice by remember { mutableStateOf<String?>(null) }
     var logoutRequested by remember { mutableStateOf(false) }
@@ -383,6 +389,8 @@ private fun MainNavHost(
                 // 「이메일로 시작하기」 = 가입 시작 → 10 프로필 설정. 소셜(카카오) 로그인은 백엔드에 없어 제공하지 않는다
                 onEmailStart = {
                     signupDraft = SignupDraft() // 새 가입은 빈 초안에서 시작
+                    // 지난 가입에서 인증 되돌림이 있었어도 새 폼에 그 안내가 남으면 안 된다
+                    reverifyPhoneRequest = 0
                     navController.navigate(Routes.PROFILE_SETUP)
                 },
                 onLogin = { navController.navigate(Routes.LOGIN_FORM) },
@@ -402,6 +410,7 @@ private fun MainNavHost(
                 },
                 onSignUp = {
                     signupDraft = SignupDraft()
+                    reverifyPhoneRequest = 0
                     navController.navigate(Routes.PROFILE_SETUP)
                 },
                 noticeMessage = signOutNotice,
@@ -422,10 +431,14 @@ private fun MainNavHost(
                 repository = authRepository,
                 onBack = ::back,
                 onNext = { info ->
-                    // 닉네임을 포함한 서버 가입 8개 값이 이 화면에서 한 번에 채워진다
+                    // 닉네임·문자 인증 토큰을 포함한 서버 가입 9개 값이 이 화면에서 한 번에 채워진다
                     signupDraft = info
                     navController.navigate(Routes.MANNER_PLEDGE)
                 },
+                // 이미 가입된 번호(409)로 인증번호 발송이 끊겼을 때의 길 — 가입을 계속하게 두지 않고 로그인으로 보낸다.
+                // 가입 폼 위에 쌓으므로 뒤로 가면 적어 둔 입력이 그대로 있다.
+                onGoToLogin = { navController.navigate(Routes.LOGIN_FORM) },
+                reverifyPhoneRequest = reverifyPhoneRequest,
             )
         }
         composable(Routes.MANNER_PLEDGE) {
@@ -438,6 +451,12 @@ private fun MainNavHost(
                 // 409 닉네임 중복 — 10 으로 되돌린다. 스택에 남아 있는 그 엔트리로 pop 하므로
                 // 이미 채운 나머지 7개 필드는 그대로 있고 닉네임만 고치면 된다.
                 onEditNickname = { navController.popBackStack(Routes.PROFILE_SETUP, inclusive = false) },
+                // 400 USER207 — 토큰이 만료·소진됐다. 10 으로 되돌리면서 인증 블록을 초기화하라고 알린다.
+                // 입력값(rememberSaveable)은 그대로 남아 휴대폰 인증만 다시 하면 된다.
+                onReverifyPhone = {
+                    reverifyPhoneRequest++
+                    navController.popBackStack(Routes.PROFILE_SETUP, inclusive = false)
+                },
             )
         }
         composable(Routes.SIGNUP_COMPLETE) {
@@ -525,12 +544,14 @@ private fun MainNavHost(
                 repository = rideRepository,
                 partyId = selectedPartyId,
                 onDismiss = ::back,
-                // 합류 응답이 곧 최신 방 상세 — 그대로 21 매칭 대기로 넘겨 정원 도달을 기다린다.
+                // 합류가 끝나면 **방 id 만** 받아 21 매칭 대기로 넘긴다 — 합류 응답은 더 이상 방 상세가
+                // 아니고(Backend #213), 대기 화면이 SSE 첫 스냅샷으로 상세 전체를 받으므로 여기서 상세를
+                // 읽어 넘길 필요가 없다. 「이미 그 방 멤버였다」로 복구된 경우도 같은 길로 온다.
                 // (준비/출발 버튼이 사라진 뒤로 합류의 다음 단계는 22 상세가 아니라 대기다)
-                onJoined = { ride ->
-                    createdPartyId = ride.id.toLongOrNull()
-                    activePartyId = createdPartyId
-                    activePartyViewModel.rememberParty(ride.id)
+                onJoined = { joinedPartyId ->
+                    createdPartyId = joinedPartyId
+                    activePartyId = joinedPartyId
+                    activePartyViewModel.rememberParty(joinedPartyId.toString())
                     navController.navigate(Routes.MATCH_WAITING) {
                         popUpTo(Routes.JOIN_CONFIRM) { inclusive = true }
                     }

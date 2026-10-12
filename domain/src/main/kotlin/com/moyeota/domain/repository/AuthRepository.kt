@@ -23,6 +23,56 @@ interface AuthRepository {
     val authState: StateFlow<AuthState>
 
     /**
+     * 문자 인증번호 발송. POST /api/v1/auth/sms/send (**204 No Content**, 토큰 불필요).
+     *
+     * 가입 전에 불리므로 Bearer 가 붙지 않는 인증 전용 클라이언트로 나간다
+     * (`/api/v1/auth/` 하위가 서버 permitAll 구간이다).
+     *
+     * 번호는 하이픈이 있든 없든 받아서 숫자열로 정규화해 보낸다
+     * ([AuthPolicy.normalizePhoneNumber][com.moyeota.domain.model.AuthPolicy.normalizePhoneNumber]).
+     *
+     * **성공은 "문자를 보냈다"까지다.** 돌려받는 값이 없고, 코드는 서버만 안다.
+     * 로컬·dev 서버는 실제 문자를 보내지 않는다 — `provider=log` 면 서버 로그에 코드가 찍히고,
+     * dev 프로필은 `moyeota.sms.fixed-code` 가 `000000` 으로 고정돼 있다.
+     *
+     * 서버가 문자 비용을 쓰기 전에 **이미 가입된 번호인지 먼저 확인한다** — 그래서 이 단계에서
+     * 409 가 날 수 있고, 그건 "로그인하세요"라는 뜻이다.
+     *
+     * @throws com.moyeota.domain.model.AuthException
+     *   [com.moyeota.domain.model.AuthError.PHONE_NUMBER_DUPLICATED] (409 `USER104`) /
+     *   [com.moyeota.domain.model.AuthError.SMS_COOLDOWN] (429 `USER202`) /
+     *   [com.moyeota.domain.model.AuthError.SMS_DAILY_LIMIT_EXCEEDED] (429 `USER203`) /
+     *   [com.moyeota.domain.model.AuthError.SMS_UNAVAILABLE] (502 `USER201` / 503 `USER208`) /
+     *   [com.moyeota.domain.model.AuthError.INVALID_REQUEST] (400, 번호 형식 — 발송 쪽은 `@Pattern` 이 먼저 걸린다) /
+     *   [com.moyeota.domain.model.AuthError.NETWORK]
+     */
+    suspend fun sendPhoneVerificationCode(phoneNumber: String)
+
+    /**
+     * 문자 인증번호 확인. POST /api/v1/auth/sms/verify (200, 토큰 불필요).
+     *
+     * @param phoneNumber [sendPhoneVerificationCode] 에 넣은 것과 같은 번호. 표기(하이픈)는 달라도 되지만
+     *   **번호 자체가 다르면 통과하지 않는다** — 서버가 번호 해시로 저장된 코드를 찾는다.
+     * @param code 숫자 6자리([AuthPolicy.isValidVerificationCode][com.moyeota.domain.model.AuthPolicy.isValidVerificationCode]).
+     *
+     * @return 가입에 실어 보낼 `verificationToken`. 이 값을 [NewUser.verificationToken] 에 넣는다
+     *   — 수명 10분, 가입 성공 시 소진된다(상세는 [NewUser.verificationToken] KDoc).
+     *
+     * **성공하면 서버가 인증번호를 지운다.** 같은 코드로 다시 확인하면
+     * [com.moyeota.domain.model.AuthError.SMS_CODE_EXPIRED] 가 오므로, 화면은 받은 토큰을
+     * 가입 제출까지 들고 있어야 한다(재확인으로 다시 얻을 수 없다).
+     *
+     * @throws com.moyeota.domain.model.AuthException
+     *   [com.moyeota.domain.model.AuthError.SMS_CODE_MISMATCH] (400 `USER205`) /
+     *   [com.moyeota.domain.model.AuthError.SMS_CODE_EXPIRED] (400 `USER204`) /
+     *   [com.moyeota.domain.model.AuthError.SMS_TOO_MANY_ATTEMPTS] (429 `USER206`) /
+     *   [com.moyeota.domain.model.AuthError.INVALID_PHONE_NUMBER] (400 `USER105`) /
+     *   [com.moyeota.domain.model.AuthError.SMS_UNAVAILABLE] (503 `USER208`) /
+     *   [com.moyeota.domain.model.AuthError.NETWORK]
+     */
+    suspend fun verifyPhoneCode(phoneNumber: String, code: String): String
+
+    /**
      * 회원가입. POST /api/v1/auth/register (201).
      *
      * **가입은 로그인시키지 않는다** — 서버가 토큰이 아니라 uuid 만 준다.
@@ -30,9 +80,19 @@ interface AuthRepository {
      *
      * [NewUser.nickname] 은 **필수다** — 서버가 닉네임 없이는 가입을 받지 않는다.
      *
+     * [NewUser.verificationToken] 도 **필수다**(2026-10 서버 변경). 비어 있으면 서버 검증에서
+     * 400 `INVALID_REQUEST` 로 튕기므로, 화면은 [sendPhoneVerificationCode] →
+     * [verifyPhoneCode] 를 먼저 끝내고 그 토큰을 실어야 한다.
+     *
+     * **실패가 토큰을 태우지는 않는다** — 서버는 세 테이블 저장이 다 끝난 뒤에야 토큰을 지운다.
+     * 아이디·닉네임 중복(409)으로 되돌아온 사용자는 입력만 고쳐 같은 토큰으로 재시도할 수 있고,
+     * 문자 인증을 다시 받게 할 이유는 [com.moyeota.domain.model.AuthError.PHONE_NOT_VERIFIED] 뿐이다.
+     *
      * @return 생성된 사용자의 UUID 문자열
      * @throws com.moyeota.domain.model.AuthException
+     *   [com.moyeota.domain.model.AuthError.PHONE_NOT_VERIFIED] (400 `USER207`, 토큰 만료·소진·번호 불일치) /
      *   [com.moyeota.domain.model.AuthError.LOGIN_ID_DUPLICATED] (409) /
+     *   [com.moyeota.domain.model.AuthError.PHONE_NUMBER_DUPLICATED] (409 `USER104`) /
      *   [com.moyeota.domain.model.AuthError.NICKNAME_DUPLICATED] (409 `USER108`) /
      *   [com.moyeota.domain.model.AuthError.INVALID_NICKNAME] (400 `USER107`) /
      *   [com.moyeota.domain.model.AuthError.INVALID_REQUEST] (400, serverMessage 가 "필드: 사유")

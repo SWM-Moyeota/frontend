@@ -13,6 +13,7 @@ import com.moyeota.domain.model.ChatRoomMembership
 import com.moyeota.domain.model.ChatRoomStatus
 import com.moyeota.domain.model.MyChatRoom
 import com.moyeota.domain.model.NewParty
+import com.moyeota.domain.model.PartyStatus
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.model.RouteEstimate
@@ -280,7 +281,7 @@ private class FakeRideRepository(
     override suspend fun getPartiesWithin(swLat: Double, swLng: Double, neLat: Double, neLng: Double): List<Ride> =
         emptyList()
     override suspend fun createParty(request: NewParty): Ride = error("쓰이지 않는다")
-    override suspend fun joinParty(partyId: Long): Ride = error("쓰이지 않는다")
+    override suspend fun joinParty(partyId: Long): PartyStatus = error("쓰이지 않는다")
     override suspend fun leaveParty(partyId: Long) = error("쓰이지 않는다")
     override suspend fun finishParty(partyId: Long) = error("쓰이지 않는다")
     override suspend fun getAssignedDriver(partyId: Long): AssignedDriver = error("쓰이지 않는다")

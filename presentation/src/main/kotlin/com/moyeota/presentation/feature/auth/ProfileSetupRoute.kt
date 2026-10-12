@@ -1,6 +1,7 @@
 package com.moyeota.presentation.feature.auth
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.ViewModel
@@ -99,22 +100,57 @@ class NicknameCheckViewModel(private val repository: AuthRepository) : ViewModel
     }
 }
 
-// 10 프로필 만들기 — 닉네임 중복 확인(POST /auth/nickname/check) 진입점.
-// 화면 자체는 입력을 들고 있는 순수 컴포저블이고, 서버에 묻는 일만 여기로 뺐다.
+/**
+ * 10 프로필 만들기의 서버 호출 진입점 — 입력값 자체는 여전히 화면이 들고 있다.
+ *
+ * ViewModel 이 둘인 이유는 두 호출의 성격이 다르기 때문이다:
+ * - [NicknameCheckViewModel] — 입력 중 디바운스 조회 하나. 결과를 버려도 가입은 된다.
+ * - [PhoneVerifyViewModel] — **가입 통과 조건**인 토큰을 들고 있고, 쿨다운·만료 타이머를 돌린다.
+ *   둘을 한 ViewModel 로 합치면 닉네임 한 글자마다 인증 상태까지 같이 흔들리게 된다.
+ *
+ * 두 ViewModel 모두 이 NavBackStackEntry 에 묶여 **12 매너 서약에 올라가 있는 동안 살아 있다** —
+ * 닉네임 중복(409)으로 되돌아왔을 때 인증 토큰을 그대로 써야 하기 때문이다(재인증은 금지).
+ *
+ * @param reverifyPhoneRequest 12 에서 가입이 `PHONE_NOT_VERIFIED` 로 떨어져 되돌려 보낸 횟수.
+ *   값이 **바뀔 때마다** 인증 블록을 초기화한다. Boolean 이 아니라 카운터인 이유는 같은 일이
+ *   두 번 이상 일어날 수 있고(토큰이 또 만료될 수 있다), Boolean 이면 두 번째 신호를 놓치기 때문이다.
+ *   0 은 "아직 그런 일이 없었다"는 초기값이라 아무 동작도 하지 않는다.
+ * @param onGoToLogin 이미 가입된 번호(409)로 발송이 끊겼을 때 안내하는 길 — 04a 로그인으로 보낸다.
+ */
 @Composable
 fun ProfileSetupRoute(
     repository: AuthRepository,
     onBack: () -> Unit = {},
     onNext: (SignupDraft) -> Unit = {},
+    onGoToLogin: () -> Unit = {},
+    reverifyPhoneRequest: Int = 0,
 ) {
     val viewModel: NicknameCheckViewModel =
         viewModel(factory = NicknameCheckViewModel.factory(repository))
+    val phoneViewModel: PhoneVerifyViewModel =
+        viewModel(factory = PhoneVerifyViewModel.factory(repository))
     val checkState by viewModel.state.collectAsState()
+    val phoneState by phoneViewModel.state.collectAsState()
+    val nowMillis by phoneViewModel.nowMillis.collectAsState()
+
+    // 신호를 ViewModel 에 넘기고, 중복 적용 방어는 그쪽이 한다(10 의 컴포지션은 12 로 올라갈 때마다
+    // 버려지므로, 여기서 LaunchedEffect 키만으로 판단하면 12 에서 뒤로 돌아올 때도 다시 적용된다).
+    LaunchedEffect(reverifyPhoneRequest) {
+        if (reverifyPhoneRequest > 0) phoneViewModel.onSignupRejectedPhone(reverifyPhoneRequest)
+    }
 
     ProfileSetupScreen(
         onBack = onBack,
         onNext = onNext,
         nicknameCheck = checkState,
         onNicknameChange = viewModel::onNicknameChanged,
+        phoneVerify = phoneState,
+        nowMillis = nowMillis,
+        onPhoneDigitsChange = phoneViewModel::onPhoneDigitsChanged,
+        onRequestVerificationCode = phoneViewModel::requestCode,
+        onVerificationCodeChange = phoneViewModel::onCodeChanged,
+        onSubmitVerificationCode = phoneViewModel::verify,
+        onPhoneEditRequested = phoneViewModel::onPhoneEditRequested,
+        onGoToLogin = onGoToLogin,
     )
 }

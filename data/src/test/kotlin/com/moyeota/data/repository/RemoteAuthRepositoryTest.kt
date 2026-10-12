@@ -10,6 +10,9 @@ import com.moyeota.data.remote.dto.NicknameCheckResponse
 import com.moyeota.data.remote.dto.RefreshTokenRequestDto
 import com.moyeota.data.remote.dto.RegisterRequestDto
 import com.moyeota.data.remote.dto.RegisterResponse
+import com.moyeota.data.remote.dto.SmsSendRequestDto
+import com.moyeota.data.remote.dto.SmsVerifyRequestDto
+import com.moyeota.data.remote.dto.SmsVerifyResponse
 import com.moyeota.data.remote.dto.TokenResponse
 import com.moyeota.data.remote.dto.UpdateProfileRequest
 import com.moyeota.data.remote.dto.UserProfileResponse
@@ -48,6 +51,7 @@ class RemoteAuthRepositoryTest {
         phoneNumber = "010-1234-5678",
         gender = Gender.MALE,
         email = "test@moyeota.com",
+        verificationToken = "3f2b8c1e-0000-4000-8000-000000000001",
     )
 
     private fun session(initial: StoredSession? = null, storage: FakeTokenStorage = FakeTokenStorage(initial)) =
@@ -103,6 +107,136 @@ class RemoteAuthRepositoryTest {
         }.exceptionOrNull()
 
         assertEquals(AuthError.UNKNOWN, (thrown as AuthException).error)
+    }
+
+    /**
+     * 204 라 본문이 없다 — "돌려받을 게 없는 성공"이 예외 없이 끝나는지만 확인한다.
+     * 번호는 하이픈을 떼고 보낸다(발송·확인·가입 세 곳을 같은 형태로 맞추려는 것).
+     */
+    @Test
+    fun `인증번호 발송은 하이픈을 뗀 번호로 나가고 204 를 성공으로 끝낸다`() = runBlocking {
+        val api = FakeAuthApi()
+
+        repository(api, session()).sendPhoneVerificationCode("010-1234-5678")
+
+        assertEquals(SmsSendRequestDto("01012345678"), api.smsSendRequest)
+    }
+
+    /**
+     * **발송 단계에서 409 가 난다** — 서버가 문자 비용을 쓰기 전에 가입된 번호를 거른다.
+     * 화면은 인증번호 입력칸을 열기 전에 "이미 가입된 번호"를 말해야 한다.
+     */
+    @Test
+    fun `발송 409 USER104 는 이미 가입된 번호로 올라온다`() = runBlocking {
+        val api = FakeAuthApi(
+            smsSendFailure = httpException(409, """{"code":"USER104","message":"이미 가입된 전화번호입니다."}"""),
+        )
+
+        val thrown = runCatching {
+            repository(api, session()).sendPhoneVerificationCode("01012345678")
+        }.exceptionOrNull()
+
+        assertEquals(AuthError.PHONE_NUMBER_DUPLICATED, (thrown as AuthException).error)
+    }
+
+    /** 429 가 셋이라 코드를 봐야 갈린다 — 쿨다운과 하루 한도는 화면 대응이 정반대다. */
+    @Test
+    fun `발송 429 는 쿨다운과 하루 한도로 갈린다`() = runBlocking {
+        val cooldown = FakeAuthApi(
+            smsSendFailure = httpException(429, """{"code":"USER202","message":"인증번호는 1분에 한 번만 요청할 수 있습니다."}"""),
+        )
+        val daily = FakeAuthApi(
+            smsSendFailure = httpException(429, """{"code":"USER203","message":"오늘 인증번호 요청 횟수를 초과했습니다."}"""),
+        )
+
+        assertEquals(
+            AuthError.SMS_COOLDOWN,
+            (runCatching { repository(cooldown, session()).sendPhoneVerificationCode("01012345678") }
+                .exceptionOrNull() as AuthException).error,
+        )
+        assertEquals(
+            AuthError.SMS_DAILY_LIMIT_EXCEEDED,
+            (runCatching { repository(daily, session()).sendPhoneVerificationCode("01012345678") }
+                .exceptionOrNull() as AuthException).error,
+        )
+    }
+
+    @Test
+    fun `인증 확인은 토큰을 돌려주고 번호와 코드를 그대로 싣는다`() = runBlocking {
+        val api = FakeAuthApi()
+
+        val token = repository(api, session()).verifyPhoneCode("010-1234-5678", " 123456 ")
+
+        assertEquals("3f2b8c1e-0000-4000-8000-000000000001", token)
+        // 번호는 정규화하고 코드는 앞뒤 공백만 다듬는다(붙여넣기 대비).
+        assertEquals(SmsVerifyRequestDto(phoneNumber = "01012345678", code = "123456"), api.smsVerifyRequest)
+    }
+
+    /**
+     * 빈 토큰을 통과시키면 화면은 "인증 완료"로 넘어가고, 400 은 한참 뒤 가입 제출에서야 터진다.
+     * uuid 를 끊는 것과 같은 이유로 여기서 끊는다.
+     */
+    @Test
+    fun `인증 응답에 토큰이 없으면 실패로 끊는다`() = runBlocking {
+        val api = FakeAuthApi(verificationToken = "")
+
+        val thrown = runCatching {
+            repository(api, session()).verifyPhoneCode("01012345678", "123456")
+        }.exceptionOrNull()
+
+        assertEquals(AuthError.UNKNOWN, (thrown as AuthException).error)
+    }
+
+    /** 만료·불일치·시도 초과는 모두 "재발송"이냐 "다시 입력"이냐가 달라 각각 올라와야 한다. */
+    @Test
+    fun `인증 확인 실패는 코드별 사유로 올라온다`() = runBlocking {
+        val cases = listOf(
+            Triple(400, """{"code":"USER204","message":"인증번호가 만료되었습니다. 다시 요청해 주세요."}""", AuthError.SMS_CODE_EXPIRED),
+            Triple(400, """{"code":"USER205","message":"인증번호가 일치하지 않습니다."}""", AuthError.SMS_CODE_MISMATCH),
+            Triple(429, """{"code":"USER206","message":"입력 횟수를 초과했습니다. 인증번호를 다시 요청해 주세요."}""", AuthError.SMS_TOO_MANY_ATTEMPTS),
+            Triple(400, """{"code":"USER105","message":"전화번호 형식이 올바르지 않습니다."}""", AuthError.INVALID_PHONE_NUMBER),
+            Triple(503, """{"code":"USER208","message":"지금은 인증을 진행할 수 없습니다. 잠시 후 다시 시도해 주세요."}""", AuthError.SMS_UNAVAILABLE),
+        )
+
+        cases.forEach { (status, body, expected) ->
+            val api = FakeAuthApi(smsVerifyFailure = httpException(status, body))
+            val thrown = runCatching {
+                repository(api, session()).verifyPhoneCode("01012345678", "123456")
+            }.exceptionOrNull()
+
+            assertEquals(body, expected, (thrown as AuthException).error)
+        }
+    }
+
+    /**
+     * 토큰이 본문에 실리지 않으면 가입이 **전부** 400 이다(서버 `@NotBlank`).
+     * 서버가 중복 검사보다 먼저 토큰을 보므로, 이 필드가 비면 다른 입력이 멀쩡해도 끝이다.
+     */
+    @Test
+    fun `가입 요청에 문자 인증 토큰을 싣는다`() = runBlocking {
+        val api = FakeAuthApi()
+
+        repository(api, session()).register(newUser)
+
+        assertEquals("3f2b8c1e-0000-4000-8000-000000000001", api.registerRequest?.verificationToken)
+        // 인증·가입이 같은 번호 형태를 쓰는지 — 다르면 서버 해시 비교가 어긋날 소지를 남긴다.
+        assertEquals("01012345678", api.registerRequest?.phoneNumber)
+    }
+
+    /**
+     * 토큰 만료·소진·번호 불일치가 한 코드로 뭉쳐 온다. 400 폴백(INVALID_REQUEST)에 맡기면
+     * "입력한 정보를 다시 확인해 주세요"가 떠서, 인증 단계로 되돌아가야 할 사용자가
+     * 아이디·비밀번호만 고치며 맴돈다.
+     */
+    @Test
+    fun `가입 400 USER207 은 휴대폰 미인증으로 올라온다`() = runBlocking {
+        val api = FakeAuthApi(
+            registerFailure = httpException(400, """{"code":"USER207","message":"휴대폰 인증이 필요합니다."}"""),
+        )
+
+        val thrown = runCatching { repository(api, session()).register(newUser) }.exceptionOrNull()
+
+        assertEquals(AuthError.PHONE_NOT_VERIFIED, (thrown as AuthException).error)
     }
 
     @Test
@@ -406,6 +540,9 @@ private class FakeAuthApi(
     private val logoutFailure: Throwable? = null,
     private val nicknameExists: Boolean = false,
     private val nicknameFailure: Throwable? = null,
+    private val smsSendFailure: Throwable? = null,
+    private val smsVerifyFailure: Throwable? = null,
+    private val verificationToken: String = "3f2b8c1e-0000-4000-8000-000000000001",
 ) : AuthApi {
     var registerRequest: RegisterRequestDto? = null
         private set
@@ -415,6 +552,21 @@ private class FakeAuthApi(
         private set
     var logoutRequest: RefreshTokenRequestDto? = null
         private set
+    var smsSendRequest: SmsSendRequestDto? = null
+        private set
+    var smsVerifyRequest: SmsVerifyRequestDto? = null
+        private set
+
+    override suspend fun sendSmsCode(request: SmsSendRequestDto) {
+        smsSendRequest = request
+        smsSendFailure?.let { throw it }
+    }
+
+    override suspend fun verifySmsCode(request: SmsVerifyRequestDto): SmsVerifyResponse {
+        smsVerifyRequest = request
+        smsVerifyFailure?.let { throw it }
+        return SmsVerifyResponse(verificationToken = verificationToken)
+    }
 
     override suspend fun register(request: RegisterRequestDto): RegisterResponse {
         registerRequest = request

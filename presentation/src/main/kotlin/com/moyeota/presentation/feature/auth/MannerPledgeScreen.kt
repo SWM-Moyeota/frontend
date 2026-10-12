@@ -68,6 +68,15 @@ fun MannerPledgeScreen(
      * null 이면 배너만 뜬다(여기서 재시도하면 되는 실패).
      */
     onEditNickname: (() -> Unit)? = null,
+    /**
+     * 가입이 `PHONE_NOT_VERIFIED`(400 `USER207`) 로 거절됐을 때만 채워진다 — 문자 인증 토큰이
+     * 만료·소진됐거나 번호가 달라졌다는 뜻이고, 여기서 다시 눌러도 같은 400 이다.
+     * 누르면 10 으로 돌아가 인증 블록이 초기화된다.
+     *
+     * [onEditNickname] 과 동시에 채워지는 일은 없다 — 서버가 토큰을 중복 검사보다 먼저 보므로
+     * 두 실패는 같은 요청에서 함께 오지 않는다.
+     */
+    onReverifyPhone: (() -> Unit)? = null,
 ) {
     // 전체 항목 동의 필수 → 하나라도 미체크면 CTA 비활성.
     // 개수를 [pledgeItems] 에서 끌어온다 — 항목을 늘렸을 때 체크 배열이 짧아 터지는 일이 없도록.
@@ -173,10 +182,16 @@ fun MannerPledgeScreen(
             // 실패는 화면을 갈아엎지 않고 CTA 바로 위에 남긴다 — 다시 누를 곳이 아래 있기 때문
             if (errorMessage != null) {
                 NoticeBanner(kind = NoticeKind.ERROR, text = errorMessage)
-                if (onEditNickname != null) {
+                // 10 으로 되돌려야 고칠 수 있는 실패에만 링크가 붙는다. 둘은 동시에 오지 않는다.
+                val recovery = when {
+                    onEditNickname != null -> "닉네임 바꾸기" to onEditNickname
+                    onReverifyPhone != null -> "휴대폰 인증 다시 하기" to onReverifyPhone
+                    else -> null
+                }
+                if (recovery != null) {
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        text = "닉네임 바꾸기",
+                        text = recovery.first,
                         style = MoyeotaType.BodySm,
                         fontWeight = FontWeight.Bold,
                         color = MoyeotaColor.Primary500,
@@ -185,7 +200,7 @@ fun MannerPledgeScreen(
                             .clickable(
                                 interactionSource = remember { MutableInteractionSource() },
                                 indication = null,
-                                onClick = onEditNickname,
+                                onClick = recovery.second,
                             ),
                     )
                 }
