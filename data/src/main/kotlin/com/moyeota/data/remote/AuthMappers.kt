@@ -60,6 +60,9 @@ internal fun NewUser.toDto(): RegisterRequestDto = RegisterRequestDto(
  * | `USER106` | 400 | FCM 토큰이 비어 있음 |
  * | `USER107` | 400 | 닉네임 형식 위반 |
  * | `USER108` | 409 | 닉네임 중복 |
+ * | `USER109` | 409 | 탈퇴한 번호의 재가입 제한 기간(30일) |
+ * | `USER110` | 409 | 진행 중인 합승이 있어 탈퇴 불가 |
+ * | `USER111` | 400 | 탈퇴 본인 확인 비밀번호 불일치 |
  * | `USER201` | 502 | 문자 발송 실패 |
  * | `USER202` | 429 | 재발송 대기(1분) |
  * | `USER203` | 429 | 하루 발송 한도(5회) 초과 |
@@ -78,10 +81,12 @@ internal fun NewUser.toDto(): RegisterRequestDto = RegisterRequestDto(
  * 특히 **로그인 실패와 세션 만료가 둘 다 401** 이라 상태 코드 폴백만으로는 구분되지 않는다
  * — `USER102` 를 놓치면 아이디/비밀번호 오류에 "다시 로그인해 주세요"가 뜬다.
  *
- * 같은 이유로 **409 는 세 가지 뜻을 갖는다** — 아이디(`USER101`)·전화번호(`USER104`)·닉네임(`USER108`) 중복.
- * 서버 검사 순서가 loginId → phoneNumber → nickname 이라 셋 중 하나만 올라오는데,
+ * 같은 이유로 **409 는 다섯 가지 뜻을 갖는다** — 아이디(`USER101`)·전화번호(`USER104`)·닉네임(`USER108`)
+ * 중복에, 탈퇴 계열 둘(`USER109` 재가입 제한 · `USER110` 진행 중 합승)이 2026-10 에 더해졌다.
+ * 가입 쪽 셋은 서버 검사 순서가 loginId → phoneNumber → nickname 이라 하나만 올라오고,
  * 코드를 놓치고 상태 코드로 폴백하면 무엇이 겹쳤든 "이미 사용 중인 아이디예요"가 떠서
- * 사용자가 아이디만 계속 바꾸게 된다.
+ * 사용자가 아이디만 계속 바꾸게 된다. **탈퇴 화면에서는 그 폴백이 더 나쁘다** — 아이디를 입력한 적도
+ * 없는 화면에 아이디 중복 안내가 뜬다.
  */
 internal fun Throwable.toAuthException(): AuthException = when (this) {
     is AuthException -> this
@@ -95,6 +100,11 @@ internal fun Throwable.toAuthException(): AuthException = when (this) {
             "USER105" -> AuthError.INVALID_PHONE_NUMBER
             "USER107" -> AuthError.INVALID_NICKNAME
             "USER108" -> AuthError.NICKNAME_DUPLICATED
+            // 탈퇴 계열(2026-10, Backend #206). 셋 다 화면 대응이 서로 다르므로 하나도 합치지 않는다 —
+            // 109 는 가입(문자 발송) 경로, 110·111 은 탈퇴 경로에서 난다.
+            "USER109" -> AuthError.REJOIN_RESTRICTED
+            "USER110" -> AuthError.ONGOING_PARTY_EXISTS
+            "USER111" -> AuthError.PASSWORD_MISMATCH
             // 문자 인증. 둘(201/208)만 합치고 나머지는 그대로 남긴다 — 위 표 아래 주석에 근거.
             "USER201", "USER208" -> AuthError.SMS_UNAVAILABLE
             "USER202" -> AuthError.SMS_COOLDOWN

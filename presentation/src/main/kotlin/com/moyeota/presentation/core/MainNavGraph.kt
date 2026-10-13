@@ -16,6 +16,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.compose.LifecycleResumeEffect
+import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -53,6 +54,7 @@ import com.moyeota.presentation.feature.matching.DispatchStatusRoute
 import com.moyeota.presentation.feature.matching.MatchWaitingRoute
 import com.moyeota.presentation.feature.matching.PartnerProfileScreen
 import com.moyeota.presentation.feature.matching.RideDetailRoute
+import com.moyeota.presentation.feature.mypage.AccountDeleteRoute
 import com.moyeota.presentation.feature.mypage.MyPageScreen
 import com.moyeota.presentation.feature.mypage.ModeDebugOptions
 import com.moyeota.presentation.feature.mypage.ProfileEditRoute
@@ -162,6 +164,16 @@ private fun MainNavHost(
     // 컴포지션 스코프라 화면이 사라지면 함께 멈춘다.
     LaunchedEffect(activePartyViewModel) { activePartyViewModel.pollChatRoom() }
 
+    // 위 폴링(10초 주기 `GET /chat-rooms/me`)을 **앱이 백그라운드로 가면 멈춘다.**
+    // 컴포지션 스코프만으로는 부족하다 — 이 ViewModel 과 NavHost 는 액티비티 스코프라
+    // 홈 버튼을 눌러도 살아 있어서, 배선이 없으면 앱을 쓰지 않는 동안에도 10초마다 요청이 나간다
+    // (17 탐색의 4초 폴링과 같은 종류의 누수다). RESUMED 가 아니라 STARTED 를 쓰는 이유는
+    // ActivePartyViewModel.onHostStart KDoc 에 있다(NavHost 는 전환 애니메이션이 끝나야 RESUMED 다).
+    LifecycleStartEffect(activePartyViewModel) {
+        activePartyViewModel.onHostStart()
+        onStopOrDispose { activePartyViewModel.onHostStop() }
+    }
+
     // 앱을 다시 앞으로 가져올 때마다 재조회한다 — 배경에 있는 동안 방이 끝났을 수 있다.
     // 탭 진입마다의 재조회는 각 화면(홈·합승)의 LaunchedEffect 가 따로 건다.
     LifecycleResumeEffect(Unit) {
@@ -182,6 +194,12 @@ private fun MainNavHost(
     // 로그인 화면으로 돌아온 이유. 세션 만료일 때만 채워지고 사용자가 스스로 로그아웃하면 비운다.
     var signOutNotice by remember { mutableStateOf<String?>(null) }
     var logoutRequested by remember { mutableStateOf(false) }
+    // 37 탈퇴가 **요청을 보내기 직전에** 세우는 표시. [logoutRequested] 와 같은 장치이지만 값이 셋으로
+    // 갈리기 때문에 분리했다: 탈퇴는 세션 만료 안내를 지우는 데 그치지 않고 자기 안내를 띄운다.
+    // 요청 **전에** 세우는 이유는 성공 시 세션 전이가 응답 처리보다 먼저 도착하기 때문이다
+    // (아래 LaunchedEffect 가 NavHost 보다 앞에 선언돼 있어 같은 컴포지션에서 먼저 돈다).
+    // 탈퇴가 실패하면 AccountDeleteRoute 가 되돌린다 — 안 되돌리면 나중의 진짜 세션 만료가 조용해진다.
+    var accountDeleted by remember { mutableStateOf(false) }
     var searchInitialQuery by remember { mutableStateOf("") }
     // 15 에서 고른 출발지·도착지(좌표 포함) — 16 방 생성에 필요하다.
     // 15 는 출발지(고른 곳 또는 실위치)가 있어야만 16 으로 넘긴다. 15 를 거치지 않은 복원 진입이면 null — 16 이 안내만 한다.
@@ -314,10 +332,19 @@ private fun MainNavHost(
     var wasLoggedIn by remember { mutableStateOf(loggedIn) }
     LaunchedEffect(loggedIn) {
         if (wasLoggedIn && !loggedIn) {
-            signOutNotice = if (logoutRequested) null else "세션이 만료됐어요. 다시 로그인해 주세요"
+            // 세 경로가 같은 전이로 들어온다 — 탈퇴 · 사용자의 로그아웃 · 재발급까지 실패한 세션 만료.
+            // 안내가 서로 달라야 한다: 스스로 탈퇴한 사람에게 「세션이 만료됐어요」는 오해를 주고,
+            // 아무 안내도 없으면 탈퇴가 처리된 건지 알 수 없다.
+            signOutNotice = when {
+                accountDeleted -> "탈퇴가 처리됐어요. 그동안 이용해 주셔서 고마웠어요"
+                logoutRequested -> null
+                else -> "세션이 만료됐어요. 다시 로그인해 주세요"
+            }
+            accountDeleted = false
             logoutRequested = false
             // 로컬 기억은 남긴다(계정에 매인 값이라 같은 계정 재로그인 시 되살아나야 한다) —
-            // 화면이 들고 있던 값만 버린다
+            // 화면이 들고 있던 값만 버린다. 탈퇴는 예외로 디스크 기억까지 지우는데, 그건 여기가 아니라
+            // AuthRepository.deleteAccount 가 세션을 비우면서 함께 한다(계정이 사라져 되살아날 길이 없다).
             activePartyViewModel.forget()
             resetAfterSignOut(Routes.LOGIN_FORM)
         }
@@ -771,6 +798,7 @@ private fun MainNavHost(
                     logoutRequested = true
                     scope.launch { authRepository.logout() }
                 },
+                onDeleteAccount = { navController.navigate(Routes.ACCOUNT_DELETE) },
                 onTabSelect = ::navigateTab,
                 // 디버그 빌드 전용 — 서버 모드와 무관하게 동승/택시 화면을 강제해 본다. 릴리스엔 없다.
                 modeDebug = if (debuggable) {
@@ -797,6 +825,23 @@ private fun MainNavHost(
                     profileViewModel.refresh()
                     back()
                 },
+            )
+        }
+        composable(Routes.ACCOUNT_DELETE) {
+            // 37 회원 탈퇴 — DELETE /api/v1/users/me.
+            //
+            // 성공 뒤의 이동을 여기서 하지 않는다. 탈퇴가 204 를 받으면 Repository 가 세션을 비우고
+            // authState 가 전이하므로, 위의 로그인 전이 LaunchedEffect 가 스택을 통째로 비우며
+            // 04a 로 보낸다(이 화면도 그때 사라진다). 여기서 또 navigate 하면 전이와 겹친다.
+            //
+            // accountDeleted 를 **요청 직전에** 세우는 이유는 그 LaunchedEffect 가 NavHost 보다 앞에
+            // 선언돼 있어 같은 컴포지션에서 먼저 돌기 때문이다 — 응답을 받은 뒤에 세우면 늦어서
+            // 전이가 이미 「세션이 만료됐어요」로 처리된다.
+            AccountDeleteRoute(
+                repository = authRepository,
+                onBack = ::back,
+                onSessionEndExpected = { accountDeleted = true },
+                onSessionKept = { accountDeleted = false },
             )
         }
     }

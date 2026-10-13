@@ -111,6 +111,11 @@ internal fun authErrorMessage(error: AuthError, serverMessage: String? = null): 
     // 전화번호 중복은 "계정이 이미 있다"는 뜻이라, 고칠 곳(로그인)을 함께 알려준다.
     // 2026-10 부터는 가입이 아니라 **인증번호 발송 단계**에서 먼저 난다 — 문자를 기다리게 하지 않는다.
     AuthError.PHONE_NUMBER_DUPLICATED -> "이미 가입된 번호예요. 로그인해서 이어가 주세요"
+    // 같은 409, 같은 발송 단계인데 할 일이 정반대다 — 위쪽은 "로그인하세요"지만 여기엔 로그인할 계정이 없다.
+    // 기다리는 수밖에 없는 상황이라 재시도를 권하지 않고 쓸 수 있는 선택지(다른 번호)를 말한다.
+    // 서버 쓸어내기가 하루 한 번이라 "정확히 30일 뒤"라고 약속하지 않는다(AuthPolicy.REJOIN_RESTRICTED_DAYS).
+    AuthError.REJOIN_RESTRICTED ->
+        "탈퇴한 번호는 ${AuthPolicy.REJOIN_RESTRICTED_DAYS}일 동안 다시 가입할 수 없어요. 기간이 지난 뒤에 가입하거나 다른 번호를 써 주세요"
     AuthError.NICKNAME_DUPLICATED -> "이미 사용 중인 닉네임이에요"
     AuthError.INVALID_NICKNAME -> "닉네임은 한글·영문·숫자 2~10자로 입력해 주세요"
     // 닉네임 형식 오류는 두 코드로 온다 — 서버 VO 가 먼저 걸리면 USER107, Bean Validation 이
@@ -143,6 +148,13 @@ internal fun authErrorMessage(error: AuthError, serverMessage: String? = null): 
     AuthError.PHONE_NOT_VERIFIED -> "휴대폰 인증이 만료됐어요. 인증을 다시 하고 가입을 마쳐 주세요"
     // 사용자 입력 문제가 아니다 — 무엇을 고쳐야 할지 찾게 만들지 않는다
     AuthError.SMS_UNAVAILABLE -> "문자 인증이 일시적으로 안 되고 있어요. 잠시 뒤 다시 시도해 주세요"
+
+    // ── 회원 탈퇴 (2026-10 신규, 37 탈퇴 화면) ──
+    // 둘 다 409 라 코드를 놓치면 "이미 사용 중인 아이디예요"(409 폴백)가 탈퇴 화면에 뜬다.
+    // 할 일을 한 줄에 담는다 — 「나가기」가 어디 있는지는 사용자가 이미 안다(21·25·26 의 버튼).
+    AuthError.ONGOING_PARTY_EXISTS -> "진행 중인 합승이 있어요. 합승에서 먼저 나간 뒤에 탈퇴해 주세요"
+    // 로그인 실패(401)와 달리 세션은 살아 있다 — "다시 로그인"이 아니라 "다시 입력"이다.
+    AuthError.PASSWORD_MISMATCH -> "비밀번호가 일치하지 않아요"
 
     AuthError.SESSION_EXPIRED -> "다시 로그인해 주세요"
     AuthError.NETWORK -> "네트워크 연결을 확인해 주세요"

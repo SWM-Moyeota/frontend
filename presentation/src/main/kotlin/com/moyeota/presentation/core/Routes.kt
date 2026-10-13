@@ -66,4 +66,15 @@ object Routes {
     const val RIDE_COMPLETE = "ride/complete"                // 33 S18
     const val MYPAGE = "mypage"                              // 35 S24
     const val PROFILE_EDIT = "mypage/profile-edit"           // 36 신규 (닉네임 수정)
+
+    /**
+     * 37 회원 탈퇴 (신규, 2026-10) — `DELETE /api/v1/users/me`. Google Play 계정 삭제 요건.
+     *
+     * 다이얼로그가 아니라 **별 화면**인 이유는 [com.moyeota.presentation.feature.mypage.AccountDeleteScreen]
+     * KDoc 에 있다(서버가 비밀번호를 본문으로 요구한다 → 입력란 + 두 가지 실패 표시 + 경고 네 줄).
+     *
+     * 성공 뒤의 이동을 이 라우트가 하지 않는다 — 세션이 사라지면 [MainNavGraph] 의 로그인 전이
+     * 감지가 04a 로 보내면서 스택을 통째로 비운다(이 화면도 그때 사라진다).
+     */
+    const val ACCOUNT_DELETE = "mypage/account-delete"       // 37 신규 (회원 탈퇴)
 }

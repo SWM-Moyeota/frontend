@@ -28,6 +28,24 @@ enum class AuthError {
     PHONE_NUMBER_DUPLICATED,
 
     /**
+     * 409 `USER109` REJOIN_RESTRICTED — 탈퇴한 번호의 재가입 제한 기간
+     * ([AuthPolicy.REJOIN_RESTRICTED_DAYS][com.moyeota.domain.model.AuthPolicy.REJOIN_RESTRICTED_DAYS]일)이
+     * 아직 지나지 않았다.
+     *
+     * **[PHONE_NUMBER_DUPLICATED] 와 같은 409 이고 같은 자리에서 난다** — 서버
+     * `SmsVerificationService.send` 가 번호 중복을 먼저 보고, 바로 다음 줄에서 탈퇴 기록을 본다.
+     * 즉 가입 흐름에서 이 에러를 만나는 지점은 `register` 가 아니라
+     * [AuthRepository.sendPhoneVerificationCode][com.moyeota.domain.repository.AuthRepository.sendPhoneVerificationCode]다
+     * (문자 비용을 쓰기 전에 끊는다).
+     *
+     * 코드를 놓쳐 409 폴백으로 떨어지면 「이미 사용 중인 아이디예요」가 뜬다 — 사용자는 아이디를
+     * 계속 바꿔 보게 되고, 진짜 원인(그 번호로는 지금 가입할 수 없다)은 영영 보이지 않는다.
+     * [PHONE_NUMBER_DUPLICATED] 와도 합치면 안 된다: 그쪽은 「로그인하세요」가 답이지만
+     * 여기서는 로그인할 계정 자체가 없다.
+     */
+    REJOIN_RESTRICTED,
+
+    /**
      * 400 `USER107` INVALID_NICKNAME — 닉네임 형식 위반(2~10자 한글·영문·숫자가 아니다).
      *
      * [INVALID_REQUEST] 와 굳이 나눈 이유: 닉네임 중복 확인
@@ -110,6 +128,35 @@ enum class AuthError {
     SMS_UNAVAILABLE,
 
     /**
+     * 409 `USER110` ONGOING_PARTY_EXISTS — 진행 중인 합승이 있어 탈퇴할 수 없다.
+     *
+     * 서버 판정 기준은 "CANCELED·FINISHED 가 아닌 방에 멤버로 들어가 있는가"다
+     * (`PartyOngoingChecker` → `Parties.existsOngoingByMemberId`). 즉 모집 중인 방도 포함이며,
+     * **앱이 미리 막을 수 없다** — "지금 내가 타고 있는 방"을 묻는 엔드포인트가 없어
+     * ([ActivePartyRepository][com.moyeota.domain.repository.ActivePartyRepository] 가 로컬 기억으로
+     * 흉내 내는 중이다) 로컬 기억이 비어 있어도 서버에는 방이 남아 있을 수 있다.
+     * 그래서 이건 "버튼을 잠글 조건"이 아니라 **눌러 본 뒤 받는 안내**다.
+     *
+     * 사용자가 할 일은 하나다: 합승에서 먼저 나오고 다시 탈퇴한다.
+     *
+     * **아이디 중복과 같은 409 라 코드를 놓치면 「이미 사용 중인 아이디예요」가 뜬다**
+     * (409 폴백이 [LOGIN_ID_DUPLICATED] 다) — 탈퇴 화면에 아이디 이야기가 뜨는 꼴이다.
+     */
+    ONGOING_PARTY_EXISTS,
+
+    /**
+     * 400 `USER111` PASSWORD_MISMATCH — 탈퇴 본인 확인 비밀번호가 틀렸다.
+     *
+     * 서버는 비밀번호가 없는 계정(소셜)에도 같은 코드를 쓴다 — 지금은 로컬 가입만 있어 실제로는
+     * 오타뿐이다. 로그인 실패([LOGIN_FAILED], 401)와 달리 **세션은 그대로 살아 있다**:
+     * [SESSION_EXPIRED] 로 뭉치면 멀쩡한 사용자를 로그인 화면으로 쫓아낸다.
+     *
+     * 화면은 이 하나만 **입력란 오류**로 그리고, 나머지 실패는 배너로 돌린다 — 고칠 곳이 입력란에 있는
+     * 유일한 실패이기 때문이다.
+     */
+    PASSWORD_MISMATCH,
+
+    /**
      * 400 INVALID_REQUEST — 서버 검증 실패. 서버 message 가 "필드: 사유" 형태라
      * [AuthException.serverMessage] 를 그대로 보여줘도 사용자에게 의미가 통한다.
      */
@@ -118,6 +165,12 @@ enum class AuthError {
     /**
      * 리프레시 재발급까지 실패해 세션이 끝났다(만료·회전·로그아웃·탈퇴).
      * 서버가 사유를 401 하나로 뭉치므로 앱의 대응도 "재로그인" 하나다.
+     *
+     * **스스로 탈퇴한 직후에는 이 값이 보이지 않아야 한다.** 탈퇴가 성공하면 서버가 토큰을 즉시
+     * 무효화하므로(인증 캐시까지 비운다 — 남은 수명이 있는 액세스 토큰도 바로 막힌다) 그 뒤의 요청은
+     * 전부 401 이 되는데, [AuthRepository.deleteAccount][com.moyeota.domain.repository.AuthRepository.deleteAccount]
+     * 가 204 를 받은 자리에서 로컬 세션을 비우므로 401 을 맞을 요청 자체가 남지 않는다.
+     * 여기까지 올라온다면 그 정리가 새고 있다는 신호다.
      */
     SESSION_EXPIRED,
 

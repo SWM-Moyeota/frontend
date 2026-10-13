@@ -93,6 +93,21 @@ object AuthPolicy {
     const val SMS_MAX_VERIFY_ATTEMPTS = 5
 
     /**
+     * 탈퇴한 번호로 다시 가입할 수 없는 기간(일). 서버 `UserDeletions.RETENTION` = 30일.
+     *
+     * 서버가 이 값을 **두 곳에 같이 쓴다**: 재가입 차단 판정(`existsDeletedSince`)과 탈퇴 번호 기록
+     * 삭제(`UserDeletionSweeper`, 매일 04:00 KST). 그래서 "차단 기간"과 "보관 기간"이 같은 수다
+     * — 탈퇴 안내 문구에 보관 기간을 따로 적을 필요가 없다.
+     *
+     * 쓸 곳이 두 군데다: 탈퇴 화면의 경고 문구와 가입 실패([AuthError.REJOIN_RESTRICTED]) 안내.
+     * 두 화면이 서로 다른 숫자를 말하면 둘 중 하나는 거짓말이 되므로 한 상수를 본다.
+     *
+     * 쓸어내기가 하루 한 번이라 **실제로는 최대 하루 더 막힐 수 있다**(서버 KDoc 이 명시한다) —
+     * 문구에 "정확히 30일 뒤"라고 약속하지 않는 이유다.
+     */
+    const val REJOIN_RESTRICTED_DAYS = 30
+
+    /**
      * 닉네임: 2~10자의 한글·영문·숫자. 공백과 특수문자는 불가하다.
      * 서버 도메인 VO `Nickname` 의 정규식을 그대로 옮긴 것이며, 서버도 **앞뒤 공백을 strip 한 뒤** 검사한다
      * — [isValidNickname] 이 trim 하는 이유다.

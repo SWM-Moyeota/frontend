@@ -321,16 +321,24 @@ class AuthMappersTest {
     }
 
     /**
-     * **409 는 세 가지 뜻을 갖는다** — 아이디(USER101)·전화번호(USER104)·닉네임(USER108) 중복.
-     * 상태 코드로만 폴백하면 무엇이 겹쳤든 "이미 사용 중인 아이디예요"가 떠서
-     * 사용자가 아이디만 계속 바꾸게 된다. 셋이 서로 다른 값으로 갈리는지 한 번에 못 박는다.
+     * **409 는 다섯 가지 뜻을 갖는다.** 셋은 중복(아이디 `USER101`·전화번호 `USER104`·닉네임 `USER108`),
+     * 둘은 탈퇴가 들어오면서 생겼다 (2026-10, Backend #206).
+     * 신규 둘은 중복과 아무 상관이 없다:
+     * - `USER109` 재가입 제한 — 가입(문자 발송) 경로. 그 번호로 탈퇴한 계정이 있다.
+     * - `USER110` 진행 중 합승 — 탈퇴 경로. 합승에서 먼저 나와야 한다.
+     *
+     * 상태 코드로만 폴백하면 다섯이 전부 [AuthError.LOGIN_ID_DUPLICATED] = "이미 사용 중인
+     * 아이디예요"가 된다. 가입에서는 사용자가 아이디만 계속 바꾸게 되고, **탈퇴 화면에서는 더 나쁘다**
+     * — 아이디를 입력한 적도 없는 화면에 아이디 중복 안내가 뜬다.
      */
     @Test
-    fun `409 세 코드는 서로 다른 중복 사유로 갈린다`() {
-        val duplicates = listOf(
+    fun `409 다섯 코드가 전부 다른 값으로 갈린다 - 탈퇴 둘 포함`() {
+        val conflicts = listOf(
             """{"code":"USER101","message":"이미 존재하는 아이디입니다."}""",
             """{"code":"USER104","message":"이미 가입된 전화번호입니다."}""",
             """{"code":"USER108","message":"이미 사용 중인 닉네임입니다."}""",
+            """{"code":"USER109","message":"탈퇴 후 30일 동안은 같은 번호로 다시 가입할 수 없습니다."}""",
+            """{"code":"USER110","message":"진행 중인 합승이 있어 탈퇴할 수 없습니다. 합승을 나간 뒤 다시 시도해 주세요."}""",
         ).map { httpException(409, it).toAuthException().error }
 
         assertEquals(
@@ -338,9 +346,46 @@ class AuthMappersTest {
                 AuthError.LOGIN_ID_DUPLICATED,
                 AuthError.PHONE_NUMBER_DUPLICATED,
                 AuthError.NICKNAME_DUPLICATED,
+                AuthError.REJOIN_RESTRICTED,
+                AuthError.ONGOING_PARTY_EXISTS,
             ),
-            duplicates,
+            conflicts,
         )
+        // 같은 상태 코드에 다섯 뜻이 있으면 하나라도 겹치는 순간 그 화면은 틀린 말을 한다.
+        assertEquals("409 매핑이 서로 겹친다", conflicts.size, conflicts.toSet().size)
+    }
+
+    /**
+     * `USER111` 비밀번호 불일치는 **400** 이다 — 로그인 실패(`USER102`, 401)와 다르다.
+     *
+     * 401 로 뭉치거나 [AuthError.SESSION_EXPIRED] 로 보내면 비밀번호를 한 번 틀린 사용자가
+     * 로그인 화면으로 쫓겨난다. 세션은 그대로 살아 있다.
+     */
+    @Test
+    fun `400 USER111 은 세션 만료가 아니라 비밀번호 불일치다`() {
+        val exception = httpException(400, """{"code":"USER111","message":"비밀번호가 일치하지 않습니다."}""")
+            .toAuthException()
+
+        assertEquals(AuthError.PASSWORD_MISMATCH, exception.error)
+        assertEquals("비밀번호가 일치하지 않습니다.", exception.serverMessage)
+    }
+
+    /**
+     * `USER109` 는 **탈퇴가 아니라 가입 경로**에서 난다 — 서버 `SmsVerificationService.send` 가
+     * 번호 중복을 본 바로 다음 줄에서 탈퇴 기록을 본다. 즉 사용자는 「인증번호 받기」를 누르고
+     * 이 에러를 만난다. [AuthError.PHONE_NUMBER_DUPLICATED] 와 합치면 안 된다:
+     * 저쪽 안내는 "로그인하세요"인데 여기엔 로그인할 계정이 없다.
+     */
+    @Test
+    fun `409 USER109 는 전화번호 중복과 다른 값이다`() {
+        val rejoin = httpException(409, """{"code":"USER109","message":"탈퇴 후 30일 동안은 같은 번호로 다시 가입할 수 없습니다."}""")
+            .toAuthException()
+        val duplicated = httpException(409, """{"code":"USER104","message":"이미 가입된 전화번호입니다."}""")
+            .toAuthException()
+
+        assertEquals(AuthError.REJOIN_RESTRICTED, rejoin.error)
+        assertEquals(AuthError.PHONE_NUMBER_DUPLICATED, duplicated.error)
+        assertEquals("탈퇴 후 30일 동안은 같은 번호로 다시 가입할 수 없습니다.", rejoin.serverMessage)
     }
 
     @Test

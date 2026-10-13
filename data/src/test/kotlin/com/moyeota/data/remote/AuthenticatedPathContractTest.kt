@@ -3,8 +3,10 @@ package com.moyeota.data.remote
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
+import retrofit2.http.HTTP
 import retrofit2.http.Header
 import retrofit2.http.HeaderMap
 import retrofit2.http.PATCH
@@ -114,6 +116,37 @@ class AuthenticatedPathContractTest {
 
         assertTrue("등록이 PUT 이 아니다", register.isAnnotationPresent(PUT::class.java))
         assertTrue("해제가 DELETE 가 아니다", delete.isAnnotationPresent(DELETE::class.java))
+    }
+
+    /**
+     * 회원 탈퇴. `/users/me` 는 프로필 수정(PATCH)과 **경로가 같고 동사만 다르다** — [path] 검사만으로는
+     * 둘이 뒤바뀌어도 통과하므로 `@HTTP` 의 세 값을 모두 못 박는다.
+     *
+     * `hasBody = true` 가 특히 중요하다. 서버가 비밀번호를 `@RequestBody` 로 받는데 Retrofit 의
+     * `@DELETE` 는 본문을 못 실으므로(그 조합은 실행 시점 `IllegalArgumentException` 이다)
+     * `@HTTP` 가 유일한 길이다. 실제로 본문이 실려 나가는지는
+     * [UserApiDeleteBodyTest] 가 Retrofit 을 돌려 확인한다.
+     *
+     * 탈퇴가 `AuthApi` 로 옮겨 가는 것도 막는다 — 그쪽은 Bearer 가 붙지 않아 `@CurrentUser` 가
+     * 대상을 못 찾고 401 `USER005` 가 된다.
+     */
+    @Test
+    fun `회원 탈퇴는 users me 경로의 DELETE 이고 본문을 싣는다`() {
+        val delete = UserApi::class.java.declaredMethods.single { it.name == "deleteAccount" }
+        val http = delete.getAnnotation(HTTP::class.java)
+
+        assertEquals("api/v1/users/me", UserApi::class.java.path("deleteAccount"))
+        assertEquals("DELETE", http?.method)
+        assertTrue("탈퇴 요청이 본문을 싣지 않는다 — 비밀번호를 보낼 자리가 없다", http?.hasBody == true)
+        // @Body 파라미터가 하나. 비밀번호가 경로·쿼리로 새면 서버 액세스 로그에 평문으로 남는다.
+        assertEquals(
+            1,
+            delete.parameterAnnotations.count { annotations -> annotations.any { it is Body } },
+        )
+        assertTrue(
+            "탈퇴가 Bearer 없는 AuthApi 쪽으로 옮겨졌다 — 401 USER005 가 된다",
+            AuthApi::class.java.methods.none { it.name == "deleteAccount" },
+        )
     }
 
     @Test
@@ -252,12 +285,18 @@ class AuthenticatedPathContractTest {
         return method.pathOrNull() ?: error("$simpleName.$methodName 에 HTTP 애노테이션이 없다")
     }
 
+    /**
+     * `@HTTP` 도 읽는다. 읽지 않으면 그 애노테이션을 쓴 메서드는 아래 「auth 프리픽스가 UserApi 에
+     * 있으면 안 된다」 같은 전수 검사에서 **조용히 빠진다** — 경로 오타를 잡으려고 만든 검사가
+     * 정작 특수 케이스만 못 보는 꼴이 된다(탈퇴가 그 특수 케이스다).
+     */
     private fun Method.pathOrNull(): String? =
         getAnnotation(GET::class.java)?.value
             ?: getAnnotation(POST::class.java)?.value
             ?: getAnnotation(PUT::class.java)?.value
             ?: getAnnotation(DELETE::class.java)?.value
             ?: getAnnotation(PATCH::class.java)?.value
+            ?: getAnnotation(HTTP::class.java)?.path
 
     private fun Method.hasParameterNamed(vararg names: String): Boolean =
         parameterAnnotations.any { annotations ->

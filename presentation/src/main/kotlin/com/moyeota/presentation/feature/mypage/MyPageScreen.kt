@@ -60,7 +60,8 @@ private val CardShadow = Color(0x0F1B2A4A)
  *
  * 진입: 하단탭 마이페이지
  *
- * 구성: 프로필 카드(이름 + 꺾쇠) → 「설정」 카드 → 「지원」 카드 → 로그아웃(+버전) → (디버그) 개발자 옵션
+ * 구성: 프로필 카드(이름 + 꺾쇠) → 「설정」 카드 → 「지원」 카드 → 로그아웃(+버전)
+ *       → 「계정」 영역(탈퇴하기) → (디버그) 개발자 옵션
  *
  * 이동(디스크립션):
  * - 하단탭 홈 / 합승 / 채팅 → 14 / 17 / 24 (onTabSelect)
@@ -69,10 +70,12 @@ private val CardShadow = Color(0x0F1B2A4A)
  * - 「문의하기」 → 메일 앱, 제목·환경 정보 자동 입력 (앱 밖)
  * - 「이용약관」 · 「개인정보 처리방침」 → 브라우저 (앱 밖)
  * - 「로그아웃」 → 확인 다이얼로그 후 04a 로그인 (onLogout)
+ * - 「탈퇴하기」 → 37 회원 탈퇴 (onDeleteAccount)
  *
  * 상태(디스크립션):
- * - **없는 기능은 행을 만들지 않는다.** 탈퇴하기 · 탑승 기록 · 고객센터는 서버 API 가 없어 빠져 있고
+ * - **없는 기능은 행을 만들지 않는다.** 탑승 기록 · 고객센터는 서버 API 가 없어 빠져 있고
  *   (`docs/BACKEND-GAP-CLEANUP.md`), 매너 점수 · 마일리지 · 결제 수단도 같은 이유로 없다.
+ *   탈퇴하기는 같은 이유로 빠져 있었지만 2026-10 에 `DELETE /api/v1/users/me` 가 생겨 되살렸다.
  * - 약관 · 개인정보 · 문의 행은 [SupportLinks] 의 주소가 null 이면 그리지 않는다. 운영 주소가
  *   정해지기 전인 지금은 셋 다 null 이라 「지원」 카드 자체가 보이지 않는다 — 「준비 중」을 두는 대신이다.
  * - 앱 안에 알림 토글을 두지 않는 이유는 [openAppNotificationSettings] 의 설명과 같다
@@ -87,6 +90,7 @@ fun MyPageScreen(
     userName: UserNameState = UserNameState.Loading,
     onEditProfile: () -> Unit = {},          // → 36 프로필 수정
     onLogout: () -> Unit = {},               // → 04a 로그인 (세션 정리 후)
+    onDeleteAccount: () -> Unit = {},        // → 37 회원 탈퇴
     onTabSelect: (MoyeotaTab) -> Unit = {},  // → 14 / 17 / 24
     modeDebug: ModeDebugOptions? = null,     // 디버그 빌드 전용 개발자 옵션. 릴리스는 null
 ) {
@@ -183,7 +187,7 @@ fun MyPageScreen(
 
             // 로그아웃 → 04a (확인 후). logout() 은 실패하지 않는다 — 로컬 세션을 먼저 비우고
             // 서버 무효화는 최선 노력이라, 오프라인에서도 사용자가 갇히지 않는다.
-            // 탈퇴하기는 서버에 탈퇴 API 가 없어 두지 않는다. 버전은 로그아웃과 같은 줄 오른쪽에.
+            // 버전은 로그아웃과 같은 줄 오른쪽에. 탈퇴하기는 **이 줄에 붙이지 않는다** (아래 「계정」 영역).
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -204,6 +208,59 @@ fun MyPageScreen(
                     )
                 }
             }
+
+            // 「계정」 — 되돌릴 수 없는 영역. 로그아웃 줄과 **섞지 않는다.**
+            //
+            // 로그아웃은 13sp 회색 글자고 탈퇴도 글자 링크로 두면 두 줄이 나란히 붙어 오탭이 난다.
+            // 그래서 (a) 40dp 를 띄우고 (b) 머리말을 세우고 (c) 흰 카드 + danger 색 + 꺾쇠로
+            // 「설정」·「지원」 행과 같은 터치 영역(56dp)을 준다. 다른 카드와 달리 ↗ 가 아니라 꺾쇠인
+            // 이유는 앱 **안**의 37 로 가기 때문이다(이 화면의 기호 규칙: ↗ = 앱 밖, › = 앱 안).
+            //
+            // 오탭해도 되돌릴 수 있다 — 37 은 비밀번호를 받고, 거기서 또 확인 다이얼로그를 띄운다.
+            Spacer(Modifier.height(40.dp))
+            Box(
+                modifier = Modifier
+                    .padding(horizontal = 16.dp)
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(SoftDivider),
+            )
+            Text(
+                text = "계정",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = GrayAsh,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+            )
+            Row(
+                modifier = Modifier
+                    .padding(horizontal = 16.dp)
+                    .fillMaxWidth()
+                    .height(56.dp)
+                    .shadow(4.dp, RoundedCornerShape(18.dp), spotColor = CardShadow)
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(MoyeotaColor.SurfaceCanvas)
+                    .clickable { onDeleteAccount() }
+                    .padding(horizontal = 20.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "탈퇴하기",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MoyeotaColor.Danger500,
+                    modifier = Modifier.weight(1f),
+                )
+                ChevronRightIcon()
+            }
+            Text(
+                // 여기서 결과를 한 줄로 미리 알린다 — 「탈퇴하기」만 적어 두면 무엇이 사라지는지
+                // 37 에 들어가야만 알 수 있고, 들어가기 전에 멈출 기회가 없다.
+                text = "계정과 저장한 정보가 사라지고 되돌릴 수 없어요",
+                fontSize = 11.sp,
+                color = GrayAsh,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+            )
 
             if (modeDebug != null) {
                 Spacer(Modifier.height(32.dp))

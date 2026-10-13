@@ -195,6 +195,37 @@ class PhoneVerifyStateTest {
         assertEquals(0, state.codeRemainingSeconds(NOW))
     }
 
+    /**
+     * 탈퇴한 번호의 재가입 제한(409 `USER109`, 2026-10). 발송 단계에서 나는 것까지는
+     * [AuthError.PHONE_NUMBER_DUPLICATED] 와 같지만 **같은 플래그로 묶으면 안 된다** —
+     * 저쪽은 "로그인하세요"로 보내는데 여기엔 로그인할 계정이 없다.
+     * 오늘 다시 눌러도 같은 409 뿐이라 버튼을 잠근다.
+     */
+    @Test
+    fun `재가입 제한은 입력칸을 열지 않고 버튼을 잠근다`() {
+        val state = PhoneVerifyState().onRequestStart(PHONE)
+            .onRequestFailure(AuthError.REJOIN_RESTRICTED, "30일 동안 다시 가입할 수 없어요", NOW)
+
+        assertEquals(PhoneVerifyStage.Idle, state.stage)
+        assertTrue(state.rejoinRestricted)
+        assertFalse("이미 가입된 번호로 오해하게 만든다", state.alreadyRegistered)
+        assertEquals("30일 동안 다시 가입할 수 없어요", state.phoneMessage)
+        assertEquals(0, state.codeRemainingSeconds(NOW))
+        assertFalse(state.canRequestCode(PHONE, NOW))
+    }
+
+    /** 다른 번호로는 가입할 수 있다 — 번호를 고치면 상태 전체가 비워져 버튼이 풀린다. */
+    @Test
+    fun `재가입 제한은 번호를 고치면 풀린다`() {
+        val blocked = PhoneVerifyState().onRequestStart(PHONE)
+            .onRequestFailure(AuthError.REJOIN_RESTRICTED, "30일 동안 다시 가입할 수 없어요", NOW)
+
+        val other = blocked.onPhoneDigitsChanged("01098765432")
+
+        assertFalse(other.rejoinRestricted)
+        assertTrue(other.canRequestCode("01098765432", NOW))
+    }
+
     @Test
     fun `쿨다운 429 는 남은 시간을 최대치로 다시 잡는다 - 서버가 남은 초를 주지 않는다`() {
         // 앱을 껐다 켠 직후: 발송 시점을 모르니 쿨다운이 0 인 상태에서 눌러 429 를 맞는다

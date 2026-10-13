@@ -1,11 +1,13 @@
 package com.moyeota.data.remote
 
+import com.moyeota.data.remote.dto.AccountDeletionRequest
 import com.moyeota.data.remote.dto.FcmTokenRequest
 import com.moyeota.data.remote.dto.UpdateProfileRequest
 import com.moyeota.data.remote.dto.UserProfileResponse
 import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
+import retrofit2.http.HTTP
 import retrofit2.http.PATCH
 import retrofit2.http.PUT
 
@@ -67,4 +69,38 @@ interface UserApi {
      */
     @DELETE("api/v1/users/me/fcm-token")
     suspend fun deleteFcmToken()
+
+    /**
+     * 회원 탈퇴. 204 No Content. 기준: `user/deletion/presentation/UserDeletionController.java`
+     * (`@RequestMapping("/api/v1/users")` + `@DeleteMapping("/me")` + `@ResponseStatus(NO_CONTENT)`).
+     *
+     * ### `@DELETE` 가 아니라 `@HTTP` 인 이유 — Retrofit 의 함정
+     * Retrofit 의 `@DELETE` 는 **본문을 실을 수 없다**(`@DELETE` 선언 자체가 `hasBody = false` 다).
+     * `@DELETE` + [Body] 로 쓰면 **컴파일은 통과하고 실행 시점에** 서비스 메서드를 파싱하다가
+     * `IllegalArgumentException: Non-body HTTP method cannot contain @Body or @Field parameters.`
+     * 로 터진다 — 즉 「탈퇴하기」를 누른 그 순간에야 드러난다.
+     *
+     * 서버는 비밀번호를 **본문으로** 받으므로(`@Valid @RequestBody UserDeletionRequest`) 본문을
+     * 반드시 실어야 하고, 그 조합을 표현하는 길이 `@HTTP(hasBody = true)` 뿐이다. 쿼리로 돌리는 선택지는
+     * 애초에 없다 — 비밀번호가 URL 과 서버 액세스 로그에 평문으로 남는다.
+     *
+     * 이 메서드가 Retrofit 에게 받아들여지는지는 [com.moyeota.data.remote.UserApiDeleteBodyTest] 가
+     * 실제 Retrofit 인스턴스로 호출해 확인한다(애노테이션만 보는 리플렉션 검사로는 못 잡는다).
+     *
+     * ### [AuthApi] 가 아니라 여기여야 하는 이유
+     * `@CurrentUser` 로 주체를 정하므로 **Bearer 가 필수다**. [AuthApi] 는 Bearer 도 401 재발급도
+     * 붙지 않는 클라이언트로 만들어지므로(`NetworkModule.create` 의 `publicRetrofit`) 거기 두면
+     * 무토큰 요청이 되어 401 `USER005` 다. `/api/v1/users/` 하위는 Security 의 permitAll 구간도 아니다.
+     * (여기에 `users/` + 별표 둘을 적으면 Kotlin 의 **중첩되는** 블록 주석이 열려 파일이 깨진다 —
+     * [AuthApi] KDoc 이 같은 자리에서 「하위 전체」라고 풀어 쓰는 이유다.)
+     *
+     * ### 성공 후
+     * 서버가 리프레시 전량 취소 + 인증 캐시 축출까지 하므로 **이 응답 뒤의 모든 요청은 401 이다.**
+     * 그래서 성공 자리에서 세션·로컬 기억을 비우는 것까지가 한 동작이다
+     * ([com.moyeota.data.repository.RemoteAuthRepository.deleteAccount]).
+     *
+     * 실패: 400 `USER111`(비밀번호 불일치) · 409 `USER110`(진행 중 합승) · 401 `USER005`(무토큰).
+     */
+    @HTTP(method = "DELETE", path = "api/v1/users/me", hasBody = true)
+    suspend fun deleteAccount(@Body request: AccountDeletionRequest)
 }

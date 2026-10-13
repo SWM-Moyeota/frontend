@@ -112,6 +112,10 @@ private const val TICK_INTERVAL_MS = 500L
  * @property alreadyRegistered 발송이 409 `PHONE_NUMBER_DUPLICATED` 로 끊긴 상태. 인증번호 입력칸을
  *   열지 않고 로그인으로 가는 길을 보여준다 — 번호를 고치면 풀린다.
  * @property dailyLimitReached 하루 발송 한도(5회)를 넘겼다. 재시도를 권하지 않고 버튼을 잠근다.
+ * @property rejoinRestricted 발송이 409 `USER109`([AuthError.REJOIN_RESTRICTED])로 끊긴 상태 —
+ *   그 번호로 탈퇴한 계정이 있고 재가입 제한 기간이 아직 안 지났다. [alreadyRegistered] 와 같은 409,
+ *   같은 단계인데 **할 일이 정반대다**: 저쪽은 로그인으로 보내면 되지만 여기엔 로그인할 계정이 없다.
+ *   기다리는 것 말고 할 수 있는 게 없으므로 버튼을 잠근다 — 번호를 고치면 풀린다.
  */
 data class PhoneVerifyState(
     val stage: PhoneVerifyStage = PhoneVerifyStage.Idle,
@@ -126,6 +130,7 @@ data class PhoneVerifyState(
     val codeMessage: String? = null,
     val alreadyRegistered: Boolean = false,
     val dailyLimitReached: Boolean = false,
+    val rejoinRestricted: Boolean = false,
 )
 
 /**
@@ -171,13 +176,13 @@ internal fun PhoneVerifyState.hasRunningCountdown(nowMillis: Long): Boolean =
  *
  * - 이미 인증을 끝냈으면 더 받을 이유가 없다(번호를 바꾸려면 「번호 변경」을 먼저 눌러야 한다).
  * - 쿨다운 중에는 눌러도 429 다 — 앱이 먼저 막는다.
- * - 이미 가입된 번호·일일 한도는 **그 번호로는 끝난 상태**라 재시도를 열어 두지 않는다.
- *   둘 다 번호를 고치면 풀린다([onPhoneDigitsChanged] 가 상태를 비운다).
+ * - 이미 가입된 번호·일일 한도·재가입 제한은 **그 번호로는 끝난 상태**라 재시도를 열어 두지 않는다.
+ *   셋 다 번호를 고치면 풀린다([onPhoneDigitsChanged] 가 상태를 비운다).
  */
 internal fun PhoneVerifyState.canRequestCode(phoneDigits: String, nowMillis: Long): Boolean {
     if (stage == PhoneVerifyStage.Verified) return false
     if (requesting) return false
-    if (alreadyRegistered || dailyLimitReached) return false
+    if (alreadyRegistered || dailyLimitReached || rejoinRestricted) return false
     if (resendRemainingSeconds(nowMillis) > 0) return false
     return isCompletePhoneDigits(phoneDigits)
 }
@@ -230,6 +235,7 @@ internal fun PhoneVerifyState.onRequestStart(phone: String): PhoneVerifyState = 
     phoneMessage = null,
     codeMessage = null,
     alreadyRegistered = false,
+    rejoinRestricted = false,
 )
 
 /**
@@ -289,6 +295,21 @@ internal fun PhoneVerifyState.onRequestFailure(
         requesting = false,
         phoneMessage = message,
         dailyLimitReached = true,
+    )
+    // 탈퇴한 번호의 재가입 제한(30일) — 오늘 다시 눌러도 같은 409 다. 버튼을 잠근다.
+    // 입력칸을 열지 않는 건 PHONE_NUMBER_DUPLICATED 와 같지만 alreadyRegistered 로 묶지 않는다:
+    // 그 플래그는 "로그인하면 된다"는 뜻이고, 여기엔 로그인할 계정이 없다.
+    AuthError.REJOIN_RESTRICTED -> copy(
+        stage = PhoneVerifyStage.Idle,
+        code = "",
+        token = "",
+        codeExpiresAt = NO_DEADLINE,
+        resendAllowedAt = NO_DEADLINE,
+        requesting = false,
+        verifying = false,
+        phoneMessage = message,
+        codeMessage = null,
+        rejoinRestricted = true,
     )
     // 문자 서비스 장애·네트워크·형식 오류 — 상태는 그대로 두고 다시 누를 수 있게 한다.
     // (발송 실패 쪽은 서버가 쿨다운을 풀어 주므로 1분을 기다릴 필요도 없다)

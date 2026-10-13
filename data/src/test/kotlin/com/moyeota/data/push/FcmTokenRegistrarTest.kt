@@ -1,6 +1,7 @@
 package com.moyeota.data.push
 
 import com.moyeota.data.remote.UserApi
+import com.moyeota.data.remote.dto.AccountDeletionRequest
 import com.moyeota.data.remote.dto.FcmTokenRequest
 import com.moyeota.data.remote.dto.UpdateProfileRequest
 import com.moyeota.data.remote.dto.UserProfileResponse
@@ -220,4 +221,7 @@ private class FakeUserApi(private val failure: Throwable? = null) : UserApi {
         failure?.let { throw it }
         deleteCount++
     }
+
+    override suspend fun deleteAccount(request: AccountDeletionRequest): Unit =
+        throw UnsupportedOperationException("푸시 토큰 등록과 무관하다")
 }

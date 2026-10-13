@@ -1,8 +1,11 @@
 package com.moyeota.data.repository
 
+import com.moyeota.data.local.ActivePartyStorage
+import com.moyeota.data.local.RememberedParty
 import com.moyeota.data.push.FcmTokenRegistrar
 import com.moyeota.data.remote.AuthApi
 import com.moyeota.data.remote.UserApi
+import com.moyeota.data.remote.dto.AccountDeletionRequest
 import com.moyeota.data.remote.dto.FcmTokenRequest
 import com.moyeota.data.remote.dto.LoginRequestDto
 import com.moyeota.data.remote.dto.NicknameCheckRequestDto
@@ -58,12 +61,14 @@ class RemoteAuthRepositoryTest {
         SessionManager(storage, CoroutineScope(Dispatchers.Unconfined))
 
     // 내 정보 조회 API 는 가입/로그인/로그아웃 경로와 무관하다 — 그쪽 테스트가 신경 쓰지 않게 기본값으로 채운다.
+    // activePartyStorage 도 같다: 탈퇴 경로만 건드리므로 나머지 테스트는 빈 기억으로 둔다.
     private fun repository(
         api: AuthApi,
         session: SessionManager,
         userApi: UserApi = FakeUserApi(),
         registrar: FcmTokenRegistrar = FcmTokenRegistrar(userApi, session),
-    ) = RemoteAuthRepository(api, userApi, session, registrar)
+        activePartyStorage: ActivePartyStorage = SpyActivePartyStorage(),
+    ) = RemoteAuthRepository(api, userApi, session, registrar, activePartyStorage)
 
     @Test
     fun `내 정보는 uuid 와 이름을 그대로 도메인으로 넘긴다`() = runBlocking {
@@ -521,9 +526,162 @@ class RemoteAuthRepositoryTest {
         assertNull(api.logoutRequest)
     }
 
+    // ─────────────────────────────── 회원 탈퇴 ───────────────────────────────
+
+    /** 서버 `UserDeletionRequest` 는 `password` 하나다. 다듬지 않고 그대로 싣는다 — trim 하면 다른 값이 된다. */
+    @Test
+    fun `탈퇴는 입력한 비밀번호를 그대로 본문에 싣는다`() = runBlocking {
+        val userApi = FakeUserApi()
+        val session = session(StoredSession("uuid-1", "access.jwt", "refresh.jwt"))
+
+        repository(FakeAuthApi(), session, userApi).deleteAccount(" Passw0rd! ")
+
+        assertEquals(listOf(AccountDeletionRequest(" Passw0rd! ")), userApi.deletions)
+    }
+
+    /**
+     * **204 를 받으면 세션이 비워져야 한다.** 서버가 리프레시를 전량 취소하고 인증 캐시까지 비우므로
+     * 그 뒤의 모든 요청은 401 이다 — 로컬 토큰을 들고 있으면 다음 화면 조회가 401 을 맞고
+     * [AuthError.SESSION_EXPIRED] 가 올라와 스스로 탈퇴한 사용자에게 「세션이 만료됐어요」가 뜬다.
+     */
+    @Test
+    fun `탈퇴가 성공하면 세션이 비워지고 미로그인으로 전이한다`() = runBlocking {
+        val session = session(StoredSession("uuid-1", "access.jwt", "refresh.jwt"))
+
+        repository(FakeAuthApi(), session).deleteAccount("Passw0rd!")
+
+        assertEquals(AuthState.Unauthenticated, session.authState.value)
+        assertNull(session.currentAccessToken())
+        assertNull(session.currentRefreshToken())
+    }
+
+    /**
+     * **로그아웃보다 한 가지 넓다.** `logout()` 은 "진행 중인 방" 기억을 일부러 남기지만
+     * (계정에 매인 값이라 같은 계정 재로그인 시 되살아나야 한다) 탈퇴한 계정은 다시 로그인할 길이 없다.
+     * 남겨 두면 다음 사용자의 기기에 앞 사람의 방 id 가 그대로 남는다.
+     */
+    @Test
+    fun `탈퇴는 진행 중인 방 기억까지 지운다`() = runBlocking {
+        val storage = SpyActivePartyStorage(RememberedParty("42", "uuid-1"))
+        val session = session(StoredSession("uuid-1", "access.jwt", "refresh.jwt"))
+
+        repository(FakeAuthApi(), session, activePartyStorage = storage).deleteAccount("Passw0rd!")
+
+        assertNull(storage.load())
+    }
+
+    /** 반대쪽 못 박기 — 로그아웃은 그 기억을 남긴다. 둘이 같아지면 재로그인 복귀가 깨진다. */
+    @Test
+    fun `로그아웃은 진행 중인 방 기억을 남긴다`() = runBlocking {
+        val remembered = RememberedParty("42", "uuid-1")
+        val storage = SpyActivePartyStorage(remembered)
+        val session = session(StoredSession("uuid-1", "access.jwt", "refresh.jwt"))
+
+        repository(FakeAuthApi(), session, activePartyStorage = storage).logout()
+
+        assertEquals(remembered, storage.load())
+    }
+
+    /**
+     * 비밀번호를 틀렸거나 진행 중인 합승이 있으면 **아무 일도 없었던 것처럼** 계속 쓸 수 있어야 한다.
+     * 세션을 먼저 비우는 구현(= 로그아웃과 같은 순서)이면 400 한 번에 사용자가 로그아웃된다.
+     */
+    @Test
+    fun `탈퇴가 실패하면 세션과 방 기억이 그대로 남는다`() {
+        val failures = listOf(
+            httpException(400, """{"code":"USER111","message":"비밀번호가 일치하지 않습니다."}""") to
+                AuthError.PASSWORD_MISMATCH,
+            httpException(409, """{"code":"USER110","message":"진행 중인 합승이 있어 탈퇴할 수 없습니다."}""") to
+                AuthError.ONGOING_PARTY_EXISTS,
+            IOException("offline") to AuthError.NETWORK,
+        )
+
+        failures.forEach { (failure, expected) ->
+            val remembered = RememberedParty("42", "uuid-1")
+            val storage = SpyActivePartyStorage(remembered)
+            val session = session(StoredSession("uuid-1", "access.jwt", "refresh.jwt"))
+            val userApi = FakeUserApi(deleteAccountFailure = failure)
+
+            val thrown = runCatching {
+                runBlocking {
+                    repository(FakeAuthApi(), session, userApi, activePartyStorage = storage)
+                        .deleteAccount("wrong")
+                }
+            }.exceptionOrNull()
+
+            assertEquals(expected, (thrown as AuthException).error)
+            assertEquals("$expected 에서 세션이 날아갔다", AuthState.Authenticated("uuid-1"), session.authState.value)
+            assertEquals("$expected 에서 방 기억이 날아갔다", remembered, runBlocking { storage.load() })
+        }
+    }
+
+    /**
+     * **탈퇴는 푸시 토큰을 따로 해제하지 않는다.** 서버 `User.delete()` 가 `fcmToken` 을 비우므로
+     * 왕복이 필요 없고, 미리 불러 두면 400·409 로 탈퇴가 실패했을 때 멀쩡한 사용자의 알림만 끊긴다
+     * (로그아웃은 반대로 반드시 불러야 한다 — 그쪽은 계정이 남기 때문이다).
+     */
+    @Test
+    fun `탈퇴는 푸시 토큰 해제를 부르지 않는다`() = runBlocking {
+        val userApi = FakeUserApi()
+        val session = session(StoredSession("uuid-1", "access.jwt", "refresh.jwt"))
+        val registrar = FcmTokenRegistrar(userApi, session)
+        registrar.onTokenAvailable("device-token")
+        userApi.fcmCalls.clear()
+
+        repository(FakeAuthApi(), session, userApi, registrar).deleteAccount("Passw0rd!")
+
+        assertTrue("탈퇴가 FCM 해제를 불렀다: ${userApi.fcmCalls}", userApi.fcmCalls.isEmpty())
+    }
+
+    /**
+     * 서버 토큰은 이미 전량 취소됐다 — `POST /auth/logout` 을 더 보내는 건 401 만 받는 헛된 왕복이다.
+     */
+    @Test
+    fun `탈퇴는 로그아웃 API 를 덧붙여 부르지 않는다`() = runBlocking {
+        val api = FakeAuthApi()
+        val session = session(StoredSession("uuid-1", "access.jwt", "refresh.jwt"))
+
+        repository(api, session).deleteAccount("Passw0rd!")
+
+        assertNull(api.logoutRequest)
+    }
+
+    /**
+     * 로컬 저장소가 터져도(디스크 꽉 참·손상) 탈퇴는 성공으로 끝나야 한다 —
+     * 서버 계정은 이미 사라졌으므로 "실패"로 올리면 사용자가 이미 없는 계정의 탈퇴를 다시 시도한다.
+     */
+    @Test
+    fun `방 기억 삭제가 실패해도 탈퇴는 성공으로 끝난다`() = runBlocking {
+        val storage = SpyActivePartyStorage(RememberedParty("42", "uuid-1"), failOnClear = true)
+        val session = session(StoredSession("uuid-1", "access.jwt", "refresh.jwt"))
+
+        repository(FakeAuthApi(), session, activePartyStorage = storage).deleteAccount("Passw0rd!")
+
+        assertEquals(AuthState.Unauthenticated, session.authState.value)
+    }
+
     private fun httpException(code: Int, body: String) = HttpException(
         Response.error<Any>(code, body.toResponseBody("application/json".toMediaType())),
     )
+}
+
+/** 인메모리 "진행 중인 방" 기억. [failOnClear] 로 디스크 실패를 흉내 낸다. */
+private class SpyActivePartyStorage(
+    remembered: RememberedParty? = null,
+    private val failOnClear: Boolean = false,
+) : ActivePartyStorage {
+    private var value: RememberedParty? = remembered
+
+    override suspend fun load(): RememberedParty? = value
+
+    override suspend fun save(party: RememberedParty) {
+        value = party
+    }
+
+    override suspend fun clear() {
+        if (failOnClear) throw IOException("디스크 실패")
+        value = null
+    }
 }
 
 /** 페이로드 `{"sub":"uuid-1","tokenType":"ACCESS"}` 를 base64url 로 담은 가짜 액세스 토큰. 서명은 검증되지 않는다. */
@@ -604,12 +762,16 @@ private class FakeUserApi(
     private val failure: Throwable? = null,
     private val fcmFailure: Throwable? = null,
     private val profileFailure: Throwable? = null,
+    private val deleteAccountFailure: Throwable? = null,
 ) : UserApi {
     /** 푸시 토큰 호출이 **일어난 순서**. 어떤 호출이 실제로 나갔는지를 그대로 남긴다. */
     val fcmCalls = mutableListOf<String>()
 
     /** PATCH 로 실제 나간 본문. null 필드가 어떻게 실렸는지까지 확인한다. */
     val profileUpdates = mutableListOf<UpdateProfileRequest>()
+
+    /** 탈퇴 요청으로 나간 본문. 비밀번호가 다듬어지지 않았는지까지 본다. */
+    val deletions = mutableListOf<AccountDeletionRequest>()
 
     override suspend fun getMyProfile(): UserProfileResponse {
         failure?.let { throw it }
@@ -629,6 +791,12 @@ private class FakeUserApi(
     override suspend fun deleteFcmToken() {
         fcmFailure?.let { throw it }
         fcmCalls += "DELETE"
+    }
+
+    override suspend fun deleteAccount(request: AccountDeletionRequest) {
+        // 실패해도 기록은 남긴다 — "무엇을 보내려 했는가"가 실패 경로에서도 검증 대상이다.
+        deletions += request
+        deleteAccountFailure?.let { throw it }
     }
 }
 
@@ -654,4 +822,7 @@ private class TokenProbingUserApi(private val accessToken: () -> String?) : User
         accessTokenAtDelete = accessToken()
         deleteCount++
     }
+
+    override suspend fun deleteAccount(request: AccountDeletionRequest) =
+        throw UnsupportedOperationException("푸시 해제 순서 검증 전용 페이크다")
 }

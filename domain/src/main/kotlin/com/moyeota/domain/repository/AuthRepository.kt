@@ -151,6 +151,55 @@ interface AuthRepository {
     suspend fun logout()
 
     /**
+     * 회원 탈퇴. DELETE /api/v1/users/me (**204 No Content**, 토큰 필수, 본문에 비밀번호).
+     *
+     * Google Play 의 계정 삭제 요건을 채우는 경로다(Backend #206 / PR #216).
+     *
+     * ### 성공은 되돌릴 수 없다
+     * 서버가 한 트랜잭션에서 하는 일(`UserDeletionService.delete`):
+     * - `users.deleted_at` 기록 + 닉네임·프로필 사진·FCM 토큰 비우기
+     *   → 남에게는 **「탈퇴한 사용자」**로 보인다(`User.DELETED_DISPLAY_NAME`)
+     * - 프로필(실명·생년월일·번호·성별·메일)과 로컬 계정(아이디·비밀번호 해시) **삭제**
+     *   → 같은 아이디로 다시 로그인할 수 없다
+     * - 번호 해시를 탈퇴 기록에 남김 → 같은 번호의 재가입을
+     *   [AuthPolicy.REJOIN_RESTRICTED_DAYS][com.moyeota.domain.model.AuthPolicy.REJOIN_RESTRICTED_DAYS]일간 차단
+     *   ([sendPhoneVerificationCode] 가 409 `USER109` 로 거절한다)
+     * - 리프레시 토큰 전량 취소 + 인증 캐시 축출
+     * - 커밋 후 비동기로 **참여 중인 채팅방 전부 나가기**와 **즐겨찾기 삭제**
+     *   (`ChatRoomUserDeletionListener` · `FavoritePlaceUserDeletionListener`)
+     *
+     * **서버가 하지 않는 일**: 지난 합승 기록 삭제. 끝난 방의 멤버로는 남고 이름만 가려진다.
+     * 화면 문구가 "모든 기록이 사라진다"고 약속하면 안 된다.
+     *
+     * ### 토큰이 즉시 죽는다 — 그래서 성공 자리에서 로컬을 비운다
+     * 취소되는 건 리프레시만이 아니다. 서버가 인증 캐시까지 축출해 **남은 수명이 있는 액세스 토큰도
+     * 바로 401** 이 된다(백엔드 통합 테스트 `만료 전 access 토큰도 캐시가 비워져 바로 막힌다`).
+     * 그 401 을 앱이 맞으면 재발급이 실패하고 [AuthError.SESSION_EXPIRED] 가 올라와
+     * "세션이 만료됐어요"가 뜬다 — 스스로 탈퇴한 사용자에게는 오해를 주는 말이다.
+     * 그래서 구현은 204 를 받은 즉시 세션과 로컬 기억을 비우고 [authState] 를
+     * [AuthState.Unauthenticated] 로 바꾼다. 화면은 [logout] 과 **똑같은 전이**를 받는다.
+     *
+     * 비우는 범위는 [logout] 보다 넓다 — "진행 중인 방" 로컬 기억까지 지운다. [logout] 은 그 기억을
+     * 계정에 매인 값으로 보고 남겨 두지만(같은 계정으로 다시 로그인하면 되살아나야 한다),
+     * 탈퇴한 계정은 다시 로그인할 길이 없어 남겨 둘 이유가 없다.
+     *
+     * ### 푸시 토큰은 따로 해제하지 않는다
+     * [logout] 은 세션을 비우기 전에 `DELETE /users/me/fcm-token` 을 부르지만 탈퇴는 부르지 않는다
+     * — 서버 `User.delete()` 가 `fcmToken` 을 직접 비운다. 미리 불러 두면 409·400 으로 탈퇴가
+     * 실패했을 때 **멀쩡한 사용자의 알림만 끊긴 상태**가 남는다.
+     *
+     * @param password 본인 확인용 **현재 비밀번호**. 서버는 `@NotBlank` 만 보고 해시를 비교하므로
+     *   앱이 길이·형식을 미리 검사하지 않는다 — 틀림은 서버가 판정한다.
+     * @throws com.moyeota.domain.model.AuthException
+     *   [AuthError.PASSWORD_MISMATCH] (400 `USER111`, 비밀번호 불일치 — 입력란 오류) /
+     *   [AuthError.ONGOING_PARTY_EXISTS] (409 `USER110`, 진행 중 합승 — 먼저 나가야 한다) /
+     *   [AuthError.SESSION_EXPIRED] (401) /
+     *   [AuthError.NETWORK] (연결 실패 — **세션은 그대로 남는다**) /
+     *   [AuthError.UNKNOWN]
+     */
+    suspend fun deleteAccount(password: String)
+
+    /**
      * 로그인한 본인의 정보 조회. GET /api/v1/local/users/info (200, **토큰 필수**).
      *
      * [authState] 가 이미 uuid 를 들고 있으므로 이 호출의 목적은 사실상 **이름 하나**다
