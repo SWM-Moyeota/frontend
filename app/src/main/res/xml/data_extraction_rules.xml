@@ -1,19 +1,62 @@
 <?xml version="1.0" encoding="utf-8"?><!--
-   Sample data extraction rules file; uncomment and customize as necessary.
-   See https://developer.android.com/about/versions/12/backup-restore#xml-changes
-   for details.
+  데이터 추출 규칙 — **API 31 이상(Android 12+)** 전용.
+  31 미만은 이 파일을 보지 않고 `res/xml/backup_rules.xml` 을 쓴다. 두 파일을 **함께** 고쳐야 한다.
+
+  제외 대상과 근거는 `backup_rules.xml` 의 머리말에 전부 적어 뒀다(요약: 로컬 저장물은
+  `files/datastore/moyeota_session.preferences_pb` 의 평문 토큰과
+  `files/datastore/moyeota_active_party.preferences_pb` 의 방 id 뿐이고, 둘 다 백업 가치가 없다).
+
+  ## 이 파일이 `backup_rules.xml` 과 다른 점: 경로가 둘이다
+
+  - `<cloud-backup>` — 구글 드라이브로 올라가는 백업.
+  - `<device-transfer>` — 기기 교체 시 **기기 ↔ 기기 직접 전송**(케이블/무선 D2D).
+
+  **섹션을 적지 않으면 그 경로는 "전부 전송"이 기본값이다.** 그래서 둘 다 명시한다.
+  `android:allowBackup="false"` 로도 `device-transfer` 는 막히지 않는다 — 이 파일이 유일한 방어선이다.
+
+  ## device-transfer 도 막는다 (사용자가 직접 하는 전송인데도)
+
+  D2D 전송은 클라우드를 거치지 않고 사용자가 직접 트리거하므로 기밀성 위험은 백업보다 낮다.
+  그래도 **허용하지 않는 쪽**을 골랐다. 보안이 아니라 **동작이 깨지기 때문**이다.
+
+  1. **리프레시 토큰이 두 기기에 복제된다.** 서버가 리프레시를 회전시키므로(`TokenAuthenticator`)
+     먼저 갱신한 기기가 다른 쪽 토큰을 무효화한다. 지는 쪽은 401 → `onSessionExpired()` 로
+     예고 없이 로그아웃된다. **합승 도중에 터질 수 있는 사고**다.
+  2. **옛 방 id 가 되살아난다.** `moyeota_active_party` 가 복원되면 새 기기가 이미 끝난 방을
+     복구하려 들어 `GET /matching/rooms/{id}` 404 로 시작한다.
+  3. **FCM 등록 토큰이 복제된다.** 새 기기가 재등록을 건너뛰어 푸시가 조용히 끊긴다.
+  4. **잃는 것이 없다.** 전송을 막아도 사용자는 새 기기에서 한 번 로그인하면 끝이고,
+     즐겨찾기·방·프로필은 전부 서버에서 다시 내려온다.
+
+  토큰을 기기 간에 옮길 필요가 생기면 백업 복원이 아니라 **서버가 발급한 새 세션**으로 풀어야 한다.
+
+  (`<cross-platform-transfer>` 는 두지 않았다. 그쪽은 `platform` 을 명시해 **옵트인**하는 구조라
+   선언하지 않으면 전송 대상이 되지 않는다. 나중에 쓰게 되면 여기에도 같은 제외를 넣어야 한다.)
 -->
 <data-extraction-rules>
+    <!-- 구글 드라이브 클라우드 백업 — 아무것도 올리지 않는다 -->
     <cloud-backup>
-        <!-- TODO: Use <include> and <exclude> to control what is backed up.
-        <include .../>
-        <exclude .../>
-        -->
+        <exclude domain="file" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="database" path="." />
+        <exclude domain="external" path="." />
+        <exclude domain="root" path="." />
+        <exclude domain="device_file" path="." />
+        <exclude domain="device_sharedpref" path="." />
+        <exclude domain="device_database" path="." />
+        <exclude domain="device_root" path="." />
     </cloud-backup>
-    <!--
+
+    <!-- 기기 ↔ 기기 직접 전송 — 위 근거로 역시 아무것도 보내지 않는다 -->
     <device-transfer>
-        <include .../>
-        <exclude .../>
+        <exclude domain="file" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="database" path="." />
+        <exclude domain="external" path="." />
+        <exclude domain="root" path="." />
+        <exclude domain="device_file" path="." />
+        <exclude domain="device_sharedpref" path="." />
+        <exclude domain="device_database" path="." />
+        <exclude domain="device_root" path="." />
     </device-transfer>
-    -->
 </data-extraction-rules>

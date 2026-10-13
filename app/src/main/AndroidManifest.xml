@@ -10,10 +10,13 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
+    <!-- 평문(http) 통신은 **디버그 빌드에만** 허용한다 — `app/src/debug/AndroidManifest.xml` 참고.
+         여기에 usesCleartextTraffic 을 두면 스토어에 올라가는 릴리스에도 그대로 들어가,
+         토큰이 실린 요청이 http 로 나가는 것을 플랫폼이 더 이상 막아 주지 않는다.
+         targetSdk 36(≥ 28)이라 선언을 지우면 기본값 false 가 적용돼 릴리스에서 평문이 차단된다. -->
     <application
         android:name=".MoyeotaApplication"
         android:allowBackup="true"
-        android:usesCleartextTraffic="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
