@@ -44,6 +44,27 @@ private val TextFaint = Color(0xFF9AA1AC)
 private val CardShadow = Color(0x0F1B2A4A)
 
 /**
+ * 04 시작 화면의 신뢰 불릿 두 줄. 둘 다 서버 동작으로 확인한 사실이다.
+ *
+ * - 휴대폰 인증: 문자 인증 토큰이 없으면 서버가 가입을 `USER207 PHONE_NOT_VERIFIED` 로 거절한다
+ *   (`AuthError.PHONE_NOT_VERIFIED`). 앱만의 검사가 아니라 **서버가 막는다**.
+ * - 탑승 횟수: 서버 `PartyDetailResult.MemberInfo.rideCount` 를 20·21·22·23 이 그대로 그린다
+ *   (`User.rideCountLabel`).
+ *
+ * 2026-10-13 에 지운 두 줄과 이유:
+ * - 「같은 성별끼리만 매칭돼요」 — **성별 조건 매칭이 없다.** 성별은 가입 때 받아 `UserProfile` 에
+ *   저장될 뿐이고, 백엔드 `matching` 패키지 어디에도 성별이 등장하지 않는다.
+ * - 「운행 중 위치를 지인과 공유할 수 있어요」 — **위치 공유 기능이 없다**
+ *   (`docs/BACKEND-GAP-CLEANUP.md` §1 에서 보호자 공유·동승자 위치 보고를 전부 제거했다).
+ *
+ * 불릿은 **두 줄로 유지한다** — 카드 여백이 두 줄 기준으로 맞춰져 있다(아래 주석 참고).
+ */
+internal val LoginTrustBullets = listOf(
+    "휴대폰 인증을 마친 사람만 가입해요",
+    "함께 탈 사람의 탑승 횟수가 보여요",
+)
+
+/**
  * 04 · 시작 — 로그인 방식 [S01]
  *
  * 진입: 03 시작하기 · 온보딩 완료 후 재실행 · 로그아웃 직후
@@ -53,6 +74,9 @@ private val CardShadow = Color(0x0F1B2A4A)
  *
  * 소셜(카카오) 로그인은 없다 — 백엔드 AuthController 에 소셜 로그인 엔드포인트가 없고
  * 가입·로그인은 아이디/비밀번호뿐이다. 카카오 버튼과 「준비 중」 안내는 그래서 뺐다.
+ *
+ * 신뢰 불릿은 [LoginTrustBullets] 에 있다 — 가입 전 마지막으로 "모여타가 무엇을 해 주는가"를
+ * 말하는 자리라 **코드로 확인한 사실만** 적는다(2026-10-13).
  */
 @Composable
 fun LoginScreen(
@@ -116,8 +140,7 @@ fun LoginScreen(
                 verticalArrangement = Arrangement.spacedBy(20.dp),
             ) {
                 // 「학교 인증을 마친 학생만 매칭돼요」는 삭제 — 가입에 학교 인증 단계가 없어 사실이 아니다
-                TrustBulletRow(text = "같은 성별끼리만 매칭돼요")
-                TrustBulletRow(text = "운행 중 위치를 지인과 공유할 수 있어요")
+                LoginTrustBullets.forEach { TrustBulletRow(text = it) }
             }
 
             Spacer(Modifier.height(24.dp))

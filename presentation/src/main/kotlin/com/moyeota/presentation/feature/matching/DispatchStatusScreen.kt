@@ -56,7 +56,6 @@ import com.moyeota.presentation.core.location.UserCoordinates
 private val CanvasBg = Color(0xFFF5F7FA)
 private val GraySlate = Color(0xFF4B5563)
 private val GrayMute = Color(0xFF8A93A0)
-private val GrayAsh = Color(0xFF9AA1AC)
 private val ChipBg = Color(0xFFF1F5FD)
 private val CardSoft = Color(0xFFF6F8FB)
 private val DividerGray = Color(0xFFE7EAF0)
@@ -255,16 +254,10 @@ fun DispatchStatusScreen(
                     Spacer(Modifier.height(16.dp))
                     OpenChatButton(onClick = onOpenChat, modifier = Modifier.fillMaxWidth())
                 }
-                Spacer(Modifier.height(16.dp))
-
-                Text(
-                    text = "기사님 도착 후 3분간 기다려요",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = GrayAsh,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                // 「기사님 도착 후 3분간 기다려요」는 지웠다(2026-10-13) — 그런 대기 정책이 없다.
+                // 백엔드에 승객 대기 시간 개념이 아예 없고(기사 도착 통보 → 운행 시작 두 단계뿐:
+                // `RideController`), 앱도 타이머를 돌리지 않았다. 지킬 주체가 없는 약속이라
+                // 대체 문구를 두지 않고 줄을 비웠다.
             }
             Spacer(Modifier.weight(1f))
         }

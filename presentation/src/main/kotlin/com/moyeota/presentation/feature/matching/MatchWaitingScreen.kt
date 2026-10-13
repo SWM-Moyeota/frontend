@@ -289,7 +289,9 @@ fun MatchWaitingScreen(
                         text = when {
                             isFull && !taxiEnabled -> "같이 탈 사람이 다 모였어요"
                             isFull -> "정원이 다 찼어요"
-                            else -> "보통 2분 안에 모여요"
+                            // 「보통 2분 안에 모여요」는 지웠다 — 근거가 될 매칭 소요 통계가 없다.
+                            // 기다리는 사람에게 지킬 수 없는 시각을 약속하는 자리다(2026-10-13).
+                            else -> "같이 탈 사람을 찾고 있어요"
                         },
                         fontSize = 22.sp,
                         fontWeight = FontWeight.Bold,

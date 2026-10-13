@@ -131,8 +131,9 @@ fun IdentityVerifyScreen(
             )
             Spacer(Modifier.height(10.dp))
             Text(
-                // 실명·성별은 가입 시 서버에 저장된다 — "저장하지 않아요"로 안내하면 사실과 다르다
-                text = "실명과 성별은 매칭 안전을 위해서만 사용해요",
+                // 실명·성별은 가입 시 서버에 저장된다 — "저장하지 않아요"로 안내하면 사실과 다르다.
+                // 「매칭 안전을 위해서만」은 지웠다 — 성별은 매칭에 쓰이지 않는다(2026-10-13).
+                text = "실명은 본인 확인에만 쓰고 탑승 상대에게는 보이지 않아요",
                 style = MoyeotaType.BodySm.copy(fontSize = 14.sp),
                 color = MoyeotaColor.TextMute,
             )
@@ -220,16 +221,12 @@ fun IdentityVerifyScreen(
                     .background(InfoCardBlue, RoundedCornerShape(18.dp))
                     .padding(20.dp),
             ) {
+                // 제목이던 「성별은 동성 매칭에만 써요」는 지웠다 — 성별 조건 매칭이 없다.
+                // 백엔드 matching 패키지에 성별이 0건이고, user/profile 에 저장만 된다(2026-10-13).
                 Text(
-                    text = "성별은 동성 매칭에만 써요",
+                    text = "성별은 프로필에 표시되지 않아요",
                     style = MoyeotaType.BodySm.copy(fontWeight = FontWeight.Bold),
                     color = MoyeotaColor.InkPrimary,
-                )
-                Spacer(Modifier.height(5.dp))
-                Text(
-                    text = "프로필에는 표시되지 않아요",
-                    style = MoyeotaType.CaptionMd,
-                    color = SlateGray,
                 )
             }
 

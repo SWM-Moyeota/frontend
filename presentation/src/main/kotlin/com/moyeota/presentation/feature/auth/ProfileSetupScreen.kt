@@ -240,8 +240,9 @@ fun ProfileSetupScreen(
             )
             Spacer(Modifier.height(10.dp))
             Text(
-                // 실명·성별은 가입 시 서버에 저장된다 — "저장하지 않아요"로 안내하면 사실과 다르다
-                text = "실명과 성별은 매칭 안전을 위해서만 사용해요",
+                // 실명·성별은 가입 시 서버에 저장된다 — "저장하지 않아요"로 안내하면 사실과 다르다.
+                // 「매칭 안전을 위해서만」은 지웠다 — 성별은 매칭에 쓰이지 않는다(2026-10-13).
+                text = "실명은 본인 확인에만 쓰고 탑승 상대에게는 보이지 않아요",
                 style = MoyeotaType.BodySm.copy(fontSize = 14.sp),
                 color = MoyeotaColor.TextMute,
             )
@@ -294,7 +295,8 @@ fun ProfileSetupScreen(
             Spacer(Modifier.height(28.dp))
             ProfileSectionHeader(
                 title = "기본 정보",
-                description = "가입 확인과 동성 매칭에 쓰는 정보예요",
+                // 「동성 매칭」은 지웠다 — 성별 조건 매칭이 없다(2026-10-13)
+                description = "가입할 때 본인 확인에 쓰는 정보예요",
             )
 
             Spacer(Modifier.height(16.dp))
@@ -343,9 +345,12 @@ fun ProfileSetupScreen(
             }
             Spacer(Modifier.height(8.dp))
             Text(
-                // 09 의 「성별은 동성 매칭에만 써요」 안내 카드를 필드 바로 아래 한 줄로 옮겼다
-                // — 필드가 7개인 화면에서 카드를 하나 더 세우면 읽는 흐름이 끊긴다
-                text = "동성 매칭 확인에만 쓰고 프로필에는 표시되지 않아요",
+                // 09 의 안내 카드를 필드 바로 아래 한 줄로 옮긴 자리다
+                // — 필드가 7개인 화면에서 카드를 하나 더 세우면 읽는 흐름이 끊긴다.
+                // 성별은 가입 시 서버에 저장되지만 **매칭에는 쓰이지 않는다** — 백엔드 matching
+                // 패키지에 성별이 한 번도 등장하지 않는다(user/profile 의 저장·복원 경로에만 있다).
+                // 그래서 용도를 말하지 않고, 프로필에 안 보인다는 사실만 적는다(2026-10-13).
+                text = "프로필에는 표시되지 않아요",
                 style = MoyeotaType.CaptionMd,
                 fontWeight = FontWeight.Medium,
                 color = LabelGray,
@@ -454,9 +459,10 @@ fun ProfileSetupScreen(
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    // 가입 중에는 어떤 인증 배지도 발급되지 않는다(학교·재직 인증은 가입 경로에 없다)
-                    // — 배지를 근거로 들면 없는 것을 있다고 말하는 셈이라 매너 기록만 남겼다
-                    text = "얼굴 사진 없이도 매너 기록으로 서로를 확인할 수 있어요",
+                    // 가입 중에는 어떤 인증 배지도 발급되지 않는다(학교·재직 인증은 가입 경로에 없다).
+                    // 「매너 기록」도 없다 — 평가 API 자체가 서버에 없어 User.rating 은 항상 0.0 이다
+                    // (`User` KDoc). 실제로 상대에게 보이는 것은 닉네임과 탑승 횟수뿐이다(2026-10-13).
+                    text = "탑승 상대에게는 닉네임과 탑승 횟수만 보여요",
                     style = MoyeotaType.BodySm,
                     fontWeight = FontWeight.Medium,
                     color = SlateGray,

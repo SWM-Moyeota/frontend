@@ -79,8 +79,8 @@ fun MannerPledgeScreen(
     onReverifyPhone: (() -> Unit)? = null,
 ) {
     // 전체 항목 동의 필수 → 하나라도 미체크면 CTA 비활성.
-    // 개수를 [pledgeItems] 에서 끌어온다 — 항목을 늘렸을 때 체크 배열이 짧아 터지는 일이 없도록.
-    val checks = remember { mutableStateListOf(*Array(pledgeItems.size) { false }) }
+    // 개수를 [mannerPledgeItems] 에서 끌어온다 — 항목을 늘렸을 때 체크 배열이 짧아 터지는 일이 없도록.
+    val checks = remember { mutableStateListOf(*Array(mannerPledgeItems.size) { false }) }
     val allChecked = checks.all { it }
 
     Column(modifier = modifier.fillMaxSize().background(MoyeotaColor.SurfaceSoft)) {
@@ -161,13 +161,13 @@ fun MannerPledgeScreen(
                     .background(MoyeotaColor.SurfaceCanvas, RoundedCornerShape(18.dp))
                     .padding(vertical = 8.dp),
             ) {
-                pledgeItems.forEachIndexed { index, item ->
+                mannerPledgeItems.forEachIndexed { index, item ->
                     PledgeItemRow(
                         item = item,
                         checked = checks[index],
                         onToggle = { checks[index] = !checks[index] },
                     )
-                    if (index != pledgeItems.lastIndex) {
+                    if (index != mannerPledgeItems.lastIndex) {
                         HorizontalDivider(
                             color = MoyeotaColor.Hairline,
                             modifier = Modifier.padding(start = 56.dp, end = 20.dp),
@@ -217,18 +217,42 @@ fun MannerPledgeScreen(
     }
 }
 
-private data class PledgeItem(val title: String, val description: String)
+/**
+ * 12 매너 서약의 동의 항목 하나.
+ *
+ * [description] 이 nullable 인 이유: **보조 설명이 약속이 되는 자리**라서다. 운영이 지킬 수단이
+ * 없는 말을 적을 바에는 줄을 비우는 쪽이 맞다 — 아래 「불쾌한 말과 행동」 항목이 그 경우다.
+ */
+internal data class PledgeItem(val title: String, val description: String? = null)
 
-private val pledgeItems = listOf(
+/**
+ * 동의 항목 — **전부 체크해야 가입 버튼이 열린다**(체크 배열 길이를 이 목록에서 끌어온다).
+ * 즉 여기 한 줄을 넣는 것은 "이걸 동의하지 않으면 가입시키지 않겠다"는 뜻이다.
+ *
+ * 2026-10-13 에 지운 것:
+ * - 「불쾌한 말과 행동을 하지 않을게요」의 설명 **「신고가 들어오면 24시간 안에 확인해요」** —
+ *   앱에 신고 UI 가 없다. 사용자 신고·메시지 신고 API 를 앱이 부르지 않고(27 긴급 신고만
+ *   `POST /reports` 를 쓰는데 그것도 운행 중인 방의 승객만이고 동승 모드는 26 에 닿지 않는다),
+ *   받을 창구는 문의 메일뿐인데 `SupportLinks.CONTACT_EMAIL` 이 null 이라 그 행조차 안 보인다.
+ *   **24시간을 지킬 수단이 없다.** 대체 문구를 새로 만들지 않고 줄을 비웠다 — 창구가 없는 상태에서
+ *   「확인해요」라고만 줄여도 없는 창구를 있다고 말하는 셈이다.
+ * - 항목 **「운행 중 내 위치를 동승자와 공유하는 데 동의해요」** — 위치 공유 기능이 아예 없고
+ *   (`docs/BACKEND-GAP-CLEANUP.md` §1 이 `reportMyLocation`·`getMemberLocations` 를 지웠다;
+ *   남은 위치 API 는 기사 위치 조회뿐이다) **그 동의도 서버에 저장되지 않았다**(저장 필드가 없어
+ *   전송하지 않았다). 없는 기능에 동의를 받아 버리고 있었다. 개인정보 처리방침의 「실시간 위치를
+ *   동승자에게 공유하는 기능이 현재 없습니다」와도 정면으로 어긋났다.
+ *
+ * 남긴 「이용이 제한돼요」류는 운영이 약관으로 유보하는 조치라 기능 주장이 아니다 — 다만 백엔드에
+ * 제재 수단이 아직 없어 운영자 판단 대상이다(산출물 보고서 참고).
+ */
+internal val mannerPledgeItems = listOf(
     // 09 본인 인증에 있던 「이용약관 · 개인정보 수집에 동의해요」 체크를 여기로 합쳤다.
     // 09 가 가입 경로에서 빠지기도 했지만, 그 전에도 동의를 두 화면이 나눠 받고 있었다
     // — 무엇에 동의했는지는 제출 버튼이 있는 이 화면에 모여 있어야 한다.
-    PledgeItem("이용약관 · 개인정보 수집에 동의해요", "실명·생년월일·연락처는 본인 확인과 매칭 안전에만 써요"),
+    PledgeItem("이용약관 · 개인정보 수집에 동의해요", "실명·생년월일·연락처는 본인 확인에만 써요"),
     PledgeItem("약속한 시간과 장소를 지킬게요", "무단 취소가 반복되면 이용이 제한돼요"),
-    PledgeItem("불쾌한 말과 행동을 하지 않을게요", "신고가 들어오면 24시간 안에 확인해요"),
+    PledgeItem("불쾌한 말과 행동을 하지 않을게요"),
     PledgeItem("매칭이 확정되면 꼭 나갈게요", "매칭 확정 후 오지 않으면 이용이 제한될 수 있어요"),
-    // 위치 공유 동의 — 백엔드에 동의 저장 필드가 없어 제출하지 않는다(가입 진행 조건으로만 쓴다).
-    PledgeItem("운행 중 내 위치를 동승자와 공유하는 데 동의해요", "매칭된 운행 동안에만 위치를 쓰고, 운행이 끝나면 공유도 함께 끝나요"),
 )
 
 @Composable
@@ -265,13 +289,16 @@ private fun PledgeItemRow(
                 fontWeight = FontWeight.Bold,
                 color = MoyeotaColor.InkPrimary,
             )
-            Spacer(Modifier.height(2.dp))
-            Text(
-                text = item.description,
-                style = MoyeotaType.CaptionMd,
-                fontWeight = FontWeight.Medium,
-                color = Color(0xFF8A93A0),
-            )
+            // 설명이 없는 항목은 제목만 — 빈 줄을 띄우면 문구가 지워진 자리가 드러난다
+            if (item.description != null) {
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = item.description,
+                    style = MoyeotaType.CaptionMd,
+                    fontWeight = FontWeight.Medium,
+                    color = Color(0xFF8A93A0),
+                )
+            }
         }
     }
 }

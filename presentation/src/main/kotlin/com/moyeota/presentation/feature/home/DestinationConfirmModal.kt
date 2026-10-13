@@ -443,16 +443,9 @@ fun DestinationConfirmModal(
                                     )
                                 }
                             }
-                            HorizontalDivider(color = MoyeotaColor.Hairline)
-                            ConditionRow(label = "매칭 방식") {
-                                ConditionChip(
-                                    text = "주요 승차지점",
-                                    // 단일 방식이라 항상 선택된 상태다 — 고를 게 없으니 탭도 무동작
-                                    selected = true,
-                                    onClick = {},
-                                    wide = true,
-                                )
-                            }
+                            // 「매칭 방식 · 주요 승차지점」 행은 지웠다(2026-10-13) — 그런 매칭 방식이
+                            // 없다. 서버에 승차지점 개념이 없고(방은 사용자가 찍은 좌표 그대로 만들어진다)
+                            // 칩도 항상 선택된 채 무동작이었다. 고를 것도, 가리킬 기능도 없는 줄이었다.
                         }
 
                         Spacer(Modifier.height(16.dp))
@@ -576,6 +569,7 @@ internal fun ConditionChip(
     text: String,
     selected: Boolean,
     onClick: () -> Unit,
+    /** 넓은 패딩 — 핀 조정 화면(16a)의 출발지/도착지 토글이 쓴다 */
     wide: Boolean = false,
 ) {
     val bg = if (selected) MoyeotaColor.Primary500 else MoyeotaColor.SurfaceCanvas

@@ -636,6 +636,8 @@ private fun MainNavHost(
             RideDetailRoute(
                 repository = rideRepository,
                 partyId = selectedPartyId,
+                // 21 과 같은 설정을 넘긴다 — 정원이 찬 뒤의 안내가 모드별로 갈린다
+                taxiEnabled = appConfig.taxiEnabled,
                 onBack = ::back,
                 onPartnerClick = { partner ->
                     selectedPartner = partner

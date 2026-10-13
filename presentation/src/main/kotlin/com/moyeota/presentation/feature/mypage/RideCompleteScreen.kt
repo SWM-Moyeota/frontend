@@ -100,7 +100,10 @@ fun RideCompleteScreen(
 
             // 요약 카드 — 내가 낸 돈 / 함께 탄 사람 (값이 있는 칸만)
             val cells = buildList {
-                if (paidAmount != null) add("%,d원".format(paidAmount) to "내가 낸 돈")
+                // 「내가 낸 돈」이 아니라 「1인 부담」이다 — 결제 기능이 없어 앱은 실제로 낸 돈을
+                // 알 수 없다. 이 값은 예상 요금을 정원으로 나눈 추정치(`Ride.farePerPerson`)로,
+                // 20·22·25 가 쓰는 라벨과 같게 맞췄다(2026-10-13).
+                if (paidAmount != null) add("%,d원".format(paidAmount) to "1인 부담")
                 if (companionCount != null) add("${companionCount}명" to "함께 탄 사람")
             }
             if (cells.isNotEmpty()) {

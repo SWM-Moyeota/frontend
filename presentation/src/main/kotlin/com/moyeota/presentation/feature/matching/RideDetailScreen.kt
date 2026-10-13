@@ -86,6 +86,11 @@ private val DashGray = Color(0xFFB9C3D6)
  * 하나로 끝난다 — 예전에는 앱이 자기 내부 Long id 를 몰라 고정값 1 과 비교하던 자리였다.
  * 평가 API 는 아직 없어 그 줄은 표시하지 않는다.
  *
+ * 모드 분기(2026-10-13): 정원이 찬 뒤 무슨 일이 일어나는지는 **모드가 가른다**. 동승 모드 서버는
+ * `DISPATCHING` 을 내지 않아 기사가 오지 않는다(`docs/MODE-ROUTES.md`). 그런데 이 화면은 모드를
+ * 모른 채 「정원이 차면 기사님이 자동으로 배차돼요」라고만 말하고 있었다 — 21 매칭 대기는 이미
+ * [taxiEnabled] 로 갈라 말하고 있었는데 여기만 남았다. 기본값은 **동승**이다(모르면 동승, 원칙 2).
+ *
  * 서버가 주지 않는 값(성별 조건·도착 시각·서비스 요금)은 지어내지 않고 요소를 두지 않는다.
  * 출발 표기는 [Ride.departureLabel] 이 있을 때만, 도착 쪽은 [Ride.estimatedMinutes] 가 있을 때만
  * 「약 N분」으로 보이고, 1인 부담은 서버 매핑 값 [Ride.farePerPerson] 을 그대로 쓴다.
@@ -95,6 +100,11 @@ fun RideDetailScreen(
     ride: Ride,
     /** 내 위치 → 탑승 위치 거리(m). 모르면 null 이고 그 줄을 감춘다 */
     pickupDistanceMeters: Double? = null,
+    /**
+     * 택시 모드(서버 설정). false = 1차 배포 — 정원이 차도 기사를 부르지 않는다.
+     * 정원 안내 문구가 갈린다(21 매칭 대기의 같은 파라미터와 같은 뜻·같은 기본값).
+     */
+    taxiEnabled: Boolean = false,
     onBack: () -> Unit = {},
     onPartnerClick: (User) -> Unit = {},
     onLeave: () -> Unit = {},
@@ -346,12 +356,17 @@ fun RideDetailScreen(
                 }
                 Spacer(Modifier.height(14.dp))
 
-                // 앱이 출발을 트리거하지 않는다는 사실을 알려주는 지점 (21 매칭 대기와 같은 문구)
+                // 앱이 출발을 트리거하지 않는다는 사실을 알려주는 지점 (21 매칭 대기와 같은 문구).
+                // 네 갈래가 21 의 안내 배너와 짝이다 — 한쪽만 고치면 두 화면이 다른 말을 한다.
                 Text(
-                    text = if (ride.members.size >= ride.capacity) {
-                        "기사님을 찾고 있어요. 배차되면 바로 알려드릴게요"
-                    } else {
-                        "정원이 차면 기사님이 자동으로 배차돼요"
+                    text = run {
+                        val isFull = ride.members.size >= ride.capacity
+                        when {
+                            isFull && !taxiEnabled -> "같이 탈 사람이 다 모였어요. 채팅으로 만날 곳을 정해요"
+                            isFull -> "기사님을 찾고 있어요. 배차되면 바로 알려드릴게요"
+                            !taxiEnabled -> "정원이 차면 채팅으로 만날 곳을 정해요"
+                            else -> "정원이 차면 기사님이 자동으로 배차돼요"
+                        }
                     },
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Medium,

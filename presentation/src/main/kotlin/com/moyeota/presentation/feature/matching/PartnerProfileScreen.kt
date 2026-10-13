@@ -151,7 +151,9 @@ fun PartnerProfileScreen(
             Spacer(Modifier.height(20.dp))
 
             Text(
-                text = "실명과 학번은 서로에게 공개되지 않아요",
+                // 「학번」은 지웠다 — 학교 인증(06·07)이 가입 경로에 없어 학번을 받은 적이 없다.
+                // 서버가 주는 멤버 정보는 publicId·닉네임·이미지·탑승 횟수뿐이다(2026-10-13).
+                text = "실명과 연락처는 서로에게 공개되지 않아요",
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Medium,
                 color = GrayAsh,
