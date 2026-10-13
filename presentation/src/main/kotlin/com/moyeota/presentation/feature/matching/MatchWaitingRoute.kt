@@ -133,9 +133,11 @@ class MatchWaitingViewModel(
      *
      * 가시성 게이트가 **되살려야 하는 것과 그러면 안 되는 것**을 가르는 값이다: 가려져서 취소된 구독은
      * 복귀 때 다시 붙지만, 종결로 끝난 구독은 다시 붙어도 같은 답이라 붙지 않는다(게이트 이전 동작과 동일).
+     *
+     * **StateFlow 인 이유**: 폴백 루프의 `combine` 입력이라서다. 평범한 변수면 가려진 사이에 스트림이
+     * 끝나도 복귀 패스가 그 사실을 모른 채 확정돼, 다시 붙을 스트림이 없는데도 6초를 기다린다.
      */
-    @Volatile
-    private var streamEnded = false
+    private val streamEnded = MutableStateFlow(false)
 
     /**
      * 폴백 루프가 **제 할 일을 끝냈다** — 방이 대기 단계를 벗어났다([isWaitingForMembers] false:
@@ -232,14 +234,14 @@ class MatchWaitingViewModel(
     private fun observeEvents() {
         viewModelScope.launch {
             visible.collectLatest { shown ->
-                if (!shouldObservePartyEvents(visible = shown, streamEnded = streamEnded)) {
+                if (!shouldObservePartyEvents(visible = shown, streamEnded = streamEnded.value)) {
                     return@collectLatest
                 }
                 try {
                     repository.observePartyEvents(partyId).collect { event -> applyEvent(event) }
                     // 여기까지 왔으면 스트림이 **종결**로 끝났다. 화면이 가려져 취소된 경우는
                     // CancellationException 으로 빠져나가 이 줄을 지나지 않는다 — 그래서 복귀 때 다시 붙는다.
-                    streamEnded = true
+                    streamEnded.value = true
                 } finally {
                     // 종결이든 취소든 실시간 근거가 사라진다. 취소된 뒤에도 true 로 남겨 두면 복귀해서
                     // 재연결이 실패했을 때 폴백이 영영 돌지 않아 화면이 멈춘다.
@@ -356,12 +358,15 @@ class MatchWaitingViewModel(
      */
     private fun observeFallbackPolling() {
         viewModelScope.launch {
-            combine(visible, _partyClosed, ::Pair).collectLatest { (shown, closed) ->
+            // streamEnded 가 combine 입력인 이유: 가려진 사이에 스트림이 종결되면(방 닫힘·403·404)
+            // 복귀 때 다시 붙을 스트림이 없다. 평범한 변수로 두면 패스가 이미 WAIT_THEN_READ 로
+            // 확정된 뒤라 READ_NOW 가 영영 타지 않고, 그 전이가 늘 6초 늦는다(QA 125 D-2).
+            combine(visible, _partyClosed, streamEnded, ::Triple).collectLatest { (shown, closed, ended) ->
                 val step = fallbackPollStep(
                     visible = shown,
                     partyClosed = closed,
                     fallbackDone = fallbackDone,
-                    streamEnded = streamEnded,
+                    streamEnded = ended,
                 )
                 if (step == FallbackStep.STOP) return@collectLatest
                 // 평상시(WAIT_THEN_READ)는 첫 주기를 그대로 기다린다 — 복귀의 갱신은 폴백이 아니라
