@@ -5,6 +5,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
@@ -22,12 +23,18 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
- * **끊긴 동안에만** 도는 폴백 폴링 간격.
+ * **화면이 보이고, SSE 가 끊긴 동안에만** 도는 폴백 폴링 간격.
+ *
+ * 가시성 조건은 나중에 붙었다([fallbackPollStep]). 예전에는 이 루프가 `viewModelScope` 에만 묶여 있어서
+ * 앱을 내려놓아도 돌았고, 그때 OS 가 네트워크를 조여 SSE 가 죽으면 **3초 재연결 ↔ 6초 폴백**이 서로
+ * 틈을 메우며 되풀이됐다(QA 123 D-3: 백그라운드 75초에 9건 — `/events` 5 + 상세 4, 분당 약 7건).
  *
  * 평상시 이 화면은 서버를 **주기적으로 부르지 않는다** — 방 상태는 SSE 변경분
  * ([RideRepository.observePartyEvents])이 전해 준다. 그래도 폴백을 남긴 이유는 그 스트림이
@@ -86,10 +93,59 @@ class MatchWaitingViewModel(
 
     /**
      * SSE 가 살아 있는가 — [PartyEvent.Snapshot] 을 받으면 true, [PartyEvent.Disconnected] 와
-     * 스트림 종료에서 false. **폴백 폴링의 유일한 스위치다**([shouldPollFallback]).
+     * 스트림 종료·구독 취소에서 false. **폴백 폴링이 이번 주기에 읽을지의 스위치다**([shouldPollFallback]).
      */
     @Volatile
     private var realtimeAlive = false
+
+    /**
+     * 화면이 지금 **보이는가** — SSE 구독([observeEvents])과 폴백 폴링([observeFallbackPolling])의
+     * **공통 스위치**다. 보이지 않으면 둘 다 멈추고, 돌아오면 둘 다 다시 붙는다.
+     *
+     * ### 왜 끊어도 안전한가 ★
+     * 재연결할 때마다 서버가 `connected` 로 **방 상세 전체**를 다시 준다([PartyEvent.Snapshot]).
+     * 그래서 가려진 동안 끊고 있다가 복귀해 다시 붙으면 **그 순간 상태가 통째로 맞춰진다** — 끊긴 사이의
+     * 변화를 따라잡는 catch-up 조회가 필요 없다. 이것이 이번 SSE 설계의 핵심이고(`117` §2 표의 1번 근거),
+     * 이 게이트가 성립하는 근거다. 증분(`member-joined`/`member-left`)은 바탕이 있을 때만 쓰는 값이라
+     * 「놓친 증분」을 복원할 필요도 없다 — 바탕 자체가 새로 온다.
+     *
+     * ### 왜 끊는 게 이득인가
+     * 보이지 않는 동안 SSE 를 유지해도 **사용자가 얻는 것이 없다**: 알림은 FCM 이 띄우는데 **멤버 합류에는
+     * FCM 이 없고**, 화면도 보이지 않는다. 반대로 비용은 확실하다 — 앱을 내려놓으면 OS 가 네트워크를 조여
+     * SSE 가 죽고, 3초 뒤 재연결하고, 그 틈을 6초 폴백이 메우고, 다시 죽는다
+     * (QA 123 D-3 실측: 백그라운드 **75초에 9건**, 분당 약 7건).
+     *
+     * ### 기본값이 true 인 이유
+     * 이 값을 내려 주는 배선([onScreenStart]·[onScreenStop])은 Route 에 있다. 기본값을 false 로 두면
+     * 배선이 빠진 채 머지됐을 때 **방 상태가 영영 갱신되지 않는** 기능 손실이 된다 — true 면 최악이
+     * 「고쳐지지 않은 상태 유지」다([com.moyeota.presentation.core.ActivePartyViewModel] 의 `hostVisible`
+     * 가 같은 이유로 true 다).
+     *
+     * 플래그가 아니라 [MutableStateFlow] 인 이유는 **수집과 같은 흐름에 묶기** 위해서다: `collectLatest`
+     * 가 가려지는 순간 진행 중인 구독·조회와 `delay` 를 **함께** 취소하고, 다시 보이면 같은 패스를 새로
+     * 시작한다(17 탐색 `ExploreViewModel.visible` 과 같은 모양).
+     */
+    private val visible = MutableStateFlow(true)
+
+    /**
+     * SSE 스트림이 **종결**로 끝났다 — 방 닫힘(`closed`)·403(멤버 아님)·404(방 없음), 또는 스트림 자체가
+     * 없는 저장소(더미). 그 밖의 끊김은 데이터 계층이 3초 뒤 스스로 다시 붙으므로 여기까지 오지 않는다.
+     *
+     * 가시성 게이트가 **되살려야 하는 것과 그러면 안 되는 것**을 가르는 값이다: 가려져서 취소된 구독은
+     * 복귀 때 다시 붙지만, 종결로 끝난 구독은 다시 붙어도 같은 답이라 붙지 않는다(게이트 이전 동작과 동일).
+     */
+    @Volatile
+    private var streamEnded = false
+
+    /**
+     * 폴백 루프가 **제 할 일을 끝냈다** — 방이 대기 단계를 벗어났다([isWaitingForMembers] false:
+     * 배차 시작·방 종료).
+     *
+     * 게이트를 넣었다고 끝난 루프가 되살아나면 회귀다. 가시성은 「멈췄다 다시 켜는」 스위치지만
+     * 이 값은 「끝났다」는 사실이라 복귀로 되돌아가지 않는다.
+     */
+    @Volatile
+    private var fallbackDone = false
 
     /**
      * 실시간 이벤트를 화면에 반영한 횟수. 값 자체에는 뜻이 없고, **상세 조회가 늦게 도착해**
@@ -102,6 +158,32 @@ class MatchWaitingViewModel(
         refresh()
         observeEvents()
         observeFallbackPolling()
+    }
+
+    /**
+     * 화면이 보이기 시작했다 — **즉시 재구독**하고 폴백 폴링을 재개한다.
+     *
+     * 이 길로 오는 것: 첫 진입, 앱 복귀, 위에 올라와 있던 화면(22 상세·24 채팅방)의 pop.
+     *
+     * **즉시성**: 재구독이 곧 스냅샷이다. 패스가 다시 시작되는 순간 `connect` 가 나가고, 서버가
+     * `connected` 에 방 상세 전체를 실어 주므로 6초 폴백 주기를 기다리는 구간이 없다(17 탐색은 같은
+     * 구조에서 복귀 첫 조회가 58ms 였다 — QA 123 A3).
+     */
+    fun onScreenStart() {
+        visible.value = true
+    }
+
+    /**
+     * 화면이 가려졌다 — SSE 구독과 폴백 폴링을 **함께** 멈춘다.
+     *
+     * 이 길로 오는 것: 위에 다른 화면이 올라옴(22 상세·24 채팅방 — 엔트리가 CREATED 로 내려간다),
+     * 앱 백그라운드(호스트 ON_STOP).
+     *
+     * 들고 있던 방 상태는 **건드리지 않는다.** 돌아올 때 보던 화면을 먼저 보여주고 스냅샷으로 덮는 것이
+     * 맞고, 로딩으로 깜빡이게 할 이유가 없다.
+     */
+    fun onScreenStop() {
+        visible.value = false
     }
 
     /**
@@ -125,21 +207,45 @@ class MatchWaitingViewModel(
     /**
      * 방 상태의 **주 경로** — SSE 변경분 구독([RideRepository.observePartyEvents]).
      *
+     * **화면이 보이는 동안에만 구독한다**([visible]) — 가려지면 끊고, 돌아오면 다시 붙는다. 끊어도
+     * 안전한 근거(재연결 = 스냅샷 = 상태 전체 재동기)는 [visible] 의 KDoc 에 적어 두었다.
+     *
      * ⚠️ 수집 지점은 이 화면에서 **여기 하나뿐이어야 한다.** 서버는 같은 사용자의 기존 구독을 끊고 새 연결을
      * 받으므로(`PartySseRegistry.closeMember`), 같은 방을 두 곳에서 수집하면 두 연결이 서로를 끊고 3초마다
-     * 번갈아 재연결하는 무한 루프가 된다. 그래서 `init` 에서 한 번만 걸고 ViewModel(키 `waiting-{partyId}`)이
-     * 사는 동안 그 수집을 유지한다 — 재구성·`LaunchedEffect` 로 다시 걸지 않는다.
+     * 번갈아 재연결하는 무한 루프가 된다. 그래서 `init` 에서 `launch` **한 번만** 걸고
+     * ViewModel(키 `waiting-{partyId}`)이 사는 동안 그 하나를 유지한다 — 재구성·`LaunchedEffect` 로
+     * 다시 걸지 않는다.
+     *
+     * 가시성 게이트가 그 성질을 깨지 않는 이유: `collectLatest` 는 새 값을 받으면 **앞 패스를 취소하고
+     * 끝날 때까지 기다린 뒤**(`cancelAndJoin`) 다음 패스를 시작한다. 앞 패스가 끝난다는 건
+     * `PartyEventSource` 의 `awaitClose { source.cancel() }` 까지 돌았다는 뜻이라, 어느 순간에도
+     * **살아 있는 수집은 0개 또는 1개**다. 가시성이 빠르게 토글돼도 두 수집이 겹치지 않는다.
      *
      * 받는 순서는 늘 [PartyEvent.Snapshot] → 변경분이고 **재연결 때도 스냅샷이 먼저** 온다. 그래서
      * 끊긴 사이 놓친 변화를 메우는 catch-up 조회가 없다 — 스냅샷이 방을 통째로 덮는다.
+     * 가시성 때문에 끊었다 붙는 것도 서버 입장에선 똑같은 재연결이다.
      *
-     * 수집이 끝나는 건 종결뿐이다(방 닫힘·403 멤버 아님·404 방 없음). 그때는 실시간 근거가 사라지므로
-     * 폴백을 켠다 — 내가 방을 나간 경우라면 Route 가 이미 화면을 떠났고 수집도 함께 취소된다.
+     * 수집이 **스스로** 끝나는 건 종결뿐이다(방 닫힘·403 멤버 아님·404 방 없음). 그때는 다시 붙어도 같은
+     * 답이라 복귀해도 붙지 않고([streamEnded]) 폴백이 갱신을 맡는다 — 내가 방을 나간 경우라면 Route 가
+     * 이미 화면을 떠났고 수집도 함께 취소된다.
      */
     private fun observeEvents() {
         viewModelScope.launch {
-            repository.observePartyEvents(partyId).collect { event -> applyEvent(event) }
-            realtimeAlive = false
+            visible.collectLatest { shown ->
+                if (!shouldObservePartyEvents(visible = shown, streamEnded = streamEnded)) {
+                    return@collectLatest
+                }
+                try {
+                    repository.observePartyEvents(partyId).collect { event -> applyEvent(event) }
+                    // 여기까지 왔으면 스트림이 **종결**로 끝났다. 화면이 가려져 취소된 경우는
+                    // CancellationException 으로 빠져나가 이 줄을 지나지 않는다 — 그래서 복귀 때 다시 붙는다.
+                    streamEnded = true
+                } finally {
+                    // 종결이든 취소든 실시간 근거가 사라진다. 취소된 뒤에도 true 로 남겨 두면 복귀해서
+                    // 재연결이 실패했을 때 폴백이 영영 돌지 않아 화면이 멈춘다.
+                    realtimeAlive = false
+                }
+            }
         }
     }
 
@@ -227,25 +333,54 @@ class MatchWaitingViewModel(
     }
 
     /**
-     * 끊긴 동안의 **폴백** 폴링. SSE 가 살아 있고 화면에 방이 떠 있으면 **한 번도 서버를 부르지 않는다** —
-     * 이번 변경의 핵심이다(예전에는 신호가 붙어 있어도 20초마다 물었다). 판정은 [shouldPollFallback] 하나에 있다.
+     * 끊긴 동안의 **폴백** 폴링 — 그리고 **화면이 보이는 동안에만**.
+     *
+     * 판정이 두 층이다. 섞지 않는 이유는 보는 값의 수명이 다르기 때문이다.
+     *
+     * | 함수 | 묻는 것 | 언제 바뀌나 |
+     * |---|---|---|
+     * | [fallbackPollStep] | 루프를 **돌릴지 / 첫 조회를 미룰지** | 가시성·방 닫힘·루프 종료 (패스 단위) |
+     * | [shouldPollFallback] | 이번 주기에 **읽을지** | SSE 생사·화면에 방이 있는지 (주기 단위) |
+     *
+     * SSE 가 살아 있고 화면에 방이 떠 있으면 **한 번도 서버를 부르지 않는다**(평상시 0회). 거기에
+     * 가시성이 더해져, 가려진 동안에는 **깨어나 아무 일도 안 하는 주기조차 남지 않는다** — `collectLatest`
+     * 가 진행 중인 조회와 `delay` 를 함께 취소한다(17 탐색 `ExploreViewModel.observeRequests` 와 같은 모양).
      *
      * 폴백 수단은 방 상세뿐이다 — 지문과 `GET /rooms/{id}/status` 가 서버에서 사라져(Backend #221)
      * 「바뀌었나」를 싸게 묻는 길이 없다. 대신 상세를 **통째로 교체**하는 건 스냅샷과 같은 처리라 멱등하고,
      * 내용이 같으면 [MutableStateFlow] 가 같은 값으로 보아 흘리지 않으므로 재구성도 일어나지 않는다.
      *
-     * 방이 대기 단계를 벗어났거나([isWaitingForMembers]) 닫혔으면 더 볼 게 없어 루프를 끝낸다 —
-     * 화면 이동은 Route 의 `LaunchedEffect` 가 맡는다. 조회 실패는 조용히 다음 주기를 기다린다.
+     * **기존 종료 조건은 그대로다.** 방이 닫히면([_partyClosed]) 루프가 끝나고, 방이 대기 단계를 벗어나면
+     * ([isWaitingForMembers] false) 폴백이 끝난다([fallbackDone]) — 둘 다 복귀로 되살아나지 않는다.
+     * 화면 이동은 Route 의 `LaunchedEffect` 가 맡고, 조회 실패는 조용히 다음 주기를 기다린다.
      */
     private fun observeFallbackPolling() {
         viewModelScope.launch {
-            while (isActive) {
-                delay(PARTY_FALLBACK_POLL_INTERVAL_MS)
-                if (_partyClosed.value) return@launch
-                if (!shouldPollFallback(realtimeAlive, hasRide = _uiState.value is UiState.Success)) continue
-                if (!readDetail()) continue
-                val status = (_uiState.value as? UiState.Success)?.ride?.status ?: continue
-                if (!isWaitingForMembers(status)) return@launch
+            combine(visible, _partyClosed, ::Pair).collectLatest { (shown, closed) ->
+                val step = fallbackPollStep(
+                    visible = shown,
+                    partyClosed = closed,
+                    fallbackDone = fallbackDone,
+                    streamEnded = streamEnded,
+                )
+                if (step == FallbackStep.STOP) return@collectLatest
+                // 평상시(WAIT_THEN_READ)는 첫 주기를 그대로 기다린다 — 복귀의 갱신은 폴백이 아니라
+                // **재구독 스냅샷**이 맡으므로, 여기서 즉시 읽으면 복귀마다 상세 1건이 덧붙는다.
+                // READ_NOW 는 다시 붙을 스트림이 아예 없는 경우다(종결·스트림 없는 저장소) —
+                // 유일한 갱신 수단을 6초 미룰 이유가 없다.
+                if (step == FallbackStep.WAIT_THEN_READ) delay(PARTY_FALLBACK_POLL_INTERVAL_MS)
+                while (isActive) {
+                    if (shouldPollFallback(realtimeAlive, hasRide = _uiState.value is UiState.Success) &&
+                        readDetail()
+                    ) {
+                        val status = (_uiState.value as? UiState.Success)?.ride?.status
+                        if (status != null && !isWaitingForMembers(status)) {
+                            fallbackDone = true
+                            return@collectLatest
+                        }
+                    }
+                    delay(PARTY_FALLBACK_POLL_INTERVAL_MS)
+                }
             }
         }
     }
@@ -305,6 +440,75 @@ internal fun isWaitingForMembers(status: RideStatus): Boolean =
  */
 internal fun shouldPollFallback(realtimeAlive: Boolean, hasRide: Boolean): Boolean =
     !realtimeAlive || !hasRide
+
+/**
+ * SSE 를 지금 구독해야 하는가 — **가시성 게이트의 판정**(`MatchWaitingViewModel.observeEvents`).
+ *
+ * | 판정 | 조건 | 왜 |
+ * |---|---|---|
+ * | 구독하지 않는다 | [visible] 이 false | **이 함수의 존재 이유.** 보이지 않는 화면이 연결을 붙들 이유가 없다 — 멤버 합류에는 FCM 이 없어 백그라운드에서 받아도 띄울 데가 없고, OS 가 네트워크를 조여 「죽고 재연결」만 되풀이된다(QA 123 D-3) |
+ * | 구독하지 않는다 | [streamEnded] 가 true | 종결로 끝난 스트림이다(방 닫힘·403 멤버 아님·404 방 없음·스트림 없는 저장소). 다시 붙어도 같은 답이고, 게이트 이전에도 다시 붙지 않았다 |
+ * | 구독한다 | 그 밖 | 보이고, 아직 종결되지 않았다 |
+ *
+ * 끊어도 안전한 근거는 **재연결마다 서버가 방 상세 전체를 다시 준다**는 것이다(`connected` =
+ * [PartyEvent.Snapshot]) — 복귀해 붙는 순간 상태가 통째로 맞춰지므로 끊긴 동안의 변화를 따라잡는
+ * 별도 조회가 없다(`MatchWaitingViewModel` 의 `visible` KDoc).
+ *
+ * @param visible 화면이 사용자에게 보이는가(`LifecycleStartEffect` 로 받는다)
+ * @param streamEnded 스트림이 **종결**로 끝났는가(가려져서 취소된 것과 구분한다)
+ */
+internal fun shouldObservePartyEvents(visible: Boolean, streamEnded: Boolean): Boolean =
+    visible && !streamEnded
+
+/**
+ * 폴백 폴링 패스 하나가 할 일 — [fallbackPollStep] 의 판정 결과.
+ * (17 탐색 `NearbyPollStep` 과 같은 자리·같은 모양이다.)
+ */
+internal enum class FallbackStep {
+    /** 아무것도 하지 않고 다음 신호를 기다린다 — 안 보이거나, 루프가 이미 끝났다 */
+    STOP,
+
+    /** 지금 바로 상세를 읽고 주기를 시작한다 — 다시 붙을 스트림이 없어 폴백이 **유일한** 갱신 수단이다 */
+    READ_NOW,
+
+    /** 한 주기 기다린 뒤 읽는다 — 평상시. 복귀의 갱신은 재구독 스냅샷이 맡는다 */
+    WAIT_THEN_READ,
+}
+
+/**
+ * 폴백 루프를 **돌릴지, 첫 조회를 미룰지, 아예 멈출지.**
+ *
+ * 폴링을 화면 가시성에 묶는 판정을 이 한 곳에 모은다(17 탐색 `nearbyPollStep` 과 같은 역할).
+ * 위에서부터 읽는다 — 앞의 조건이 뒤를 가린다.
+ *
+ * | 판정 | 조건 | 이유 |
+ * |---|---|---|
+ * | [FallbackStep.STOP] | [visible] 이 false | **이 함수의 존재 이유.** 보이지 않는 화면이 서버를 부를 이유가 없다 (QA 123 D-3) |
+ * | [FallbackStep.STOP] | [partyClosed] | 서버가 방이 닫혔다고 알려 왔다 — 닫힌 방을 다시 읽어도 「닫혔다」만 재확인한다. **기존 종료 조건** |
+ * | [FallbackStep.STOP] | [fallbackDone] | 방이 대기 단계를 벗어나 루프가 이미 끝났다. **기존 종료 조건** — 복귀로 되살아나면 회귀다 |
+ * | [FallbackStep.READ_NOW] | [streamEnded] | 다시 붙을 스트림이 없다(종결·더미). 복귀 갱신을 맡을 스냅샷이 없으므로 6초를 기다리지 않는다 |
+ * | [FallbackStep.WAIT_THEN_READ] | 그 밖 | 평상시. 복귀 즉시 재구독이 스냅샷을 가져오므로, 여기서 또 읽으면 복귀마다 상세 1건이 덧붙는다 |
+ *
+ * 가시성이 맨 앞인 게 요점이다 — **보이지 않는 동안에는 나머지 조건을 보지 않는다.**
+ * 반대로 [partyClosed]·[fallbackDone] 은 「끝났다」는 사실이라 복귀해도 되돌아가지 않는다:
+ * 가시성은 스위치, 이 둘은 종결이다.
+ *
+ * @param visible 화면이 사용자에게 보이는가(`LifecycleStartEffect` 로 받는다)
+ * @param partyClosed 서버가 `closed` 를 보냈는가([PartyEvent.Closed])
+ * @param fallbackDone 대기 단계를 벗어나 루프가 끝났는가([isWaitingForMembers] false 를 본 뒤)
+ * @param streamEnded SSE 가 종결로 끝나 재구독할 것이 없는가([shouldObservePartyEvents])
+ */
+internal fun fallbackPollStep(
+    visible: Boolean,
+    partyClosed: Boolean,
+    fallbackDone: Boolean,
+    streamEnded: Boolean,
+): FallbackStep = when {
+    !visible -> FallbackStep.STOP
+    partyClosed || fallbackDone -> FallbackStep.STOP
+    streamEnded -> FallbackStep.READ_NOW
+    else -> FallbackStep.WAIT_THEN_READ
+}
 
 /**
  * [PartyEvent.MemberJoined] 적용 — 멤버 목록에 더하고 서버가 준 **들어온 뒤의** [status] 로 바꾼다.
@@ -382,7 +586,9 @@ internal fun canFinishParty(status: RideStatus, taxiEnabled: Boolean): Boolean =
  * 21 매칭 대기 — SSE 변경분 구독(+끊김 폴백) · 나가기/합승 완료 진입점. partyId 없으면 기존 더미 화면 유지.
  *
  * 방 상태의 출처는 [MatchWaitingViewModel] 하나뿐이다 — 이 화면에서 SSE 를 두 번 수집하면 서버가 서로의
- * 연결을 끊어 무한 재연결이 되므로, 여기서 `LaunchedEffect` 로 구독을 추가하지 말 것.
+ * 연결을 끊어 무한 재연결이 되므로, 여기서 `LaunchedEffect` 로 구독을 추가하지 말 것. 아래
+ * `LifecycleStartEffect` 는 **구독을 추가하지 않는다** — 그 하나의 수집을 켜고 끄는 신호만 보낸다
+ * ([MatchWaitingViewModel.onScreenStart]·[MatchWaitingViewModel.onScreenStop]).
  */
 @Composable
 fun MatchWaitingRoute(
@@ -427,6 +633,19 @@ fun MatchWaitingRoute(
     // 지도의 파란 점. 권한을 자동 요청하지 않는다 — 대기 화면의 본질은 지도가 아니라 「기다림」이라,
     // 여기서 다이얼로그를 띄우면 흐름을 끊는다. 이미 허용돼 있으면(14·17 에서 받았을 것) 점이 뜬다.
     val myLocation = rememberMyLocationState(autoRequestPermission = false)
+
+    // 화면이 보이는 동안만 SSE 를 구독하고 폴백 폴링을 돌린다 — 위에 22 상세·24 채팅방이 올라오거나
+    // 앱이 백그라운드로 가면 둘 다 멈추고, 돌아오면 그 자리에서 다시 붙는다.
+    // 끊어도 안전한 근거는 **재연결마다 서버가 방 상세 전체를 다시 준다**는 것이다(MatchWaitingViewModel.visible).
+    //
+    // RESUMED 가 아니라 STARTED 를 쓴다: ① NavHost 는 **전환 애니메이션이 끝난 뒤에야** 엔트리를
+    // RESUMED 로 올려서, RESUMED 로 묶으면 복귀 재구독이 그만큼 늦는다 ② 위에 올라온 화면에 가린
+    // 엔트리는 CREATED 까지 내려가므로 「22·24 가 올라옴」도 STARTED 로 똑같이 잡히고, 앱 백그라운드
+    // (ON_STOP)도 함께 잡힌다 ③ 같은 코드베이스의 17 탐색·24 채팅방·GPS 구독이 전부 STARTED 경계다.
+    LifecycleStartEffect(viewModel) {
+        viewModel.onScreenStart()
+        onStopOrDispose { viewModel.onScreenStop() }
+    }
 
     LaunchedEffect(action.left) {
         if (action.left) onCancelSearch()
