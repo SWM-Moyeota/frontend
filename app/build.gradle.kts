@@ -49,13 +49,13 @@ val moyeotaBaseUrl: String =
  */
 val keystorePath: String = buildSetting("MOYEOTA_KEYSTORE_PATH", default = "")
 val keystorePassword: String = buildSetting("MOYEOTA_KEYSTORE_PASSWORD", default = "")
-val keyAlias: String = buildSetting("MOYEOTA_KEY_ALIAS", default = "")
+val keyAliasValue: String = buildSetting("MOYEOTA_KEY_ALIAS", default = "")
 val keyPasswordValue: String = buildSetting("MOYEOTA_KEY_PASSWORD", default = "")
 
 /** 서명에 필요한 네 값이 모두 있고 키스토어 파일이 실제로 있을 때만 서명한다. */
 val releaseSigningReady: Boolean = keystorePath.isNotEmpty() &&
     keystorePassword.isNotEmpty() &&
-    keyAlias.isNotEmpty() &&
+    keyAliasValue.isNotEmpty() &&
     keyPasswordValue.isNotEmpty() &&
     rootProject.file(keystorePath).exists()
 
@@ -88,9 +88,13 @@ android {
     signingConfigs {
         if (releaseSigningReady) {
             create("release") {
+                // 바깥 val 이름 뒤에 Value 를 붙인 이유: 이 블록 안에서는 keyAlias·keyPassword 가
+                // **수신자의 프로퍼티**로 먼저 해석된다. `this.keyAlias = keyAlias` 로 쓰면 오른쪽이
+                // 바깥 변수가 아니라 자기 자신(null)이 되어, 빌드가 아니라 **서명 단계에서**
+                // NullPointerException 으로 터진다 — 이름을 겹치지 않게 두는 것이 유일한 방어다.
                 storeFile = rootProject.file(keystorePath)
                 storePassword = keystorePassword
-                this.keyAlias = keyAlias
+                keyAlias = keyAliasValue
                 keyPassword = keyPasswordValue
             }
         }
