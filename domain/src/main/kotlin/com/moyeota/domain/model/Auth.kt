@@ -108,6 +108,19 @@ object AuthPolicy {
     const val REJOIN_RESTRICTED_DAYS = 30
 
     /**
+     * 가입할 수 있는 **최소 만 나이**. 판정은 [isOldEnough] 가 한다.
+     *
+     * 근거는 개인정보 보호법이다 — 만 14세 미만의 개인정보는 법정대리인 동의 없이 처리할 수 없다.
+     * 동의 절차를 만드는 대신 **가입 자체를 막기로** 했다(서비스 특성상 미성년 단독 동승도 위험하다).
+     * 개인정보 처리방침에도 「만 14세 미만은 가입할 수 없습니다」로 고지하므로 **고지와 동작이 어긋나면
+     * 안 된다** — 화면 문구도 이 상수를 끼워 쓴다(`birthDateError`). 숫자를 한 곳에서만 고치게 하는 이유다.
+     *
+     * **서버에는 이 제한이 없다**(`UserRegisterRequest` 는 `birthDate` 에 `@Past` 뿐이다).
+     * 즉 이 판정은 앱만의 방어선이고, API 를 직접 호출하면 우회된다 — 서버에도 같은 검증이 필요하다.
+     */
+    const val MIN_AGE = 14
+
+    /**
      * 닉네임: 2~10자의 한글·영문·숫자. 공백과 특수문자는 불가하다.
      * 서버 도메인 VO `Nickname` 의 정규식을 그대로 옮긴 것이며, 서버도 **앞뒤 공백을 strip 한 뒤** 검사한다
      * — [isValidNickname] 이 trim 하는 이유다.
@@ -152,6 +165,37 @@ object AuthPolicy {
      * 그 틈을 아예 막으려고 **UTC 기준 오늘보다 이른 날짜만** 통과시킨다.
      */
     fun isValidBirthDate(value: LocalDate): Boolean = value.isBefore(LocalDate.now(ZoneOffset.UTC))
+
+    /**
+     * [birthDate] 가 [today] 기준 만 [MIN_AGE] 세 이상인지 — **생일 당일부터 통과한다.**
+     *
+     * 만 나이이므로 연도만 빼면 안 된다: 2012-12-31 생은 2026-01-01 에 아직 13세다.
+     * 그래서 "[birthDate] 의 [MIN_AGE] 년 뒤 날짜가 오늘까지 왔는지"로 본다 —
+     * `Period.between(birthDate, today).years >= MIN_AGE` 와 **단 하루를 빼고 같은 판정**이다.
+     * 그 하루는 윤년 2월 29일생의 평년 생일이다: [LocalDate.plusYears] 는 해당일이 없으면 그 달의
+     * 말일로 맞춰(2008-02-29 + 14년 = 2022-02-28) **민법 제160조 ③과 같게** 2월 28일에 나이를 먹는데,
+     * `Period` 로 세면 그날 13세로 떨어져 법적으로 14세인 사람을 하루 더 막는다. 막는 쪽이 아니라
+     * 맞는 쪽을 골랐다. 어느 입력에도 예외를 던지지 않는다(없는 날짜는 애초에 [LocalDate] 가 못 된다).
+     *
+     * [today] 를 인자로 받는 이유: 이 함수의 값어치는 **경계값**(생일 하루 전/당일/하루 뒤)에 있는데
+     * 안에서 `LocalDate.now()` 를 부르면 기기 시계에 묶여 그 셋을 검증할 방법이 없다.
+     * 호출부(화면)가 `LocalDate.now()` 를 넘긴다.
+     *
+     * [isValidBirthDate] 와 **역할이 겹치지 않게** 나눠 둔 것이다:
+     *
+     * | | [isValidBirthDate] | [isOldEnough] |
+     * |---|---|---|
+     * | 근거 | 서버 `UserRegisterRequest` 의 `@Past` | 개인정보 보호법 + 앱 정책([MIN_AGE]) |
+     * | 막는 값 | 보내면 **400 이 되는** 값(미래·오늘) | 보내면 **200 이지만 받아선 안 되는** 가입 |
+     * | 기준 시각 | UTC 오늘(서버가 Instant 로 비교한다) | 호출부가 넘긴 오늘(사용자가 사는 지역의 날짜) |
+     * | 사용자가 할 일 | 날짜를 고친다 | 고칠 게 없다 — 가입이 안 된다 |
+     *
+     * 만 [MIN_AGE] 세 이상이면 당연히 과거 날짜라 포함 관계처럼 보이지만 합치면 안 된다. 기준 시각이 다르고
+     * (서버 타임존 vs 사용자 지역), 바뀌는 이유가 다르고(서버 검증 vs 법·정책), 무엇보다 **사용자에게
+     * 할 말이 다르다.** 2005 를 2025 로 잘못 친 오타와 "정말 어리다"를 한 문구로 뭉개면 고칠 곳을 못 찾는다.
+     */
+    fun isOldEnough(birthDate: LocalDate, today: LocalDate): Boolean =
+        !today.isBefore(birthDate.plusYears(MIN_AGE.toLong()))
 }
 
 /**

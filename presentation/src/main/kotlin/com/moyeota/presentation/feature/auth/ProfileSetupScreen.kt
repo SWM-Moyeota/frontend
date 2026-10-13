@@ -51,6 +51,7 @@ import com.moyeota.domain.model.AuthPolicy
 import com.moyeota.domain.model.Gender
 import com.moyeota.presentation.core.BirthDateTransformation
 import com.moyeota.presentation.core.PhoneNumberTransformation
+import java.time.LocalDate
 
 private val LabelGray = Color(0xFF8A93A0)
 private val CounterGray = Color(0xFF9AA1AC)
@@ -81,6 +82,11 @@ private val TrackGray = Color(0xFFE6EAF0)
  * 자리가 없어 어디로도 가지 않는 값이었지만, 이제 [SignupDraft.nickname] 으로 그대로 서버에 간다.
  * 규칙도 서버 VO 와 같은 [NicknamePolicy] 로 맞췄다(2~10자 한글·영문·숫자).
  *
+ * **만 [AuthPolicy.MIN_AGE] 세 미만은 이 화면에서 막는다.** 개인정보 보호법상 법정대리인 동의 없이는
+ * 가입시킬 수 없고, 동의 절차를 만드는 대신 가입 자체를 받지 않기로 했다(개인정보 처리방침의
+ * 고지와 동작이 같아야 한다). 서버에는 연령 제한이 없어 **앱이 유일한 방어선**이다 —
+ * 판정은 [AuthPolicy.isOldEnough], 문구는 [birthDateError] 가 갖는다.
+ *
  * 2026-10 서버 변경으로 **휴대폰 문자 인증이 가입 선행 조건**이 됐다. 인증을 별도 화면으로 빼지 않고
  * 휴대폰 입력란 바로 아래 [PhoneVerificationBlock] 으로 넣었다 — 이유는 그 함수 KDoc 에 적었다.
  * 그래서 이 화면은 서버 가입 **9개 값**(기존 8 + `verificationToken`)을 모두 책임지고,
@@ -94,6 +100,8 @@ private val TrackGray = Color(0xFFE6EAF0)
  * @param onPhoneDigitsChange 번호가 바뀔 때마다 호출 — 다른 번호가 되면 인증이 무효가 된다.
  * @param onRequestVerificationCode 「인증번호 받기」. 번호를 인자로 넘기는 이유는 입력값의 주인이
  *   이 화면이기 때문이다 — ViewModel 이 번호를 따로 들고 있으면 두 곳이 어긋날 수 있다.
+ * @param today 만 나이 계산 기준일. 기기 시계를 기본값으로 두되 **파라미터로 받는다** —
+ *   연령 판정의 경계값(생일 당일)은 시계를 고정하지 않으면 검증할 수 없고, 프리뷰도 날짜에 흔들린다.
  * @param onNext 「다음」 → 12 매너 서약. [SignupDraft] 가 서버로 갈 9개 값 전부다.
  */
 @Composable
@@ -101,6 +109,7 @@ fun ProfileSetupScreen(
     onBack: () -> Unit,
     onNext: (SignupDraft) -> Unit,
     modifier: Modifier = Modifier,
+    today: LocalDate = LocalDate.now(),
     nicknameCheck: NicknameCheckState = NicknameCheckState.Idle,
     onNicknameChange: (String) -> Unit = {},
     phoneVerify: PhoneVerifyState = PhoneVerifyState(),
@@ -153,17 +162,12 @@ fun ProfileSetupScreen(
         if (realName.isNotEmpty() && !realNameValid) "이름은 한글 또는 영문 2~20자로 입력해 주세요" else null
 
     // 8자리를 채웠을 때만 실제로 있는 날짜인지까지 본다(20250230 같은 값 차단)
-    val birthDate = parseBirthDate(birthDigits)
-    // 서버는 생년월일을 Instant 로 받아 @Past 로 검사하고, data 매퍼는 날짜를 UTC 자정으로 올려 보낸다
-    // — 그래서 "오늘"을 고르면 09:00 KST 이전에는 UTC 자정이 아직 미래라 가입이 400 으로 떨어진다.
-    // AuthPolicy.isValidBirthDate 가 그 틈(UTC 기준 오늘 이후)을 미리 막는다.
-    val birthValid = birthDate != null && AuthPolicy.isValidBirthDate(birthDate)
-    val birthError = when {
-        birthDigits.length < 8 -> null
-        birthDate == null -> "실제로 있는 날짜를 YYYYMMDD 로 입력해 주세요"
-        !birthValid -> "생년월일은 오늘 이전 날짜로 입력해 주세요"
-        else -> null
-    }
+    val birthDate = parseBirthDate(birthDigits, today)
+    // 거절 사유 셋(없는 날짜 · 오늘 이후 · 만 14세 미만)을 각각 다른 문구로 말한다.
+    // 규칙과 문구는 birthDateError 가 갖는다 — 09 본인 인증도 같은 함수를 쓰므로 두 화면이 어긋나지 않는다.
+    val birthError = birthDateError(birthDigits, today)
+    // 「다음」 판정은 문구와 같은 근거를 본다: 할 말이 남아 있으면 넘어가지 않는다
+    val birthValid = birthDate != null && birthError == null
 
     // 휴대폰 — 010 + 숫자 8자리, 하이픈은 표시에만. 판정은 인증 블록과 같은 함수를 쓴다
     // (「인증번호 받기」는 활성인데 「다음」은 번호가 틀렸다고 막는 어긋남을 구조적으로 없앤다)
@@ -311,6 +315,8 @@ fun ProfileSetupScreen(
                 label = "생년월일",
                 placeholder = "2000-01-01",
                 errorText = birthError,
+                // 다 쓰고 나서 "가입할 수 없어요"를 보는 대신 미리 안다. 오류가 있으면 필드가 그쪽을 띄운다
+                helperText = BirthDateHelperText,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 visualTransformation = BirthDateTransformation,
             )
