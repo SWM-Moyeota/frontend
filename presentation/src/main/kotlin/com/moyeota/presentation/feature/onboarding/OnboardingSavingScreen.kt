@@ -92,7 +92,7 @@ fun OnboardingSavingScreen(
         Spacer(Modifier.height(32.dp))
 
         Text(
-            text = "택시비, 혼자 다 내지 마요",
+            text = OnboardingSavingCopy.headline,
             style = MoyeotaType.DisplayMd.copy(fontSize = 26.sp, letterSpacing = (-0.52).sp),
             color = MoyeotaColor.InkPrimary,
             textAlign = TextAlign.Center,
@@ -102,7 +102,7 @@ fun OnboardingSavingScreen(
         Spacer(Modifier.height(12.dp))
 
         Text(
-            text = "같은 방향 사람과 나눠 타면\n요금이 1/N로 줄어요",
+            text = OnboardingSavingCopy.body,
             style = MoyeotaType.BodyMd.copy(lineHeight = 22.sp, letterSpacing = (-0.3).sp),
             color = MoyeotaColor.TextMute,
             textAlign = TextAlign.Center,

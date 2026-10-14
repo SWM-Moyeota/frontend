@@ -17,7 +17,7 @@ jobs:
     steps:
       - name: Slack payload 생성
         id: payload
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const MEMBERS = {

@@ -3,7 +3,6 @@ package com.moyeota.core.designsystem.component
 import com.naver.maps.geometry.LatLng
 import kotlin.math.PI
 import kotlin.math.atan
-import kotlin.math.cos
 import kotlin.math.exp
 import kotlin.math.ln
 import kotlin.math.log2
@@ -94,27 +93,9 @@ fun fitMapCamera(
     return LatLng(inverseMercatorY(centerY), (minLng + maxLng) / 2.0) to zoom
 }
 
-/**
- * 반경 [radiusMeters] 원의 외접 사각형 꼭짓점 4개. [fitMapCamera] 의 points 에 넣으면
- * **원 전체가 화면에 들어오도록** 줌이 잡힌다(중심 좌표 하나만 넣으면 원이 잘린다).
- *
- * 위경도 ↔ m 환산은 구면 근사다. 반경이 수백 m 수준이라 이 오차(0.1% 미만)는 화면에서 보이지 않는다.
- */
-fun circleBoundsPoints(center: LatLng, radiusMeters: Double): List<LatLng> {
-    if (radiusMeters <= 0.0 || !radiusMeters.isFinite()) return listOf(center)
-    val deltaLat = radiusMeters / METERS_PER_DEGREE_LAT
-    // 경도 1도의 길이는 위도가 높을수록 짧아진다. 극지방(cos≈0)에서 발산하지 않게 하한을 둔다.
-    val cosLat = cos(center.latitude * PI / 180.0).coerceAtLeast(0.01)
-    val deltaLng = radiusMeters / (METERS_PER_DEGREE_LAT * cosLat)
-    return listOf(
-        LatLng((center.latitude - deltaLat).coerceAtLeast(LatLng.MINIMUM_LATITUDE), center.longitude),
-        LatLng((center.latitude + deltaLat).coerceAtMost(LatLng.MAXIMUM_LATITUDE), center.longitude),
-        LatLng(center.latitude, (center.longitude - deltaLng).coerceAtLeast(LatLng.MINIMUM_LONGITUDE)),
-        LatLng(center.latitude, (center.longitude + deltaLng).coerceAtMost(LatLng.MAXIMUM_LONGITUDE)),
-    )
-}
-
-private const val METERS_PER_DEGREE_LAT = 111_320.0
+// 반경 원의 외접 사각형을 구하던 circleBoundsPoints 는 지웠다 — 21 매칭 대기의 탐색 반경 원이
+// 유일한 사용처였고, 그 원은 서버가 반경을 고정값으로 정하면서(Backend `a668aee`) 아무것도
+// 걸러내지 않는 범위를 그리는 일이 됐다. 원을 되살릴 이유가 생기면 환산도 함께 다시 쓰면 된다.
 
 /**
  * 네이버 지도의 줌 1 단계당 세계 지도 폭 (dp).

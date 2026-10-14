@@ -124,8 +124,8 @@ private const val MinBearingSpeedMps = 0.5f
  * 위치 권한을 요청하고 현재 좌표를 구독하는 공용 상태.
  *
  * 컴포저블이 화면에 있는 동안에만 구독한다(백그라운드 위치 없음). 권한이 없거나 좌표를
- * 한 번도 못 받으면 [MyLocationState.coordinates] 가 null 로 남고, 호출부는 각자의 폴백
- * 좌표(앱 공통 `DemoOrigin`)를 쓰면 된다 — **어느 경로에서도 예외를 던지지 않는다.**
+ * 한 번도 못 받으면 [MyLocationState.coordinates] 가 null 로 남고, 호출부가 각자 처리한다
+ * (지도는 기본 카메라, 15 목적지 입력은 출발지 검색 유도) — **어느 경로에서도 예외를 던지지 않는다.**
  *
  * @param autoRequestPermission 진입 시 권한 다이얼로그를 자동으로 띄운다. 지도가 핵심인
  *   합승 탭(17~19)은 true, 검색이 핵심이라 다이얼로그가 방해되는 15 목적지 입력은 false 로 쓴다

@@ -22,6 +22,7 @@ import com.moyeota.domain.repository.RideRepository
 import com.moyeota.presentation.core.BackStateScaffold
 import com.moyeota.presentation.core.ErrorBox
 import com.moyeota.presentation.core.LoadingBox
+import com.moyeota.presentation.core.shouldPublishDetail
 import com.moyeota.presentation.core.location.rememberMyLocationState
 import com.moyeota.core.designsystem.component.latLngOrNull
 import kotlinx.coroutines.currentCoroutineContext
@@ -33,11 +34,18 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
- * 배차 폴링 간격. 지도 마커뿐 아니라 **탑승 시작(IN_RIDE) 감지 지연**도 이 값이 정한다 —
- * 기사가 board 를 누른 뒤 최악의 경우 이만큼 기다렸다 26 으로 넘어간다.
- * 26 운행 중의 완료 폴링(4초)과 같은 자릿수로 둔다.
+ * 배차 폴링 간격 — **7초**. 지도 마커 갱신 주기이자 **탑승 시작(IN_RIDE) 감지 지연**이다
+ * (기사가 board 를 누른 뒤 최악의 경우 이만큼 기다렸다 26 으로 넘어간다).
+ *
+ * 옛 5초에서 늘렸다. 매 주기 읽는 대상이 쿼리 1개짜리 상태 조회에서 **쿼리 3개짜리 방 상세**로
+ * 바뀌었기 때문이다 — 서버가 `/status` 를 삭제했다(`04f6be7`). 5초를 그대로 두면 쿼리 부하가
+ * 0.20 → 0.60 q/s 로 3배가 된다. 7초면 0.43 q/s 다.
+ *
+ * 26 운행 중(8초)보다 **짧게** 두는 이유: 기사 위치 조회가 같은 루프에 얹혀 있어 이 값이 곧
+ * 마커 갱신 주기다. 40km/h 로 오는 택시가 한 걸음에 약 78m 를 뛴다 — 더 벌리면 마커가 튄다.
+ * 근거와 부하 표는 [com.moyeota.presentation.core.PARTY_DETAIL_POLL_FLOOR_MS] KDoc 에 있다.
  */
-private const val DRIVER_POLL_INTERVAL_MS = 5_000L
+internal const val DRIVER_POLL_INTERVAL_MS = 7_000L
 
 private const val TAG = "DispatchStatus"
 
@@ -91,26 +99,48 @@ class DispatchStatusViewModel(
      * 방 상세·기사 정보·기사 위치 폴링. **호출자(Route)의 코루틴 스코프에서 돌린다** —
      * LaunchedEffect 가 화면 이탈 시 이 함수를 취소해 폴링이 함께 멈춘다.
      *
-     * 방 상세는 **매 주기 무조건** 다시 읽는다. 기사 배정 여부로 건너뛰면 안 된다 —
-     * 이 화면이 기다리는 마지막 신호(기사측 board → IN_RIDE)는 **배정된 뒤에** 오기 때문에,
-     * 배정을 조건으로 상세 조회를 멈추면 탑승 시작을 영영 못 본다 (결함 D-9 의 원인).
-     * 기사 **정보** 조회만 이미 받아온 뒤 건너뛴다 — 그 값은 배차 동안 바뀌지 않는다.
+     * **동승 모드에서는 이 루프가 한 번도 돌지 않는다** — 서버가 `DISPATCHING` 을 내지 않아 25 에
+     * 닿을 길이 없다(`docs/MODE-ROUTES.md`). 택시 모드 전용이다.
      *
-     * 기사 미배정·위치 미보고는 서버가 거절하는 정상 상황이라 실패를 삼키고 다음 주기를 기다린다.
+     * 매 주기 읽는 건 **방 상세**([RideRepository.getPartyDetail], 서버 쿼리 3개)다. 예전에는 가벼운
+     * 상태 조회(`/status`, 쿼리 1개)를 읽고 지문이 달라진 주기에만 상세를 읽었지만, 그 엔드포인트와
+     * 지문이 백엔드에서 사라졌다(`04f6be7`). 그래서 **「안 바뀌었으면 상세 재조회 생략」은 원리적으로
+     * 불가능하다** — 바뀌었는지 알려면 상세를 받아야 한다. 대신 두 가지로 비용을 눌렀다:
+     * 1. 간격을 5초 → [DRIVER_POLL_INTERVAL_MS](7초)로 늘렸다.
+     * 2. 받은 상세가 들고 있던 것과 같으면 **화면 상태를 갱신하지 않는다**([shouldPublishDetail]) —
+     *    7초마다 지도·기사 카드가 다시 그려지지 않게.
+     *
+     * 수단을 바꾸면서 **옛 예외 조건 하나가 통째로 없어졌다**: 지문이 없는 서버에서는 요약만으로
+     * `MATCHING`(기사 찾는 중)과 `DRIVER_ASSIGNED`(배정 완료)를 가를 수 없어(앱에서는 둘 다
+     * [RideStatus.DISPATCHING], 인원도 같다) 「미배정인 동안에는 매 주기 상세를 읽는다」는 단서가
+     * 붙어 있었다. 이제는 매 주기가 상세라 [Ride.driverId] 가 그 자리에서 들어온다.
+     *
+     * 기사 **정보** 조회는 이미 받아온 뒤 건너뛴다 — 그 값은 배차 동안 바뀌지 않는다.
+     * 기사 **위치**(`GET /dispatch/rides/{id}`)는 방 상세가 아닌 별도 API 라 매 주기 묻는다
+     * — 택시가 오는 동안 마커가 움직여야 한다. 그래서 이 간격이 마커 갱신 주기도 된다.
+     *
+     * 조회 실패(네트워크·기사 미배정·위치 미보고)는 삼키고 **들고 있던 값을 유지한 채** 다음 주기를
+     * 기다린다 — 한 번의 실패로 화면이 깜빡이거나 에러로 덮이면 안 된다.
      */
     suspend fun pollDriver() {
         Log.d(TAG, "배차 폴링 시작 partyId=$partyId")
         try {
             while (currentCoroutineContext().isActive) {
-                val previous = (_uiState.value as? UiState.Success)?.ride
-                // 방 상세를 다시 읽어 배차 전이(MATCHING → DRIVER_ASSIGNED → IN_RIDE)를 따라잡는다
-                val latest = runCatching { rideRepository.getPartyDetail(partyId) }.getOrNull()
-                if (latest != null) _uiState.value = UiState.Success(latest)
-                loadDriverIfAssigned(latest ?: previous)
-                if (markStartedIfInRide(latest)) return
+                val held = (_uiState.value as? UiState.Success)?.ride
+                // 실패하면(null) 들고 있던 값으로 이 주기를 넘긴다 — 깜빡임도 에러 화면도 없다.
+                val fetched = runCatching { rideRepository.getPartyDetail(partyId) }.getOrNull()
+                if (fetched != null && shouldPublishDetail(held, fetched)) {
+                    _uiState.value = UiState.Success(fetched)
+                }
+                // 전이 판정은 **이번 주기에 받은 값**으로만 한다 — 실패한 주기(null)는 "아직 아니다"다.
+                if (markStartedIfInRide(fetched)) return
+                // 기사 조회 게이트는 반대로 **마지막으로 아는 값**을 쓴다 — 한 주기 실패했다고 마커
+                // 갱신을 멈추면 택시가 오는 동안 지도가 굳는다.
+                val ride = fetched ?: held
+                loadDriverIfAssigned(ride)
                 // 기사 위치는 배정된 뒤에만 묻는다 — 배정 전 호출은 서버가 DRIVER_NOT_ASSIGNED 로 거절하며
                 // 폴링 주기마다 서버 WARN 로그만 쌓는다. 조회 주체는 Bearer 토큰이 정한다(22 보고서 §2).
-                if (shouldFetchDriverLocation(latest ?: previous)) {
+                if (shouldFetchDriverLocation(ride)) {
                     runCatching { dispatchRepository.getDriverLocation(partyId) }
                         .onSuccess { _driverLocation.value = it }
                 }
@@ -130,11 +160,11 @@ class DispatchStatusViewModel(
     }
 
     /**
-     * 서버 status IN_RIDE([RideStatus.ONGOING]) = 기사가 탑승 처리를 마쳤다는 뜻.
-     * 25 가 26 으로 넘어가는 유일한 서버 신호다. 감지하면 true 를 돌려줘 폴링을 끝낸다.
+     * 탑승 시작([isRideStarted])을 감지하면 1회성 신호를 올리고 true 를 돌려줘 폴링을 끝낸다.
+     * 판정 자체는 순수 함수로 빼 두었다 — 폴링 루프와 테스트가 같은 규칙을 본다.
      */
     private fun markStartedIfInRide(ride: Ride?): Boolean {
-        if (ride?.status != RideStatus.ONGOING) return false
+        if (!isRideStarted(ride)) return false
         if (!_rideStarted.value) Log.d(TAG, "탑승 시작 감지 partyId=$partyId → 26 운행 중")
         _rideStarted.value = true
         return true
@@ -169,9 +199,12 @@ class DispatchStatusViewModel(
  * MATCHING 과 DRIVER_ASSIGNED 는 도메인에서 둘 다 [RideStatus.DISPATCHING] 이라
  * **[Ride.driverId] 유무로 가른다** — 배정되면 서버가 taxiDriverId 를 채운다.
  *
- * 26 운행 중으로의 전이 신호는 **서버 status IN_RIDE**(기사측 board) **하나뿐**이다.
+ * 26 운행 중으로의 전이 신호는 **서버 status IN_RIDE**(기사측 board) **하나뿐**이다([isRideStarted]).
  * [DispatchStatusScreen] 에는 [onStartRide] 를 부르는 수동 트리거가 없다 — 이 Route 의 폴링이 유일한 발화점이다.
  * partyId 가 없으면 폴링도 없어 전이도 없다(채팅·34 내 기록에서 직행한 경우의 폴백 화면).
+ *
+ * **이 화면은 택시 모드에서만 보인다** — 동승 모드 서버는 `DISPATCHING` 을 내지 않는다
+ * (`docs/MODE-ROUTES.md`). 그래서 [DispatchStatusViewModel.pollDriver] 의 상세 폴링도 택시 모드에서만 돈다.
  *
  * @param onRetryMatching 매칭 실패 후 「다시 찾기」. 취소된 방은 되살릴 수 없어 홈으로 보낸다
  */
@@ -212,7 +245,7 @@ fun DispatchStatusRoute(
     LaunchedEffect(viewModel) {
         viewModel.pollDriver()
     }
-    // 기사측 탑승 처리를 잡으면 26 운행 중으로 자동 전이한다 (26→28 의 onRideFinished 와 같은 모양)
+    // 기사측 탑승 처리를 잡으면 26 운행 중으로 자동 전이한다 (26→33 의 onRideFinished 와 같은 모양)
     LaunchedEffect(rideStarted) {
         if (rideStarted) onStartRide()
     }
@@ -263,6 +296,20 @@ fun DispatchStatusRoute(
         }
     }
 }
+
+/**
+ * 기사가 탑승 처리를 마쳤는가 — 25 가 26 운행 중으로 넘어갈 **유일한** 신호.
+ *
+ * 서버 status `IN_RIDE`([RideStatus.ONGOING]) 하나만 참이다. [DispatchStatusScreen] 에는 수동
+ * 트리거가 없어 이 판정이 전이의 발화점 전부다(26 의 [com.moyeota.presentation.feature.chat.isRideFinished]
+ * 와 같은 모양).
+ *
+ * 입력이 [RideStatus] 가 아니라 [Ride] 인 이유: 폴링이 받는 게 **방 상세뿐**이 됐다(가벼운 상태
+ * 조회가 서버에서 삭제됐다 — `04f6be7`). 두 종류의 응답으로 똑같이 판정할 일이 없어졌으니, 들고
+ * 있는 값 그대로 받는다. 조회가 실패한 주기(null)는 "아직 아니다"로 본다 — 한 번의 네트워크
+ * 오류로 화면을 넘기지 않는다.
+ */
+internal fun isRideStarted(ride: Ride?): Boolean = ride?.status == RideStatus.ONGOING
 
 /**
  * 기사 **정보**(`GET /matching/rooms/{id}/driver`)를 물어도 되는가.

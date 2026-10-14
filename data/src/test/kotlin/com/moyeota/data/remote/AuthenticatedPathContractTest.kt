@@ -3,8 +3,10 @@ package com.moyeota.data.remote
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
+import retrofit2.http.HTTP
 import retrofit2.http.Header
 import retrofit2.http.HeaderMap
 import retrofit2.http.PATCH
@@ -36,6 +38,23 @@ class AuthenticatedPathContractTest {
         assertEquals("api/v1/auth/reissue", AuthApi::class.java.path("reissue"))
         assertEquals("api/v1/auth/logout", AuthApi::class.java.path("logout"))
         assertEquals("api/v1/auth/nickname/check", AuthApi::class.java.path("checkNickname"))
+    }
+
+    /**
+     * 문자 인증 컨트롤러는 별 파일(`user/verification/presentation/SmsVerificationController.java`)이지만
+     * 프리픽스가 `/api/v1/auth/sms` 다 — **그래야 permitAll 구간에 들어와 가입 전(무토큰)에 부를 수 있다.**
+     * `/api/v1/sms/...` 처럼 적으면 404 가 아니라 **401** 이 나서(Security 가 미매핑 경로도 보호한다)
+     * "세션이 만료됐나"로 오해하게 된다. 두 경로는 `POST` 이고, 발송만 204 다.
+     */
+    @Test
+    fun `문자 인증 두 경로는 auth sms 프리픽스를 쓴다`() {
+        assertEquals("api/v1/auth/sms/send", AuthApi::class.java.path("sendSmsCode"))
+        assertEquals("api/v1/auth/sms/verify", AuthApi::class.java.path("verifySmsCode"))
+
+        listOf("sendSmsCode", "verifySmsCode").forEach { name ->
+            val method = AuthApi::class.java.declaredMethods.single { it.name == name }
+            assertTrue("$name 이 POST 가 아니다", method.isAnnotationPresent(POST::class.java))
+        }
     }
 
     /**
@@ -99,6 +118,37 @@ class AuthenticatedPathContractTest {
         assertTrue("해제가 DELETE 가 아니다", delete.isAnnotationPresent(DELETE::class.java))
     }
 
+    /**
+     * 회원 탈퇴. `/users/me` 는 프로필 수정(PATCH)과 **경로가 같고 동사만 다르다** — [path] 검사만으로는
+     * 둘이 뒤바뀌어도 통과하므로 `@HTTP` 의 세 값을 모두 못 박는다.
+     *
+     * `hasBody = true` 가 특히 중요하다. 서버가 비밀번호를 `@RequestBody` 로 받는데 Retrofit 의
+     * `@DELETE` 는 본문을 못 실으므로(그 조합은 실행 시점 `IllegalArgumentException` 이다)
+     * `@HTTP` 가 유일한 길이다. 실제로 본문이 실려 나가는지는
+     * [UserApiDeleteBodyTest] 가 Retrofit 을 돌려 확인한다.
+     *
+     * 탈퇴가 `AuthApi` 로 옮겨 가는 것도 막는다 — 그쪽은 Bearer 가 붙지 않아 `@CurrentUser` 가
+     * 대상을 못 찾고 401 `USER005` 가 된다.
+     */
+    @Test
+    fun `회원 탈퇴는 users me 경로의 DELETE 이고 본문을 싣는다`() {
+        val delete = UserApi::class.java.declaredMethods.single { it.name == "deleteAccount" }
+        val http = delete.getAnnotation(HTTP::class.java)
+
+        assertEquals("api/v1/users/me", UserApi::class.java.path("deleteAccount"))
+        assertEquals("DELETE", http?.method)
+        assertTrue("탈퇴 요청이 본문을 싣지 않는다 — 비밀번호를 보낼 자리가 없다", http?.hasBody == true)
+        // @Body 파라미터가 하나. 비밀번호가 경로·쿼리로 새면 서버 액세스 로그에 평문으로 남는다.
+        assertEquals(
+            1,
+            delete.parameterAnnotations.count { annotations -> annotations.any { it is Body } },
+        )
+        assertTrue(
+            "탈퇴가 Bearer 없는 AuthApi 쪽으로 옮겨졌다 — 401 USER005 가 된다",
+            AuthApi::class.java.methods.none { it.name == "deleteAccount" },
+        )
+    }
+
     @Test
     fun `합류는 partyId 만 담은 경로를 쓴다`() {
         assertEquals("api/v1/matching/rooms/{partyId}/join", MatchingApi::class.java.path("joinParty"))
@@ -112,6 +162,27 @@ class AuthenticatedPathContractTest {
     @Test
     fun `나가기 경로에 더미 세그먼트가 없다`() {
         assertEquals("api/v1/matching/leave/{partyId}", MatchingApi::class.java.path("leaveParty"))
+    }
+
+    /**
+     * 방 상세 경로에 **세그먼트가 붙지 않는 것**을 못박는다.
+     *
+     * 예전에는 `/status` 가 붙은 가벼운 상태 조회가 따로 있었고, 이 테스트는 둘을 혼동하지 않게
+     * 두 경로를 함께 고정했다. 백엔드가 `GET /matching/rooms/{partyId}/status` 와 지문을
+     * **삭제했으므로**(`04f6be7` — 매칭방 변화가 SSE 전용이 되어 폴링용 조회가 쓰이지 않게 됐다)
+     * 지금은 상세 하나만 남는다. `/status` 를 되살리면 **404** 다.
+     *
+     * 25·26 의 주기 조회가 이 경로로 옮겨와 **폴링이 이 한 경로에 걸려 있다** — 틀리면 두 화면이
+     * 배차·운행 전이를 영영 못 잡는다(그 전이에는 SSE 도 FCM 도 없다).
+     */
+    @Test
+    fun `방 상세 조회 경로에는 뒤에 붙는 세그먼트가 없다`() {
+        assertEquals("api/v1/matching/rooms/{partyId}", MatchingApi::class.java.path("getPartyDetail"))
+        // 삭제된 상태 조회가 되살아나면 여기서 먼저 걸린다.
+        assertTrue(
+            "MatchingApi 에 상태 조회(/status) 메서드가 되살아났다 — 서버에 없는 경로다",
+            MatchingApi::class.java.methods.none { it.name == "getPartyStatus" },
+        )
     }
 
     @Test
@@ -214,12 +285,18 @@ class AuthenticatedPathContractTest {
         return method.pathOrNull() ?: error("$simpleName.$methodName 에 HTTP 애노테이션이 없다")
     }
 
+    /**
+     * `@HTTP` 도 읽는다. 읽지 않으면 그 애노테이션을 쓴 메서드는 아래 「auth 프리픽스가 UserApi 에
+     * 있으면 안 된다」 같은 전수 검사에서 **조용히 빠진다** — 경로 오타를 잡으려고 만든 검사가
+     * 정작 특수 케이스만 못 보는 꼴이 된다(탈퇴가 그 특수 케이스다).
+     */
     private fun Method.pathOrNull(): String? =
         getAnnotation(GET::class.java)?.value
             ?: getAnnotation(POST::class.java)?.value
             ?: getAnnotation(PUT::class.java)?.value
             ?: getAnnotation(DELETE::class.java)?.value
             ?: getAnnotation(PATCH::class.java)?.value
+            ?: getAnnotation(HTTP::class.java)?.path
 
     private fun Method.hasParameterNamed(vararg names: String): Boolean =
         parameterAnnotations.any { annotations ->

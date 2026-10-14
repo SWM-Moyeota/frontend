@@ -1,25 +1,31 @@
 package com.moyeota.data.repository
 
 import com.moyeota.data.remote.MatchingApi
-import com.moyeota.data.remote.dto.MemberLocationResponse
-import com.moyeota.data.remote.dto.MemberLocationRequestDto
 import com.moyeota.data.remote.dto.DriverSummaryResponse
 import com.moyeota.data.remote.dto.OpenPartyRequestDto
 import com.moyeota.data.remote.dto.OpenPartyResponse
 import com.moyeota.data.remote.dto.PartyDetailResponse
 import com.moyeota.data.remote.dto.PartyListResponse
+import com.moyeota.data.remote.dto.PartyStatusResponse
 import com.moyeota.data.remote.dto.RouteEstimateResponse
 import com.moyeota.data.remote.dto.RouteRequestDto
 import com.moyeota.domain.model.AuthState
 import com.moyeota.domain.model.NewParty
+import com.moyeota.domain.model.PartyJoinException
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.session.UserSession
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.runBlocking
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import retrofit2.HttpException
+import retrofit2.Response
 
 class RemoteRideRepositoryTest {
 
@@ -30,19 +36,22 @@ class RemoteRideRepositoryTest {
         )
     }
 
+    /**
+     * 합류 응답이 방 상세 → `PartyStatusResponse` 로 바뀌었다(Backend #213). 동승자 목록은 오지 않으므로
+     * 저장소도 **상태만** 돌려준다 — 몰래 상세를 한 번 더 읽어 Ride 를 만들어 주면, 합류 왕복이 2회로
+     * 늘어난 걸 호출부가 모르게 된다(대기 화면은 SSE 스냅샷으로 상세를 받는다).
+     */
     @Test
-    fun `합류는 서버가 돌려준 방 상세를 재조회 없이 그대로 반환한다`() = runBlocking {
+    fun `합류는 상태와 인원만 돌려주고 상세를 부르지 않는다`() = runBlocking {
         val api = FakeMatchingApi()
 
-        val ride = RemoteRideRepository(api, session()).joinParty(partyId = 7)
+        val status = RemoteRideRepository(api, session()).joinParty(partyId = 7)
 
         // 합류자는 Bearer 토큰이 정한다 — partyId 외에 아무것도 넘기지 않는다.
         assertEquals(7L, api.joinCall)
-        // 합류 응답이 곧 상세라 getPartyDetail 을 한 번도 부르지 않아야 한다.
         assertEquals(0, api.detailCallCount)
-        assertEquals("7", ride.id)
-        assertEquals(RideStatus.MATCHED, ride.status)
-        assertEquals(2, ride.members.size)
+        assertEquals(RideStatus.MATCHED, status.status)
+        assertEquals(2, status.currentMembers)
     }
 
     /**
@@ -50,16 +59,65 @@ class RemoteRideRepositoryTest {
      * 저장소가 세션을 매퍼에 흘려보내지 않으면 화면의 「나 제외」 카운트와 나 배지가 통째로 어긋난다.
      */
     @Test
-    fun `상세와 합류 응답의 멤버 중 세션 uuid 와 같은 사람을 나로 표시한다`() = runBlocking {
+    fun `상세 응답의 멤버 중 세션 uuid 와 같은 사람을 나로 표시한다`() = runBlocking {
         val repository = RemoteRideRepository(FakeMatchingApi(), session())
 
-        val joined = repository.joinParty(partyId = 7)
         val detail = repository.getPartyDetail(partyId = 7)
 
-        assertEquals(listOf(true, false), joined.members.map { it.isMe })
         assertEquals(listOf(true, false), detail.members.map { it.isMe })
         assertEquals(listOf("성윤", "다른사람"), detail.members.map { it.nickname })
         assertEquals(4, detail.members[0].rideCount)
+    }
+
+    /**
+     * 서버는 **멤버 추가를 먼저 커밋**하고 응답을 만든다. 그 응답을 앱이 놓치면 서버에는 들어가 있는데
+     * 화면은 실패로 끝나고, 재시도는 409 로 막힌다 — 복구가 없으면 30분 스윕 전까지 그 계정이
+     * 어떤 방에도 못 들어간다. 그래서 409 를 받으면 상세로 **내가 이미 멤버인지 확인해** 되돌린다.
+     */
+    @Test
+    fun `이미 참여 중 409 는 상세로 멤버십을 확인해 복구 신호로 올린다`() = runBlocking {
+        val api = FakeMatchingApi(joinFailure = conflict("ALREADY_JOINED_OTHER_PARTY", "이미 참여 중인 방이 있습니다."))
+
+        val error = runCatching { RemoteRideRepository(api, session()).joinParty(partyId = 7) }
+            .exceptionOrNull() as PartyJoinException
+
+        // 확인은 추측이 아니라 상세 조회다 — 한 번은 반드시 읽는다.
+        assertEquals(1, api.detailCallCount)
+        assertTrue(error.isAlreadyInThisParty)
+        assertFalse(error.isAlreadyInAnotherParty)
+        // 복구에 필요한 건 "그 방의 지금 상태" — 합류 성공과 같은 모양으로 넘길 수 있어야 한다.
+        assertEquals(RideStatus.MATCHED, error.joinedStatus?.status)
+        assertEquals(2, error.joinedStatus?.currentMembers)
+    }
+
+    /** 상세에 내가 없으면 **다른 방**에 있는 것이다 — 그 방을 정리해야 들어갈 수 있다는 다른 안내가 필요하다. */
+    @Test
+    fun `상세에 내가 없으면 다른 방에 참여 중으로 올린다`() = runBlocking {
+        val api = FakeMatchingApi(joinFailure = conflict("ALREADY_JOINED_OTHER_PARTY", "이미 참여 중인 방이 있습니다."))
+
+        // 세션 uuid 가 멤버 목록에 없는 계정.
+        val error = runCatching { RemoteRideRepository(api, session(uuid = UUID_STRANGER)).joinParty(partyId = 7) }
+            .exceptionOrNull() as PartyJoinException
+
+        assertFalse(error.isAlreadyInThisParty)
+        assertTrue(error.isAlreadyInAnotherParty)
+        assertNull(error.joinedStatus)
+    }
+
+    /** 「이미 참여 중」이 아닌 실패는 상세를 읽을 이유가 없다 — 쓸데없는 왕복을 늘리지 않는다. */
+    @Test
+    fun `정원 초과 409 는 상세를 읽지 않고 그대로 올린다`() = runBlocking {
+        val api = FakeMatchingApi(joinFailure = conflict("PARTY_FULL", "정원이 가득 찬 방입니다."))
+
+        val error = runCatching { RemoteRideRepository(api, session()).joinParty(partyId = 7) }
+            .exceptionOrNull() as PartyJoinException
+
+        assertEquals(0, api.detailCallCount)
+        assertTrue(error.isPartyFull)
+        assertFalse(error.isAlreadyInThisParty)
+        assertEquals(409, error.httpStatus)
+        // 서버 원문을 그대로 들고 온다 — 화면 문구는 화면이 정한다.
+        assertEquals("정원이 가득 찬 방입니다.", error.serverMessage)
     }
 
     @Test
@@ -175,7 +233,44 @@ class RemoteRideRepositoryTest {
         assertEquals("sb`vEwtzrWbiMnwC", estimate.encodedPath)
     }
 
-    private class FakeMatchingApi : MatchingApi {
+    /**
+     * 25·26 의 주기 조회가 **상세로 옮겨왔다** — 가벼운 상태 조회(`/status`)가 백엔드에서 삭제됐기
+     * 때문이다(`04f6be7`). 그 호출을 되살리면 404 라, 저장소에 남아 있으면 안 된다.
+     *
+     * 같은 방을 두 번 읽으면 `==` 로 같아야 한다 — 그게 두 화면이 「안 바뀌었다」를 판정하는 유일한
+     * 근거이고(지문이 하던 일), 어긋나면 매 주기 화면 상태가 갈려 recomposition 이 멈추지 않는다.
+     */
+    @Test
+    fun `주기 조회는 상세를 읽고 같은 방을 두 번 읽으면 서로 같다`() = runBlocking {
+        val api = FakeMatchingApi()
+        val repository = RemoteRideRepository(api, session())
+
+        val first = repository.getPartyDetail(partyId = 7)
+        val second = repository.getPartyDetail(partyId = 7)
+
+        assertEquals(2, api.detailCallCount)
+        assertEquals(first, second)
+        assertEquals(RideStatus.MATCHED, first.status)
+        assertEquals(2, first.members.size)
+    }
+
+    /** 더미 저장소도 같은 방을 두 번 읽으면 같아야 한다 — 디버그 빌드에서 폴링이 헛돌지 않게. */
+    @Test
+    fun `더미 저장소의 상세도 두 번 읽으면 서로 같다`() = runBlocking {
+        val repository = DummyRideRepository()
+
+        assertEquals(repository.getPartyDetail(partyId = 1), repository.getPartyDetail(partyId = 1))
+    }
+
+    /** 서버 공통 에러 본문 그대로 — 저장소가 code 를 읽어 분기한다. */
+    private fun conflict(code: String, message: String) = HttpException(
+        Response.error<Unit>(
+            409,
+            """{"code":"$code","message":"$message"}""".toResponseBody("application/json".toMediaType()),
+        ),
+    )
+
+    private class FakeMatchingApi(private val joinFailure: Throwable? = null) : MatchingApi {
         var joinCall: Long? = null
         var leaveCall: Long? = null
         var openRequest: OpenPartyRequestDto? = null
@@ -228,9 +323,12 @@ class RemoteRideRepositoryTest {
             )
         }
 
-        override suspend fun joinParty(partyId: Long): PartyDetailResponse {
+        // 합류 응답은 상태·인원 두 값뿐이다(Backend #213 + `04f6be7` 로 지문 제거).
+        // 상세와 **같은 방**을 가리키도록 같은 상태·인원을 쓴다.
+        override suspend fun joinParty(partyId: Long): PartyStatusResponse {
             joinCall = partyId
-            return detail(partyId)
+            joinFailure?.let { throw it }
+            return PartyStatusResponse(status = "COMPLETED", currentMembers = 2)
         }
 
         override suspend fun finishParty(partyId: Long) = error("쓰이지 않는다")
@@ -243,8 +341,6 @@ class RemoteRideRepositoryTest {
             DriverSummaryResponse(seats = 4, plateNumber = "12가 3456", type = "쏘나타")
 
         // 실서버(localhost:8080) 응답을 축약한 값 — 폴리라인 필드명이 path 다.
-        override suspend fun reportMyLocation(partyId: Long, request: MemberLocationRequestDto) = Unit
-        override suspend fun getMemberLocations(partyId: Long): List<MemberLocationResponse> = emptyList()
         override suspend fun previewRoute(request: RouteRequestDto): RouteEstimateResponse {
             routeRequest = request
             return RouteEstimateResponse(
@@ -267,12 +363,10 @@ class RemoteRideRepositoryTest {
                     publicId = UUID_ME,
                     nickname = "성윤",
                     rideCount = 4,
-                    joinedAt = "2026-08-30T09:00:00Z",
                 ),
                 PartyDetailResponse.MemberInfo(
                     publicId = UUID_OTHER,
                     nickname = "다른사람",
-                    joinedAt = "2026-08-30T09:01:00Z",
                 ),
             ),
             estimateFare = 9600,
@@ -285,5 +379,8 @@ class RemoteRideRepositoryTest {
         /** 세션 uuid 와 첫 멤버의 publicId 가 같은 값이어야 "나" 판정이 성립한다. */
         const val UUID_ME = "01a06145-3caf-7614-a3bd-cee6e25316b1"
         const val UUID_OTHER = "01a06145-3caf-7614-a3bd-cee6e2531999"
+
+        /** 이 방의 멤버 목록에 **없는** 계정 — "다른 방에 참여 중" 판정을 가르는 데 쓴다. */
+        const val UUID_STRANGER = "01a06145-3caf-7614-a3bd-cee6e2531aaa"
     }
 }

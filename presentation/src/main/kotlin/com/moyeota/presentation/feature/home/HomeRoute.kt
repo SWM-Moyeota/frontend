@@ -10,6 +10,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.moyeota.core.designsystem.component.MoyeotaTab
+import com.moyeota.domain.model.FavoritePlace
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.repository.PlaceRepository
 import com.moyeota.presentation.core.location.rememberMyLocationState
@@ -22,7 +23,7 @@ class HomeViewModel(
     private val repository: PlaceRepository,
 ) : ViewModel() {
 
-    // 홈의 「자주 가는 곳」은 부가 정보라 실패해도 화면 전체를 막지 않는다 — 빈 목록으로 떨어뜨린다.
+    // 홈의 「즐겨찾기」 목록은 부가 정보라 실패해도 화면 전체를 막지 않는다 — 빈 목록으로 떨어뜨린다.
     private val _favorites = MutableStateFlow<List<FavoritePlace>>(emptyList())
     val favorites: StateFlow<List<FavoritePlace>> = _favorites.asStateFlow()
 
@@ -30,7 +31,7 @@ class HomeViewModel(
         viewModelScope.launch {
             // 즐겨찾기 주체는 Bearer 토큰이 정한다 — userId 를 넘기지 않는다 (22 보고서 §2)
             _favorites.value = runCatching { repository.getFavoritePlaces() }
-                .map { places -> places.sortedBy { it.sequence }.map { FavoritePlace(it.name, it.roadName) } }
+                .map { places -> places.sortedBy { it.sequence } }
                 .getOrDefault(emptyList())
         }
     }
@@ -42,7 +43,7 @@ class HomeViewModel(
     }
 }
 
-// 14 홈 — 자주 가는 곳만 서버에서 채운다(나머지는 아직 더미).
+// 14 홈 — 즐겨찾기 목록을 서버에서 채운다(domain FavoritePlace 그대로, sequence 순).
 @Composable
 fun HomeRoute(
     repository: PlaceRepository,
@@ -73,8 +74,7 @@ fun HomeRoute(
         favoritePlaces = favorites,
         onSearchClick = onSearchClick,
         onActiveRideClick = onActiveRideClick,
-        onFavoritePlaceClick = { onPlaceQuery(it.address) },
-        onRecentPlaceClick = { onPlaceQuery(it.name) },
+        onFavoritePlaceClick = { onPlaceQuery(it.roadName) },
         onTabSelect = onTabSelect,
     )
 }

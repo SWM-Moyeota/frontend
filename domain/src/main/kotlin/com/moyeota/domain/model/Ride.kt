@@ -38,29 +38,33 @@ data class Ride(
     val routePolyline: String? = null,
     /** 배정된 기사 id. 미배정이면 null. 서버 taxiDriverId. */
     val driverId: Long? = null,
-    /**
-     * 방 생성 시 정해진 탐색 반경(m). 서버 departureRadius / destinationRadius.
-     *
-     * 목록 응답에는 없어 null 이다 — 21 대기 화면이 「탐색 반경」을 하드코딩("1km")하지 않고
-     * 실제 방 값으로 보여 주기 위해 상세·생성 응답에서만 채운다(QA D-3).
-     * 서버가 0 을 내려보내면(값 없음) null 로 접는다 — 0m 반경은 의미가 없다.
-     */
-    val departureRadiusMeters: Int? = null,
-    val destinationRadiusMeters: Int? = null,
 )
+// 방의 **반경**(서버 `departureRadius`/`destinationRadius`) 필드는 없다 — 백엔드가 방 생성 요청에서
+// 반경을 빼고 서버 고정값(500m)으로 바꿨다(Backend `a668aee`). 응답에는 아직 실려 오지만
+// (`PartyDetailResponse`) 그건 **사용자가 정한 값이 아니고**, 서버의 어떤 조회·판정도 읽지 않는다 —
+// 합류에 거리 검사가 없고 목록은 지도 뷰포트만 본다. 도메인에 태우면 21 대기 화면의 「탐색 반경」처럼
+// 아무것도 걸러내지 않는 숫자를 사용자가 고른 조건으로 보여 주게 된다. 경로 매칭이 실제로 이 값을
+// 쓰기 시작하면 그때 다시 태운다.
+//
+// 방의 **지문**(서버 `fingerprint`) 필드는 없다 — 백엔드가 지웠다(Backend `04f6be7`).
+// 지문은 「가벼운 상태 요약이 내가 그린 상세와 같은가」를 비교하려고 만든 값이고, 그 비교 대상인
+// 상태 조회 API(`GET /matching/rooms/{id}/status`)가 함께 사라지면서 비교할 짝을 잃었다.
+// 지금은 주기 조회가 곧 상세([com.moyeota.domain.repository.RideRepository.getPartyDetail])이므로
+// 「바뀌었나」는 받은 Ride 와 들고 있던 Ride 의 `==` 로 직접 본다 — 요약으로는 못 잡던
+// 「인원수 같은 멤버 교체」까지 잡히니 지문보다 오히려 정확하다. 되살리면 쓰이지 않는 필드가 된다.
 
 /**
- * 동승자 한 명의 실시간 위치(서버 `GET /matching/rooms/{id}/locations`).
+ * 합류 직후의 방 상태(서버 `POST /matching/rooms/{partyId}/join` 응답 `PartyStatusResponse`).
  *
- * 탑승 지점에서 서로를 찾기 위한 값이라 **오래 살지 않는다** — 서버가 60초 TTL 안에 보고가 있는
- * 멤버만 돌려주므로, 목록에서 빠진 사람은 앱을 껐거나 신호가 끊긴 것이다.
+ * 이름이 「상태」인 건 **합류 응답이 방 상세가 아니라 이 두 값뿐**이기 때문이다(Backend #213) —
+ * 동승자 목록이 오지 않으므로, 필요하면 상세를 따로 읽거나 21 대기 화면의 SSE 첫 스냅샷에 맡긴다
+ * ([com.moyeota.domain.repository.RideRepository.joinParty]).
  *
- * [publicId] 는 방 상세 [User.id] 와 같은 체계라 이름·프로필로 이을 수 있다. 서버가 유저 요약을
- * 못 찾으면(탈퇴 등) publicId·nickname 이 null 이고, 그때는 좌표만 쓴다.
+ * 쓰임은 **합류 응답 하나뿐**이다. 예전에는 폴링용 상태 조회(`/status`)도 같은 모양이었지만
+ * 그 엔드포인트는 사라졌다(Backend `04f6be7`). 그래서 지문 필드도, 상세와 비교하던 `isSameAs` 도 없다.
  */
-data class MemberLocation(
-    val publicId: String?,
-    val nickname: String?,
-    val latitude: Double,
-    val longitude: Double,
+data class PartyStatus(
+    /** 합류 **직후**의 상태. 내가 마지막 자리를 채웠으면 COMPLETED(기사 모드면 MATCHING)로 온다. */
+    val status: RideStatus,
+    val currentMembers: Int,
 )

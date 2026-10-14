@@ -47,7 +47,6 @@ import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.BackArrowIcon
 import com.moyeota.core.designsystem.component.MapOverlayPill
 import com.moyeota.core.designsystem.component.MapPlaceholder
-import com.moyeota.core.designsystem.component.MapRadiusCircle
 import com.moyeota.core.designsystem.component.MapSheetScaffold
 import com.moyeota.core.designsystem.component.NavigationBarSpacer
 import com.moyeota.core.designsystem.component.NoticeBanner
@@ -55,7 +54,6 @@ import com.moyeota.core.designsystem.component.NoticeKind
 import com.moyeota.core.designsystem.component.PrimaryCtaButton
 import com.moyeota.core.designsystem.component.RouteMapView
 import com.moyeota.core.designsystem.component.StatusBarSpacer
-import com.moyeota.core.designsystem.component.circleBoundsPoints
 import com.moyeota.core.designsystem.component.decodePolyline
 import com.moyeota.core.designsystem.component.fitMapCamera
 import com.moyeota.core.designsystem.component.latLngOrNull
@@ -83,7 +81,7 @@ private val ProgressTrack = Color(0xFFE6EAF0)
 
 private val waitingRideDummy = Ride(
     id = "ride-21",
-    origin = "부산대학교 정문",
+    origin = "센텀시티역 3번 출구",
     destination = "서면역 1번 출구",
     departureLabel = "지금 출발",
     capacity = 3,
@@ -110,9 +108,12 @@ private val waitingRideDummy = Ride(
  * - 「채팅 열기」 → 24 채팅방(독립 목적지, 뒤로가기로 여기 복귀) — [onOpenChat] 이 null 이 아닐 때만 그린다.
  *   채팅방은 **정원이 찬 뒤에** 생기므로 모집 중에는 대개 null 이다. 눌러도 열 것이 없는 버튼을 두지 않는다.
  * - 매칭 성사(서버 status 전이) → 25 배차 현황 — 화면이 아니라 Route 가 관찰해 넘긴다
- * - 매칭 조건·탐색 반경은 **읽기 전용**이다. 방을 만들 때(16) 정해진 값이고 바꾸는 API 도 없다 —
+ * - 매칭 조건(인원)은 **읽기 전용**이다. 방을 만들 때(16) 정해진 값이고 바꾸는 API 도 없다 —
  *   방장 개념이 사라진 뒤로 「누가 조건을 고치는가」에 답이 없어졌다. 눌러도 아무 일 없는
  *   「수정」 버튼을 두는 대신 카드 아래 한 줄로 이유를 적는다.
+ *   「탐색 반경」 행은 지웠다(2026-10-14) — 서버가 반경을 요청에서 빼고 고정값(500m)으로 정하면서
+ *   **사용자가 정한 값이 아니게 됐다.** 게다가 합류에 거리 검사가 없고 목록은 지도 뷰포트만 보므로
+ *   그 숫자는 아무것도 걸러내지 않는다. 바꿀 수도 없고 효과도 없는 값을 조건으로 보여 주지 않는다.
  *
  * 도메인 변경(2026-08-30): 「전원 준비 → 방장이 출발」 흐름이 백엔드에서 사라졌다.
  * `/matching/ready`, `/matching/start` 가 삭제되고 **정원이 차면 서버가 스스로 기사 매칭을 시작**한다.
@@ -122,8 +123,9 @@ private val waitingRideDummy = Ride(
  * **누가 모였는지**를 실제로 보여줄 수 있게 됐다. 내 줄은 `isMe`(publicId == 세션 uuid)로
  * 판정한다 — 예전처럼 고정 memberId 1 과 비교하지 않는다.
  *
- * 레이아웃(2026-09-08): 배경이 레이더 애니메이션에서 **실지도**로 바뀌었다. 출발지 마커 +
- * 탐색 반경 원 + 내 위치 파란 점을 그려, 「어느 범위에서 사람을 찾고 있는지」를 실제로 보여 준다.
+ * 레이아웃(2026-09-08): 배경이 레이더 애니메이션에서 **실지도**로 바뀌었다. 출발지·도착지 마커와
+ * 경로, 내 위치 파란 점을 그린다. **탐색 반경 원은 2026-10-14 에 지웠다** — 서버가 반경을
+ * 고정값으로 정하고 매칭은 그 값을 읽지 않으므로, 원은 「이 범위에서 찾는다」는 없는 약속이었다.
  * 시트는 16 도착지 확인과 같은 [MapSheetScaffold] 로 접었다 폈다 한다 —
  * 접힘 = 헤드라인 · 진행바 · 「그만 찾기」만 남고 지도가 넓어진다.
  */
@@ -132,15 +134,13 @@ fun MatchWaitingScreen(
     ride: Ride = waitingRideDummy,
     foundCount: Int = 1,
     conditionLabel: String = "3인",
-    // 실제 방의 반경. Route 가 [Ride] 에서 뽑아 넘긴다 — 예전엔 "1km" 가 하드코딩돼 있었다(QA D-3)
-    radiusLabel: String = "—",
     /** 내 현재 위치(파란 점). 권한이 없거나 아직 못 받았으면 null — 지도에 점을 찍지 않는다 */
     myLocation: UserCoordinates? = null,
     /**
      * 택시 모드(서버 설정). false = 1차 배포 — 정원이 차도 기사를 부르지 않는다.
      * 문구(「기사님을 찾아요」 → 「채팅으로 만나요」)와 정원 찼을 때의 CTA(「합승 완료」)가 갈린다.
      */
-    taxiEnabled: Boolean = true,
+    taxiEnabled: Boolean = false,
     actionInProgress: Boolean = false,
     actionErrorMessage: String? = null,
     onCancelSearch: () -> Unit = {},
@@ -181,16 +181,6 @@ fun MatchWaitingScreen(
     val routePath = remember(ride.routePolyline) {
         ride.routePolyline?.let(::decodePolyline).orEmpty()
     }
-    // 탐색 반경 원 — 서버가 방에 박아 둔 출발지 반경이 원본이다. 21 의 「수정」으로 값이 바뀌면
-    // 다음 폴링에서 새 반경이 내려오고 원도 따라 커진다(화면이 따로 캐시하지 않는다).
-    val radiusMeters = ride.departureRadiusMeters?.toDouble()
-    val radiusCircle = remember(originPosition, radiusMeters) {
-        if (originPosition != null && radiusMeters != null && radiusMeters > 0.0) {
-            MapRadiusCircle(originPosition, radiusMeters)
-        } else {
-            null
-        }
-    }
 
     Column(modifier = Modifier.fillMaxSize().background(CanvasBg)) {
         StatusBarSpacer()
@@ -218,41 +208,30 @@ fun MatchWaitingScreen(
             // 16 보다 지도를 더 남긴다. 21 의 펼침 콘텐츠(안내 · 모인 사람 · 조건 카드)는
             // 16 의 매칭 조건 카드보다 짧아서, 16 과 같은 160dp 로 두면 상세 영역이 남아
             // 조건 카드와 「그만 찾기」 사이가 휑하게 빈다. 남는 만큼 지도에 준다.
-            // 상세 콘텐츠(안내 배너 · 모인 사람 N줄 · 조건 카드 4줄 · 안내 문구)가 멤버가 늘수록
-            // 길어진다. 실기에서 2명일 때 「탐색 반경」 줄과 안내 문구가 잘려 나가는 것을 확인해
+            // 상세 콘텐츠(안내 배너 · 모인 사람 N줄 · 조건 카드 3줄 · 안내 문구)가 멤버가 늘수록
+            // 길어진다. 실기에서 2명일 때 조건 카드 마지막 줄과 안내 문구가 잘려 나가는 것을 확인해
             // 16 과 같은 160dp 로 되돌렸다 — 펼침은 정보를 보는 상태이고, 지도는 접힘이 맡는다.
+            // (「탐색 반경」 줄이 빠져 카드가 한 줄 짧아졌다. 여유가 늘었을 뿐이라 값은 그대로 둔다.)
             mapRevealHeight = 160.dp,
             // 접힘 = 핸들 + 헤드라인 + 인원 문구 + 진행바 + 「그만 찾기」
             collapsedSheetHeight = 196.dp,
             background = { sheet ->
                 val widthDp = sheet.containerWidth.value
                 val visibleMapHeightDp = sheet.visibleMapHeight.value
-                // 펼침(지도 160dp)에서는 **출발지와 탐색 반경 원**이 들어오게,
-                // 접힘(지도 확장)에서는 **출발–도착 전체**가 들어오게 맞춘다.
+                // **출발–도착 전체**(경로 포함)가 들어오게 맞춘다. 펼침·접힘은 보이는 지도 높이만
+                // 다르고([visibleMapHeight] 가 그걸 알려 준다) 맞출 대상은 같다 —
+                // 반경 원이 사라진 뒤로 펼침에서 따로 출발지 주변만 당겨 볼 이유가 없어졌다.
                 // 앵커가 바뀔 때만 값이 변하므로 사용자가 손으로 잡아 둔 줌·중심을 덮어쓰지 않는다.
                 val fitted = remember(
-                    sheet.expanded,
                     originPosition,
                     destinationPosition,
                     routePath,
-                    radiusMeters,
                     widthDp,
                     visibleMapHeightDp,
                 ) {
-                    val points = if (sheet.expanded && originPosition != null && radiusMeters != null) {
-                        // 중심 좌표 하나만 넣으면 원이 잘린다 — 외접 사각형 꼭짓점을 넣는다
-                        circleBoundsPoints(originPosition, radiusMeters)
-                    } else {
-                        val whole = routePath + listOfNotNull(originPosition, destinationPosition)
-                        // 도착지·경로가 아직 없으면(목록 응답 등) 반경 원 기준으로 떨어진다
-                        if (whole.size >= 2) {
-                            whole
-                        } else if (originPosition != null && radiusMeters != null) {
-                            circleBoundsPoints(originPosition, radiusMeters)
-                        } else {
-                            whole
-                        }
-                    }
+                    // 좌표가 하나뿐이면(목록 응답으로 만든 Ride 등) null 이고, 아래에서
+                    // 출발지 중심 기본 줌으로 떨어진다 — 없는 범위를 그려 메우지 않는다.
+                    val points = routePath + listOfNotNull(originPosition, destinationPosition)
                     fitMapCamera(points = points, widthDp = widthDp, heightDp = visibleMapHeightDp)
                 }
                 // 시트에 가리는 만큼을 지도에 알려 카메라 중심이 보이는 영역 기준으로 잡히게 한다
@@ -266,7 +245,6 @@ fun MatchWaitingScreen(
                         routePath = routePath,
                         originPosition = originPosition,
                         destinationPosition = destinationPosition,
-                        radiusCircle = radiusCircle,
                         myPosition = myPosition,
                         center = fitted?.first ?: originPosition,
                         zoom = fitted?.second ?: 14.0,
@@ -289,7 +267,9 @@ fun MatchWaitingScreen(
                         text = when {
                             isFull && !taxiEnabled -> "같이 탈 사람이 다 모였어요"
                             isFull -> "정원이 다 찼어요"
-                            else -> "보통 2분 안에 모여요"
+                            // 「보통 2분 안에 모여요」는 지웠다 — 근거가 될 매칭 소요 통계가 없다.
+                            // 기다리는 사람에게 지킬 수 없는 시각을 약속하는 자리다(2026-10-13).
+                            else -> "같이 탈 사람을 찾고 있어요"
                         },
                         fontSize = 22.sp,
                         fontWeight = FontWeight.Bold,
@@ -384,8 +364,8 @@ fun MatchWaitingScreen(
                         ConditionRow(label = "도착지", value = ride.destination)
                         HorizontalDivider(color = DividerGray)
                         ConditionRow(label = "매칭 조건", value = conditionLabel)
-                        HorizontalDivider(color = DividerGray)
-                        ConditionRow(label = "탐색 반경", value = radiusLabel)
+                        // 「탐색 반경」 행은 지웠다(2026-10-14) — 서버 고정값이고 매칭이 읽지 않는
+                        // 숫자였다(KDoc 참고). 지금 카드에 남은 건 전부 실제로 방을 정하는 값이다.
                     }
                     Spacer(Modifier.height(16.dp))
                 }
@@ -547,9 +527,10 @@ private fun ConditionRow(label: String, value: String) {
 /**
  * 지도 위 「찾는 중」 배지 — 예전 220dp 레이더 애니메이션을 대신한다.
  *
- * 레이더는 **삭제**했다. 배경이 실지도가 된 뒤로는 동심원이 지도를 가리기만 할 뿐,
- * 「주변에서 찾고 있다」는 정보는 이제 지도 위의 **실제 탐색 반경 원**이 훨씬 정확하게 보여 준다.
- * 남길 가치가 있던 건 「지금도 돌아가고 있다」는 신호 하나라, 점 하나의 펄스로 줄였다.
+ * 레이더는 **삭제**했다. 배경이 실지도가 된 뒤로는 동심원이 지도를 가리기만 했고, 「어느 범위에서
+ * 찾는지」는 애초에 앱이 말할 수 있는 것이 아니다 — 매칭은 반경을 보지 않는다(2026-10-14 에
+ * 반경 원도 같은 이유로 지웠다). 남길 가치가 있던 건 「지금도 돌아가고 있다」는 신호 하나라,
+ * 점 하나의 펄스로 줄였다.
  */
 @Composable
 private fun SearchingBadgeContent(isFull: Boolean, taxiEnabled: Boolean) {

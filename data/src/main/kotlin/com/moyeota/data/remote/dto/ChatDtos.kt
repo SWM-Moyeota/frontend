@@ -5,7 +5,7 @@ import kotlinx.serialization.Serializable
 // 백엔드 chat/app/dto/*.java, chat/presentation/dto/*.java (origin/develop) 와 필드 1:1
 // enum(status/type)은 문자열로 받고 매퍼에서 도메인 enum 으로 방어적으로 변환한다.
 
-// GET /api/v1/chat-rooms/{id}, POST /api/v1/chat-rooms → ChatRoomResult
+// GET /api/v1/chat-rooms/{id} → ChatRoomResult
 @Serializable
 data class ChatRoomResponse(
     val id: Long,
@@ -46,14 +46,6 @@ data class ChatLastMessageResponse(
     val content: String = "",
     val type: String = "",
     val createdAt: String? = null,
-)
-
-// POST /api/v1/chat-rooms 요청 본문 (ChatRoomRequest)
-@Serializable
-data class CreateChatRoomRequestDto(
-    val partyId: Long,
-    val departure: String,
-    val destination: String,
 )
 
 // POST /api/v1/chat-rooms/{id}/messages 요청 본문 (SendMessageRequest)

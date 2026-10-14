@@ -11,6 +11,10 @@ import kotlinx.serialization.Serializable
  *
  * [nickname] 은 나중에 추가된 **필수** 필드다(서버 record 필드 순서도 password 다음이다).
  * 빠뜨리면 400, 형식이 틀리면 400 `USER107`, 이미 쓰는 값이면 409 `USER108` 이다.
+ *
+ * [verificationToken] 도 **필수**다(2026-10). 빠뜨리면 400 `INVALID_REQUEST`
+ * (`message = "verificationToken: 휴대폰 인증이 필요합니다."`)라서, 서버 변경 직후 앱이
+ * 가입 자체를 못 하는 상태가 됐던 필드다.
  */
 @Serializable
 data class RegisterRequestDto(
@@ -22,6 +26,45 @@ data class RegisterRequestDto(
     val phoneNumber: String,
     val gender: String,
     val email: String,
+    val verificationToken: String,
+)
+
+/**
+ * POST /api/v1/auth/sms/send 의 요청 본문 — 백엔드 `SmsSendRequest`.
+ *
+ * 필드가 하나뿐이고 `@Pattern(^01[016-9]-?\d{3,4}-?\d{4}$)` 가 걸려 있어 **형식 위반은 VO 가 아니라
+ * Bean Validation 에 먼저 걸린다** → 400 `INVALID_REQUEST`(`USER105` 가 아니다).
+ * 확인 요청([SmsVerifyRequestDto])과 갈리는 지점이라 에러 매핑에서 헷갈리기 쉽다.
+ *
+ * 응답은 **본문 없는 204** 다.
+ */
+@Serializable
+data class SmsSendRequestDto(
+    val phoneNumber: String,
+)
+
+/**
+ * POST /api/v1/auth/sms/verify 의 요청 본문 — 백엔드 `SmsVerifyRequest`.
+ *
+ * [phoneNumber] 에는 `@NotBlank` 만 있다(발송 쪽과 달리 `@Pattern` 이 없다) — 형식이 틀리면
+ * 서버가 `PhoneNumber` VO 를 만들다 400 `USER105` 를 낸다.
+ * [code] 는 `@Pattern(^\d{6}$)` — 6자리가 아니면 비교 전에 400 `INVALID_REQUEST` 다.
+ */
+@Serializable
+data class SmsVerifyRequestDto(
+    val phoneNumber: String,
+    val code: String,
+)
+
+/**
+ * 200 응답 — 백엔드 `SmsVerifyResponse(String verificationToken)`. 서버는 UUID 문자열을 담는다.
+ *
+ * 기본값 빈 문자열은 방어다. 다만 빈 값으로 가입을 보내면 400 이 나므로
+ * Repository 가 여기서 끊는다([com.moyeota.data.repository.RemoteAuthRepository.verifyPhoneCode]).
+ */
+@Serializable
+data class SmsVerifyResponse(
+    val verificationToken: String = "",
 )
 
 /** 201 응답. 백엔드 `UserResponse(UUID uuid)`. 토큰은 주지 않는다 — 가입 후 로그인을 따로 해야 한다. */

@@ -94,17 +94,16 @@ fun IdentityVerifyScreen(
     val nameValid = PersonNameRegex.matches(name)
     val nameError = if (name.isNotEmpty() && !nameValid) "이름은 한글 또는 영문 2~20자로 입력해 주세요" else null
 
-    // 유효값 검증: 생년월일 — 8자리를 채웠을 때만 실제 날짜인지까지 본다(20250230 같은 값 차단)
+    // 유효값 검증: 생년월일 — 8자리를 채웠을 때만 실제 날짜인지까지 본다(20250230 같은 값 차단).
+    // 판정·문구는 10 프로필 만들기와 **같은 함수**를 쓴다(SignupFieldSupport): 만 14세 미만 가입 차단이
+    // 10 에만 있으면, 이 화면이 가입 경로로 되살아날 때 연령 제한이 빠진 채 돌아온다.
     val birthDate = parseBirthDate(birthDigits)
-    val birthError = when {
-        birthDigits.length < 8 -> null
-        birthDate == null -> "실제로 있는 날짜를 YYYYMMDD 로 입력해 주세요"
-        else -> null
-    }
+    val birthError = birthDateError(birthDigits)
 
     // 모든 필수 값 + 약관 동의 → 미충족 시 CTA 비활성
+    // birthError 까지 보는 이유: 만 14세 미만은 "실제로 있는 과거 날짜"라 파싱만으로는 걸러지지 않는다
     val ctaEnabled = carrier != null && phoneValid && nameValid &&
-        birthDate != null && gender != null && agreed
+        birthDate != null && birthError == null && gender != null && agreed
 
     Column(modifier = Modifier.fillMaxSize().imePadding().background(MoyeotaColor.SurfaceSoft)) {
         StatusBarSpacer()
@@ -132,8 +131,9 @@ fun IdentityVerifyScreen(
             )
             Spacer(Modifier.height(10.dp))
             Text(
-                // 실명·성별은 가입 시 서버에 저장된다 — "저장하지 않아요"로 안내하면 사실과 다르다
-                text = "실명과 성별은 매칭 안전을 위해서만 사용해요",
+                // 실명·성별은 가입 시 서버에 저장된다 — "저장하지 않아요"로 안내하면 사실과 다르다.
+                // 「매칭 안전을 위해서만」은 지웠다 — 성별은 매칭에 쓰이지 않는다(2026-10-13).
+                text = "실명은 본인 확인에만 쓰고 탑승 상대에게는 보이지 않아요",
                 style = MoyeotaType.BodySm.copy(fontSize = 14.sp),
                 color = MoyeotaColor.TextMute,
             )
@@ -186,6 +186,8 @@ fun IdentityVerifyScreen(
                 label = "생년월일",
                 placeholder = "2000-01-01",
                 errorText = birthError,
+                // 10 과 같은 안내 — 오류가 있으면 필드가 errorText 를 대신 띄운다
+                helperText = BirthDateHelperText,
                 enabled = !submitting,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 visualTransformation = BirthDateTransformation,
@@ -219,16 +221,12 @@ fun IdentityVerifyScreen(
                     .background(InfoCardBlue, RoundedCornerShape(18.dp))
                     .padding(20.dp),
             ) {
+                // 제목이던 「성별은 동성 매칭에만 써요」는 지웠다 — 성별 조건 매칭이 없다.
+                // 백엔드 matching 패키지에 성별이 0건이고, user/profile 에 저장만 된다(2026-10-13).
                 Text(
-                    text = "성별은 동성 매칭에만 써요",
+                    text = "성별은 프로필에 표시되지 않아요",
                     style = MoyeotaType.BodySm.copy(fontWeight = FontWeight.Bold),
                     color = MoyeotaColor.InkPrimary,
-                )
-                Spacer(Modifier.height(5.dp))
-                Text(
-                    text = "프로필에는 표시되지 않아요",
-                    style = MoyeotaType.CaptionMd,
-                    color = SlateGray,
                 )
             }
 

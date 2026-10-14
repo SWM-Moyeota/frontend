@@ -2,7 +2,6 @@ package com.moyeota.data.repository
 
 import com.moyeota.data.local.ActivePartyStorage
 import com.moyeota.data.local.RememberedParty
-import com.moyeota.domain.model.MemberLocation
 import com.moyeota.domain.model.AssignedDriver
 import com.moyeota.domain.model.AuthState
 import com.moyeota.domain.model.ChatMember
@@ -14,6 +13,7 @@ import com.moyeota.domain.model.ChatRoomMembership
 import com.moyeota.domain.model.ChatRoomStatus
 import com.moyeota.domain.model.MyChatRoom
 import com.moyeota.domain.model.NewParty
+import com.moyeota.domain.model.PartyStatus
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.model.RouteEstimate
@@ -175,6 +175,75 @@ class RemoteActivePartyRepositoryTest {
         assertNull(resolved)
     }
 
+    /**
+     * QA 119 D-3. 「합승 완료」·방 종료 직후 `GET /api/v1/matching/rooms/0` 404 가 나던 자리다.
+     * 서버 partyId 는 1 부터 올라가는 PK 라 0·음수·비숫자는 **네트워크를 타기 전에** 아니라고 답해야 한다
+     * — 읽어 봐야 404 이고, 그 404 는 서버 에러 로그만 더럽힌다.
+     */
+    @Test
+    fun `유효하지 않은 기억은 조회하지 않고 지운다`() = runBlocking {
+        for (garbage in listOf("0", "-1", "", " ", "null")) {
+            val rides = FakeRideRepository()
+            val chats = FakeChatRepository()
+            val storage = FakeActivePartyStorage(RememberedParty(garbage, MY_UUID))
+
+            val resolved = repository(rides, chats, storage).resolve()
+
+            assertNull(resolved)
+            assertTrue("[$garbage] 없는 방 번호로 상세를 읽었다: ${rides.detailCalls}", rides.detailCalls.isEmpty())
+            assertNull("[$garbage] 쓰레기 기억이 남았다", storage.load())
+        }
+    }
+
+    /**
+     * 채팅방 목록 응답(백엔드 `ChatRoomUserResult`)에는 partyId 가 없어 매퍼가 0 으로 채운다.
+     * 그 0 을 그대로 조회하면 방마다 404 한 번씩이다 — 후보에서 아예 빼야 한다.
+     */
+    @Test
+    fun `partyId 가 0 인 채팅방은 조회 대상에서 건너뛴다`() = runBlocking {
+        val rides = FakeRideRepository(details = mapOf(8L to ride(id = 8, status = RideStatus.ONGOING)))
+        val chats = FakeChatRepository(
+            rooms = listOf(
+                myChatRoom(roomId = 1, partyId = 8),
+                myChatRoom(roomId = 2, partyId = 0),
+                myChatRoom(roomId = 3, partyId = 0),
+            ),
+        )
+
+        val resolved = repository(rides, chats, FakeActivePartyStorage(null)).resolve()
+
+        assertEquals("8", resolved?.id)
+        assertEquals("0 번 방을 읽었다", listOf(8L), rides.detailCalls)
+    }
+
+    /** 지금 서버는 목록 항목이 전부 partyId 0 이다 — 그러면 방 상세 요청이 **한 건도** 나가지 않아야 한다. */
+    @Test
+    fun `채팅방이 전부 partyId 0 이면 방 상세를 한 번도 읽지 않는다`() = runBlocking {
+        val rides = FakeRideRepository()
+        val chats = FakeChatRepository(rooms = (1L..3L).map { myChatRoom(roomId = it, partyId = 0) })
+
+        val resolved = repository(rides, chats, FakeActivePartyStorage(null)).resolve()
+
+        assertNull(resolved)
+        assertEquals("조회 예산을 0 번 방에 썼다", 1, chats.myRoomsCalls)
+        assertTrue("없는 방 번호로 상세를 읽었다: ${rides.detailCalls}", rides.detailCalls.isEmpty())
+    }
+
+    /** 쓰레기 id 는 저장도 하지 않는다 — 심어 두면 다음 resolve 가 404 한 번 맞고 지우는 것이 전부다. */
+    @Test
+    fun `유효하지 않은 id 는 기억에 심지 않는다`() = runBlocking {
+        val storage = FakeActivePartyStorage(null)
+        val repository = repository(FakeRideRepository(), FakeChatRepository(), storage)
+
+        for (garbage in listOf("0", "-3", "", "abc")) {
+            repository.remember(garbage)
+            assertNull("[$garbage] 조회할 수 없는 id 를 심었다", storage.load())
+        }
+
+        repository.remember("42")
+        assertEquals(RememberedParty("42", MY_UUID), storage.load())
+    }
+
     @Test
     fun `미로그인 상태에서는 기억을 건드리지 않고 null`() = runBlocking {
         val storage = FakeActivePartyStorage(RememberedParty("10", MY_UUID))
@@ -281,14 +350,12 @@ private class FakeRideRepository(
     override suspend fun getPartiesWithin(swLat: Double, swLng: Double, neLat: Double, neLng: Double): List<Ride> =
         emptyList()
     override suspend fun createParty(request: NewParty): Ride = error("쓰이지 않는다")
-    override suspend fun joinParty(partyId: Long): Ride = error("쓰이지 않는다")
+    override suspend fun joinParty(partyId: Long): PartyStatus = error("쓰이지 않는다")
     override suspend fun leaveParty(partyId: Long) = error("쓰이지 않는다")
     override suspend fun finishParty(partyId: Long) = error("쓰이지 않는다")
     override suspend fun getAssignedDriver(partyId: Long): AssignedDriver = error("쓰이지 않는다")
     override suspend fun reportEmergency(partyId: Long?): Long = error("쓰이지 않는다")
     override suspend fun confirmEmergencyCall(called: Boolean) = error("쓰이지 않는다")
-    override suspend fun reportMyLocation(partyId: Long, latitude: Double, longitude: Double) = error("쓰이지 않는다")
-    override suspend fun getMemberLocations(partyId: Long): List<MemberLocation> = error("쓰이지 않는다")
     override suspend fun previewRoute(
         departureLat: Double,
         departureLng: Double,
@@ -312,9 +379,6 @@ private class FakeChatRepository(
 
     override fun observeRoom(chatRoomId: Long): Flow<ChatRealtimeEvent> = emptyFlow()
     override suspend fun getChatRoom(chatRoomId: Long): ChatRoom = error("쓰이지 않는다")
-    override suspend fun createChatRoom(partyId: Long, departure: String, destination: String): ChatRoom =
-        error("쓰이지 않는다")
-    override suspend fun closeChatRoom(chatRoomId: Long) = error("쓰이지 않는다")
     override suspend fun joinChatRoom(chatRoomId: Long) = error("쓰이지 않는다")
     override suspend fun leaveChatRoom(chatRoomId: Long) = error("쓰이지 않는다")
     override suspend fun setNotificationMuted(chatRoomId: Long, muted: Boolean) = error("쓰이지 않는다")

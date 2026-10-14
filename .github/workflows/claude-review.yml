@@ -24,7 +24,7 @@ jobs:
       actions: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # git diff로 베이스 브랜치와 비교하려면 전체 히스토리 필요 (얕은 클론이면 실패)
           fetch-depth: 0

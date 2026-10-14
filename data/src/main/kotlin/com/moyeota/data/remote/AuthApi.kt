@@ -6,6 +6,9 @@ import com.moyeota.data.remote.dto.NicknameCheckResponse
 import com.moyeota.data.remote.dto.RefreshTokenRequestDto
 import com.moyeota.data.remote.dto.RegisterRequestDto
 import com.moyeota.data.remote.dto.RegisterResponse
+import com.moyeota.data.remote.dto.SmsSendRequestDto
+import com.moyeota.data.remote.dto.SmsVerifyRequestDto
+import com.moyeota.data.remote.dto.SmsVerifyResponse
 import com.moyeota.data.remote.dto.TokenResponse
 import retrofit2.Call
 import retrofit2.http.Body
@@ -16,9 +19,14 @@ import retrofit2.http.POST
  * 앱이 쓰는 인증 엔드포인트가 **전부 이 한 컨트롤러로 모였다** — 가입·로그인이 `/api/v1/users*` 에 있던
  * 이전 배치는 사라졌다(실측: `POST /api/v1/users/login` → 401, Security 가 보호 경로로 잡는다).
  *
- * 이 프리픽스가 Security 의 사실상 유일한 permitAll 구간이기도 하다 — `SecurityConfig` 가 열어 두는 건
- * `/api/v1/auth/` 하위 전체, `/api/v1/local/users`, `/ws-chat/` 하위 전체뿐이고 나머지는
- * `anyRequest().authenticated()` 다. 즉 **여기 말고는 토큰 없이 부를 수 있는 도메인 API 가 없다.**
+ * 이 프리픽스가 Security 의 사실상 유일한 permitAll 구간이기도 하다 — 현행 `SecurityConfig` 가 열어 두는 건
+ * `/api/v1/auth/` 하위 전체, `/api/v1/config`, `/ws-chat/` 하위 전체, 그리고 운영 점검 경로
+ * (`/health`·`/prometheus`·`/info`)뿐이고 나머지는 `anyRequest().authenticated()` 다.
+ * 즉 **여기 말고는 토큰 없이 부를 수 있는 도메인 API 가 없다.**
+ *
+ * 예전 목록에 있던 `/api/v1/local/users` 는 열린 경로가 아니다 — 그 가입 엔드포인트 자체가 삭제됐고
+ * (`LocalUserController` 에는 이제 토큰이 필요한 `GET /users/info` 만 남았다) permitAll 목록에서도 빠졌다.
+ * 문자 인증 두 경로가 `/api/v1/auth/sms/...` 인 것도 이 구간에 들어오기 위한 것이다.
  *
  * **이 API 는 Bearer 헤더도, 401 재발급 Authenticator 도 붙지 않은 별도 OkHttp 클라이언트로 만든다**
  * ([NetworkModule.create] 참조). 그렇게 하지 않으면 재발급이 실패했을 때 재발급 요청 자체가
@@ -26,7 +34,34 @@ import retrofit2.http.POST
  */
 interface AuthApi {
 
-    /** 201. 성공해도 토큰은 없다(uuid 만) — 가입 직후 [login] 을 이어서 불러야 한다. */
+    /**
+     * 문자 인증번호 발송. **204 No Content** — 본문이 없어 반환형이 Unit 이다
+     * (Retrofit 이 Unit 을 알아보고 본문을 버린다. [logout] 과 같은 모양이다).
+     *
+     * 경로 기준: `user/verification/presentation/SmsVerificationController.java`
+     * (`@RequestMapping("/api/v1/auth/sms")` + `@ResponseStatus(NO_CONTENT)`).
+     * **컨트롤러가 `/api/v1/auth` 하위라는 게 중요하다** — Security 의 permitAll 구간이 그 프리픽스라
+     * 가입 전(무토큰)에 부를 수 있고, 그래서 이 메서드가 [AuthApi] 에 있어야 한다.
+     */
+    @POST("api/v1/auth/sms/send")
+    suspend fun sendSmsCode(@Body request: SmsSendRequestDto)
+
+    /**
+     * 문자 인증번호 확인. 200 `{"verificationToken":"<uuid>"}`.
+     *
+     * 성공 시 서버가 인증번호를 지우므로 **같은 코드로 두 번 성공할 수 없다**
+     * — 두 번째는 400 `USER204`(저장된 코드 없음)다.
+     */
+    @POST("api/v1/auth/sms/verify")
+    suspend fun verifySmsCode(@Body request: SmsVerifyRequestDto): SmsVerifyResponse
+
+    /**
+     * 201. 성공해도 토큰은 없다(uuid 만) — 가입 직후 [login] 을 이어서 불러야 한다.
+     *
+     * **[RegisterRequestDto.verificationToken] 이 필수다**(2026-10 서버 변경).
+     * 서버가 중복 검사보다 **먼저** 토큰을 확인하므로(`LocalUserService.register` 첫 줄),
+     * 토큰이 틀리면 아이디·닉네임이 멀쩡해도 400 `USER207` 로 끝난다.
+     */
     @POST("api/v1/auth/register")
     suspend fun register(@Body request: RegisterRequestDto): RegisterResponse
 

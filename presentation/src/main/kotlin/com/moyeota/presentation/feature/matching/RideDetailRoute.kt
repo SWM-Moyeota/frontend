@@ -74,7 +74,7 @@ class RideDetailViewModel(
     }
 }
 
-// 22 탑승 상세 — 서버 상세 연동 진입점. partyId 없으면 기존 더미 화면 유지.
+// 22 탑승 상세 — 서버 상세 연동 진입점. partyId 없으면 오류 안내 후 되돌린다.
 //
 // UserSession 을 더 이상 받지 않는다: 「나」 판정이 매퍼(publicId == 세션 uuid)로 내려가
 // 화면은 User.isMe 만 보면 된다. 예전에는 여기서 고정 memberId 1 을 내려보내야 했다.
@@ -82,16 +82,17 @@ class RideDetailViewModel(
 fun RideDetailRoute(
     repository: RideRepository,
     partyId: Long?,
+    /** 택시 모드(서버 설정). 정원 안내 문구가 갈린다 — 기본값은 동승(모르면 동승) */
+    taxiEnabled: Boolean = false,
     onBack: () -> Unit = {},
     onPartnerClick: (User) -> Unit = {},
     onLeave: () -> Unit = {},
 ) {
+    // 방 id 없이 닿을 길은 없다. 그래도 null 이면 예시 방을 그리는 대신 사실대로 말하고 되돌린다.
     if (partyId == null) {
-        RideDetailScreen(
-            onBack = onBack,
-            onPartnerClick = onPartnerClick,
-            onLeave = onLeave,
-        )
+        BackStateScaffold("탑승 상세", onBack) {
+            ErrorBox(message = "탑승 정보를 불러오지 못했어요", onRetry = onBack)
+        }
         return
     }
 
@@ -120,6 +121,7 @@ fun RideDetailRoute(
         is RideDetailViewModel.UiState.Success -> RideDetailScreen(
             ride = current.ride,
             pickupDistanceMeters = pickupDistanceMeters(current.ride, myLocation.coordinates),
+            taxiEnabled = taxiEnabled,
             onBack = onBack,
             onPartnerClick = onPartnerClick,
             onLeave = viewModel::leave, // 나가기 성공 후 onLeave 로 화면 전환

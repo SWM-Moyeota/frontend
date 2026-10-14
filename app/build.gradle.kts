@@ -37,6 +37,37 @@ val moyeotaBaseUrl: String =
     buildSetting("MOYEOTA_BASE_URL", default = "https://api.moyeota.p-e.kr/")
         .let { if (it.endsWith("/")) it else "$it/" }
 
+/**
+ * 릴리스 서명 정보. **키스토어와 비밀번호는 저장소에 두지 않는다** — local.properties(개발자 로컬) 나
+ * 환경변수(CI 시크릿)로만 받는다. `.gitignore` 가 `*.jks`·`*.keystore`·`local.properties` 를 이미 막고 있다.
+ *
+ * 값이 없거나 키스토어 파일이 없으면 **서명을 붙이지 않는다**. 키가 없는 팀원도 `assembleRelease` 가
+ * 실패하지 않게 하기 위해서다(서명 없는 결과물은 스토어에 올릴 수 없고 기기 설치도 막힌다 — 그래서
+ * 실수로 서명 없는 빌드를 올릴 위험은 없다).
+ *
+ * 만드는 법과 전체 배포 절차는 `docs/RELEASE.md` 참고.
+ */
+val keystorePath: String = buildSetting("MOYEOTA_KEYSTORE_PATH", default = "")
+val keystorePassword: String = buildSetting("MOYEOTA_KEYSTORE_PASSWORD", default = "")
+val keyAliasValue: String = buildSetting("MOYEOTA_KEY_ALIAS", default = "")
+val keyPasswordValue: String = buildSetting("MOYEOTA_KEY_PASSWORD", default = "")
+
+/** 서명에 필요한 네 값이 모두 있고 키스토어 파일이 실제로 있을 때만 서명한다. */
+val releaseSigningReady: Boolean = keystorePath.isNotEmpty() &&
+    keystorePassword.isNotEmpty() &&
+    keyAliasValue.isNotEmpty() &&
+    keyPasswordValue.isNotEmpty() &&
+    rootProject.file(keystorePath).exists()
+
+/**
+ * 스토어에 올리는 빌드 번호. **올릴 때마다 반드시 올려야 하고 같은 값으로는 두 번 못 올린다.**
+ * CI 가 `MOYEOTA_VERSION_CODE` 로 덮어쓴다(예: 빌드 번호나 날짜 기반).
+ */
+val moyeotaVersionCode: Int = buildSetting("MOYEOTA_VERSION_CODE", default = "1").toInt()
+
+/** 사용자에게 보이는 버전. 35 마이페이지 하단에 이 값이 그대로 뜬다. */
+val moyeotaVersionName: String = buildSetting("MOYEOTA_VERSION_NAME", default = "1.0")
+
 android {
     namespace = "com.moyeota.app"
     compileSdk = 37
@@ -45,8 +76,8 @@ android {
         applicationId = "com.moyeota"
         minSdk = 24
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = moyeotaVersionCode
+        versionName = moyeotaVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -54,11 +85,28 @@ android {
         buildConfigField("String", "BASE_URL", "\"$moyeotaBaseUrl\"")
     }
 
+    signingConfigs {
+        if (releaseSigningReady) {
+            create("release") {
+                // 바깥 val 이름 뒤에 Value 를 붙인 이유: 이 블록 안에서는 keyAlias·keyPassword 가
+                // **수신자의 프로퍼티**로 먼저 해석된다. `this.keyAlias = keyAlias` 로 쓰면 오른쪽이
+                // 바깥 변수가 아니라 자기 자신(null)이 되어, 빌드가 아니라 **서명 단계에서**
+                // NullPointerException 으로 터진다 — 이름을 겹치지 않게 두는 것이 유일한 방어다.
+                storeFile = rootProject.file(keystorePath)
+                storePassword = keystorePassword
+                keyAlias = keyAliasValue
+                keyPassword = keyPasswordValue
+            }
+        }
+    }
+
     buildTypes {
         release {
             optimization {
                 enable = false
             }
+            // 키가 없으면 null 로 남긴다 — 서명 없는 릴리스가 나오고, 그건 올릴 수도 설치할 수도 없다.
+            signingConfig = signingConfigs.findByName("release")
         }
     }
 

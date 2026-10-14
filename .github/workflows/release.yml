@@ -13,9 +13,10 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
+      version-code: ${{ steps.version.outputs.version-code }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -27,52 +28,172 @@ jobs:
     needs: [ calculate-version ]
     runs-on: ubuntu-latest
 
+    env:
+      # 산출물 이름을 한 곳에서만 만든다 — 빌드·업로드·릴리스 세 단계가 어긋나지 않게.
+      APK_NAME: moyeota-v${{ needs.calculate-version.outputs.version }}.apk
+      # 키스토어는 워크스페이스 **밖**(RUNNER_TEMP)에 푼다. upload-artifact 의 path 는
+      # 워크스페이스 기준이라, 밖에 두면 실수로 키가 아티팩트에 섞여 공개되는 경로가 아예 없다.
+      # 디렉터리는 파일명과 따로 적는다 — `runner` 컨텍스트는 잡 수준 env 에서 쓸 수 없고
+      # (워크플로 파싱 자체가 실패한다) 스텝 수준부터 쓸 수 있다. 셸에서는 $RUNNER_TEMP 로 받는다.
+      KEYSTORE_NAME: moyeota-upload.jks
+
     steps:
       - name: Repository 접근
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: JDK 25 셋팅
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           java-version: '25'
           distribution: 'temurin'
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
 
-      # 릴리즈 서명 키가 아직 없어 debug APK를 산출물로 첨부한다.
-      # 서명 설정 후 assembleRelease로 교체할 것.
-      - name: APK 빌드
+      # 키스토어 파일은 저장소에 두지 않는다(.gitignore 가 *.jks 를 막는다).
+      # base64 시크릿으로 받아 여기서 풀고, 마지막 단계에서 지운다.
+      #
+      # 네 값 중 하나라도 비면 app/build.gradle.kts 의 `releaseSigningReady` 가 false 가 되어
+      # **서명 없는 APK 가 조용히 만들어진다**. 그래서 빌드 전에 먼저 막는다.
+      - name: 서명 키스토어 복원
+        env:
+          MOYEOTA_KEYSTORE_BASE64: ${{ secrets.MOYEOTA_KEYSTORE_BASE64 }}
+          MOYEOTA_KEYSTORE_PASSWORD: ${{ secrets.MOYEOTA_KEYSTORE_PASSWORD }}
+          MOYEOTA_KEY_ALIAS: ${{ secrets.MOYEOTA_KEY_ALIAS }}
+          MOYEOTA_KEY_PASSWORD: ${{ secrets.MOYEOTA_KEY_PASSWORD }}
         run: |
-          ./gradlew :app:assembleDebug --no-daemon --build-cache
-          cp app/build/outputs/apk/debug/app-debug.apk \
-             "moyeota-v${{ needs.calculate-version.outputs.version }}.apk"
+          missing=""
+          for name in MOYEOTA_KEYSTORE_BASE64 MOYEOTA_KEYSTORE_PASSWORD MOYEOTA_KEY_ALIAS MOYEOTA_KEY_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              missing="${missing} ${name}"
+            fi
+          done
+          if [ -n "${missing}" ]; then
+            echo "::error::서명 시크릿이 비어 있다:${missing} — 서명 없는 APK 가 릴리스로 나가는 것을 막기 위해 중단한다. 등록 방법은 docs/RELEASE.md 의 「CI 에 등록할 GitHub Secrets」 참고."
+            exit 1
+          fi
+
+          keystore="${RUNNER_TEMP}/${KEYSTORE_NAME}"
+          if ! printf '%s' "${MOYEOTA_KEYSTORE_BASE64}" | base64 --decode > "${keystore}"; then
+            echo "::error::MOYEOTA_KEYSTORE_BASE64 디코딩에 실패했다 — 시크릿 값이 base64 가 아니다. docs/RELEASE.md 의 base64 생성 명령으로 다시 만들어 넣어야 한다."
+            exit 1
+          fi
+          chmod 600 "${keystore}"
+          if [ ! -s "${keystore}" ]; then
+            echo "::error::MOYEOTA_KEYSTORE_BASE64 디코딩 결과가 비었다 — 시크릿 값이 깨졌다. base64 로 다시 넣어야 한다."
+            exit 1
+          fi
+
+          # 비밀번호·별칭이 실제로 맞는지 여기서 확인한다. Gradle 은 값이 틀려도 설정 단계에서는
+          # 조용히 지나가고 **서명 단계에서** 터져 원인을 찾기 어렵다.
+          # 출력은 지문과 DN 뿐이지만 로그에 남길 이유가 없어 버린다.
+          if ! keytool -list \
+                 -keystore "${keystore}" \
+                 -storepass "${MOYEOTA_KEYSTORE_PASSWORD}" \
+                 -alias "${MOYEOTA_KEY_ALIAS}" > /dev/null 2>&1; then
+            echo "::error::키스토어를 열지 못했다 — MOYEOTA_KEYSTORE_PASSWORD 또는 MOYEOTA_KEY_ALIAS 가 키스토어와 맞지 않는다."
+            exit 1
+          fi
+
+      # MOYEOTA_BASE_URL 은 **일부러 주입하지 않는다.** 러너에는 local.properties 가 없으므로
+      # app/build.gradle.kts 의 기본값(https://api.moyeota.p-e.kr/ — 운영 서버)이 그대로 박힌다.
+      # 시크릿으로 열어 두면 누군가 스테이징 URL 을 넣는 순간 스토어 빌드가 조용히 그쪽을 보게 된다.
+      # 값이 운영 서버인지는 다음 단계에서 다시 확인한다.
+      - name: APK 빌드 (서명된 릴리스)
+        env:
+          NAVER_MAPS_CLIENT_ID: ${{ secrets.NAVER_MAPS_CLIENT_ID }}
+          # 스텝 수준 env 에서는 runner 컨텍스트를 쓸 수 있다. rootProject.file() 은 절대 경로를
+          # 그대로 쓰므로 워크스페이스 밖 경로도 문제없다.
+          MOYEOTA_KEYSTORE_PATH: ${{ runner.temp }}/${{ env.KEYSTORE_NAME }}
+          MOYEOTA_KEYSTORE_PASSWORD: ${{ secrets.MOYEOTA_KEYSTORE_PASSWORD }}
+          MOYEOTA_KEY_ALIAS: ${{ secrets.MOYEOTA_KEY_ALIAS }}
+          MOYEOTA_KEY_PASSWORD: ${{ secrets.MOYEOTA_KEY_PASSWORD }}
+          # versionCode·versionName 을 같은 출처(calculate-version)에서 뽑는다. 예전에는 run_number 를
+          # 썼는데 워크플로를 재실행하면 같은 값이 나와 Play 가 그 업로드를 거부한다.
+          MOYEOTA_VERSION_CODE: ${{ needs.calculate-version.outputs.version-code }}
+          # 사용자에게 보이는 버전. calculate-version 의 YYYY.MMDD.N 을 그대로 쓴다
+          # (35 마이페이지 하단에 이 값이 뜬다).
+          MOYEOTA_VERSION_NAME: ${{ needs.calculate-version.outputs.version }}
+        run: |
+          ./gradlew :app:assembleRelease --no-daemon --build-cache
+          cp app/build/outputs/apk/release/app-release.apk "${APK_NAME}"
+
+      # 시크릿이 없거나 틀리면 서명 없는 APK 가 나오는데, 그건 스토어에 올릴 수도 기기에 설치할 수도
+      # 없는 쓰레기다. 그게 릴리스로 나가기 전에 여기서 **워크플로를 실패시킨다.**
+      #
+      # jarsigner 를 쓰지 않는 이유: minSdk 24 라 AGP 가 v1(JAR) 서명을 붙이지 않는다.
+      # 그래서 올바르게 v2 서명된 APK 에도 `jarsigner -verify` 는 "jar is unsigned" 를 찍고
+      # **종료 코드 0 을 반환한다**(로컬 확인 결과). 통과·실패를 가릴 수 없어 게이트로 쓸 수 없다.
+      # apksigner 는 v2 를 읽고 서명이 없으면 "DOES NOT VERIFY" + 종료 코드 1 이다.
+      - name: 서명 검증
+        run: |
+          sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          if [ -z "${sdk}" ]; then
+            echo "::error::ANDROID_HOME 이 비어 있어 apksigner 를 찾을 수 없다."
+            exit 1
+          fi
+          # 빌드가 끝난 뒤에 찾는다 — AGP 가 필요한 build-tools 를 그때 내려받기 때문이다.
+          apksigner=$(find "${sdk}/build-tools" -maxdepth 2 -name apksigner -type f | sort -V | tail -1)
+          if [ -z "${apksigner}" ]; then
+            echo "::error::apksigner 를 찾지 못했다 (${sdk}/build-tools). 러너 이미지가 바뀐 것인지 확인하라."
+            exit 1
+          fi
+          echo "apksigner: ${apksigner}"
+          "${apksigner}" verify --verbose --print-certs "${APK_NAME}"
+
+          # 운영 서버를 가리키는지 확인한다. 위 빌드 단계가 MOYEOTA_BASE_URL 을 주입하지 않으므로
+          # 항상 기본값(https)이어야 한다. http 가 박히면 릴리스 매니페스트에 평문 허용이 없어
+          # **설치 후 아무 요청도 못 보내는 앱**이 된다 — 그 전에 여기서 잡는다.
+          buildconfig="app/build/generated/source/buildConfig/release/com/moyeota/app/BuildConfig.java"
+          if [ ! -f "${buildconfig}" ]; then
+            echo "::error::${buildconfig} 가 없다 — AGP 가 생성 경로를 바꿨을 수 있다. 이 단계의 경로를 고쳐야 한다."
+            exit 1
+          fi
+          base_url=$(sed -n 's/.*BASE_URL = "\(.*\)".*/\1/p' "${buildconfig}")
+          echo "BASE_URL: ${base_url}"
+          case "${base_url}" in
+            https://*) ;;
+            *)
+              echo "::error::릴리스 BASE_URL 이 https 가 아니다: '${base_url}'"
+              exit 1
+              ;;
+          esac
+
+      # 빌드가 실패해도 키는 지운다. RUNNER_TEMP 는 잡이 끝나면 사라지지만, 뒤에 붙는 단계가
+      # 생겼을 때 키가 남아 있지 않게 명시적으로 지워 둔다.
+      - name: 키스토어 삭제
+        if: always()
+        run: rm -f "${RUNNER_TEMP}/${KEYSTORE_NAME}"
 
       - name: APK 업로드
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: apk
-          path: moyeota-v${{ needs.calculate-version.outputs.version }}.apk
+          path: ${{ env.APK_NAME }}
           retention-days: 7
 
   release:
     needs: [ calculate-version, build-apk ]
     runs-on: ubuntu-latest
 
+    env:
+      APK_NAME: moyeota-v${{ needs.calculate-version.outputs.version }}.apk
+
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: APK 다운로드
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: apk
 
       - name: Create GitHub Release
-        run: |
-          gh release create "v${{ needs.calculate-version.outputs.version }}" \
-            --generate-notes \
-            "moyeota-v${{ needs.calculate-version.outputs.version }}.apk"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.calculate-version.outputs.version }}
+        run: |
+          gh release create "v${VERSION}" \
+            --generate-notes \
+            "${APK_NAME}"

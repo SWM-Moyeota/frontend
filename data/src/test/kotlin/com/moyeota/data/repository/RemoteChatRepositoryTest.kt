@@ -6,7 +6,6 @@ import com.moyeota.data.remote.dto.ChatMessageResponse
 import com.moyeota.data.remote.dto.ChatMessageSliceResponse
 import com.moyeota.data.remote.dto.ChatRoomResponse
 import com.moyeota.data.remote.dto.ChatRoomUserResponse
-import com.moyeota.data.remote.dto.CreateChatRoomRequestDto
 import com.moyeota.data.remote.dto.SendMessageRequestDto
 import com.moyeota.domain.model.AuthState
 import com.moyeota.domain.model.ChatException
@@ -400,13 +399,6 @@ private class FakeChatApi(
             status = "ACTIVE",
         )
     }
-
-    override suspend fun createRoom(request: CreateChatRoomRequestDto): ChatRoomResponse {
-        failIfNeeded()
-        return getRoom(1)
-    }
-
-    override suspend fun deleteRoom(chatRoomId: Long) = failIfNeeded() ?: Unit
 
     override suspend fun getMyRooms(): List<ChatRoomUserResponse> {
         failIfNeeded()

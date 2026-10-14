@@ -42,7 +42,10 @@ import com.moyeota.core.designsystem.theme.MoyeotaType
  * 02 · 온보딩 — 신뢰 [O02]
  *
  * 진입: 01에서 다음
- * 목적: 인증 사용자만 매칭된다는 신뢰 전달
+ * 목적: 휴대폰 인증을 마친 사람만 가입하고, 상대의 탑승 횟수를 볼 수 있다는 신뢰 전달
+ *
+ * 문구는 [OnboardingTrustCopy] 에 있다 — 예전 본문 「같은 성별끼리만 함께 타요」는 **성별 조건
+ * 매칭이 없어서** 지웠다(2026-10-13). 일러스트의 체크 배지는 휴대폰 인증을 뜻한다.
  *
  * 인터랙션
  * - 「다음」 → 03 온보딩 안심 (onNext)
@@ -93,7 +96,7 @@ fun OnboardingTrustScreen(
         Spacer(Modifier.height(32.dp))
 
         Text(
-            text = "믿을 수 있는 사람과",
+            text = OnboardingTrustCopy.headline,
             style = MoyeotaType.DisplayMd.copy(fontSize = 26.sp, letterSpacing = (-0.52).sp),
             color = MoyeotaColor.InkPrimary,
             textAlign = TextAlign.Center,
@@ -103,7 +106,7 @@ fun OnboardingTrustScreen(
         Spacer(Modifier.height(12.dp))
 
         Text(
-            text = "인증을 마친 이용자만 매칭되고\n같은 성별끼리만 함께 타요",
+            text = OnboardingTrustCopy.body,
             style = MoyeotaType.BodyMd.copy(lineHeight = 22.sp, letterSpacing = (-0.3).sp),
             color = MoyeotaColor.TextMute,
             textAlign = TextAlign.Center,
@@ -132,7 +135,7 @@ fun OnboardingTrustScreen(
     }
 }
 
-// 일러스트 — 인증 완료된 프로필 카드 (아바타 + 체크 배지 + 이름 자리 바)
+// 일러스트 — 휴대폰 인증을 마친 프로필 카드 (아바타 + 체크 배지 + 이름 자리 바)
 @Composable
 private fun TrustIllustration(modifier: Modifier = Modifier) {
     Column(
@@ -159,7 +162,7 @@ private fun TrustIllustration(modifier: Modifier = Modifier) {
                 ) {
                     PersonGlyph(Modifier.size(24.dp))
                 }
-                // 파란 체크 배지 (인증 완료)
+                // 파란 체크 배지 (휴대폰 인증 완료)
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)

@@ -672,7 +672,6 @@ fun ChatRoute(
     activePartyId: String? = null,
     onOpenMatching: () -> Unit = {},
     onOpenRideOngoing: () -> Unit = {},
-    onStartLocationShare: () -> Unit = {},
     onLeaveChat: () -> Unit = {},
     onTabSelect: (MoyeotaTab) -> Unit = {},
     /** 열린 방에서 403(참여자 아님) — 진행 화면의 채팅방 id 캐시를 버리게 한다 */
@@ -702,7 +701,6 @@ fun ChatRoute(
             onBack = { openedRoom = null },
             onOpenMatching = onOpenMatching.takeIf { room.isActiveParty(activePartyId) },
             onOpenRideOngoing = onOpenRideOngoing,
-            onStartLocationShare = onStartLocationShare,
             // 나간 방을 열어둔 채로 홈에 보내면, 채팅 탭에 돌아왔을 때 참여자가 아닌 방을 다시 연다.
             onLeaveChat = {
                 openedRoom = null
@@ -751,7 +749,6 @@ private fun ChatRoomRoute(
     onBack: () -> Unit,
     onOpenMatching: (() -> Unit)?,
     onOpenRideOngoing: () -> Unit,
-    onStartLocationShare: () -> Unit,
     onLeaveChat: () -> Unit,
     onTabSelect: (MoyeotaTab) -> Unit,
     /** 서버가 「참여자 아님」(403)을 답했다 — 호출자는 이 방 id 캐시를 버려야 한다 */
@@ -837,7 +834,6 @@ private fun ChatRoomRoute(
             onSearchLoadMore = viewModel::loadMoreSearch,
             onOpenMatching = onOpenMatching,
             onOpenRideOngoing = onOpenRideOngoing,
-            onStartLocationShare = onStartLocationShare,
             onLeaveChat = viewModel::leaveRoom, // 서버에서 빠진 뒤 14 홈으로
             onTabSelect = onTabSelect,
         )
@@ -864,7 +860,6 @@ fun ChatRoomDestinationRoute(
     onBack: () -> Unit = {},
     onOpenMatching: () -> Unit = {},
     onOpenRideOngoing: () -> Unit = {},
-    onStartLocationShare: () -> Unit = {},
     onLeaveChat: () -> Unit = {},
     onTabSelect: (MoyeotaTab) -> Unit = {},
     /** 이 방에 참여자가 아니라는 403 — 진행 화면이 들고 있던 채팅방 id 캐시를 버리게 한다 */
@@ -892,7 +887,6 @@ fun ChatRoomDestinationRoute(
             onOpenMatching = onOpenMatching.takeIf { current.isActiveParty(activePartyId) },
             onNotParticipant = onNotParticipant,
             onOpenRideOngoing = onOpenRideOngoing,
-            onStartLocationShare = onStartLocationShare,
             onLeaveChat = onLeaveChat,
             onTabSelect = onTabSelect,
         )

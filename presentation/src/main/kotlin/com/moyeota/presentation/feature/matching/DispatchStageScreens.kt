@@ -108,7 +108,10 @@ fun DriverSearchScreen(
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                text = "보통 1분 안에 배정돼요 · 최대 ${MATCHING_TIMEOUT_MINUTES}분",
+                // 「보통 1분 안에 배정돼요」는 지웠다 — 근거가 될 배차 소요 통계가 없다(21 의
+                // 「보통 2분 안에 모여요」와 같은 이유). 최대 시간은 서버가 실제로 지킨다 —
+                // `DispatchService.MATCHING_TIMEOUT = 3분`, `MatchingSweeper` 가 넘으면 취소한다.
+                text = "최대 ${MATCHING_TIMEOUT_MINUTES}분까지 기다려요",
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Medium,
                 color = StageGrayMute,
@@ -432,7 +435,7 @@ private fun androidx.compose.foundation.layout.ColumnScope.StageSheet(
 
 internal val stageRideDummy = Ride(
     id = "ride-25b",
-    origin = "부산대학교 정문",
+    origin = "센텀시티역 3번 출구",
     destination = "서면역 1번 출구",
     departureLabel = "지금 출발",
     capacity = 2,

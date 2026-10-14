@@ -27,11 +27,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -71,21 +68,6 @@ private val RouteCardBg = Color(0xFFF1F5FD)
 private val FareCardBg = Color(0xFFF6F8FB)
 private val PillBg = Color(0xFFF1F5FD)
 
-// 목록에 대표로 한 명만 보여 주는 동승자 — 방장 개념은 도메인에 없다
-private val FirstJoinedMember = User("u-1", "부산불곰", "", 0.0, 12)
-
-private val DefaultJoinRide = Ride(
-    id = "ride-1",
-    origin = "부산대학교 정문 버스정류장",
-    destination = "서면역 1번 출구",
-    departureLabel = "3분 후 출발 예정 · 6.2km",
-    capacity = 3,
-    members = listOf(FirstJoinedMember, User("u-2", "해운대곰돌", "", 0.0, 7)),
-    farePerPerson = 3600,
-    totalFare = 9600,
-    status = RideStatus.RECRUITING,
-)
-
 private fun won(amount: Int): String = "%,d원".format(amount)
 
 /**
@@ -97,7 +79,10 @@ private fun won(amount: Int): String = "%,d원".format(amount)
  * - 「닫기」 / 뒤로가기 → 직전 목록(18/19)으로 복귀 (onDismiss)
  * - 「이 탑승에 합류하기」 → 22 탑승 상세 (onConfirmJoin, 제출 중 loading)
  * - 동승자 행 탭 → 23 동승자 프로필 (onMemberClick)
- * - [미연결] 우측 상단 방패 아이콘 — 무동작
+ *
+ * 표시 값은 전부 방 상세([Ride])에서 나온다. 서버가 주지 않는 값(성별 조건·탑승 시각·서비스 요금)은
+ * 지어내지 않고 그 요소를 아예 두지 않는다 — 출발 표기는 [Ride.departureLabel] 이 있을 때만,
+ * 도착 쪽은 [Ride.estimatedMinutes] 가 있을 때만 「약 N분」으로 보이고, 1인 부담은 [Ride.farePerPerson] 그대로다.
  *
  * 검증·상태:
  * - 합류 시점 정원 재확인 — 이미 찼으면 CTA 위 NoticeBanner(ERROR) 「방금 인원이 찼어요」 + CTA 비활성
@@ -105,16 +90,12 @@ private fun won(amount: Int): String = "%,d원".format(amount)
  */
 @Composable
 fun JoinConfirmScreen(
-    ride: Ride = DefaultJoinRide,
-    femaleOnly: Boolean = true,
-    serviceFee: Int = 600,
-    pickupTimeLabel: String = "오후 6:45",
+    ride: Ride,
     /**
      * 내 위치 → 이 방의 탑승 위치 거리(m). 모르면 null 이고 그 줄을 감춘다.
      * 「도보 N분」은 쓰지 않는다 — 보행 속도를 지어내야 하고, 거리와 달리 잰 값이 아니다.
      */
     pickupDistanceMeters: Double? = null,
-    arrivalTimeLabel: String = "오후 6:57 도착",
     joining: Boolean = false,
     joinErrorMessage: String? = null,
     onDismiss: () -> Unit = {},
@@ -154,8 +135,6 @@ fun JoinConfirmScreen(
                     fontWeight = FontWeight.Bold,
                     color = MoyeotaColor.InkPrimary,
                 )
-                Spacer(Modifier.weight(1f))
-                ShieldIcon() // 미연결 — 무동작
             }
         }
 
@@ -220,24 +199,20 @@ fun JoinConfirmScreen(
                             color = GrayMute,
                             modifier = Modifier.weight(1f),
                         )
-                        if (femaleOnly) {
-                            GrayPill(text = "여성만")
-                        }
                     }
 
                     Spacer(Modifier.height(16.dp))
                     RouteCard(
                         origin = ride.origin,
                         destination = ride.destination,
-                        pickupTimeLabel = pickupTimeLabel,
+                        departureLabel = ride.departureLabel.takeIf { it.isNotBlank() },
                         pickupDistanceMeters = pickupDistanceMeters,
-                        arrivalTimeLabel = arrivalTimeLabel,
+                        durationLabel = ride.estimatedMinutes?.let { "약 ${it}분" },
                     )
 
                     Spacer(Modifier.height(16.dp))
                     FareCard(
                         totalFare = ride.totalFare,
-                        serviceFee = serviceFee,
                         farePerPerson = ride.farePerPerson,
                         capacity = ride.capacity,
                     )
@@ -264,7 +239,7 @@ fun JoinConfirmScreen(
 
                     Spacer(Modifier.height(14.dp))
                     Text(
-                        text = "합류하면 인원 ${joinedCount + 1}명으로 요금이 확정되고 채팅방에 들어가요",
+                        text = "합류하면 바로 채팅방에 들어가요 · 1인 부담금은 정원 기준 예상 금액이에요",
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Medium,
                         color = GrayAsh,
@@ -320,9 +295,11 @@ fun JoinConfirmScreen(
 private fun RouteCard(
     origin: String,
     destination: String,
-    pickupTimeLabel: String,
+    /** 서버 출발 표기. 비어 있으면 null — 자리를 비워 둔다 */
+    departureLabel: String?,
     pickupDistanceMeters: Double?,
-    arrivalTimeLabel: String,
+    /** 예상 소요 시간 「약 N분」. 서버 값이 없으면 null */
+    durationLabel: String?,
 ) {
     Column(
         modifier = Modifier
@@ -340,19 +317,21 @@ private fun RouteCard(
                 color = MoyeotaColor.InkPrimary,
                 modifier = Modifier.weight(1f),
             )
-            Text(
-                text = pickupTimeLabel,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Bold,
-                color = MoyeotaColor.InkPrimary,
-            )
+            if (departureLabel != null) {
+                Text(
+                    text = departureLabel,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MoyeotaColor.InkPrimary,
+                )
+            }
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(modifier = Modifier.width(11.dp), contentAlignment = Alignment.Center) {
                 DashedVerticalLine()
             }
             Spacer(Modifier.width(12.dp))
-            // 내 위치를 모르면 점선만 남는다 — 「도보 2분」 같은 지어낸 값을 채우지 않는다
+            // 내 위치를 모르면 점선만 남는다 — 보행 시간 같은 지어낸 값을 채우지 않는다
             if (pickupDistanceMeters != null) {
                 Text(
                     text = "내 위치에서 ${pickupDistanceLabel(pickupDistanceMeters)}",
@@ -372,12 +351,14 @@ private fun RouteCard(
                 color = MoyeotaColor.InkPrimary,
                 modifier = Modifier.weight(1f),
             )
-            Text(
-                text = arrivalTimeLabel,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Bold,
-                color = MoyeotaColor.InkPrimary,
-            )
+            if (durationLabel != null) {
+                Text(
+                    text = durationLabel,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MoyeotaColor.InkPrimary,
+                )
+            }
         }
     }
 }
@@ -404,7 +385,6 @@ private fun DashedVerticalLine() {
 @Composable
 private fun FareCard(
     totalFare: Int,
-    serviceFee: Int,
     farePerPerson: Int,
     capacity: Int,
 ) {
@@ -415,8 +395,6 @@ private fun FareCard(
             .padding(horizontal = 20.dp, vertical = 18.dp),
     ) {
         FareRow(label = "총 예상 요금", value = won(totalFare))
-        Spacer(Modifier.height(12.dp))
-        FareRow(label = "서비스 수수료 (2차)", value = won(serviceFee))
         Spacer(Modifier.height(14.dp))
         Row(
             modifier = Modifier
@@ -440,14 +418,12 @@ private fun FareCard(
                 color = MoyeotaColor.Primary500,
             )
         }
-        Spacer(Modifier.height(14.dp))
-        FareRow(label = "정산 방식", value = "10원 단위 · 1/N")
         Spacer(Modifier.height(6.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             CheckIcon(color = GrayMute)
             Spacer(Modifier.width(6.dp))
             Text(
-                text = "${capacity}명 기준 · 수수료 포함 10원 단위로 나눠요",
+                text = "총 예상 요금을 정원 ${capacity}명으로 나눈 금액이에요",
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Medium,
                 color = GrayMute,
@@ -539,27 +515,6 @@ private fun GrayPill(text: String) {
 // ─── Canvas 아이콘·경로 (material-icons 미사용) ─────────────────────────────
 
 @Composable
-private fun ShieldIcon(modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier.size(22.dp)) {
-        val w = size.width
-        val h = size.height
-        val stroke = Stroke(width = 1.6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
-        val shield = Path().apply {
-            moveTo(w * 0.5f, h * 0.08f)
-            lineTo(w * 0.85f, h * 0.2f)
-            lineTo(w * 0.85f, h * 0.5f)
-            quadraticTo(w * 0.85f, h * 0.76f, w * 0.5f, h * 0.92f)
-            quadraticTo(w * 0.15f, h * 0.76f, w * 0.15f, h * 0.5f)
-            lineTo(w * 0.15f, h * 0.2f)
-            close()
-        }
-        drawPath(shield, MoyeotaColor.InkPrimary, style = stroke)
-        drawLine(MoyeotaColor.InkPrimary, Offset(w * 0.36f, h * 0.5f), Offset(w * 0.47f, h * 0.62f), stroke.width, StrokeCap.Round)
-        drawLine(MoyeotaColor.InkPrimary, Offset(w * 0.47f, h * 0.62f), Offset(w * 0.66f, h * 0.36f), stroke.width, StrokeCap.Round)
-    }
-}
-
-@Composable
 private fun CheckIcon(color: Color, modifier: Modifier = Modifier) {
     Canvas(modifier = modifier.size(14.dp)) {
         val w = size.width
@@ -584,5 +539,19 @@ private fun ChevronRightIcon(color: Color, modifier: Modifier = Modifier) {
 @Preview(showBackground = true, widthDp = 393, heightDp = 852)
 @Composable
 private fun JoinConfirmScreenPreview() {
-    JoinConfirmScreen()
+    // 프리뷰 전용 더미 — 실행 경로에는 흘러가지 않는다
+    JoinConfirmScreen(
+        ride = Ride(
+            id = "preview",
+            origin = "출발지",
+            destination = "도착지",
+            departureLabel = "",
+            capacity = 3,
+            members = listOf(User("u-1", "동승자", "", 0.0, 3)),
+            farePerPerson = 3000,
+            totalFare = 9000,
+            status = RideStatus.RECRUITING,
+            estimatedMinutes = 20,
+        ),
+    )
 }

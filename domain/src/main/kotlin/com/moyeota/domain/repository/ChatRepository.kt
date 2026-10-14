@@ -29,12 +29,6 @@ interface ChatRepository {
     /** GET /api/v1/chat-rooms/{chatRoomId} */
     suspend fun getChatRoom(chatRoomId: Long): ChatRoom
 
-    /** POST /api/v1/chat-rooms (201). 같은 partyId 로 두 번 만들면 409 CHAT_ROOM_ALREADY_EXISTS. */
-    suspend fun createChatRoom(partyId: Long, departure: String, destination: String): ChatRoom
-
-    /** DELETE /api/v1/chat-rooms/{chatRoomId} (204). 방 자체를 CLOSED 로 만든다(탑승 종료 시). */
-    suspend fun closeChatRoom(chatRoomId: Long)
-
     /** POST /api/v1/chat-rooms/{chatRoomId}/users (201). 합류 시 호출. */
     suspend fun joinChatRoom(chatRoomId: Long)
 
@@ -56,7 +50,11 @@ interface ChatRepository {
      */
     suspend fun setNotificationMuted(chatRoomId: Long, muted: Boolean)
 
-    /** POST /api/v1/chat-rooms/{chatRoomId}/users/read/{readMessageId}. 성공 후 목록의 안읽음 배지 갱신 필요. */
+    /**
+     * POST /api/v1/chat-rooms/{chatRoomId}/users/read/{readMessageId}. 성공 후 목록의 안읽음 배지 갱신 필요.
+     * 서버는 읽음 위치를 **5초 모았다가 한 번에** 반영한다(Backend #188) — 바로 저장되지 않아도 정상이다.
+     * 내 목록 조회(`GET /chat-rooms/me`) 직전에는 내 것만 먼저 반영하므로 방금 읽은 방이 안 읽음으로 보이진 않는다.
+     */
     suspend fun markAsRead(chatRoomId: Long, readMessageId: Long)
 
     /**

@@ -1,12 +1,11 @@
 package com.moyeota.data.remote
 
-import com.moyeota.data.remote.dto.MemberLocationResponse
-import com.moyeota.data.remote.dto.MemberLocationRequestDto
 import com.moyeota.data.remote.dto.DriverSummaryResponse
 import com.moyeota.data.remote.dto.OpenPartyRequestDto
 import com.moyeota.data.remote.dto.OpenPartyResponse
 import com.moyeota.data.remote.dto.PartyDetailResponse
 import com.moyeota.data.remote.dto.PartyListResponse
+import com.moyeota.data.remote.dto.PartyStatusResponse
 import com.moyeota.data.remote.dto.RouteEstimateResponse
 import com.moyeota.data.remote.dto.RouteRequestDto
 import retrofit2.http.Body
@@ -44,6 +43,18 @@ interface MatchingApi {
         @Query("neLng") neLng: Double,
     ): PartyListResponse
 
+    /**
+     * 방 상세. 멤버 목록·요금·경로 폴리라인까지 전부 담긴다(`PartyController.detail`).
+     * SSE `connected` 이벤트의 data 와 **같은 모양**이라 DTO·매퍼를 공유한다.
+     *
+     * 서버 메서드에 `@CurrentUser` 가 없지만 **토큰은 필수다** — Security 가 `/api/v1/auth/` 밖
+     * 전 경로에 `anyRequest().authenticated()` 를 건다. 참여자 검사는 없다.
+     *
+     * **주기 조회(25 배차 상태·26 운행 중)가 부르는 것도 이 호출이다.** 전용 상태 조회
+     * `GET /rooms/{partyId}/status` 는 백엔드에서 **삭제됐다**(`04f6be7`) — 지금 부르면 404 다.
+     * 그 호출은 서버 쿼리 1개였고 이건 **3개**(방 + 멤버 요약 + 탑승 횟수)에 route 까지 실으므로,
+     * 부르는 화면은 간격을 벌려야 한다(부하테스트에서 상세 폴링이 전체 요청의 45% — Backend #177).
+     */
     @GET("api/v1/matching/rooms/{partyId}")
     suspend fun getPartyDetail(@Path("partyId") partyId: Long): PartyDetailResponse
 
@@ -55,18 +66,32 @@ interface MatchingApi {
      * 토큰 주체를 쓴다 — 구버전 호환용 잔재다. 그래서 앱은 아예 보내지 않는다
      * (실측: creatorId 없이 200, 토큰 주체가 방장으로 기록됨).
      * 리포트 22번 D-5("내가 만든 방에 내가 없는" 상태)는 이것으로 해소됐다.
+     *
+     * **반경도 요청에 없다** — 서버가 `OpenPartyRequest` 에서 빼고 고정값(500m)을 쓴다
+     * (Backend `a668aee`, Swagger 「반경은 서버 고정값(500m)」). 400 목록에서 `INVALID_RADIUS` 도 빠졌다.
      */
     @POST("api/v1/matching/rooms")
     suspend fun openParty(@Body request: OpenPartyRequestDto): OpenPartyResponse
 
     /**
-     * 합류. 성공 시 서버가 방 상세를 그대로 돌려준다(PartyDetailResult). 요청 본문은 없다.
+     * 합류. 요청 본문은 없다.
+     *
+     * **응답이 방 상세에서 `PartyStatusResponse{status, currentMembers}` 로 바뀌었다**
+     * (Backend #213, `PartyController.join` 의 반환 타입). 즉 **동승자 목록이 오지 않는다** —
+     * 필요하면 [getPartyDetail] 을 따로 불러야 한다(서버 Swagger 는 "동승자 목록은 SSE 구독(/events)의
+     * connected 로 받는다" 로 갱신됐다 — `04f6be7`).
+     *
+     * 그 `04f6be7` 에서 **`fingerprint` 필드도 빠졌다** — 응답은 이제 두 값뿐이다. 서버가 아직 옛
+     * 버전이라 지문을 실어 보내도 디코더가 `ignoreUnknownKeys` 로 흘린다(NetworkModule).
+     *
+     * 응답의 `status` 는 합류 **직후**의 방 상태다 — 내가 마지막 자리를 채웠으면 서버가 그 자리에서 정원 충족
+     * 처리까지 끝내고 `COMPLETED`(1차 배포) 또는 `MATCHING`(기사 모드)을 돌려준다.
      *
      * 합류자는 **Bearer 토큰에서 추출**된다(`PartyController.join(@PathVariable Long partyId, @CurrentUser Long memberId)`)
      * — 경로의 memberId 는 사라졌다. 토큰 없이 호출하면 401 `{"code":"USER005","message":"로그인이 필요합니다."}`.
      */
     @POST("api/v1/matching/rooms/{partyId}/join")
-    suspend fun joinParty(@Path("partyId") partyId: Long): PartyDetailResponse
+    suspend fun joinParty(@Path("partyId") partyId: Long): PartyStatusResponse
 
     /**
      * 나가기. 204 No Content — 응답 본문이 없다. 나가는 주체는 Bearer 토큰이 정한다.
@@ -91,20 +116,6 @@ interface MatchingApi {
      * 가 `BusinessException(MatchingErrorCode.DRIVER_NOT_ASSIGNED)` 를 던지고 전역 핸들러가 409 로 답한다.
      * 호출자는 배정 전에 부르지 말아야 한다([com.moyeota.presentation.feature.matching.shouldFetchDriverInfo]).
      */
-    /**
-     * 내 위치 보고(204). 방 화면이 열려 있는 동안 주기 호출(권장 5초) — 서버 TTL 60초.
-     * 403 NOT_PARTY_MEMBER / 404 PARTY_NOT_FOUND.
-     */
-    @POST("api/v1/matching/rooms/{partyId}/location")
-    suspend fun reportMyLocation(
-        @Path("partyId") partyId: Long,
-        @Body request: MemberLocationRequestDto,
-    )
-
-    /** **나를 뺀** 동승자 위치. 보고가 없거나 TTL 이 지난 멤버는 빠진다(빈 배열 정상). */
-    @GET("api/v1/matching/rooms/{partyId}/locations")
-    suspend fun getMemberLocations(@Path("partyId") partyId: Long): List<MemberLocationResponse>
-
     @GET("api/v1/matching/rooms/{partyId}/driver")
     suspend fun getAssignedDriver(@Path("partyId") partyId: Long): DriverSummaryResponse
 

@@ -5,6 +5,9 @@ outputs:
   version:
     description: "Calculated version (YYYY.MMDD.N)"
     value: ${{ steps.version.outputs.version }}
+  version-code:
+    description: "Play 용 versionCode (YYMMDD*100+N). 날짜와 같은 출처라 versionName 과 어긋나지 않는다"
+    value: ${{ steps.version.outputs.version-code }}
 
 runs:
   using: composite
@@ -15,8 +18,28 @@ runs:
       run: |
         TODAY=$(TZ=Asia/Seoul date +"%Y.%m%d")
         EXISTING=$(gh release list --json tagName -q "[.[] | select(.tagName | startswith(\"v${TODAY}\"))] | length" 2>/dev/null || echo "0")
-        NEXT_VERSION="${TODAY}.$((EXISTING + 1))"
+        SEQ=$((EXISTING + 1))
+        NEXT_VERSION="${TODAY}.${SEQ}"
+
+        # versionCode 는 YYMMDD*100 + 당일 순번. versionName 과 같은 날짜·순번에서 뽑으므로 둘이 어긋나지 않는다.
+        #
+        # 왜 github.run_number 를 쓰지 않는가: 워크플로를 **재실행하면 같은 값**이 나온다.
+        # Play 는 같은 versionCode 를 두 번 받지 않으므로 그 업로드는 거부된다.
+        #
+        # 왜 자리수를 100 으로 고정하는가: 단순히 이어 붙이면(YYMMDD 뒤에 N) 하루에 10번을 넘는 순간
+        # 자리수가 늘어 다음 날 값보다 커진다(2610149 → 26101410 > 26101501). 100 을 곱하면
+        # 하루 99 번까지 자리수가 고정돼 날짜 순서가 항상 지켜진다.
+        #
+        # 상한: 2099-12-31 → 99123199. Play 상한 2,100,000,000 아래다.
+        if [ "$SEQ" -gt 99 ]; then
+          echo "::error::하루 빌드가 99 번을 넘었습니다. versionCode 가 날짜 순서를 깨뜨립니다." >&2
+          exit 1
+        fi
+        DATE_PART=$(TZ=Asia/Seoul date +"%y%m%d")
+        NEXT_VERSION_CODE=$((10#$DATE_PART * 100 + SEQ))
+
         echo "version=$NEXT_VERSION" >> "$GITHUB_OUTPUT"
-        echo "Version: $NEXT_VERSION"
+        echo "version-code=$NEXT_VERSION_CODE" >> "$GITHUB_OUTPUT"
+        echo "Version: $NEXT_VERSION (code $NEXT_VERSION_CODE)"
       env:
         GH_TOKEN: ${{ github.token }}

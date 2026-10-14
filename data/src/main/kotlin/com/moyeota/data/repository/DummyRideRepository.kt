@@ -1,8 +1,8 @@
 package com.moyeota.data.repository
 
-import com.moyeota.domain.model.MemberLocation
 import com.moyeota.domain.model.AssignedDriver
 import com.moyeota.domain.model.NewParty
+import com.moyeota.domain.model.PartyStatus
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.model.RouteEstimate
@@ -84,8 +84,14 @@ class DummyRideRepository : RideRepository {
         destinationLng = request.destinationLng,
     )
 
-    override suspend fun joinParty(partyId: Long): Ride =
-        getNearbyParties().first().copy(id = partyId.toString(), status = RideStatus.MATCHED)
+    // 서버와 같은 모양으로 합류 직후 상태만 돌려준다 — 동승자 목록은 상세 조회가 맡는다.
+    override suspend fun joinParty(partyId: Long): PartyStatus {
+        val joined = getNearbyParties().first()
+        return PartyStatus(
+            status = RideStatus.MATCHED,
+            currentMembers = joined.members.size,
+        )
+    }
 
     override suspend fun leaveParty(partyId: Long) = Unit
 
@@ -99,10 +105,6 @@ class DummyRideRepository : RideRepository {
      * 평균 시속 22km + 승하차 3분). 경로는 출발·도착을 잇는 2점짜리 인코딩 폴리라인이라
      * 지도에 직선이 그려진다 — 상수 빈 문자열보다 화면 확인에 쓸모 있다.
      */
-    override suspend fun reportMyLocation(partyId: Long, latitude: Double, longitude: Double) = Unit
-
-    override suspend fun getMemberLocations(partyId: Long): List<MemberLocation> = emptyList()
-
     override suspend fun previewRoute(
         departureLat: Double,
         departureLng: Double,
