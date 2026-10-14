@@ -29,7 +29,15 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -37,6 +45,8 @@ import com.moyeota.core.designsystem.component.NavigationBarSpacer
 import com.moyeota.core.designsystem.component.PrimaryCtaButton
 import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.presentation.core.SupportLinks
+import com.moyeota.presentation.core.openWebPage
 
 private val ScreenBackground = Color(0xFFF5F7FA)
 private val TextSlate = Color(0xFF4B5563)
@@ -65,6 +75,57 @@ internal val LoginTrustBullets = listOf(
 )
 
 /**
+ * 「가입하면 이용약관 · 개인정보 처리방침에 동의하게 돼요」 — **문서 이름 두 조각만** 링크다.
+ *
+ * 문장은 주소가 있든 없든 똑같다. 동의하게 된다는 사실 자체는 주소와 무관하게 참이기 때문이다
+ * (가입하면 실제로 그 두 문서에 동의한다). 주소가 null 인 문서만 링크 없는 평범한 글자로 남는다
+ * — 35 마이페이지가 행을 숨기는 것과 같은 원칙이다(죽은 링크를 보여 주지 않는다).
+ *
+ * 링크를 누르면 [onOpen] 이 불린다. [LinkAnnotation.Url] 의 기본 동작(플랫폼 URI 핸들러)에
+ * 맡기지 않는 이유: **브라우저가 없는 기기에서 그 경로는 예외를 던진다.** 앱의 다른 외부 이동과
+ * 똑같이 `core/ExternalIntents` 를 지나게 해서 안내 토스트로 바꾼다.
+ *
+ * 줄 전체를 탭 영역으로 두지 않는다 — 두 문서를 가려낼 수 없어서다(그전에는 줄 전체에
+ * 아무 일도 하지 않는 `clickable` 이 걸려 있었다).
+ */
+internal fun signupConsentNotice(
+    termsUrl: String? = SupportLinks.TERMS_URL,
+    privacyUrl: String? = SupportLinks.PRIVACY_URL,
+    onOpen: (String) -> Unit,
+): AnnotatedString = buildAnnotatedString {
+    append("가입하면 ")
+    appendLegalDocument(label = "이용약관", url = termsUrl, onOpen = onOpen)
+    append(" · ")
+    appendLegalDocument(label = "개인정보 처리방침", url = privacyUrl, onOpen = onOpen)
+    append("에 동의하게 돼요")
+}
+
+/** 주소가 있으면 링크로, 없으면 그냥 글자로 붙인다. 11sp 회색 문장에서 링크만 파랑 + 밑줄이다. */
+private fun AnnotatedString.Builder.appendLegalDocument(
+    label: String,
+    url: String?,
+    onOpen: (String) -> Unit,
+) {
+    if (url == null) {
+        append(label)
+        return
+    }
+    withLink(
+        LinkAnnotation.Url(
+            url = url,
+            styles = TextLinkStyles(
+                style = SpanStyle(
+                    color = MoyeotaColor.Link,
+                    textDecoration = TextDecoration.Underline,
+                ),
+            ),
+        ) { onOpen(url) },
+    ) {
+        append(label)
+    }
+}
+
+/**
  * 04 · 시작 — 로그인 방식 [S01]
  *
  * 진입: 03 시작하기 · 온보딩 완료 후 재실행 · 로그아웃 직후
@@ -84,6 +145,10 @@ fun LoginScreen(
     onLogin: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val context = LocalContext.current
+    // 문장은 고정이므로 재구성마다 다시 만들지 않는다 (링크 두 개짜리 AnnotatedString)
+    val consentNotice = remember(context) { signupConsentNotice { url -> context.openWebPage(url) } }
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -190,20 +255,16 @@ fun LoginScreen(
             }
 
             Spacer(Modifier.height(11.dp))
+            // 문구가 두 문서를 **이름으로** 부르므로 그 두 조각만 링크로 만든다. 2026-10-14 까지는
+            // 줄 전체에 아무 일도 하지 않는 clickable 이 걸려 있었다(주소가 없어 열 곳이 없었다).
+            // 이제 주소가 생겼고, 동의를 안내하는 자리에서 그 문서에 닿지 못하면 안내가 반쪽이다.
             Text(
-                text = "가입하면 이용약관 · 개인정보 처리방침에 동의하게 돼요",
+                text = consentNotice,
                 color = TextFaint,
                 fontSize = 11.sp,
                 lineHeight = 16.sp,
                 letterSpacing = (-0.22).sp,
-                modifier = Modifier
-                    .align(Alignment.CenterHorizontally)
-                    // 미연결 — 약관 뷰 필요
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = {},
-                    ),
+                modifier = Modifier.align(Alignment.CenterHorizontally),
             )
             Spacer(Modifier.height(28.dp))
         }

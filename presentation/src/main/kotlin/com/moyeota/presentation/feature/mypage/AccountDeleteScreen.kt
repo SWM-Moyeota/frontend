@@ -27,6 +27,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -44,6 +45,8 @@ import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.core.designsystem.theme.MoyeotaTheme
 import com.moyeota.core.designsystem.theme.MoyeotaType
+import com.moyeota.presentation.core.SupportLinks
+import com.moyeota.presentation.core.openWebPage
 
 /**
  * 37 · 회원 탈퇴 (신규, 2026-10)
@@ -67,8 +70,19 @@ import com.moyeota.core.designsystem.theme.MoyeotaType
  * 진행 중인 합승 제약은 여기 적지 않는다: 앱이 미리 알 수 없는 값이라 경고가 아니라 실패 사유다
  * (누르면 [bannerError] 로 온다).
  *
+ * ### 「자세히 보기」를 35 가 아니라 여기 둔 이유 (2026-10-14)
+ * 계정 삭제 안내 웹페이지([SupportLinks.ACCOUNT_DELETION_URL])는 Play 콘솔 데이터 안전 섹션에
+ * 등록하는 주소이자, 네 줄 요약의 **전문**(보관 기간·남는 데이터·처리 절차)이다. 그 링크를
+ * 35 마이페이지 「안내」 카드에 행으로 두면 「탈퇴하기」와 뜻이 겹치는 입구가 두 개 생긴다 —
+ * 하나는 브라우저로 나가고(↗) 하나는 앱 안에서 계정을 지우는 길인데(›), 둘 다 「계정 삭제」로
+ * 읽혀 파괴적인 오탭 면적만 넓어진다. **자세히 알고 싶어지는 자리는 네 줄을 읽은 직후**라,
+ * 경고 카드 바로 아래 한 줄로 둔다. 네 줄을 되풀이하지 않고 "무엇이 남는지"까지 있다고만 알린다.
+ *
+ * 주소가 null 이면 이 줄을 그리지 않는다 — 35 의 메뉴 행과 같은 규칙이다(죽은 링크를 보여 주지 않는다).
+ *
  * @param passwordError 비밀번호 입력란 아래 오류. 비밀번호 불일치만 여기 온다.
  * @param bannerError 버튼 위 배너. 진행 중 합승·네트워크·세션 만료처럼 이 화면에서 못 고치는 실패.
+ * @param guideUrl 계정 삭제 안내 페이지. null 이면 「자세히 보기」 줄을 그리지 않는다.
  */
 @Composable
 fun AccountDeleteScreen(
@@ -77,6 +91,7 @@ fun AccountDeleteScreen(
     submitting: Boolean = false,
     passwordError: String? = null,
     bannerError: String? = null,
+    guideUrl: String? = SupportLinks.ACCOUNT_DELETION_URL,
     onPasswordChange: (String) -> Unit = {},
     onDelete: () -> Unit = {},
     onBack: () -> Unit = {},
@@ -84,6 +99,7 @@ fun AccountDeleteScreen(
     var confirming by remember { mutableStateOf(false) }
     var passwordVisible by remember { mutableStateOf(false) }
     val canSubmit = canSubmitAccountDeletion(password, submitting)
+    val context = LocalContext.current
 
     Column(modifier = modifier.fillMaxSize().imePadding().background(MoyeotaColor.SurfaceSoft)) {
         StatusBarSpacer()
@@ -120,6 +136,31 @@ fun AccountDeleteScreen(
                 AccountDeletionWarnings.forEachIndexed { index, warning ->
                     if (index > 0) Spacer(Modifier.height(10.dp))
                     WarningLine(text = warning)
+                }
+            }
+
+            // 경고 카드 바로 아래 — 네 줄의 전문으로 가는 한 줄. 입력란보다 위에 둬서 키보드가
+            // 올라와도 밀려 사라지지 않는다(이 화면을 다이얼로그로 만들지 않은 것과 같은 이유다).
+            if (guideUrl != null) {
+                Row(
+                    modifier = Modifier
+                        .padding(top = 12.dp)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                        ) { context.openWebPage(guideUrl) }
+                        // 글자만 눌리면 터치 영역이 20dp 밖에 안 된다 — 위아래로 넓혀 둔다
+                        .padding(vertical = 10.dp, horizontal = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "지워지는 것과 남는 것 자세히 보기",
+                        style = MoyeotaType.BodySm.copy(fontWeight = FontWeight.Bold),
+                        color = MoyeotaColor.Link,
+                    )
+                    Spacer(Modifier.size(4.dp))
+                    // ↗ = 앱 밖으로 나간다. 35 마이페이지와 같은 기호를 그대로 쓴다.
+                    ExternalLinkIcon(tint = MoyeotaColor.Link)
                 }
             }
 
@@ -232,6 +273,15 @@ private fun WarningLine(text: String) {
 private fun AccountDeleteScreenPreview() {
     MoyeotaTheme {
         AccountDeleteScreen(password = "")
+    }
+}
+
+// 안내 페이지 주소를 비웠을 때 — 「자세히 보기」 줄이 사라지고 네 줄만 남는다
+@Preview(showBackground = true, widthDp = 393, heightDp = 852, name = "안내 주소 없음")
+@Composable
+private fun AccountDeleteScreenNoGuidePreview() {
+    MoyeotaTheme {
+        AccountDeleteScreen(password = "", guideUrl = null)
     }
 }
 
