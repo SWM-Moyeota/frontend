@@ -16,9 +16,11 @@ private val errorJson = Json { ignoreUnknownKeys = true }
 
 private const val ADDRESS_NOT_FOUND = "ADDRESS_NOT_FOUND"
 
+// roadName 은 서버가 null 을 줄 수 있다(DTO 주석 참고). 도메인은 non-null 을 유지하고 여기서 "" 로 떨군다 —
+// 화면은 이 값을 Text 에 그대로 넣으므로 빈 문자열이면 주소 줄 한 칸이 비는 것으로 끝난다.
 fun PlaceSearchListResponse.PlaceSearchItem.toPlace(): Place = Place(
     name = name,
-    roadName = roadName,
+    roadName = roadName.orEmpty(),
     latitude = latitude,
     longitude = longitude,
 )
@@ -26,7 +28,7 @@ fun PlaceSearchListResponse.PlaceSearchItem.toPlace(): Place = Place(
 // 즐겨찾기는 name 이 아니라 placeName 으로 필드명이 다르다. 여기서만 흡수한다.
 fun FavoritePlaceListResponse.FavoritePlaceItem.toFavoritePlace(): FavoritePlace = FavoritePlace(
     name = placeName,
-    roadName = roadName,
+    roadName = roadName.orEmpty(),
     latitude = latitude,
     longitude = longitude,
     sequence = placeSequence,
