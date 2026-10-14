@@ -21,6 +21,13 @@ import retrofit2.HttpException
  *    "내가 속한 채팅방의 partyId" 가 곧 "내가 속한 방"의 후보다. 앱을 지우고 다시 깔았거나
  *    다른 기기에서 합류한 경우를 여기서 건진다.
  *
+ *    **다만 지금 서버에서는 이 폴백이 사실상 비어 돈다.** 목록 응답(백엔드 `ChatRoomUserResult`)에는
+ *    partyId 필드가 **없고**, 2026-09-14 서버부터 방 정보(출발·도착·상태)가 목록에 함께 실려
+ *    [com.moyeota.data.remote.toChatRoomOrNull] 이 방 상세를 읽지 않고 `partyId = 0` 으로 채운다.
+ *    그래서 후보가 전부 0 이고, 예전에는 그 0 으로 `GET /matching/rooms/0` 404 를 냈다(QA 119 D-3).
+ *    되살리려면 후보마다 `GET /chat-rooms/{id}`(이 응답에는 partyId 가 있다)를 한 번 더 읽어야 하는데,
+ *    기억이 없는 드문 경우에 요청을 N 배로 늘리는 선택이라 이번 수정 범위에서는 하지 않았다.
+ *
  * **네트워크 실패와 "끝난 방"을 절대 같은 값으로 접지 않는다.** 둘을 뭉개면 지하철에서 앱을 켠 사용자의
  * 기억이 지워져, 신호가 돌아와도 매칭 화면으로 못 돌아간다. 그래서 검증 결과는 3값([Verdict])이며
  * 기억 삭제는 **서버가 분명히 아니라고 말했을 때만** 한다.
@@ -35,7 +42,10 @@ class RemoteActivePartyRepository(
     override suspend fun remember(partyId: String) {
         // 미로그인 상태의 기억은 주인을 적을 수 없어 계정 가드가 무의미해진다 — 아예 남기지 않는다.
         val owner = session.currentUserUuid ?: return
-        quietly { storage.save(RememberedParty(partyId = partyId, ownerUuid = owner)) }
+        // 조회할 수 없는 id 는 심지 않는다. 심어 두면 다음 [resolve] 가 그 값으로 404 를 한 번 맞고
+        // 지우는 것이 전부다 — 들어오는 자리에서 막는 쪽이 싸다.
+        val id = partyId.toPartyIdOrNull() ?: return
+        quietly { storage.save(RememberedParty(partyId = id.toString(), ownerUuid = owner)) }
     }
 
     override suspend fun clear() {
@@ -82,23 +92,35 @@ class RemoteActivePartyRepository(
         }
 
         // 채팅방 id 는 단조 증가하는 서버 PK 다 — createdAt 문자열 파싱 없이 최신순을 얻는 가장 싼 방법.
-        val candidates = rooms.sortedByDescending { it.room.id }.take(CHAT_ROOM_SCAN_LIMIT)
-        for (candidate in candidates) {
-            val partyId = candidate.room.partyId.toString()
-            val verdict = verify(partyId)
+        // partyId 가 0 인 항목은 **조회 전에 버린다**: 목록 응답에 partyId 가 없어 매퍼가 채운 자리값일
+        // 뿐이어서(클래스 KDoc 2번) 읽어도 404 다. 걸러낸 항목은 요청 예산도 쓰지 않는다.
+        val candidates = rooms
+            .sortedByDescending { it.room.id }
+            .mapNotNull { it.room.partyId.takeIf { partyId -> partyId > 0 } }
+            .take(CHAT_ROOM_SCAN_LIMIT)
+        for (partyId in candidates) {
+            val verdict = verify(partyId.toString())
             if (verdict is Verdict.Active) {
                 // 다음 호출부터는 상세 1회로 끝나도록 찾은 결과를 기억해 둔다.
-                remember(partyId)
+                remember(partyId.toString())
                 return verdict.ride
             }
         }
         return null
     }
 
+    /**
+     * 조회해도 되는 방 id 인가. 서버 partyId 는 1 부터 올라가는 Long PK 라 **0 과 음수는 존재할 수
+     * 없다** — 그 값으로 상세를 읽으면 404 뿐이다(QA 119 D-3: 「합승 완료」 직후
+     * `GET /api/v1/matching/rooms/0`).
+     */
+    private fun String.toPartyIdOrNull(): Long? = toLongOrNull()?.takeIf { it > 0 }
+
     /** 방 상세를 읽어 "지금 내가 타고 있는 방인가"를 판정한다. */
     private suspend fun verify(partyId: String): Verdict {
-        // 서버 partyId 는 Long 이다. 숫자가 아니면 우리가 쓴 적 없는 쓰레기 값이므로 지워도 된다.
-        val id = partyId.toLongOrNull() ?: return Verdict.Inactive
+        // 숫자가 아니거나 0 이하면 우리가 쓴 적 없는 쓰레기 값이다 — **읽지 않고** 아니라고 답한다.
+        // 네트워크를 타지 않으므로 [Verdict.Unknown] 이 아니라 [Verdict.Inactive] 다(기억을 지워도 된다).
+        val id = partyId.toPartyIdOrNull() ?: return Verdict.Inactive
         val ride = try {
             rideRepository.getPartyDetail(id)
         } catch (e: CancellationException) {

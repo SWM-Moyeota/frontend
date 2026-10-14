@@ -5,21 +5,26 @@ import com.moyeota.data.remote.matching.PartyEventSource
 import com.moyeota.data.remote.ReportApi
 import com.moyeota.data.remote.dto.CallResultRequestDto
 import com.moyeota.data.remote.dto.ReportRequestDto
+import com.moyeota.data.remote.partyJoinException
+import com.moyeota.data.remote.readApiError
 import com.moyeota.data.remote.routeRequestDto
 import com.moyeota.data.remote.toAssignedDriver
 import com.moyeota.data.remote.toRequestDto
+import com.moyeota.data.remote.toPartyEvent
 import com.moyeota.data.remote.toPartyStatus
 import com.moyeota.data.remote.toRide
 import com.moyeota.data.remote.toRouteEstimate
 import com.moyeota.domain.model.AssignedDriver
 import com.moyeota.domain.model.NewParty
 import com.moyeota.domain.model.PartyEvent
+import com.moyeota.domain.model.PartyJoinException
 import com.moyeota.domain.model.PartyStatus
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RouteEstimate
 import com.moyeota.domain.repository.RideRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.map
 import com.moyeota.domain.session.UserSession
 import kotlin.coroutines.cancellation.CancellationException
 
@@ -46,8 +51,12 @@ class RemoteRideRepository(
     private val partyEvents: PartyEventSource? = null,
 ) : RideRepository {
 
+    /**
+     * SSE 프레임을 도메인 이벤트로 옮긴다. 세션 uuid 는 **이벤트가 올 때마다** 읽는다 — 스냅샷·입장 신호의
+     * "나" 판정이 상세 조회와 같은 근거를 쓰게 하고, 구독 중 재로그인이 있어도 다음 이벤트부터 맞게 한다.
+     */
     override fun observePartyEvents(partyId: Long): Flow<PartyEvent> =
-        partyEvents?.events(partyId) ?: emptyFlow()
+        partyEvents?.events(partyId)?.map { it.toPartyEvent(session.currentUserUuid) } ?: emptyFlow()
 
     override fun getNearbyParties(): List<Ride> = local.getNearbyParties()
 
@@ -67,20 +76,52 @@ class RemoteRideRepository(
     override suspend fun getPartyDetail(partyId: Long): Ride =
         api.getPartyDetail(partyId).toRide(session.currentUserUuid)
 
-    /**
-     * 인터페이스의 기본 구현(상세에서 깎기)을 **덮어쓴다** — 가벼운 전용 API 를 부르는 게 이 구현의 존재 이유다.
-     * 세션은 보지 않는다: 응답에 멤버 목록이 없어 "누가 나인지"를 판정할 거리가 애초에 없다.
-     */
-    override suspend fun getPartyStatus(partyId: Long): PartyStatus =
-        api.getPartyStatus(partyId).toPartyStatus()
-
     // 생성자는 서버가 토큰에서 정한다 — 요청 본문에도 응답에도 id 가 없다.
     override suspend fun createParty(request: NewParty): Ride =
         api.openParty(request.toRequestDto()).toRide()
 
-    // 합류 응답이 곧 방 상세라 재조회 없이 그대로 반환한다. 합류자는 Bearer 토큰이 정한다.
-    override suspend fun joinParty(partyId: Long): Ride =
-        api.joinParty(partyId).toRide(session.currentUserUuid)
+    /**
+     * 합류 응답은 더 이상 방 상세가 아니다(Backend #213) — 상태·인원만 담긴 [PartyStatus] 다
+     * (지문 필드는 `04f6be7` 에서 빠졌다).
+     *
+     * 성공 경로에서는 세션을 보지 않는다: 응답에 멤버 목록이 없어 "누가 나인지"를 판정할 거리가 없다.
+     * 동승자 목록은 [getPartyDetail] 이나 [observePartyEvents] 의 첫 스냅샷으로 받는다.
+     *
+     * 실패는 전부 [PartyJoinException] 으로 좁힌다 — 그중 **「이미 참여 중」 409 는 복구를 시도한다**
+     * ([recoverMembership]).
+     */
+    override suspend fun joinParty(partyId: Long): PartyStatus {
+        val response = runCatching { api.joinParty(partyId) }
+        val failure = response.exceptionOrNull()
+            ?: return response.getOrThrow().toPartyStatus()
+        // runCatching 은 취소까지 삼키므로 되던져 화면 이탈이 에러로 보이지 않게 한다.
+        if (failure is CancellationException) throw failure
+
+        // 에러 본문은 스트림이라 한 번만 읽을 수 있다 — 읽어서 들고 다닌다.
+        val error = failure.readApiError()
+        val joined = if (PartyJoinException.isAlreadyJoinedCode(error?.code)) recoverMembership(partyId) else null
+        throw partyJoinException(failure, error, joined)
+    }
+
+    /**
+     * 「이미 참여 중입니다」 409 가 **이 방**을 가리키는지 확인해, 그렇다면 그 방의 현재 상태를 돌려준다.
+     *
+     * 이 확인이 필요한 이유는 두 가지다.
+     * 1. 서버가 두 경우를 **구분해 주지 않는다** — 재합류도, 다른 방에 있는 것도 똑같이
+     *    `ALREADY_JOINED_OTHER_PARTY` 다([PartyJoinException.isAlreadyJoinedCode] KDoc).
+     * 2. 합류는 서버가 **멤버 추가를 먼저 커밋**하고 응답을 만든다. 그 응답을 앱이 놓치면(역직렬화 실패·
+     *    네트워크 끊김) 서버에는 들어가 있는데 화면은 실패로 끝나고, 재시도는 409 로 막힌다 —
+     *    그대로 두면 **30분 스윕 전까지 그 계정이 어떤 방에도 못 들어간다.**
+     *
+     * 판정 근거는 추측이 아니라 증거다: 방 상세의 members 에 내 publicId 가 있는지 본다
+     * (`isMe` 판정은 [getPartyDetail] 과 같은 매퍼·같은 세션 uuid 를 쓴다). 상세 조회까지 실패하면
+     * 복구를 포기하고 null 을 돌려준다 — 없는 멤버십을 있다고 하면 더 나쁘다.
+     */
+    private suspend fun recoverMembership(partyId: Long): PartyStatus? {
+        val ride = runCatching { getPartyDetail(partyId) }.getOrNull() ?: return null
+        if (ride.members.none { it.isMe }) return null
+        return PartyStatus(ride.status, ride.members.size)
+    }
 
     override suspend fun leaveParty(partyId: Long) = api.leaveParty(partyId)
 

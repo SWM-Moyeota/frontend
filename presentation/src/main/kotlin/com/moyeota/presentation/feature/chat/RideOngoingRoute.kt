@@ -15,6 +15,7 @@ import com.moyeota.core.designsystem.component.latLngOrNull
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.repository.RideRepository
+import com.moyeota.presentation.core.shouldPublishDetail
 import com.moyeota.presentation.core.location.rememberMyLocationState
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -23,8 +24,19 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 
-/** 운행 완료 폴링 간격. 21 매칭 대기의 상태 폴링과 같은 주기로 맞춘다. */
-private const val RIDE_POLL_INTERVAL_MS = 4_000L
+/**
+ * 운행 완료 폴링 간격 — **8초**. 기사가 운행을 끝낸 뒤 최악의 경우 이만큼 기다렸다 33 으로 넘어간다.
+ *
+ * 옛 4초에서 늘렸다. 매 주기 읽는 대상이 쿼리 1개짜리 상태 조회에서 **쿼리 3개짜리 방 상세**로
+ * 바뀌었기 때문이다 — 서버가 `/status` 를 삭제했다(`04f6be7`). 4초를 그대로 두면 쿼리 부하가
+ * 0.25 → 0.75 q/s 로 3배가 된다. 8초면 0.38 q/s 로 옛 구조와 비슷하다.
+ *
+ * 25 배차 상태(7초)보다 **길게** 두는 이유: 이 화면이 기다리는 전이는 운행 완료 하나뿐이고, 지도에
+ * 주기마다 움직일 마커가 없다(출발·도착·경로는 방 생성 시 확정된 값이고 내 위치는 단말이 1초마다
+ * 직접 갱신한다). 그래서 범위에서 가장 낮은 부하를 고를 수 있다.
+ * 근거와 부하 표는 [com.moyeota.presentation.core.PARTY_DETAIL_POLL_FLOOR_MS] KDoc 에 있다.
+ */
+internal const val RIDE_POLL_INTERVAL_MS = 8_000L
 
 private const val TAG = "RideOngoing"
 
@@ -38,25 +50,37 @@ class RideOngoingViewModel(
     private val _finished = MutableStateFlow(false)
     val finished: StateFlow<Boolean> = _finished.asStateFlow()
 
-    // 지도(출발·도착 마커, 경로)용 방 상세. **한 번만** 읽는다 — 여기서 쓰는 값(출발·도착 좌표,
-    // routePolyline)은 방 생성 시 서버가 확정해 박아두는 값이라 운행 중에 바뀌지 않는다.
-    // 지도는 부가 정보라 UiState 를 만들지 않고, 못 받은 동안(null)에는 마커 없는 지도를 그린다.
+    // 지도(출발·도착 마커, 경로)와 시트 문구용 방 상세. 폴링이 돌려주는 값이 그대로 들어온다.
+    // 여기서 쓰는 값(출발·도착 좌표, routePolyline, 목적지명, 예상 소요시간)은 방 생성 시 서버가
+    // 확정해 박아두는 값이라 운행 중에 바뀌지 않는다 — 그래서 같은 값이 다시 와도 흘려보낸다
+    // (shouldPublishDetail). 지도는 부가 정보라 UiState 를 만들지 않고, 못 받은 동안(null)에는
+    // 마커 없는 지도를 그린다.
     private val _ride = MutableStateFlow<Ride?>(null)
     val ride: StateFlow<Ride?> = _ride.asStateFlow()
 
     /**
-     * 가벼운 상태 조회([RideRepository.getPartyStatus], `GET /matching/rooms/{id}/status`)를 주기적으로
-     * 읽어 기사측 운행 종료(`POST /dispatch/rides/{id}/complete`)를 따라잡는다.
+     * 방 상세([RideRepository.getPartyDetail], `GET /matching/rooms/{id}`)를 주기적으로 읽어
+     * 기사측 운행 종료(`POST /dispatch/rides/{id}/complete`)를 따라잡는다.
      * 서버 status IN_RIDE → FINISHED 전이가 [RideStatus.ONGOING] → [RideStatus.COMPLETED] 로 매핑된다.
      *
-     * **방 상세가 아니라 상태만 읽는 이유**: 이 루프가 기다리는 건 status 하나인데 방 상세는 쿼리 3개에
-     * 경로(route)까지 실어 온다. 부하테스트에서 방 상세 폴링이 전체 요청의 45% 였고 그 대부분이
-     * 이 화면과 채팅의 4초 폴링이었다(Backend #177). 상태 조회는 쿼리 1개다.
-     * 지도용 상세는 [shouldLoadRideDetail] 이 정하는 대로 **첫 성공 한 번**만 읽는다.
+     * **동승 모드에서는 이 루프가 한 번도 돌지 않는다** — 서버가 `ONGOING` 을 내지 않아 26 에 닿을
+     * 길이 없다(`docs/MODE-ROUTES.md`). 택시 모드 전용이다.
      *
-     * 21 [com.moyeota.presentation.feature.matching.MatchWaitingViewModel] 의 observeAutoMatching 과 같은
-     * 루프지만, 스코프는 25 배차 현황의 pollDriver 처럼 **호출자(Route)** 것을 쓴다 —
-     * LaunchedEffect 가 화면 이탈 시 이 함수를 취소해 폴링이 함께 멈춘다.
+     * **상세를 읽는 이유**: 이 루프가 기다리는 건 status 하나뿐이라 예전에는 가벼운 상태 조회
+     * (`/status`, 쿼리 1개)를 읽었다. 그 엔드포인트가 백엔드에서 삭제됐다(`04f6be7` — 매칭방 변화가
+     * SSE 전용이 되면서 폴링용 조회가 쓰이지 않게 됐다). 그런데 **배차·운행 전이에는 SSE 이벤트도
+     * FCM 도 없어서**(서버 발행처가 참여·퇴장·종료뿐) 폴링을 없앨 수도 없다 — 수단만 상세로 바꿨다.
+     *
+     * 상세는 쿼리 3개에 경로까지 실어 오는 무거운 호출이라(부하테스트에서 상세 폴링이 전체 요청의
+     * 45% — Backend #177) 간격을 4초 → [RIDE_POLL_INTERVAL_MS](8초)로 늘렸고, 받은 값이 들고 있던
+     * 것과 같으면 **흘려보낸다**([shouldPublishDetail]) — 바뀔 값이 없는 화면이라 평상시엔 매 주기
+     * 같은 상세가 오고, 그대로 넣으면 8초마다 지도가 다시 그려진다.
+     *
+     * 지도용 상세를 "첫 성공 한 번만" 읽던 분기는 **없어졌다** — 폴링이 주는 게 곧 그 상세다.
+     * 첫 조회가 실패해도 다음 주기가 자동으로 복구한다(예전에 `shouldLoadRideDetail` 이 하던 일).
+     *
+     * 스코프는 25 배차 현황의 pollDriver 처럼 **호출자(Route)** 것을 쓴다 — LaunchedEffect 가
+     * 화면 이탈 시 이 함수를 취소해 폴링이 함께 멈춘다.
      *
      * 폴링 실패는 일시적 네트워크 문제일 뿐이라 화면을 에러로 덮지 않고 다음 주기를 기다린다
      * (운행 중 화면은 27 신고 진입점이라 무슨 일이 있어도 가려지면 안 된다 — QA D-3 동류).
@@ -65,17 +89,16 @@ class RideOngoingViewModel(
         Log.d(TAG, "운행 완료 폴링 시작 partyId=$partyId")
         try {
             while (currentCoroutineContext().isActive) {
-                // 지도용 상세 — 아직 한 번도 못 받았을 때만. 실패 시 마지막 성공값을 유지한다
-                // (마커가 깜빡이면 "사라졌다"로 읽힌다).
-                if (shouldLoadRideDetail(_ride.value)) {
-                    runCatching { repository.getPartyDetail(partyId) }
-                        .onSuccess { _ride.value = it }
-                        .onFailure { Log.d(TAG, "지도용 상세 조회 실패 — 다음 주기 재시도: ${it.message}") }
-                }
-                val status = runCatching { repository.getPartyStatus(partyId) }
-                    .onFailure { Log.d(TAG, "상태 폴링 실패 — 다음 주기 재시도: ${it.message}") }
+                val held = _ride.value
+                // 실패 시 마지막 성공값을 유지한다 — 마커가 깜빡이면 "사라졌다"로 읽힌다.
+                val fetched = runCatching { repository.getPartyDetail(partyId) }
+                    .onFailure { Log.d(TAG, "상세 폴링 실패 — 다음 주기 재시도: ${it.message}") }
                     .getOrNull()
-                if (isRideFinished(status?.status)) {
+                if (fetched != null && shouldPublishDetail(held, fetched)) {
+                    _ride.value = fetched
+                }
+                // 판정은 **이번 주기에 받은 값**으로만 한다 — 실패한 주기(null)는 "아직 아니다"다.
+                if (isRideFinished(fetched)) {
                     Log.d(TAG, "운행 완료 감지 partyId=$partyId → 33 도착 완료")
                     _finished.value = true
                     return
@@ -95,11 +118,15 @@ class RideOngoingViewModel(
 }
 
 /**
- * 26 운행 중 — 서버 운행 완료 상태 폴링 진입점.
+ * 26 운행 중 — 서버 운행 완료를 **방 상세 폴링**으로 따라잡는 진입점.
  *
  * partyId 가 없으면(채팅·34 내 기록에서 바로 들어온 경우) 폴링 없이 화면만 띄운다 — 이때는 목적지·경유
  * 순서도 알 수 없어 「목적지로 이동 중」만 보인다.
- * 28 로의 전이는 서버 status 전이가 유일한 신호다 — 화면 안에 수동 트리거는 없다.
+ * 33 으로의 전이는 서버 status 전이가 유일한 신호다([isRideFinished]) — 화면 안에 수동 트리거는 없다.
+ *
+ * **이 화면은 택시 모드에서만 보인다** — 동승 모드 서버는 `ONGOING` 을 내지 않는다
+ * (`docs/MODE-ROUTES.md`). 그래서 [RideOngoingViewModel.observeRideFinish] 의 상세 폴링도
+ * 택시 모드에서만 돈다.
  */
 @Composable
 fun RideOngoingRoute(
@@ -143,7 +170,8 @@ fun RideOngoingRoute(
     }
 
     // 경로는 방 상세의 routePolyline(서버가 방 생성 시 확정한 경로)을 그대로 쓴다 — 25 와 동일.
-    // 상세는 폴링하지 않고 처음 한 번만 읽으므로 이 값도 운행 내내 그대로다(바뀔 값이 아니다).
+    // 폴링이 매 주기 상세를 받아오지만 같은 값이면 ViewModel 이 흘려보내므로(shouldPublishDetail)
+    // 이 remember 는 운행 내내 한 번만 디코드한다 — 폴리라인 디코딩은 좌표 수백 개짜리 작업이다.
     val routePath = remember(ride?.routePolyline) {
         ride?.routePolyline?.let(::decodePolyline).orEmpty()
     }
@@ -171,15 +199,12 @@ fun RideOngoingRoute(
  * 「기사님을 찾지 못했어요」로 다룬다. 운행 중 화면에서 취소를 완료로 접으면 타지도 않은 운행의
  * 최종 요금 화면이 열린다 — 정상 종료는 FINISHED 뿐이다([com.moyeota.domain.model.RideStatus] KDoc).
  *
- * 상태 조회가 실패한 주기(null)는 "아직 안 끝났다"로 본다 — 한 번의 네트워크 오류로 화면을 넘기지 않는다.
- */
-internal fun isRideFinished(status: RideStatus?): Boolean = status == RideStatus.COMPLETED
-
-/**
- * 지도용 방 상세를 읽어야 하는가 — **아직 한 번도 못 받았을 때만** 참.
+ * 입력이 [RideStatus] 가 아니라 [Ride] 인 이유: 폴링이 받는 게 **방 상세뿐**이 됐다(가벼운 상태 조회가
+ * 서버에서 삭제됐다 — `04f6be7`). 두 종류의 응답으로 똑같이 판정할 일이 없어졌으니 들고 있는 값 그대로
+ * 받는다(25 의 [com.moyeota.presentation.feature.matching.isRideStarted] 와 같은 모양).
  *
- * 상세에서 쓰는 값(출발·도착 좌표, routePolyline)은 방 생성 시 확정돼 운행 중 바뀌지 않으니 한 번이면
- * 충분하다. 그래도 `held != null` 로만 끊는 이유는 **첫 조회가 실패할 수 있기** 때문이다 — 그때 다시
- * 묻지 않으면 운행이 끝날 때까지 마커·경로 없는 빈 지도가 남는다(예전엔 매 주기 상세를 읽어 저절로 복구됐다).
+ * 조회가 실패한 주기(null)는 "아직 안 끝났다"로 본다 — 한 번의 네트워크 오류로 화면을 넘기지 않는다.
  */
-internal fun shouldLoadRideDetail(held: Ride?): Boolean = held == null
+internal fun isRideFinished(ride: Ride?): Boolean = ride?.status == RideStatus.COMPLETED
+// 「지도용 상세를 아직 못 받았을 때만 읽는다」(shouldLoadRideDetail)는 없앴다 — 폴링이 주는 게 곧
+// 그 상세여서 읽을지 고를 대상이 없다. 첫 조회 실패도 다음 주기가 그냥 복구한다.

@@ -397,7 +397,10 @@ fun DestinationScreen(
         // 하단 — 안내 · 오류 · CTA
         Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
             Text(
-                text = "도착지를 넣으면 같은 방향 사람만 보여드려요",
+                // 「같은 방향 사람만 보여드려요」는 지웠다 — 17 탐색 목록은 **지도 영역**으로만 거른다
+                // (`getPartiesWithin`, 서버도 "출발지가 영역 안인 ACTIVE 방"). 도착지로 거르는 길이 없다.
+                // 이 CTA 가 실제로 하는 일은 16 에서 경로·예상 요금을 보여주는 것이다(2026-10-13).
+                text = "도착지를 넣으면 경로와 예상 요금을 알려드려요",
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Medium,
                 color = GrayAsh,

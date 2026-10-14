@@ -62,8 +62,16 @@ class AppContainer(context: Context, debugLogging: Boolean) {
      */
     val fcmTokenRegistrar = FcmTokenRegistrar(apis.user, sessionManager)
 
+    /**
+     * "진행 중인 방" 로컬 기억. **인스턴스를 하나만 만들어 두 곳이 나눠 쓴다** —
+     * [activePartyRepository] 가 읽고 쓰며, [authRepository] 는 탈퇴 때 비운다
+     * (로그아웃은 비우지 않는다 — [RemoteAuthRepository.deleteAccount] KDoc).
+     * DataStore 는 같은 파일을 두 번 열면 IllegalStateException 이라 선언도 한 번뿐이어야 한다.
+     */
+    private val activePartyStorage = DataStoreActivePartyStorage(context)
+
     val authRepository: AuthRepository =
-        RemoteAuthRepository(apis.auth, apis.user, sessionManager, fcmTokenRegistrar)
+        RemoteAuthRepository(apis.auth, apis.user, sessionManager, fcmTokenRegistrar, activePartyStorage)
     /** 택시 모드 등 서버 운영 설정. 앱 시작 시 한 번 읽고([AppConfigViewModel]), 실패하면 기본값(기사 모드) */
     val appConfigRepository: AppConfigRepository = RemoteAppConfigRepository(apis.config)
     // 세션을 넘기는 건 방 상세 멤버 중 "나"를 매퍼가 판정하기 위해서다(RemoteRideRepository KDoc).
@@ -92,7 +100,7 @@ class AppContainer(context: Context, debugLogging: Boolean) {
     val activePartyRepository: ActivePartyRepository = RemoteActivePartyRepository(
         rideRepository = rideRepository,
         chatRepository = chatRepository,
-        storage = DataStoreActivePartyStorage(context),
+        storage = activePartyStorage,
         session = sessionManager,
     )
 }

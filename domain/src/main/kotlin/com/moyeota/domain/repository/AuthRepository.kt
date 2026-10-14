@@ -23,6 +23,56 @@ interface AuthRepository {
     val authState: StateFlow<AuthState>
 
     /**
+     * 문자 인증번호 발송. POST /api/v1/auth/sms/send (**204 No Content**, 토큰 불필요).
+     *
+     * 가입 전에 불리므로 Bearer 가 붙지 않는 인증 전용 클라이언트로 나간다
+     * (`/api/v1/auth/` 하위가 서버 permitAll 구간이다).
+     *
+     * 번호는 하이픈이 있든 없든 받아서 숫자열로 정규화해 보낸다
+     * ([AuthPolicy.normalizePhoneNumber][com.moyeota.domain.model.AuthPolicy.normalizePhoneNumber]).
+     *
+     * **성공은 "문자를 보냈다"까지다.** 돌려받는 값이 없고, 코드는 서버만 안다.
+     * 로컬·dev 서버는 실제 문자를 보내지 않는다 — `provider=log` 면 서버 로그에 코드가 찍히고,
+     * dev 프로필은 `moyeota.sms.fixed-code` 가 `000000` 으로 고정돼 있다.
+     *
+     * 서버가 문자 비용을 쓰기 전에 **이미 가입된 번호인지 먼저 확인한다** — 그래서 이 단계에서
+     * 409 가 날 수 있고, 그건 "로그인하세요"라는 뜻이다.
+     *
+     * @throws com.moyeota.domain.model.AuthException
+     *   [com.moyeota.domain.model.AuthError.PHONE_NUMBER_DUPLICATED] (409 `USER104`) /
+     *   [com.moyeota.domain.model.AuthError.SMS_COOLDOWN] (429 `USER202`) /
+     *   [com.moyeota.domain.model.AuthError.SMS_DAILY_LIMIT_EXCEEDED] (429 `USER203`) /
+     *   [com.moyeota.domain.model.AuthError.SMS_UNAVAILABLE] (502 `USER201` / 503 `USER208`) /
+     *   [com.moyeota.domain.model.AuthError.INVALID_REQUEST] (400, 번호 형식 — 발송 쪽은 `@Pattern` 이 먼저 걸린다) /
+     *   [com.moyeota.domain.model.AuthError.NETWORK]
+     */
+    suspend fun sendPhoneVerificationCode(phoneNumber: String)
+
+    /**
+     * 문자 인증번호 확인. POST /api/v1/auth/sms/verify (200, 토큰 불필요).
+     *
+     * @param phoneNumber [sendPhoneVerificationCode] 에 넣은 것과 같은 번호. 표기(하이픈)는 달라도 되지만
+     *   **번호 자체가 다르면 통과하지 않는다** — 서버가 번호 해시로 저장된 코드를 찾는다.
+     * @param code 숫자 6자리([AuthPolicy.isValidVerificationCode][com.moyeota.domain.model.AuthPolicy.isValidVerificationCode]).
+     *
+     * @return 가입에 실어 보낼 `verificationToken`. 이 값을 [NewUser.verificationToken] 에 넣는다
+     *   — 수명 10분, 가입 성공 시 소진된다(상세는 [NewUser.verificationToken] KDoc).
+     *
+     * **성공하면 서버가 인증번호를 지운다.** 같은 코드로 다시 확인하면
+     * [com.moyeota.domain.model.AuthError.SMS_CODE_EXPIRED] 가 오므로, 화면은 받은 토큰을
+     * 가입 제출까지 들고 있어야 한다(재확인으로 다시 얻을 수 없다).
+     *
+     * @throws com.moyeota.domain.model.AuthException
+     *   [com.moyeota.domain.model.AuthError.SMS_CODE_MISMATCH] (400 `USER205`) /
+     *   [com.moyeota.domain.model.AuthError.SMS_CODE_EXPIRED] (400 `USER204`) /
+     *   [com.moyeota.domain.model.AuthError.SMS_TOO_MANY_ATTEMPTS] (429 `USER206`) /
+     *   [com.moyeota.domain.model.AuthError.INVALID_PHONE_NUMBER] (400 `USER105`) /
+     *   [com.moyeota.domain.model.AuthError.SMS_UNAVAILABLE] (503 `USER208`) /
+     *   [com.moyeota.domain.model.AuthError.NETWORK]
+     */
+    suspend fun verifyPhoneCode(phoneNumber: String, code: String): String
+
+    /**
      * 회원가입. POST /api/v1/auth/register (201).
      *
      * **가입은 로그인시키지 않는다** — 서버가 토큰이 아니라 uuid 만 준다.
@@ -30,9 +80,19 @@ interface AuthRepository {
      *
      * [NewUser.nickname] 은 **필수다** — 서버가 닉네임 없이는 가입을 받지 않는다.
      *
+     * [NewUser.verificationToken] 도 **필수다**(2026-10 서버 변경). 비어 있으면 서버 검증에서
+     * 400 `INVALID_REQUEST` 로 튕기므로, 화면은 [sendPhoneVerificationCode] →
+     * [verifyPhoneCode] 를 먼저 끝내고 그 토큰을 실어야 한다.
+     *
+     * **실패가 토큰을 태우지는 않는다** — 서버는 세 테이블 저장이 다 끝난 뒤에야 토큰을 지운다.
+     * 아이디·닉네임 중복(409)으로 되돌아온 사용자는 입력만 고쳐 같은 토큰으로 재시도할 수 있고,
+     * 문자 인증을 다시 받게 할 이유는 [com.moyeota.domain.model.AuthError.PHONE_NOT_VERIFIED] 뿐이다.
+     *
      * @return 생성된 사용자의 UUID 문자열
      * @throws com.moyeota.domain.model.AuthException
+     *   [com.moyeota.domain.model.AuthError.PHONE_NOT_VERIFIED] (400 `USER207`, 토큰 만료·소진·번호 불일치) /
      *   [com.moyeota.domain.model.AuthError.LOGIN_ID_DUPLICATED] (409) /
+     *   [com.moyeota.domain.model.AuthError.PHONE_NUMBER_DUPLICATED] (409 `USER104`) /
      *   [com.moyeota.domain.model.AuthError.NICKNAME_DUPLICATED] (409 `USER108`) /
      *   [com.moyeota.domain.model.AuthError.INVALID_NICKNAME] (400 `USER107`) /
      *   [com.moyeota.domain.model.AuthError.INVALID_REQUEST] (400, serverMessage 가 "필드: 사유")
@@ -89,6 +149,55 @@ interface AuthRepository {
      * 이미 발급된 액세스 토큰은 남은 수명(최대 30분) 동안 서버에서 유효한 채로 남는다.
      */
     suspend fun logout()
+
+    /**
+     * 회원 탈퇴. DELETE /api/v1/users/me (**204 No Content**, 토큰 필수, 본문에 비밀번호).
+     *
+     * Google Play 의 계정 삭제 요건을 채우는 경로다(Backend #206 / PR #216).
+     *
+     * ### 성공은 되돌릴 수 없다
+     * 서버가 한 트랜잭션에서 하는 일(`UserDeletionService.delete`):
+     * - `users.deleted_at` 기록 + 닉네임·프로필 사진·FCM 토큰 비우기
+     *   → 남에게는 **「탈퇴한 사용자」**로 보인다(`User.DELETED_DISPLAY_NAME`)
+     * - 프로필(실명·생년월일·번호·성별·메일)과 로컬 계정(아이디·비밀번호 해시) **삭제**
+     *   → 같은 아이디로 다시 로그인할 수 없다
+     * - 번호 해시를 탈퇴 기록에 남김 → 같은 번호의 재가입을
+     *   [AuthPolicy.REJOIN_RESTRICTED_DAYS][com.moyeota.domain.model.AuthPolicy.REJOIN_RESTRICTED_DAYS]일간 차단
+     *   ([sendPhoneVerificationCode] 가 409 `USER109` 로 거절한다)
+     * - 리프레시 토큰 전량 취소 + 인증 캐시 축출
+     * - 커밋 후 비동기로 **참여 중인 채팅방 전부 나가기**와 **즐겨찾기 삭제**
+     *   (`ChatRoomUserDeletionListener` · `FavoritePlaceUserDeletionListener`)
+     *
+     * **서버가 하지 않는 일**: 지난 합승 기록 삭제. 끝난 방의 멤버로는 남고 이름만 가려진다.
+     * 화면 문구가 "모든 기록이 사라진다"고 약속하면 안 된다.
+     *
+     * ### 토큰이 즉시 죽는다 — 그래서 성공 자리에서 로컬을 비운다
+     * 취소되는 건 리프레시만이 아니다. 서버가 인증 캐시까지 축출해 **남은 수명이 있는 액세스 토큰도
+     * 바로 401** 이 된다(백엔드 통합 테스트 `만료 전 access 토큰도 캐시가 비워져 바로 막힌다`).
+     * 그 401 을 앱이 맞으면 재발급이 실패하고 [AuthError.SESSION_EXPIRED] 가 올라와
+     * "세션이 만료됐어요"가 뜬다 — 스스로 탈퇴한 사용자에게는 오해를 주는 말이다.
+     * 그래서 구현은 204 를 받은 즉시 세션과 로컬 기억을 비우고 [authState] 를
+     * [AuthState.Unauthenticated] 로 바꾼다. 화면은 [logout] 과 **똑같은 전이**를 받는다.
+     *
+     * 비우는 범위는 [logout] 보다 넓다 — "진행 중인 방" 로컬 기억까지 지운다. [logout] 은 그 기억을
+     * 계정에 매인 값으로 보고 남겨 두지만(같은 계정으로 다시 로그인하면 되살아나야 한다),
+     * 탈퇴한 계정은 다시 로그인할 길이 없어 남겨 둘 이유가 없다.
+     *
+     * ### 푸시 토큰은 따로 해제하지 않는다
+     * [logout] 은 세션을 비우기 전에 `DELETE /users/me/fcm-token` 을 부르지만 탈퇴는 부르지 않는다
+     * — 서버 `User.delete()` 가 `fcmToken` 을 직접 비운다. 미리 불러 두면 409·400 으로 탈퇴가
+     * 실패했을 때 **멀쩡한 사용자의 알림만 끊긴 상태**가 남는다.
+     *
+     * @param password 본인 확인용 **현재 비밀번호**. 서버는 `@NotBlank` 만 보고 해시를 비교하므로
+     *   앱이 길이·형식을 미리 검사하지 않는다 — 틀림은 서버가 판정한다.
+     * @throws com.moyeota.domain.model.AuthException
+     *   [AuthError.PASSWORD_MISMATCH] (400 `USER111`, 비밀번호 불일치 — 입력란 오류) /
+     *   [AuthError.ONGOING_PARTY_EXISTS] (409 `USER110`, 진행 중 합승 — 먼저 나가야 한다) /
+     *   [AuthError.SESSION_EXPIRED] (401) /
+     *   [AuthError.NETWORK] (연결 실패 — **세션은 그대로 남는다**) /
+     *   [AuthError.UNKNOWN]
+     */
+    suspend fun deleteAccount(password: String)
 
     /**
      * 로그인한 본인의 정보 조회. GET /api/v1/local/users/info (200, **토큰 필수**).

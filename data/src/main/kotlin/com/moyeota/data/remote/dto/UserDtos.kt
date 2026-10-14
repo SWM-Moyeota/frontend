@@ -39,6 +39,25 @@ data class UpdateProfileRequest(
 )
 
 /**
+ * DELETE /api/v1/users/me 의 요청 본문 — 백엔드 `UserDeletionRequest(@NotBlank String password)`.
+ * 키 이름은 반드시 `password` 다.
+ *
+ * **DELETE 에 본문이 실린다는 게 이 DTO 의 전부다.** Retrofit 의 `@DELETE` 는 `hasBody = false` 라
+ * [com.moyeota.data.remote.UserApi.deleteAccount] 는 `@HTTP(method = "DELETE", hasBody = true)` 를 쓴다
+ * — 그 사정은 그쪽 KDoc 에 적었다.
+ *
+ * 누구를 지우는지는 싣지 않는다. 대상은 `@CurrentUser` 가 Bearer 에서 뽑는다
+ * — 그래서 이 호출은 **반드시 인증 클라이언트**(`UserApi`)로 나가야 한다.
+ *
+ * 빈 문자열은 서버가 400 `INVALID_REQUEST` 로 튕긴다(`@NotBlank`). 화면이 빈 입력으로는 버튼을
+ * 누를 수 없게 막으므로(`canSubmitAccountDeletion`) 실제로 나가지는 않는다.
+ */
+@Serializable
+data class AccountDeletionRequest(
+    val password: String,
+)
+
+/**
  * PUT /api/v1/users/me/fcm-token 의 요청 본문.
  * 백엔드 `user.application.dto.RegisterFcmTokenRequest(@NotBlank String token)` 와 필드 1:1 —
  * 키 이름은 반드시 `token` 이다.

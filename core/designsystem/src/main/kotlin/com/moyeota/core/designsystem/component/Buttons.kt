@@ -46,6 +46,46 @@ fun PrimaryCtaButton(
     }
 }
 
+/**
+ * 되돌릴 수 없는 파괴적 동작의 주 CTA — 지금 쓰는 곳은 37 회원 탈퇴 하나다.
+ *
+ * [PrimaryCtaButton] 과 모양·크기·중복 제출 차단 규칙이 같고 **색만 Danger** 다. 색을 바꾸는 이유는
+ * 장식이 아니라 경고다: 같은 자리의 같은 파란 버튼이면 「저장」·「다음」과 구분되지 않는다.
+ *
+ * 비활성 색은 [PrimaryCtaButton] 과 똑같이 둔다 — 못 누르는 버튼은 위험하지 않으므로
+ * 빨간색을 유지하면 "눌리지 않는데 위험해 보이는" 상태가 된다.
+ *
+ * [SafetyButton] 과 혼동하지 말 것. 그쪽은 긴급 신고(도움을 부르는 행동) 전용이고,
+ * 이쪽은 사용자가 자기 것을 지우는 행동이다.
+ */
+@Composable
+fun DangerCtaButton(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    loading: Boolean = false,
+) {
+    Button(
+        onClick = onClick,
+        modifier = modifier.fillMaxWidth().height(52.dp),
+        enabled = enabled && !loading,
+        shape = CircleShape,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = MoyeotaColor.Danger500,
+            contentColor = MoyeotaColor.TextOnDark,
+            disabledContainerColor = MoyeotaColor.SurfaceSoft,
+            disabledContentColor = MoyeotaColor.TextAsh,
+        ),
+    ) {
+        if (loading) {
+            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+        } else {
+            Text(text = text, style = MoyeotaType.ButtonLg)
+        }
+    }
+}
+
 @Composable
 fun SecondaryButton(
     text: String,

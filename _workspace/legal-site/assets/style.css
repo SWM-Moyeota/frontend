@@ -1,0 +1,1563 @@
+@charset "UTF-8";
+
+/* ════════════════════════════════════════════════════════════════════════
+   모여타 법적 고지 사이트 — 스타일시트 (전면 재작성 · 2026-10-13)
+
+   구현 근거: _design_spec.md (§ 번호를 주석에 그대로 적었다)
+   제약     : 자바스크립트 0 · 외부 요청 0 · 웹폰트 0 · CSS 파일 1개
+   원칙     : 글꼴 1종 · 브랜드 파랑은 지정된 자리에만 · 섹션 구분은 여백
+              .doc-body 안에는 등장 애니메이션을 두지 않는다 (§7-1)
+
+   목차
+     1. 번호 체계 (@counter-style — 보존)
+     2. 토큰 — 글꼴·타이포 스케일·간격·색·치수 (라이트)
+     3. 토큰 — 다크
+     4. 리셋과 기본 타이포그래피
+     5. 레이아웃 골격
+     6. 상단 바 · 건너뛰기 링크
+     7. 홈
+     8. 문서 머리말 · 메타 상자
+     9. 목차
+    10. 조문 본문
+    11. 표
+    12. 문서 꼬리말 · 사이트 푸터
+    13. 쓰지 않는 클래스 (호환용)
+    14. 브레이크포인트
+    15. 모션
+    16. 인쇄
+   ════════════════════════════════════════════════════════════════════════ */
+
+
+/* ── 1. 번호 체계 ──────────────────────────────────────────────────────────
+   한국 법령의 항(①②③) · 호(1. 2.) · 목(가. 나.) 번호를 자바스크립트 없이
+   구현한 자산이다. 명세가 보존을 명시했다(§9 "문제가 아닌 것").
+   @counter-style 미지원 브라우저는 fallback 으로 decimal 을 쓴다.           */
+
+@counter-style moyeota-hang {
+  system: fixed 1;
+  symbols: "\2460" "\2461" "\2462" "\2463" "\2464" "\2465" "\2466" "\2467"
+           "\2468" "\2469" "\246A" "\246B" "\246C" "\246D" "\246E" "\246F"
+           "\2470" "\2471" "\2472" "\2473";
+  suffix: " ";
+  fallback: decimal;
+}
+
+@counter-style moyeota-ho {
+  system: extends decimal;
+  suffix: ". ";
+}
+
+@counter-style moyeota-mok {
+  system: fixed 1;
+  symbols: "\AC00" "\B098" "\B2E4" "\B77C" "\B9C8" "\BC14" "\C0AC" "\C544"
+           "\C790" "\CC28" "\CE74" "\D130" "\D30C" "\D558";
+  suffix: ". ";
+  fallback: lower-alpha;
+}
+
+
+/* ── 2. 토큰 (라이트) ───────────────────────────────────────────────────── */
+
+:root {
+  color-scheme: light dark;
+
+  /* 2-1. 글꼴 — 문서 전체에 단 하나 (§2-1).
+     시스템에 이미 있는 것만 쓰므로 네트워크 요청이 0 이다.
+     세리프·모노스페이스 스택은 두지 않는다: 안드로이드 웹뷰에서 폴백이
+     예측 불가능하고(§9 치명 2), 한글 줄의 x-높이를 끊는다(§9 치명 3). */
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "Pretendard Variable", Pretendard,
+    "Apple SD Gothic Neo", "Noto Sans KR", "Noto Sans CJK KR",
+    "Malgun Gothic", "\B9D1\C740\20\ACE0\B515", system-ui, "Segoe UI", Roboto,
+    sans-serif;
+
+  /* 2-2. 타이포 스케일 (§2-2) — 390px → 1200px 선형 보간 */
+  --fs-display: clamp(2.125rem, 1.5833rem + 2.2222vw, 3.25rem);   /* 34 → 52 */
+  --fs-h1:      clamp(1.875rem, 1.5139rem + 1.4815vw, 2.625rem);  /* 30 → 42 */
+  --fs-h2:      clamp(1.5rem, 1.3194rem + 0.7407vw, 1.875rem);    /* 24 → 30 */
+  --fs-h3:      clamp(1.1875rem, 1.1273rem + 0.2469vw, 1.3125rem);/* 19 → 21 */
+  --fs-h4:      clamp(1.0625rem, 1.0324rem + 0.1235vw, 1.125rem); /* 17 → 18 */
+  --fs-lead:    clamp(1.125rem, 1.0648rem + 0.2469vw, 1.25rem);   /* 18 → 20 */
+  --fs-body:    clamp(1.0625rem, 1.0324rem + 0.1235vw, 1.125rem); /* 17 → 18 */
+  --fs-sm:      0.9375rem;   /* 15 — 보조 문장·캡션 */
+  --fs-cell:    0.9375rem;   /* 15 — 표 셀 */
+  --fs-th:      0.875rem;    /* 14 — 표 머리 */
+  --fs-toc:     0.9375rem;   /* 15 — 목차 항목 */
+  --fs-foot:    0.875rem;    /* 14 — 푸터 */
+  --fs-eyebrow: 0.8125rem;   /* 13 — 라벨 */
+
+  /* 행간은 글자가 커질수록 줄어든다 (§1-1 ①) */
+  --lh-display: 1.15;
+  --lh-h1:      1.22;
+  --lh-h2:      1.34;
+  --lh-h3:      1.45;
+  --lh-h4:      1.5;
+  --lh-lead:    1.65;
+  --lh-body:    1.75;
+
+  /* 자간은 글자가 커질수록 좁아진다 (§1-1 ②). 한글에 양수 자간은 쓰지 않는다 */
+  --ls-display: -0.035em;
+  --ls-h1:      -0.03em;
+  --ls-h2:      -0.025em;
+  --ls-h3:      -0.02em;
+  --ls-h4:      -0.015em;
+  --ls-lead:    -0.015em;
+  --ls-body:    -0.01em;
+  --ls-sm:      -0.005em;
+  --ls-latin:    0.04em;   /* 영문·숫자 라벨 전용 (MOYEOTA, 01) */
+
+  /* 2-3. 간격 — 기본 단위 8px (§3). 4px 는 인라인 전용 */
+  --s-1:  0.25rem;   /*   4 */
+  --s-2:  0.5rem;    /*   8 */
+  --s-3:  0.75rem;   /*  12 */
+  --s-4:  1rem;      /*  16 */
+  --s-5:  1.5rem;    /*  24 */
+  --s-6:  2rem;      /*  32 */
+  --s-7:  2.5rem;    /*  40 */
+  --s-8:  3.5rem;    /*  56 */
+  --s-9:  4.5rem;    /*  72 */
+  --s-10: 6rem;      /*  96 */
+  --s-11: 8rem;      /* 128 */
+
+  /* 2-4. 색 (§4-1). 괄호 안은 흰 바탕 대비 */
+  --bg:              #ffffff;
+  --surface-soft:    #f4f6fa;
+  --accent-soft:     #e6eefe;            /* Primary50 */
+  --hairline:        #edeff3;
+  --hairline-strong: #dee3eb;
+  --ink:             #111111;            /* 18.88 */
+  --text:            rgba(17, 17, 17, 0.72);  /* 7.57 AAA */
+  --mute:            #6b7280;            /* 4.83 AA — 흰 바탕에서만 */
+  --mute-on-soft:    #5f6774;            /* 틴트 면 위의 보조 문장 */
+  --link:            #054bc7;            /* Primary600 · 7.40 AAA */
+  --link-hover:      #033d9f;            /* Primary700 · 9.67 */
+  --accent:          #085af5;            /* Primary500 — 면적 0 에 가까운 강조만 */
+
+  --bar-bg:      rgba(255, 255, 255, 0.78);
+  --stripe:      rgba(8, 90, 245, 0.022);   /* 표 줄무늬 2% (§6-7) */
+  --edge-shadow: rgba(17, 17, 17, 0.12);    /* 표 가로 스크롤 단서 */
+  /* 그라데이션의 투명 끝점. transparent(=검정 0%)를 쓰면 페이드가 회색으로
+     죽는 엔진이 있어 같은 색의 알파 0 으로 적는다. */
+  --bg-0:        rgba(255, 255, 255, 0);
+  --edge-0:      rgba(17, 17, 17, 0);
+
+  /* 2-5. 치수 (§5-2) */
+  --measure:      42rem;     /* 672 — 본문 칼럼 */
+  --measure-wide: 56rem;     /* 896 — 표 확장 폭 */
+  --toc-w:        15rem;     /* 240 — 사이드바 목차 */
+  --toc-gap:      3.5rem;    /*  56 */
+  --rail:         60.5rem;   /* 968 = 240 + 56 + 672 — 페이지 프레임 */
+  --gutter:       1.25rem;   /*  20 → 24 → 32 → 40 (§14) */
+  --bar-h:        3.25rem;   /*  52 — 상단 바 */
+  --anchor-top:   calc(var(--bar-h) + 2rem);
+
+  --radius:    0.75rem;   /* 12 — 메타·안내 상자 */
+  --radius-lg: 1rem;      /* 16 — 카드 */
+  --radius-sm: 0.25rem;   /*  4 — 인라인 code */
+}
+
+
+/* ── 3. 토큰 (다크) ─────────────────────────────────────────────────────── */
+/*  두 레퍼런스에 미디어쿼리 다크가 없어(§0) 색상환만 브랜드에서 가져오고
+    명도는 계산했다. #085AF5 를 다크 바탕에 그대로 쓰면 3.36 — AA 미달이다.  */
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:              #0f1319;
+    --surface-soft:    #191f29;
+    --accent-soft:     #141d31;
+    --hairline:        #232a36;
+    --hairline-strong: #2a3342;
+    --ink:             #f2f4f8;          /* 16.91 */
+    --text:            #c9cfda;          /* 11.90 AAA */
+    --mute:            #98a1b2;          /*  7.16 AAA */
+    --mute-on-soft:    #98a1b2;          /*  6.3 on #191F29 */
+    --link:            #75a3fa;          /*  7.43 AAA */
+    --link-hover:      #9cbdfc;          /*  9.84 */
+    --accent:          #75a3fa;          /*  7.43 */
+
+    --bar-bg:      rgba(15, 19, 25, 0.78);
+    --stripe:      rgba(255, 255, 255, 0.028);
+    --edge-shadow: rgba(255, 255, 255, 0.12);
+    --bg-0:        rgba(15, 19, 25, 0);
+    --edge-0:      rgba(255, 255, 255, 0);
+  }
+}
+
+
+/* ── 4. 리셋과 기본 타이포그래피 ────────────────────────────────────────── */
+
+*,
+*::before,
+*::after { box-sizing: border-box; }
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  background-color: var(--bg);   /* 틴트·그라데이션 없음 (§6-2) */
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  letter-spacing: var(--ls-body);
+  /* 한국어에서 가장 중요한 두 줄: 낱말 중간에서 줄이 끊기지 않게 하고(§1-1 ③),
+     그 때문에 긴 URL 이 넘치는 경우만 구제한다(§2-3). */
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+  text-align: left;              /* justify 금지 (§10 #4) */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-kerning: normal;
+}
+
+h1, h2, h3, h4 {
+  margin: 0;
+  color: var(--ink);
+  font-weight: 700;              /* 합성 볼드가 생기지 않는 굵기 (§9 치명 2) */
+  text-wrap: balance;            /* 미지원 브라우저에서는 아무 일도 안 일어난다 */
+}
+
+h1 { font-size: var(--fs-h1); line-height: var(--lh-h1); letter-spacing: var(--ls-h1); }
+h2 { font-size: var(--fs-h2); line-height: var(--lh-h2); letter-spacing: var(--ls-h2); }
+h3 { font-size: var(--fs-h3); line-height: var(--lh-h3); letter-spacing: var(--ls-h3); }
+h4 { font-size: var(--fs-h4); line-height: var(--lh-h4); letter-spacing: var(--ls-h4); }
+
+p { margin: 0 0 var(--s-4); text-wrap: pretty; }
+p:last-child { margin-bottom: 0; }
+
+a {
+  color: var(--link);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em;
+  transition: color 0.15s ease, text-decoration-thickness 0.15s ease;
+}
+
+a:hover,
+a:focus-visible {
+  color: var(--link-hover);
+  text-decoration-thickness: 2px;
+}
+
+a:visited { color: var(--link-hover); }
+
+/* 포커스 (§6-12) — 비텍스트 대비 3:1 통과 */
+:where(a, button, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+
+strong, b { font-weight: 700; color: var(--ink); }
+
+em, i { font-style: italic; }
+
+abbr[title] { text-decoration: underline dotted; cursor: help; }
+
+hr {
+  height: 0;
+  margin: var(--s-7) 0;
+  border: 0;
+  border-top: 1px solid var(--hairline);
+}
+
+/* 입력해야 하는 문자열(URL 등). 글꼴을 바꾸지 않는다 — §6-9 */
+code, kbd, samp {
+  padding: 0.1em 0.35em;
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+  font: inherit;
+  word-break: break-all;
+}
+
+/* 앵커로 이동했을 때 고정 상단 바에 제목이 가리지 않게 한다 (§7 #7) */
+:where([id]) { scroll-margin-top: var(--anchor-top); }
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+
+/* ── 5. 레이아웃 골격 (§5-2, §5-3) ──────────────────────────────────────── */
+
+main { display: block; }
+
+.wrap {
+  width: 100%;
+  max-width: calc(var(--measure) + 2 * var(--gutter));
+  margin-inline: auto;
+  padding-inline: var(--gutter);
+}
+
+/* 문서 한 편을 감싸는 래퍼. ≥1100px 에서 2칼럼 그리드로 바뀐다(§14). */
+.doc {
+  width: 100%;
+  max-width: calc(var(--measure) + 2 * var(--gutter));
+  margin-inline: auto;
+  padding-inline: var(--gutter);
+}
+
+
+/* ── 6. 상단 바 · 건너뛰기 링크 (§6-1) ──────────────────────────────────── */
+
+.skip-link {
+  position: absolute;
+  left: var(--gutter);
+  top: -4rem;
+  z-index: 60;
+  padding: var(--s-2) var(--s-3);
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: var(--bg);              /* 라이트: 흰 글자 / 다크: 어두운 글자 */
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  text-decoration: none;
+  transition: top 0.15s ease;
+}
+.skip-link:focus { top: var(--s-2); color: var(--bg); }
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  min-height: var(--bar-h);
+  background: var(--bar-bg);
+  /* border 대신 그림자 — 높이 계산이 어긋나지 않는다 (§6-1) */
+  box-shadow: 0 1px 0 var(--hairline);
+  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(20px);
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .topbar { background: var(--bg); }
+}
+
+.topbar__inner {
+  display: flex;
+  align-items: baseline;
+  width: 100%;
+  max-width: calc(var(--measure) + 2 * var(--gutter));
+  margin-inline: auto;
+  padding-inline: var(--gutter);
+  font-size: var(--fs-eyebrow);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.topbar__home {
+  flex: none;
+  color: var(--mute);
+  text-decoration: none;
+}
+.topbar__home:hover,
+.topbar__home:focus-visible { color: var(--ink); }
+.topbar__home::before {
+  content: "\2190";
+  content: "\2190" / "";
+  margin-inline-end: 0.4em;
+}
+
+.topbar__sep {
+  flex: none;
+  margin-inline: var(--s-2);
+  color: var(--hairline-strong);
+}
+
+.topbar__doc {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 홈에서는 워드마크가 링크가 아니라 표제 역할을 한다.
+   영문 7자 — 양수 자간을 허용하는 유일한 경우 (§2-2, §10 #5). */
+.topbar__mark {
+  flex: none;
+  color: var(--mute);
+  letter-spacing: var(--ls-latin);
+  font-weight: 700;
+}
+
+
+/* ── 7. 홈 (§6-2, §6-10) ────────────────────────────────────────────────── */
+
+/* padding 단축 속성을 쓰면 .wrap 의 좌우 거터까지 덮어쓴다. 세로만 건드린다. */
+.home-hero { padding-block: var(--s-10) var(--s-9); }
+
+/* 아이브로우 — 한글 줄이므로 자간은 0. 숫자만 .num 으로 벌린다. */
+.eyebrow {
+  margin: 0 0 var(--s-3);
+  color: var(--mute);
+  font-size: var(--fs-eyebrow);
+  font-weight: 700;
+  line-height: 1.3;
+  letter-spacing: 0;
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--ls-latin);
+}
+
+.home-hero h1 {
+  max-width: 14ch;
+  font-size: var(--fs-display);
+  line-height: var(--lh-display);
+  letter-spacing: var(--ls-display);
+}
+
+.home-hero__lead,
+.doc-head__lead {
+  margin: var(--s-5) 0 0;
+  max-width: 34ch;
+  color: var(--text);
+  font-size: var(--fs-lead);
+  line-height: var(--lh-lead);
+  letter-spacing: var(--ls-lead);
+  text-wrap: pretty;
+}
+
+/* 세 문서 카드 */
+.doc-cards {
+  display: grid;
+  gap: var(--s-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.doc-card {
+  position: relative;
+  /* 명세는 grid + align-content:start 지만, 설명 글 길이가 카드마다 달라
+     「읽기 →」 가 들쭉날쭉해진다. 세로 flex 로 두고 __go 만 아래로 밀면
+     자식 개수에 상관없이 세 카드의 CTA 가 같은 선에 선다. */
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: var(--s-5);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  background: var(--bg);         /* 그림자 없음 (§10 #10) */
+  transition: border-color 0.2s ease, background-color 0.2s ease;
+}
+
+.doc-card__num {
+  margin: 0 0 var(--s-4);
+  /* hover 에서 카드 바탕이 --surface-soft 로 바뀐다. --mute 는 그 위에서
+     4.47 로 AA 미달이므로 틴트 위에서도 통과하는 --mute-on-soft 를 쓴다. */
+  color: var(--mute-on-soft);
+  font-size: var(--fs-eyebrow);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--ls-latin);
+}
+
+.doc-card__title {
+  margin: 0 0 var(--s-3);
+  max-width: 22ch;
+  font-size: var(--fs-h3);
+  line-height: var(--lh-h3);
+  letter-spacing: var(--ls-h3);
+}
+
+.doc-card__title a {
+  color: var(--ink);
+  text-decoration: none;
+}
+
+/* 카드 전체를 클릭 영역으로 — 자바스크립트 없이 (§6-10) */
+.doc-card__title a::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+
+.doc-card__desc {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  letter-spacing: var(--ls-sm);
+}
+
+.doc-card__go {
+  margin: auto 0 0;
+  padding-top: var(--s-5);
+  color: var(--link);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.doc-card__go::after {
+  content: "\2192";
+  content: "\2192" / "";
+  display: inline-block;
+  margin-inline-start: 0.35em;
+  transform: translateX(0);
+  transition: transform 0.2s ease;
+}
+
+.doc-card:hover {
+  border-color: var(--accent);
+  background: var(--surface-soft);
+}
+.doc-card:hover .doc-card__go::after { transform: translateX(4px); }
+.doc-card:has(a:focus-visible) { border-color: var(--accent); }
+
+/* 홈 섹션 — 구분선·배경 밴드 없이 여백으로만 나눈다 (§1-3, §10 #9) */
+.home-section { margin-top: var(--s-10); }
+
+.home-section h2 {
+  margin: 0 0 var(--s-4);
+  max-width: 22ch;
+}
+
+.home-section p {
+  color: var(--text);
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+}
+
+
+/* ── 8. 문서 머리말 · 메타 상자 (§6-3, §6-4) ────────────────────────────── */
+
+.doc-head {
+  padding-block: var(--s-9);
+  border-bottom: 1px solid var(--hairline-strong);
+}
+
+.doc-head h1 {
+  max-width: 18ch;
+  font-size: var(--fs-h1);
+  line-height: var(--lh-h1);
+  letter-spacing: var(--ls-h1);
+}
+
+/* 시행일·운영주체 — 테두리 없이 배경만으로 구분한다 */
+.doc-meta {
+  display: grid;
+  grid-template-columns: 1fr;
+  row-gap: var(--s-3);
+  margin: var(--s-7) 0 0;
+  padding: var(--s-4);
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+
+.doc-meta dt {
+  margin: var(--s-3) 0 0;
+  color: var(--mute-on-soft);     /* 틴트 위이므로 --mute 가 아니다 (§4-1 ⚠) */
+  font-size: var(--fs-th);
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: 0;
+}
+
+.doc-meta dt:first-of-type { margin-top: 0; }
+
+.doc-meta dd {
+  margin: var(--s-1) 0 0;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  letter-spacing: var(--ls-sm);
+  font-variant-numeric: tabular-nums;
+}
+.doc-meta dd a { font-variant-numeric: normal; }
+
+
+/* ── 9. 목차 (§6-5) ─────────────────────────────────────────────────────── */
+/*  모바일에서는 접힌다. 처리방침 16개 조·약관 21개 조를 펼쳐 두면 본문 첫
+    글자 전에 화면 두 개를 넘겨야 한다(§9 #5). <details> 는 자바스크립트가
+    필요 없다. 아래 규칙은 <details class="toc"> 와 <nav class="toc"> 양쪽
+    마크업에서 모두 성립한다.                                                */
+
+/*  스크린리더용 탐색 영역 래퍼. 박스를 만들지 않아야 .toc 가 .doc 그리드의
+    직계 아이템으로 남고, sticky 가 페이지 전체를 따라온다. 이 규칙이 없으면
+    <nav> 박스가 containing block 이 되어 sticky 이동 거리가 자기 높이(40px)에
+    묶인다 — HTML 담당 실측. */
+.toc-landmark { display: contents; }
+
+.toc {
+  margin: var(--s-7) 0 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+}
+
+.toc__title {
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+}
+
+/* <nav class="toc"> 처럼 접히지 않는 마크업일 때의 제목 간격 */
+.toc > .toc__title { margin-bottom: var(--s-3); }
+
+/* 접히는 마크업 — summary 가 상자 모양을 갖는다 */
+.toc > summary.toc__title {
+  display: block;                /* 기본 마커 제거 */
+  position: relative;
+  margin: 0;
+  padding: var(--s-4) var(--s-5);
+  padding-inline-end: calc(var(--s-5) + 1.25rem);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+  cursor: pointer;
+}
+.toc > summary.toc__title::-webkit-details-marker { display: none; }
+.toc > summary.toc__title::marker { content: ""; }
+
+.toc > summary.toc__title::after {
+  content: "\2304";              /* ⌄ — 구형 엔진용 */
+  content: "\2304" / "";         /* 장식이므로 접근성 이름에서 뺀다 */
+  position: absolute;
+  inset-inline-end: var(--s-5);
+  top: calc(var(--s-4) - 0.1em);
+  color: var(--mute-on-soft);
+  transform: rotate(0deg);
+  transform-origin: 50% 45%;
+  transition: transform 0.2s ease;
+}
+.toc[open] > summary.toc__title::after { transform: rotate(180deg); }
+
+.toc ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-toc);
+  font-weight: 500;
+  line-height: 1.45;
+  letter-spacing: var(--ls-toc);
+}
+
+/*  목차 리스트는 열어 둔 채로 높이만 묶는다 (§9 #5).
+    실측 높이: privacy 669px · terms 896px · account-deletion 546px —
+    그대로 두면 본문 첫 글자 전에 화면 두 개를 넘겨야 한다.
+    <details> 를 접는 방법은 쓰지 않는다: 접힌 내용은 인쇄물에서 통째로
+    빠지고(44,000 → 17,711 bytes 실측) Ctrl+F 로도 안 찾힌다 — 고지 의무
+    문서에서는 사고다. 인쇄에서는 이 캡을 반드시 해제한다(§16). */
+.toc > ol {
+  max-height: 16rem;             /* 약 6.5개 항목이 보이고, 더 있음이 드러난다 */
+  overflow-y: auto;
+  padding: var(--s-3) var(--s-5);
+  /* 아래가 더 있다는 단서 — 표의 스크롤 단서와 같은 기법(§6-7), 세로판 */
+  background-color: var(--bg);
+  background-image:
+    linear-gradient(180deg, var(--bg) 40%, var(--bg-0)),
+    linear-gradient(0deg, var(--bg) 40%, var(--bg-0)),
+    linear-gradient(180deg, var(--edge-shadow), var(--edge-0)),
+    linear-gradient(0deg, var(--edge-shadow), var(--edge-0));
+  background-position: 0 0, 0 100%, 0 0, 0 100%;
+  background-repeat: no-repeat;
+  background-size: 100% 24px, 100% 24px, 100% 10px, 100% 10px;
+  background-attachment: local, local, scroll, scroll;
+}
+
+.toc li {
+  margin: 0;
+  border: 0;                     /* 항목 사이 선·대시 장식 없음 (§9 #11) */
+}
+
+.toc a {
+  display: block;
+  padding-block: var(--s-2);
+  color: var(--mute);
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+.toc a:hover,
+.toc a:focus-visible { color: var(--link); }
+
+/* 중첩 목차(항 단위) */
+.toc ol ol {
+  margin: 0 0 var(--s-2);
+  padding-inline-start: var(--s-5);
+  font-size: var(--fs-th);
+}
+.toc ol ol a { padding-block: var(--s-1); }
+
+
+/* ── 10. 조문 본문 (§6-6) ───────────────────────────────────────────────── */
+
+.doc-body { padding: var(--s-7) 0 0; }
+
+/* 조(條) — 경계를 세 신호로 만든다: 헤어라인(구조) + 24×3px 마커(브랜드)
+   + 56~72px 여백(리듬). 조가 21개면 여백만으로는 경계가 안 읽힌다(§6-6). */
+.doc-body h2 {
+  margin: var(--s-8) 0 var(--s-5);
+  padding-top: var(--s-6);
+  border-top: 1px solid var(--hairline);
+  font-size: var(--fs-h2);
+  line-height: var(--lh-h2);
+  letter-spacing: var(--ls-h2);
+  color: var(--ink);
+  scroll-margin-top: var(--anchor-top);
+}
+
+.doc-body h2::before {
+  content: "";
+  display: block;
+  width: 1.5rem;
+  height: 3px;
+  margin-bottom: var(--s-4);
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.doc-body > h2:first-child,
+.doc-body > section:first-child > h2:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.doc-body h3 {
+  margin: var(--s-6) 0 var(--s-3);
+  font-size: var(--fs-h3);
+  line-height: var(--lh-h3);
+  letter-spacing: var(--ls-h3);
+  color: var(--ink);
+  scroll-margin-top: var(--anchor-top);
+}
+
+/* 용어 레이블 — 크기 대신 굵기와 색으로 가른다 (§2-2) */
+.doc-body h4,
+.doc-body dt {
+  margin: var(--s-5) 0 var(--s-1);
+  font-size: var(--fs-h4);
+  font-weight: 700;
+  line-height: var(--lh-h4);
+  letter-spacing: var(--ls-h4);
+  color: var(--ink);
+  scroll-margin-top: var(--anchor-top);
+}
+
+.doc-body p {
+  margin: 0 0 var(--s-4);
+  color: var(--text);
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+}
+
+/* 항 ① ② ③ → 호 1. 2. 3. → 목 가. 나. 다. */
+.doc-body ol {
+  margin: 0 0 var(--s-4);
+  padding-inline-start: 1.75em;
+  list-style: moyeota-hang;
+}
+.doc-body ol ol {
+  margin: var(--s-2) 0 var(--s-3);
+  padding-inline-start: 1.5em;
+  list-style: moyeota-ho;
+}
+.doc-body ol ol ol { list-style: moyeota-mok; }
+
+.doc-body ul {
+  margin: 0 0 var(--s-4);
+  padding-inline-start: 1.4em;
+  list-style: none;
+}
+.doc-body ul > li { position: relative; }
+.doc-body ul > li::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: -1em;
+  top: 0.78em;
+  width: 0.3125rem;
+  height: 0.3125rem;
+  border-radius: 50%;
+  background: var(--hairline-strong);
+}
+
+.doc-body li {
+  margin-bottom: var(--s-2);
+  color: var(--text);
+}
+.doc-body li:last-child { margin-bottom: 0; }
+.doc-body li > p:last-child { margin-bottom: 0; }
+
+/* 번호는 내용이다. 파랑이 아니라 잉크색으로 또렷하게 (§4-3) */
+.doc-body li::marker {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.doc-body dl { margin: 0 0 var(--s-4); }
+.doc-body dt:first-child { margin-top: 0; }
+.doc-body dd {
+  margin: 0 0 var(--s-4);
+  padding-inline-start: 0;       /* 조문 번호 들여쓰기와 충돌하지 않게 */
+  color: var(--text);
+}
+.doc-body dd:last-child { margin-bottom: 0; }
+
+/* 안내 상자 (§6-8) — 왼쪽 3px 선만. 테두리를 겹치지 않는다 */
+.notice {
+  margin: var(--s-6) 0;
+  padding: var(--s-4) var(--s-5);
+  border: 0;
+  border-inline-start: 3px solid var(--accent);
+  border-start-start-radius: 0;
+  border-end-start-radius: 0;
+  border-start-end-radius: var(--radius);
+  border-end-end-radius: var(--radius);
+  background: var(--surface-soft);
+  color: var(--text);
+  font-size: var(--fs-body);
+  line-height: 1.7;
+}
+.notice > :last-child { margin-bottom: 0; }
+.notice .mute,
+.notice small { color: var(--mute-on-soft); }
+
+.doc-body blockquote {
+  margin: var(--s-6) 0;
+  padding: 0 0 0 var(--s-4);
+  border-inline-start: 2px solid var(--hairline-strong);
+  color: var(--mute);
+}
+
+/* 연락처 블록 */
+.doc-body address,
+.doc-foot address {
+  margin: var(--s-5) 0;
+  padding: var(--s-5);
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+  color: var(--text);
+  font-style: normal;
+  font-size: var(--fs-sm);
+  line-height: 1.7;
+  letter-spacing: var(--ls-sm);
+}
+
+/* 본문 안에서 목차로 돌아가는 보조 링크 */
+.back-to-toc {
+  display: inline-block;
+  margin: var(--s-1) 0 0;
+  color: var(--mute);
+  font-size: var(--fs-eyebrow);
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+.back-to-toc:hover,
+.back-to-toc:focus-visible { color: var(--link); text-decoration: underline; }
+.back-to-toc::before {
+  content: "\2191";
+  content: "\2191" / "";
+  margin-inline-end: 0.35em;
+}
+
+
+/* ── 11. 표 (§6-7) ──────────────────────────────────────────────────────── */
+/*  마크업 두 가지를 모두 지원한다. 권장 구조는
+      <figure class="doc-table"><figcaption>…</figcaption>
+        <div class="doc-table__scroll"><table>…</table></div></figure>
+    이고, 래퍼가 하나뿐인 <div class="doc-table"><table><caption> 구조에서도
+    같은 결과가 나온다. 스크롤이 필요 없는 컨테이너에서는 흰 페이드가 양쪽
+    그림자를 덮으므로 단서가 보이지 않는다 — 덧칠해도 부작용이 없다.          */
+
+.doc-table {
+  margin: var(--s-6) 0 var(--s-7);   /* figure 의 기본 좌우 마진도 지운다 */
+  border: 0;
+  border-radius: 0;
+}
+
+.doc-table,
+.doc-table__scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  /* 가로로 더 읽을 것이 남았다는 단서. 자바스크립트 0 (§6-7).
+     네 겹: 흰 페이드 2장(내용과 함께 스크롤)이 그림자 2장(컨테이너에 고정)을
+     덮는다. 끝까지 스크롤하면 그쪽 그림자가 가려져 사라진다.
+     명세의 radial-gradient 대신 linear 를 쓴다 — 표 높이가 1700px 까지 가는데
+     radial 은 세로 중앙에서만 진하고 위아래로 사라져 단서 구실을 못 한다
+     (실측: 가장자리 알파 0.12 → 0.016). 명세가 근거로 든 토스의 그림자도
+     linear-gradient 다. */
+  background-color: var(--bg);
+  background-image:
+    linear-gradient(90deg, var(--bg) 30%, var(--bg-0)),
+    linear-gradient(90deg, var(--bg-0), var(--bg) 70%),
+    linear-gradient(90deg, var(--edge-shadow), var(--edge-0)),
+    linear-gradient(90deg, var(--edge-0), var(--edge-shadow));
+  background-position: 0 0, 100% 0, 0 0, 100% 0;
+  background-repeat: no-repeat;
+  background-size: 40px 100%, 40px 100%, 14px 100%, 14px 100%;
+  background-attachment: local, local, scroll, scroll;
+}
+
+.doc-body table {
+  width: 100%;
+  /* 448px 였던 값을 384px 로 줄였다(§6-7). 다만 390px 기기의 표 컨테이너는
+     350px 뿐이어서 384px 고정 하한은 모든 폰에서 가로 스크롤을 만든다.
+     그래서 하한을 「384px 또는 컨테이너 폭 중 작은 값」으로 둔다 — 넓은
+     화면에서는 384px 하한이 그대로 살아 있고, 폰에서는 칼럼의 자연
+     최소폭(min-content)이 들어가는 표는 스크롤 없이 읽힌다.
+     min() 미지원 엔진은 위의 24rem 선언을 쓴다. */
+  min-width: 24rem;
+  min-width: min(24rem, 100%);
+  border-collapse: separate;
+  border-spacing: 0;
+  border-top: 1px solid var(--hairline-strong);
+  border-bottom: 1px solid var(--hairline-strong);
+  table-layout: auto;
+  font-size: var(--fs-cell);
+  line-height: 1.55;
+  letter-spacing: var(--ls-sm);
+}
+
+/* 표 제목 — 표 위, 좌측 정렬. caption(표 안)·figcaption(표 밖) 둘 다 */
+.doc-body caption,
+.doc-table > figcaption {
+  caption-side: top;
+  margin: 0;
+  padding: 0 0 var(--s-3);
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font-size: var(--fs-h4);
+  font-weight: 700;
+  line-height: var(--lh-h4);
+  letter-spacing: var(--ls-h4);
+  text-align: start;
+}
+
+.doc-body th,
+.doc-body td {
+  padding: 0.75rem 0.875rem;
+  border-bottom: 1px solid var(--hairline);
+  text-align: start;
+  vertical-align: top;
+  /* 셀 안에서는 어절이 쪼개지지 않게 — body 의 overflow-wrap:anywhere 를
+     되돌린다. 이 값이 칼럼의 min-content 폭을 결정하므로 표 폭이 글자
+     단위로 찌그러지는 것을 막는다. */
+  overflow-wrap: break-word;
+}
+
+.doc-body thead th {
+  background: var(--surface-soft);
+  color: var(--ink);
+  font-size: var(--fs-th);
+  font-weight: 600;              /* 700 이 아니다 (§6-7) */
+  line-height: 1.4;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
+.doc-body tbody th {
+  color: var(--ink);
+  font-size: var(--fs-cell);
+  font-weight: 600;
+}
+
+.doc-body td { color: var(--text); }
+
+/* 항목명 칼럼은 내용에 맞춰 줄이되(width:1%), 「문자 / 인증번호」처럼 짧은
+   항목명이 억지로 접히지는 않게 한다 (§6-7). nowrap 은 쓰지 않는다 —
+   「자주 가는 곳(장소 이름·도로명 주소·좌표)」 같은 긴 항목명이 한 칼럼을
+   521px 까지 늘려 나머지 두 칼럼을 질식시킨다(실측).
+   하한은 가로 여유가 있는 600px 이상에서만 건다: 6.5em(약 6자) + 좌우 패딩. */
+.doc-body tbody th:first-child,
+.doc-body tbody td:first-child { width: 1%; }
+
+@media (min-width: 600px) {
+  .doc-body tbody th:first-child,
+  .doc-body tbody td:first-child { min-width: calc(6.5em + 1.75rem); }
+}
+
+/* 줄무늬는 보이는 듯 마는 듯이 정답 — 2% (§6-7) */
+.doc-body tbody tr:nth-child(odd) > th,
+.doc-body tbody tr:nth-child(odd) > td { background: var(--stripe); }
+
+.doc-body tbody tr > th,
+.doc-body tbody tr > td { transition: background-color 0.2s ease; }
+.doc-body tbody tr:hover > th,
+.doc-body tbody tr:hover > td { background: var(--surface-soft); }
+
+.doc-body tbody tr:last-child > th,
+.doc-body tbody tr:last-child > td { border-bottom: 0; }
+
+
+/* ── 12. 문서 꼬리말 · 사이트 푸터 (§6-11) ──────────────────────────────── */
+
+.doc-foot {
+  margin-top: var(--s-9);
+  padding-top: var(--s-6);
+  border-top: 1px solid var(--hairline);
+}
+
+.doc-foot h2 {
+  margin: 0 0 var(--s-3);
+  font-size: var(--fs-h3);
+  line-height: var(--lh-h3);
+  letter-spacing: var(--ls-h3);
+}
+
+.doc-foot p {
+  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: 1.7;
+  letter-spacing: var(--ls-sm);
+}
+
+.site-footer {
+  margin-top: var(--s-10);
+  padding: var(--s-8) 0 var(--s-9);
+  border-top: 1px solid var(--hairline);
+  color: var(--mute);
+  font-size: var(--fs-foot);
+  line-height: 1.7;
+  letter-spacing: var(--ls-sm);
+}
+
+.site-footer p { margin: 0 0 var(--s-2); }
+.site-footer p:last-child { margin-bottom: 0; }
+
+.footer-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3) var(--s-5);
+  margin: 0 0 var(--s-5);
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.footer-nav a {
+  color: var(--mute);
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+.footer-nav a:hover,
+.footer-nav a:focus-visible { color: var(--ink); text-decoration: underline; }
+
+.site-footer__fine {
+  color: var(--mute);
+  font-size: var(--fs-eyebrow);
+  letter-spacing: 0;             /* 등폭 글꼴·양수 자간 모두 삭제 (§6-11) */
+}
+
+
+/* ── 13. 쓰지 않는 클래스 (호환용) ──────────────────────────────────────── */
+/*  본문이 모두 채워져 .todo · .placeholder 는 더 이상 쓰이지 않는다.
+    혹시 남아 있어도 "미정"으로 읽히게만 남겨 둔다. 노란 틴트 토큰은 삭제했다. */
+
+.todo {
+  padding: 0.05em 0.4em;
+  border: 1px dashed var(--hairline-strong);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font-size: 0.9em;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.todo::before {
+  content: "\26A0\FE0E";
+  content: "\26A0\FE0E" / "";
+  margin-inline-end: 0.3em;
+  font-weight: 400;
+}
+
+.placeholder {
+  margin: 0;
+  padding: var(--s-7) var(--s-4);
+  border: 1px dashed var(--hairline-strong);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+  color: var(--mute-on-soft);
+  font-size: var(--fs-sm);
+  text-align: center;
+}
+
+
+/* ── 14. 브레이크포인트 (§5-1) ──────────────────────────────────────────────
+   mobile-first. 구조가 바뀌는 지점은 두 곳뿐이다:
+   1100px 에서 목차가 사이드바로 승격되고, 1280px 에서 표가 본문 폭 밖으로
+   확장된다.                                                                 */
+
+/* ── sm 600px — 거터 24px · 메타 2칼럼 · 카드 2열 ── */
+@media (min-width: 600px) {
+  :root { --gutter: 1.5rem; }
+
+  .doc-cards { grid-template-columns: repeat(2, 1fr); }
+
+  .doc-meta {
+    grid-template-columns: max-content minmax(0, 1fr);
+    column-gap: var(--s-5);
+    row-gap: var(--s-3);
+    padding: var(--s-5);
+  }
+  .doc-meta dt {
+    margin: 0;
+    padding-top: 0.12em;
+    white-space: nowrap;
+  }
+  .doc-meta dd { margin: 0; }
+
+  .notice { padding: var(--s-5); }
+}
+
+/* ── md 900px — 거터 32px · 카드 3열 · 조 간격 72px ── */
+@media (min-width: 900px) {
+  :root { --gutter: 2rem; }
+
+  .home-hero { padding-block: var(--s-11) var(--s-10); }
+  .doc-head  { padding-block: var(--s-10) var(--s-9); }
+  .home-section { margin-top: var(--s-11); }
+  .site-footer  { margin-top: var(--s-11); }
+
+  .doc-cards { grid-template-columns: repeat(3, 1fr); }
+
+  .doc-body h2 { margin-top: var(--s-9); }
+
+  /* 홈은 카드 3장이 들어가야 하므로 968px 레일로 넓어진다.
+     상단 바·푸터도 같은 레일에 맞춘다. :has() 미지원 브라우저에서는
+     본문 폭(672px)에 머무를 뿐 — 깨지지 않는다. */
+  .home-hero,
+  .home-main { max-width: calc(var(--rail) + 2 * var(--gutter)); }
+  .topbar:has(.topbar__mark) .topbar__inner,
+  body:has(.home-hero) .site-footer > .wrap {
+    max-width: calc(var(--rail) + 2 * var(--gutter));
+  }
+}
+
+/* ── lg 1100px — 목차를 좌측 고정 사이드바로 승격 (§5-3, §6-5) ── */
+@media (min-width: 1100px) {
+  .doc {
+    display: grid;
+    grid-template-columns: var(--toc-w) minmax(0, var(--measure));
+    column-gap: var(--toc-gap);
+    justify-content: center;
+    align-items: start;
+    max-width: none;
+    padding-inline: var(--gutter);
+  }
+
+  .doc-head { grid-column: 1 / -1; }
+  .doc-head > * { max-width: var(--measure); }
+  .doc-body { grid-column: 2; }
+  .doc > .doc-foot { grid-column: 2; }
+
+  .toc {
+    grid-column: 1;
+    position: sticky;
+    top: calc(var(--bar-h) + 2rem);
+    margin-top: var(--s-7);
+    /* 21개 조 목차가 화면을 넘기지 않게 (§9 #4) */
+    max-height: calc(100vh - var(--bar-h) - 4rem);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-inline-start: var(--s-4);
+    border-inline-start: 1px solid var(--hairline);
+  }
+
+  /* 사이드바에서는 리스트 자체가 아니라 .toc 가 스크롤한다 */
+  .toc > ol {
+    max-height: none;
+    overflow: visible;
+    padding: 0;
+    background: none;
+  }
+  .toc a { padding-block: 0.375rem; }
+
+  .toc > .toc__title {
+    margin-bottom: var(--s-3);
+    color: var(--mute);
+    font-size: var(--fs-eyebrow);
+  }
+
+  /* 사이드바에서는 접기 장치를 걷어낸다. 마크업이 <details open> 이므로
+     평탄화는 조건 없이 적용하고, 혹시 사용자가 접었을 때를 대비해
+     ::details-content 를 지원하는 엔진에서는 펼친 상태로 고정한다. */
+  .toc > summary.toc__title {
+    margin-bottom: var(--s-3);
+    padding: 0;
+    border-radius: 0;
+    background: none;
+    color: var(--mute);
+    font-size: var(--fs-eyebrow);
+    cursor: default;
+  }
+  .toc > summary.toc__title::after { display: none; }
+
+  @supports selector(::details-content) {
+    .toc::details-content {
+      content-visibility: visible;
+      block-size: auto;
+    }
+    .toc > ol { display: block; }
+  }
+
+  /* 상단 바와 푸터는 페이지 프레임(968px)에 맞춘다 */
+  .topbar__inner,
+  .site-footer > .wrap { max-width: calc(var(--rail) + 2 * var(--gutter)); }
+}
+
+/* ── xl 1280px — 거터 40px · 표가 본문 폭 밖으로 확장 (§5-4) ── */
+@media (min-width: 1280px) {
+  :root {
+    --gutter: 2.5rem;
+    /* 240 + 56 + 896 = 1192. 프레임이 표 확장분까지 품는다 */
+    --rail: 74.5rem;
+  }
+
+  /* 비어 있는 세 번째 칼럼이 표의 확장분(224px = 168 + 56 거터)을 흡수한다.
+     명세의 margin-inline: -112px(양쪽)는 목차와 56px 간격을 침범하므로
+     오른쪽으로만 내밀었다 — 명세 §5-4 의 총폭 계산(1272px)과 일치한다. */
+  .doc {
+    grid-template-columns:
+      var(--toc-w)
+      minmax(0, var(--measure))
+      calc(var(--measure-wide) - var(--measure) - var(--toc-gap));
+  }
+
+  .doc-table {
+    width: var(--measure-wide);
+    max-width: calc(100% + (var(--measure-wide) - var(--measure)));
+    margin-inline-end: calc(var(--measure) - var(--measure-wide));
+  }
+}
+
+
+/* ── 15. 모션 (§7) ─────────────────────────────────────────────────────────
+   지속시간은 .15s(색) · .2s(형태) · .5s(등장) 세 값만 쓴다.
+   .doc-body 안에는 등장 애니메이션을 두지 않는다 — opacity:0 으로 시작한
+   조문이 어떤 이유로든 안 뜨면 고지 의무 사고다 (§7-1, §10 #1).            */
+
+/* 목차를 눌러 뛰어온 조를 한 번만 물들여 "어디로 왔는지"를 알려준다 (§7 #6).
+   끝 상태가 투명이고 fill-mode 를 쓰지 않으므로 실행되지 않아도 안전하다. */
+@keyframes hl {
+  from {
+    background: var(--accent-soft);
+    box-shadow: -12px 0 0 var(--accent-soft), 12px 0 0 var(--accent-soft);
+  }
+  to {
+    background: transparent;
+    box-shadow: none;
+  }
+}
+
+.doc-body h2:target,
+.doc-body h3:target,
+.doc-body h4:target,
+.doc-body section:target > h2,
+.doc-body section:target > h3 { animation: hl 1.8s ease-out 1; }
+
+/* 홈 첫 진입 — 히어로와 카드 3장만 (§7 #8) */
+@keyframes rise {
+  from { opacity: 0; transform: translateY(1rem); }
+  to   { opacity: 1; transform: none; }
+}
+
+.home-hero > *,
+.doc-card { animation: rise 0.5s cubic-bezier(0.2, 0.6, 0.2, 1) both; }
+
+.home-hero > *:nth-child(2) { animation-delay: 0.06s; }
+.home-hero > *:nth-child(3) { animation-delay: 0.12s; }
+.doc-card:nth-child(1) { animation-delay: 0.06s; }
+.doc-card:nth-child(2) { animation-delay: 0.12s; }
+.doc-card:nth-child(3) { animation-delay: 0.18s; }
+
+/* 목차를 눌렀을 때 해당 항목을 굵게 (§7 #10) — :has() 미지원이면 아무 일도
+   일어나지 않는다. 없어도 되는 기능으로만 넣는다. */
+body:has(#article-1:target)  .toc a[href="#article-1"],
+body:has(#article-2:target)  .toc a[href="#article-2"],
+body:has(#article-3:target)  .toc a[href="#article-3"],
+body:has(#article-4:target)  .toc a[href="#article-4"],
+body:has(#article-5:target)  .toc a[href="#article-5"],
+body:has(#article-6:target)  .toc a[href="#article-6"],
+body:has(#article-7:target)  .toc a[href="#article-7"],
+body:has(#article-8:target)  .toc a[href="#article-8"],
+body:has(#article-9:target)  .toc a[href="#article-9"],
+body:has(#article-10:target) .toc a[href="#article-10"],
+body:has(#article-11:target) .toc a[href="#article-11"],
+body:has(#article-12:target) .toc a[href="#article-12"],
+body:has(#article-13:target) .toc a[href="#article-13"],
+body:has(#article-14:target) .toc a[href="#article-14"],
+body:has(#article-15:target) .toc a[href="#article-15"],
+body:has(#article-16:target) .toc a[href="#article-16"],
+body:has(#article-17:target) .toc a[href="#article-17"],
+body:has(#article-18:target) .toc a[href="#article-18"],
+body:has(#article-19:target) .toc a[href="#article-19"],
+body:has(#article-20:target) .toc a[href="#article-20"],
+body:has(#article-21:target) .toc a[href="#article-21"],
+body:has(#appendix:target)   .toc a[href="#appendix"],
+body:has(#summary:target)    .toc a[href="#summary"],
+body:has(#before-you-delete:target) .toc a[href="#before-you-delete"],
+body:has(#delete-in-app:target)     .toc a[href="#delete-in-app"],
+body:has(#delete-by-email:target)   .toc a[href="#delete-by-email"],
+body:has(#processing-time:target)   .toc a[href="#processing-time"],
+body:has(#deleted-data:target)      .toc a[href="#deleted-data"],
+body:has(#retained-data:target)     .toc a[href="#retained-data"],
+body:has(#partial-deletion:target)  .toc a[href="#partial-deletion"],
+body:has(#irreversible:target)      .toc a[href="#irreversible"],
+body:has(#rejoin-restriction:target) .toc a[href="#rejoin-restriction"],
+body:has(#ongoing-party:target)      .toc a[href="#ongoing-party"],
+body:has(#uninstall-is-not-deletion:target) .toc a[href="#uninstall-is-not-deletion"],
+body:has(#contact:target) .toc a[href="#contact"] {
+  color: var(--link);
+  font-weight: 700;
+}
+
+/* 축소 모션 (§7-2) */
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+
+/* ── 16. 인쇄 (§8) ─────────────────────────────────────────────────────────
+   법적 문서는 출력·보관된다. 두 레퍼런스에는 인쇄 스타일이 아예 없다 —
+   이건 우리가 더 잘하는 영역이다. 흰 종이에 검은 글씨, 화면 전용 장치(고정
+   바·목차·호버·배경)는 걷어내고, 링크 주소는 글로 남긴다.                   */
+
+@page {
+  size: A4;
+  margin: 18mm 16mm;
+}
+
+@media print {
+  :root {
+    color-scheme: light;
+
+    /* 글자는 전부 검정, 면은 전부 투명 */
+    --bg:              #ffffff;
+    --bg-0:            rgba(255, 255, 255, 0);
+    --surface-soft:    transparent;
+    --accent-soft:     transparent;
+    --hairline:        #9a9a9a;
+    --hairline-strong: #5a5a5a;
+    --ink:             #000000;
+    --text:            #000000;
+    --mute:            #000000;
+    --mute-on-soft:    #000000;
+    --link:            #000000;
+    --link-hover:      #000000;
+    --accent:          #000000;
+    --bar-bg:          transparent;
+    --stripe:          transparent;
+    --edge-shadow:     transparent;
+    --edge-0:          transparent;
+
+    /* 종이 위의 타이포 — 본문 11pt 는 법적 문서 가독 하한이다 */
+    --fs-display: 20pt;
+    --fs-h1:      20pt;
+    --fs-h2:      13pt;
+    --fs-h3:      11.5pt;
+    --fs-h4:      11pt;
+    --fs-lead:    11pt;
+    --fs-body:    11pt;
+    --fs-sm:      10pt;
+    --fs-cell:    9.5pt;
+    --fs-th:      9.5pt;
+    --fs-toc:     10pt;
+    --fs-foot:    9pt;
+    --fs-eyebrow: 9pt;
+    --lh-body:    1.55;
+
+    /* 종이에서는 리듬을 압축한다 */
+    --s-5:  10pt;
+    --s-6:  12pt;
+    --s-7:  12pt;
+    --s-8:  14pt;
+    --s-9:  16pt;
+    --s-10: 14pt;
+    --s-11: 14pt;
+
+    --bar-h:      0px;
+    --anchor-top: 0px;
+  }
+
+  html { scroll-behavior: auto; }
+
+  body {
+    background: #fff;
+    font-size: var(--fs-body);
+    line-height: var(--lh-body);
+  }
+
+  /* 목차의 높이 제한은 종이에서 반드시 풀린다. 잘린 목차가 인쇄되는 일은
+     없어야 한다 — .toc 를 다시 보이게 바꾸더라도 안전하도록 먼저 해제한다. */
+  .toc,
+  .toc > ol {
+    max-height: none !important;
+    overflow: visible !important;
+    background: none !important;
+  }
+
+  /* 화면 전용 장치 (§8). 목차를 종이에 싣고 싶으면 아래 목록에서 .toc 한 줄만
+     빼면 된다 — 위에서 캡을 이미 풀어 두었으므로 그대로 온전히 인쇄된다. */
+  .skip-link,
+  .topbar,
+  .toc-landmark,
+  .toc,
+  .back-to-toc,
+  .footer-nav,
+  .doc-card__go { display: none !important; }
+
+  /* 등장 애니메이션이 종이에서 사라지는 사고를 막는다 (§7-1 ②) */
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .wrap,
+  .doc {
+    max-width: none;
+    padding-inline: 0;
+  }
+
+  /* 인쇄에서는 사이드바 그리드를 쓰지 않는다 */
+  .doc { display: block; }
+  /* 머리말 아래 선과 메타 상자의 아래 선이 나란히 두 줄로 겹친다.
+     종이에서는 메타 상자의 선 하나만 남긴다. */
+  .doc-head { padding-top: 0; border-bottom: 0; }
+  .doc-head > * { max-width: none; }
+  .doc-body { padding-top: 12pt; }
+
+  .doc-meta {
+    padding: 8pt 0;
+    border-top: 1px solid #000;
+    border-bottom: 1px solid #000;
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .notice {
+    border: 1px solid #000;
+    border-inline-start-width: 3px;
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .doc-body address,
+  .doc-foot address {
+    border: 1px solid var(--hairline-strong);
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .doc-card {
+    border-color: #000;
+    background: transparent;
+  }
+
+  /* 표 — 종이에서는 전체 격자를 그리고 스크롤 컨테이너를 해제한다 */
+  .doc-table,
+  .doc-table__scroll {
+    overflow: visible;
+    width: auto;
+    max-width: none;
+    margin-inline: 0;
+    background: none;
+  }
+  .doc-table { margin-block: 12pt; }
+
+  .doc-body table {
+    min-width: 0;
+    width: 100%;
+    border: 0;
+    border-collapse: collapse;
+    font-size: var(--fs-cell);
+  }
+  .doc-body th,
+  .doc-body td {
+    padding: 4pt 5pt;
+    border: 1px solid #000;
+    background: transparent !important;
+  }
+  .doc-body tbody th:first-child,
+  .doc-body tbody td:first-child { width: auto; }
+  .doc-body tbody th:first-child { white-space: normal; }
+  .doc-body thead th { white-space: normal; }
+  thead { display: table-header-group; }
+
+  /* 줄바꿈 제어 — 제목이 쪽 끝에 혼자 남지 않게 */
+  h1, h2, h3, h4 {
+    break-after: avoid-page;
+    page-break-after: avoid;
+  }
+  h2, h3, h4,
+  table, tr, .notice, .doc-meta, address, li {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  table { break-inside: auto; page-break-inside: auto; }
+  caption,
+  .doc-table > figcaption,
+  thead {
+    break-after: avoid-page;
+    page-break-after: avoid;
+  }
+  p { orphans: 3; widows: 3; }
+
+  a { color: #000; text-decoration: underline; }
+
+  /* 종이에서는 링크를 누를 수 없으니 주소를 글로 적는다.
+     문서 안 앵커(#…)와 숨긴 푸터 내비게이션은 제외한다. */
+  .doc-body a[href^="http"]::after,
+  .doc-body a[href^="mailto:"]::after,
+  .doc-foot a[href^="http"]::after,
+  .doc-foot a[href^="mailto:"]::after,
+  .site-footer p a[href^="http"]::after,
+  .site-footer p a[href^="mailto:"]::after {
+    content: " (" attr(href) ")";
+    font-size: 9pt;
+    color: #000;
+    word-break: break-all;
+  }
+
+  /* 다른 문서로 가는 내부 링크는 전체 주소로 적는다 */
+  .doc-body a[href^="/"]::after,
+  .doc-foot a[href^="/"]::after {
+    content: " (legal.moyeota.p-e.kr" attr(href) ")";
+    font-size: 9pt;
+    color: #000;
+    word-break: break-all;
+  }
+
+  .todo { border: 1px solid #000; font-weight: 700; }
+  .todo::before { content: "[\BBF8\C815] "; }
+
+  .site-footer {
+    margin-top: 14pt;
+    padding-bottom: 0;
+    border-top: 1px solid var(--hairline-strong);
+  }
+}

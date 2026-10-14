@@ -6,6 +6,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -15,6 +16,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.compose.LifecycleResumeEffect
+import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -52,6 +54,7 @@ import com.moyeota.presentation.feature.matching.DispatchStatusRoute
 import com.moyeota.presentation.feature.matching.MatchWaitingRoute
 import com.moyeota.presentation.feature.matching.PartnerProfileScreen
 import com.moyeota.presentation.feature.matching.RideDetailRoute
+import com.moyeota.presentation.feature.mypage.AccountDeleteRoute
 import com.moyeota.presentation.feature.mypage.MyPageScreen
 import com.moyeota.presentation.feature.mypage.ModeDebugOptions
 import com.moyeota.presentation.feature.mypage.ProfileEditRoute
@@ -161,6 +164,16 @@ private fun MainNavHost(
     // 컴포지션 스코프라 화면이 사라지면 함께 멈춘다.
     LaunchedEffect(activePartyViewModel) { activePartyViewModel.pollChatRoom() }
 
+    // 위 폴링(10초 주기 `GET /chat-rooms/me`)을 **앱이 백그라운드로 가면 멈춘다.**
+    // 컴포지션 스코프만으로는 부족하다 — 이 ViewModel 과 NavHost 는 액티비티 스코프라
+    // 홈 버튼을 눌러도 살아 있어서, 배선이 없으면 앱을 쓰지 않는 동안에도 10초마다 요청이 나간다
+    // (17 탐색의 4초 폴링과 같은 종류의 누수다). RESUMED 가 아니라 STARTED 를 쓰는 이유는
+    // ActivePartyViewModel.onHostStart KDoc 에 있다(NavHost 는 전환 애니메이션이 끝나야 RESUMED 다).
+    LifecycleStartEffect(activePartyViewModel) {
+        activePartyViewModel.onHostStart()
+        onStopOrDispose { activePartyViewModel.onHostStop() }
+    }
+
     // 앱을 다시 앞으로 가져올 때마다 재조회한다 — 배경에 있는 동안 방이 끝났을 수 있다.
     // 탭 진입마다의 재조회는 각 화면(홈·합승)의 LaunchedEffect 가 따로 건다.
     LifecycleResumeEffect(Unit) {
@@ -173,9 +186,20 @@ private fun MainNavHost(
     // 화면 사이에 넘겨야 하는 값 (백엔드 없는 와이어프레임 데모용 간이 상태)
     // 10 프로필 만들기가 채우는 가입 정보 — 12 매너 서약에서 제출한다
     var signupDraft by remember { mutableStateOf(SignupDraft()) }
+    // 12 가 가입에서 PHONE_NOT_VERIFIED 를 받고 10 으로 되돌려 보낸 횟수.
+    // 10 은 이 값이 바뀔 때마다 문자 인증 블록을 초기화한다 — 토큰이 서버에서 이미 죽었기 때문이다.
+    // Boolean 이 아니라 카운터인 이유: 같은 일이 두 번 일어날 수 있고(새 토큰도 또 만료될 수 있다),
+    // Boolean 이면 두 번째 신호가 "이미 true" 에 묻혀 10 이 알아채지 못한다.
+    var reverifyPhoneRequest by remember { mutableIntStateOf(0) }
     // 로그인 화면으로 돌아온 이유. 세션 만료일 때만 채워지고 사용자가 스스로 로그아웃하면 비운다.
     var signOutNotice by remember { mutableStateOf<String?>(null) }
     var logoutRequested by remember { mutableStateOf(false) }
+    // 37 탈퇴가 **요청을 보내기 직전에** 세우는 표시. [logoutRequested] 와 같은 장치이지만 값이 셋으로
+    // 갈리기 때문에 분리했다: 탈퇴는 세션 만료 안내를 지우는 데 그치지 않고 자기 안내를 띄운다.
+    // 요청 **전에** 세우는 이유는 성공 시 세션 전이가 응답 처리보다 먼저 도착하기 때문이다
+    // (아래 LaunchedEffect 가 NavHost 보다 앞에 선언돼 있어 같은 컴포지션에서 먼저 돈다).
+    // 탈퇴가 실패하면 AccountDeleteRoute 가 되돌린다 — 안 되돌리면 나중의 진짜 세션 만료가 조용해진다.
+    var accountDeleted by remember { mutableStateOf(false) }
     var searchInitialQuery by remember { mutableStateOf("") }
     // 15 에서 고른 출발지·도착지(좌표 포함) — 16 방 생성에 필요하다.
     // 15 는 출발지(고른 곳 또는 실위치)가 있어야만 16 으로 넘긴다. 15 를 거치지 않은 복원 진입이면 null — 16 이 안내만 한다.
@@ -308,10 +332,19 @@ private fun MainNavHost(
     var wasLoggedIn by remember { mutableStateOf(loggedIn) }
     LaunchedEffect(loggedIn) {
         if (wasLoggedIn && !loggedIn) {
-            signOutNotice = if (logoutRequested) null else "세션이 만료됐어요. 다시 로그인해 주세요"
+            // 세 경로가 같은 전이로 들어온다 — 탈퇴 · 사용자의 로그아웃 · 재발급까지 실패한 세션 만료.
+            // 안내가 서로 달라야 한다: 스스로 탈퇴한 사람에게 「세션이 만료됐어요」는 오해를 주고,
+            // 아무 안내도 없으면 탈퇴가 처리된 건지 알 수 없다.
+            signOutNotice = when {
+                accountDeleted -> "탈퇴가 처리됐어요. 그동안 이용해 주셔서 고마웠어요"
+                logoutRequested -> null
+                else -> "세션이 만료됐어요. 다시 로그인해 주세요"
+            }
+            accountDeleted = false
             logoutRequested = false
             // 로컬 기억은 남긴다(계정에 매인 값이라 같은 계정 재로그인 시 되살아나야 한다) —
-            // 화면이 들고 있던 값만 버린다
+            // 화면이 들고 있던 값만 버린다. 탈퇴는 예외로 디스크 기억까지 지우는데, 그건 여기가 아니라
+            // AuthRepository.deleteAccount 가 세션을 비우면서 함께 한다(계정이 사라져 되살아날 길이 없다).
             activePartyViewModel.forget()
             resetAfterSignOut(Routes.LOGIN_FORM)
         }
@@ -383,6 +416,8 @@ private fun MainNavHost(
                 // 「이메일로 시작하기」 = 가입 시작 → 10 프로필 설정. 소셜(카카오) 로그인은 백엔드에 없어 제공하지 않는다
                 onEmailStart = {
                     signupDraft = SignupDraft() // 새 가입은 빈 초안에서 시작
+                    // 지난 가입에서 인증 되돌림이 있었어도 새 폼에 그 안내가 남으면 안 된다
+                    reverifyPhoneRequest = 0
                     navController.navigate(Routes.PROFILE_SETUP)
                 },
                 onLogin = { navController.navigate(Routes.LOGIN_FORM) },
@@ -402,6 +437,7 @@ private fun MainNavHost(
                 },
                 onSignUp = {
                     signupDraft = SignupDraft()
+                    reverifyPhoneRequest = 0
                     navController.navigate(Routes.PROFILE_SETUP)
                 },
                 noticeMessage = signOutNotice,
@@ -422,10 +458,14 @@ private fun MainNavHost(
                 repository = authRepository,
                 onBack = ::back,
                 onNext = { info ->
-                    // 닉네임을 포함한 서버 가입 8개 값이 이 화면에서 한 번에 채워진다
+                    // 닉네임·문자 인증 토큰을 포함한 서버 가입 9개 값이 이 화면에서 한 번에 채워진다
                     signupDraft = info
                     navController.navigate(Routes.MANNER_PLEDGE)
                 },
+                // 이미 가입된 번호(409)로 인증번호 발송이 끊겼을 때의 길 — 가입을 계속하게 두지 않고 로그인으로 보낸다.
+                // 가입 폼 위에 쌓으므로 뒤로 가면 적어 둔 입력이 그대로 있다.
+                onGoToLogin = { navController.navigate(Routes.LOGIN_FORM) },
+                reverifyPhoneRequest = reverifyPhoneRequest,
             )
         }
         composable(Routes.MANNER_PLEDGE) {
@@ -438,6 +478,12 @@ private fun MainNavHost(
                 // 409 닉네임 중복 — 10 으로 되돌린다. 스택에 남아 있는 그 엔트리로 pop 하므로
                 // 이미 채운 나머지 7개 필드는 그대로 있고 닉네임만 고치면 된다.
                 onEditNickname = { navController.popBackStack(Routes.PROFILE_SETUP, inclusive = false) },
+                // 400 USER207 — 토큰이 만료·소진됐다. 10 으로 되돌리면서 인증 블록을 초기화하라고 알린다.
+                // 입력값(rememberSaveable)은 그대로 남아 휴대폰 인증만 다시 하면 된다.
+                onReverifyPhone = {
+                    reverifyPhoneRequest++
+                    navController.popBackStack(Routes.PROFILE_SETUP, inclusive = false)
+                },
             )
         }
         composable(Routes.SIGNUP_COMPLETE) {
@@ -525,12 +571,14 @@ private fun MainNavHost(
                 repository = rideRepository,
                 partyId = selectedPartyId,
                 onDismiss = ::back,
-                // 합류 응답이 곧 최신 방 상세 — 그대로 21 매칭 대기로 넘겨 정원 도달을 기다린다.
+                // 합류가 끝나면 **방 id 만** 받아 21 매칭 대기로 넘긴다 — 합류 응답은 더 이상 방 상세가
+                // 아니고(Backend #213), 대기 화면이 SSE 첫 스냅샷으로 상세 전체를 받으므로 여기서 상세를
+                // 읽어 넘길 필요가 없다. 「이미 그 방 멤버였다」로 복구된 경우도 같은 길로 온다.
                 // (준비/출발 버튼이 사라진 뒤로 합류의 다음 단계는 22 상세가 아니라 대기다)
-                onJoined = { ride ->
-                    createdPartyId = ride.id.toLongOrNull()
-                    activePartyId = createdPartyId
-                    activePartyViewModel.rememberParty(ride.id)
+                onJoined = { joinedPartyId ->
+                    createdPartyId = joinedPartyId
+                    activePartyId = joinedPartyId
+                    activePartyViewModel.rememberParty(joinedPartyId.toString())
                     navController.navigate(Routes.MATCH_WAITING) {
                         popUpTo(Routes.JOIN_CONFIRM) { inclusive = true }
                     }
@@ -588,6 +636,8 @@ private fun MainNavHost(
             RideDetailRoute(
                 repository = rideRepository,
                 partyId = selectedPartyId,
+                // 21 과 같은 설정을 넘긴다 — 정원이 찬 뒤의 안내가 모드별로 갈린다
+                taxiEnabled = appConfig.taxiEnabled,
                 onBack = ::back,
                 onPartnerClick = { partner ->
                     selectedPartner = partner
@@ -750,6 +800,7 @@ private fun MainNavHost(
                     logoutRequested = true
                     scope.launch { authRepository.logout() }
                 },
+                onDeleteAccount = { navController.navigate(Routes.ACCOUNT_DELETE) },
                 onTabSelect = ::navigateTab,
                 // 디버그 빌드 전용 — 서버 모드와 무관하게 동승/택시 화면을 강제해 본다. 릴리스엔 없다.
                 modeDebug = if (debuggable) {
@@ -776,6 +827,23 @@ private fun MainNavHost(
                     profileViewModel.refresh()
                     back()
                 },
+            )
+        }
+        composable(Routes.ACCOUNT_DELETE) {
+            // 37 회원 탈퇴 — DELETE /api/v1/users/me.
+            //
+            // 성공 뒤의 이동을 여기서 하지 않는다. 탈퇴가 204 를 받으면 Repository 가 세션을 비우고
+            // authState 가 전이하므로, 위의 로그인 전이 LaunchedEffect 가 스택을 통째로 비우며
+            // 04a 로 보낸다(이 화면도 그때 사라진다). 여기서 또 navigate 하면 전이와 겹친다.
+            //
+            // accountDeleted 를 **요청 직전에** 세우는 이유는 그 LaunchedEffect 가 NavHost 보다 앞에
+            // 선언돼 있어 같은 컴포지션에서 먼저 돌기 때문이다 — 응답을 받은 뒤에 세우면 늦어서
+            // 전이가 이미 「세션이 만료됐어요」로 처리된다.
+            AccountDeleteRoute(
+                repository = authRepository,
+                onBack = ::back,
+                onSessionEndExpected = { accountDeleted = true },
+                onSessionKept = { accountDeleted = false },
             )
         }
     }

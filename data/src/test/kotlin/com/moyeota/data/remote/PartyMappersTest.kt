@@ -10,7 +10,9 @@ import com.moyeota.data.remote.dto.RouteEstimateResponse
 import com.moyeota.data.remote.dto.RouteRequestDto
 import com.moyeota.domain.model.NewParty
 import com.moyeota.domain.model.RideStatus
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -139,21 +141,22 @@ class PartyMappersTest {
     }
 
     /**
-     * 백엔드가 자동 기사 매칭으로 바뀌며 방장 개념이 사라졌다. 예전엔 joinedAt 이 가장 이른 멤버를
-     * 방장으로 추정해 "방장" 닉네임을 붙였는데, 그 추정이 되살아나지 않는지 못박는다.
+     * 백엔드가 자동 기사 매칭으로 바뀌며 방장 개념이 사라졌다. 예전엔 입장 시각(joinedAt)이 가장 이른
+     * 멤버를 방장으로 추정해 "방장" 닉네임을 붙였는데, 그 추정이 되살아나지 않는지 못박는다.
+     * 서버가 그 필드를 아예 없앴으므로(Backend #218) 추정의 재료조차 남지 않았다.
      */
     @Test
     fun `멤버는 전부 동등하게 매핑된다 — 방장 추정이 없다`() {
         val detail = detailResponse(
             members = listOf(
-                member(publicId = UUID_OTHER, nickname = "다른사람", joinedAt = "2026-08-17T09:01:00Z"),
-                member(publicId = UUID_ME, nickname = "성윤", joinedAt = "2026-08-17T09:00:00Z"),
+                member(publicId = UUID_OTHER, nickname = "다른사람"),
+                member(publicId = UUID_ME, nickname = "성윤"),
             ),
         )
 
         val ride = detail.toRide()
 
-        // 서버가 준 순서 그대로, joinedAt 으로 재정렬하거나 특별 취급하지 않는다.
+        // 서버가 준 순서 그대로, 재정렬하거나 특별 취급하지 않는다.
         assertEquals(listOf(UUID_OTHER, UUID_ME), ride.members.map { it.id })
         assertEquals(listOf("다른사람", "성윤"), ride.members.map { it.nickname })
     }
@@ -199,7 +202,7 @@ class PartyMappersTest {
         assertEquals("", user.id)
         assertEquals("탈퇴한 회원", user.nickname)
         assertNull(user.imageUrl)
-        // joinedAt 과 rideCount 는 파티 쪽 데이터라 요약이 없어도 채워진다.
+        // rideCount 는 파티 쪽 데이터라 유저 요약이 없어도 채워진다.
         assertEquals(3, user.rideCount)
         // publicId 가 null 이라고 "나"가 되면 안 된다 — currentUuid 가 null 인 경우까지 참이 될 수 있다.
         assertFalse(user.isMe)
@@ -282,12 +285,15 @@ class PartyMappersTest {
     }
 
     /**
-     * 방 생성자는 서버가 토큰에서 정한다. 사용자 id 가 **본문에 실려서는 안 된다** — 실려도 서버는
-     * 조용히 무시하므로(테스트가 없으면) 되살아난 걸 아무도 눈치채지 못하고,
-     * "앱이 보낸 생성자"가 유효하다는 착각만 남는다.
+     * 방 생성 요청 본문의 **계약**을 통째로 못 박는다 — 좌표·라벨·정원 7개 키뿐이다.
+     *
+     * 서버가 버리는 값(사용자 id·반경)이 본문에 되살아나도 응답은 200 이라 **아무 증상이 없다.**
+     * 그래서 키 목록을 여기서 고정한다: 되살아나면 "앱이 보낸 생성자/반경이 유효하다"는 착각만 남는다.
+     * - 사용자 id: 서버가 `@CurrentUser`(토큰 주체)를 쓰고 본문 `creatorId` 는 버린다.
+     * - 반경: 서버가 `OpenPartyRequest` 에서 빼고 고정값 500m 를 쓴다(Backend `a668aee`).
      */
     @Test
-    fun `생성 요청 본문에 사용자 id 를 싣지 않는다`() {
+    fun `생성 요청 본문에는 좌표 라벨 정원만 실린다 — 사용자 id 도 반경도 없다`() {
         val dto: OpenPartyRequestDto = NewParty(
             departureLat = 37.5665,
             departureLng = 126.9780,
@@ -300,13 +306,20 @@ class PartyMappersTest {
 
         assertEquals("서울시청", dto.departure)
         assertEquals(3, dto.capacity)
-        // 서버 검증 범위(100~500)를 만족하는 기본 반경이 채워져야 한다.
-        assertEquals(500, dto.departureRadius)
-        assertEquals(500, dto.destinationRadius)
 
         val encoded = json.encodeToString(dto)
         assertFalse("생성자 id 가 본문에 되살아났다: $encoded", encoded.contains("creatorId"))
         assertFalse("생성자 id 가 본문에 되살아났다: $encoded", encoded.contains("hostId"))
+        assertFalse("반경이 본문에 되살아났다: $encoded", encoded.contains("Radius"))
+        assertFalse("반경이 본문에 되살아났다: $encoded", encoded.contains("radius"))
+        // 키 집합 자체를 고정한다 — 새 필드가 몰래 끼어드는 것까지 잡는다.
+        assertEquals(
+            setOf(
+                "departureLat", "departureLng", "destinationLat", "destinationLng",
+                "departure", "destination", "capacity",
+            ),
+            json.parseToJsonElement(encoded).jsonObject.keys,
+        )
     }
 
     @Test
@@ -329,22 +342,27 @@ class PartyMappersTest {
     @Test
     fun `상세 응답 JSON 을 실제 서버 shape 그대로 역직렬화한다`() {
         // PartyDetailResult(… members, estimateFare, estimateTime, route, taxiDriverId) 기준.
-        // members 는 MemberInfo(publicId, nickname, imageUrl, badgeId, rideCount, joinedAt) —
-        // 내부 PK memberId 는 사라졌고, 둘째 멤버는 요약이 없는(탈퇴) 경우다. badgeId 는 서버 TODO 라 항상 null.
+        // members 는 MemberInfo(publicId, nickname, imageUrl, badgeId, rideCount) —
+        // 내부 PK memberId 와 joinedAt 은 사라졌고, 둘째 멤버는 요약이 없는(탈퇴) 경우다.
+        // badgeId 는 서버 TODO 라 항상 null.
         val body = """
             {"id":7,"departureLat":37.5665,"departureLng":126.978,"destinationLat":37.4979,
              "destinationLng":127.0276,"departure":"서울시청","destination":"강남역","capacity":3,
              "currentMembers":2,"departureRadius":500,"destinationRadius":500,"status":"DRIVER_ASSIGNED",
              "createdAt":"2026-08-30T09:00:00Z",
              "members":[{"publicId":"$UUID_ME","nickname":"성윤","imageUrl":null,"badgeId":null,
-                         "rideCount":4,"joinedAt":"2026-08-30T09:00:00Z"},
+                         "rideCount":4},
                         {"publicId":null,"nickname":null,"imageUrl":null,"badgeId":null,
-                         "rideCount":0,"joinedAt":"2026-08-30T09:01:00Z"}],
+                         "rideCount":0}],
              "estimateFare":9600,"estimateTime":14,"route":"_p~iF~ps|U","taxiDriverId":42}
         """.trimIndent()
 
-        val ride = json.decodeFromString<PartyDetailResponse>(body).toRide(currentUuid = UUID_ME)
+        val decoded = json.decodeFromString<PartyDetailResponse>(body)
+        val ride = decoded.toRide(currentUuid = UUID_ME)
 
+        // 서버는 아직 반경을 내려보낸다(고정 500m) — DTO 는 그 모양대로 받는다.
+        assertEquals(500, decoded.departureRadius)
+        assertEquals(500, decoded.destinationRadius)
         assertEquals("7", ride.id)
         assertEquals(RideStatus.DISPATCHING, ride.status)
         assertEquals(listOf(UUID_ME, ""), ride.members.map { it.id })
@@ -356,7 +374,7 @@ class PartyMappersTest {
     }
 
     /**
-     * 서버가 `memberId` 로 되돌아가거나 새 필드를 얹어도 방 상세가 열리는 건 지켜야 한다
+     * 서버가 `memberId`·`joinedAt` 으로 되돌아가거나 새 필드를 얹어도 방 상세가 열리는 건 지켜야 한다
      * (`ignoreUnknownKeys` + 전 필드 기본값). 파싱이 터지면 21/25 화면이 통째로 죽는다.
      */
     @Test
@@ -447,128 +465,138 @@ class PartyMappersTest {
         assertEquals("", estimate.encodedPath)
     }
 
-    // ---- 방 상태 조회(GET /matching/rooms/{partyId}/status) ----
+    // ---- 합류 응답(POST /matching/rooms/{partyId}/join) ----
+    //
+    // 이 DTO 의 쓰임은 **합류 응답 하나뿐**이다. 예전에는 폴링용 상태 조회
+    // `GET /matching/rooms/{partyId}/status` 도 같은 모양이었지만 백엔드가 그 엔드포인트와
+    // 지문(fingerprint)을 함께 삭제했다(`04f6be7`) — 매칭방 변화가 SSE 전용이 되면서
+    // 「요약이 상세와 같은가」를 비교할 이유가 없어졌다.
 
     /**
-     * 상태 응답은 상세와 **같은 상태 변환표**를 써야 한다 — 갈리면 같은 방이 폴링 결과와 상세에서
-     * 서로 다른 단계로 보인다(21 대기 화면이 배차로 넘어가지 못하는 식).
+     * 합류 응답은 상세와 **같은 상태 변환표**를 써야 한다([partyStatusToRideStatus]) —
+     * 갈리면 합류 직후 상태와 방 상세가 같은 방을 서로 다른 단계로 보여 준다.
      */
     @Test
-    fun `방 상태 응답을 도메인 PartyStatus 로 매핑한다`() {
+    fun `합류 응답을 도메인 PartyStatus 로 매핑한다`() {
         val status = PartyStatusResponse(
             status = "DRIVER_ASSIGNED",
             currentMembers = 3,
-            fingerprint = FINGERPRINT,
         ).toPartyStatus()
 
         assertEquals(RideStatus.DISPATCHING, status.status)
         assertEquals(3, status.currentMembers)
-        assertEquals(FINGERPRINT, status.fingerprint)
-    }
-
-    @Test
-    fun `방 상태 응답 JSON 을 실제 서버 shape 그대로 역직렬화한다`() {
-        // 백엔드 PartyStatusResponse(String status, Integer currentMembers, String fingerprint).
-        // 실측(localhost:8080): {"status":"ACTIVE","currentMembers":1,"fingerprint":"4aa5adb7bd31ea6d"}
-        // — 지문은 16진수 16글자(HMAC-SHA256 앞 8바이트)였다.
-        val body = """{"status":"MATCHING","currentMembers":3,"fingerprint":"$FINGERPRINT"}"""
-
-        val status = json.decodeFromString<PartyStatusResponse>(body).toPartyStatus()
-
-        assertEquals(RideStatus.DISPATCHING, status.status)
-        assertEquals(3, status.currentMembers)
-        assertEquals(FINGERPRINT, status.fingerprint)
     }
 
     /**
-     * 지문은 Backend #177 에서 생긴 필드다 — 구버전 서버는 아예 내려보내지 않는다.
-     * 그때 폴링이 전부 실패하면(논-널 선언) 안 되고, [com.moyeota.domain.model.PartyStatus.isSameAs]
-     * 가 상태·인원 비교로 내려갈 수 있도록 null 이어야 한다.
+     * **합류 응답이 이 모양으로 바뀌었다**(Backend #213) — 방 상세가 아니라 상태·인원 두 값뿐이고,
+     * `04f6be7` 에서 지문까지 빠져 **정확히 두 값**이다.
+     *
+     * 예전 응답(방 상세)을 기대하던 DTO 로는 이 본문이 **역직렬화에서 터졌다** — `PartyDetailResponse.id`
+     * 가 기본값 없는 유일한 필드라서다. 서버는 이미 멤버를 추가해 둔 상태라 그 실패가 곧
+     * "어떤 방에도 못 들어가는" 계정을 만들었다(RemoteRideRepository.recoverMembership 참고).
      */
     @Test
-    fun `지문이 빠진 상태 응답도 파싱되고 지문은 null 이다`() {
-        val status = json.decodeFromString<PartyStatusResponse>(
-            """{"status":"ACTIVE","currentMembers":1}""",
-        ).toPartyStatus()
+    fun `합류 응답 JSON 을 실제 서버 shape 그대로 역직렬화한다`() {
+        // 백엔드 PartyController.join → PartyStatusResponse(status, currentMembers). 내가 마지막 자리를
+        // 채운 경우(서버가 그 자리에서 정원 충족까지 끝내고 COMPLETED 를 돌려준다).
+        val body = """{"status":"COMPLETED","currentMembers":3}"""
 
-        assertEquals(RideStatus.RECRUITING, status.status)
-        assertEquals(1, status.currentMembers)
-        assertNull(status.fingerprint)
+        val status = json.decodeFromString<PartyStatusResponse>(body).toPartyStatus()
+
+        assertEquals(RideStatus.MATCHED, status.status)
+        assertEquals(3, status.currentMembers)
     }
 
-    /** 빈 문자열은 "값 없음"과 같이 다룬다 — 빈 값끼리 같다고 판정해 변화를 놓치면 안 된다. */
+    /**
+     * 합류 응답의 필드가 **딱 둘**인 것을 못박는다 — 지문이 다시 생기면 비교할 짝(상세의 지문)이 없는
+     * 죽은 필드가 되고, 「요약과 상세를 비교한다」는 사라진 설계가 코드에 되살아난다.
+     */
     @Test
-    fun `지문이 빈 문자열이면 null 로 접는다`() {
-        assertNull(PartyStatusResponse(status = "ACTIVE", currentMembers = 1, fingerprint = "").toPartyStatus().fingerprint)
-        assertNull(detailResponse(fingerprint = "  ").toRide().fingerprint)
+    fun `합류 응답 DTO 에는 상태와 인원 두 필드만 있다`() {
+        assertEquals(listOf("status", "currentMembers"), PartyStatusResponse.serializer().fieldNames())
     }
 
+    /**
+     * 롤아웃 중 서버가 아직 옛 버전이라 `fingerprint` 를 실어 보내도 합류가 깨지지 않아야 한다 —
+     * 디코더가 `ignoreUnknownKeys` 다(NetworkModule). 합류는 서버가 **멤버 추가를 먼저 커밋**하므로,
+     * 여기서 파싱이 터지면 그 계정은 30분 스윕 전까지 어떤 방에도 못 들어간다.
+     */
     @Test
-    fun `모르는 필드가 섞여도 상태 응답 파싱이 깨지지 않는다`() {
+    fun `옛 서버가 지문을 실어 보내도 합류 응답 파싱이 깨지지 않는다`() {
         val status = json.decodeFromString<PartyStatusResponse>(
-            """{"status":"FINISHED","currentMembers":3,"fingerprint":"$FINGERPRINT","memberIds":[1,2,3]}""",
+            """{"status":"FINISHED","currentMembers":3,"fingerprint":"9f3c1a7b4e2d0586","memberIds":[1,2,3]}""",
         ).toPartyStatus()
 
         assertEquals(RideStatus.COMPLETED, status.status)
+        assertEquals(3, status.currentMembers)
     }
 
-    // ---- 상세 응답의 지문 ----
+    // ---- 상세 응답에 지문이 없다 ----
 
+    /**
+     * 옛 서버의 상세 응답이 지문을 실어 보내도 **조용히 무시**돼야 한다. 25·26 의 주기 조회가
+     * 이 상세로 옮겨왔으므로, 여기서 파싱이 터지면 두 화면이 배차·운행 전이를 영영 못 잡는다.
+     */
     @Test
-    fun `상세 응답의 지문을 Ride 로 옮긴다`() {
-        assertEquals(FINGERPRINT, detailResponse().toRide().fingerprint)
-        assertEquals(FINGERPRINT, detailResponse().toRide(currentUuid = UUID_ME).fingerprint)
-    }
-
-    @Test
-    fun `상세 응답 JSON 의 지문을 Ride 로 옮긴다`() {
+    fun `옛 서버가 지문을 실어 보내도 상세 매핑이 깨지지 않는다`() {
         val body = """
             {"id":7,"departure":"서울시청","destination":"강남역","capacity":3,"currentMembers":3,
-             "status":"MATCHING","fingerprint":"$FINGERPRINT"}
+             "status":"MATCHING","fingerprint":"9f3c1a7b4e2d0586"}
         """.trimIndent()
 
         val ride = json.decodeFromString<PartyDetailResponse>(body).toRide()
 
-        assertEquals(FINGERPRINT, ride.fingerprint)
-    }
-
-    /** 목록·생성 응답에는 지문 필드가 **서버에도 없다** — 매핑이 null 로 남는 걸 못박는다. */
-    @Test
-    fun `목록과 생성 응답의 Ride 에는 지문이 없다`() {
-        assertNull(PartyListResponse.PartyItem(partyId = 7, capacity = 3, status = "ACTIVE").toRide().fingerprint)
-        assertNull(OpenPartyResponse(id = 12, capacity = 3, status = "ACTIVE").toRide().fingerprint)
-    }
-
-    @Test
-    fun `구버전 서버의 상세 응답에 지문이 없어도 매핑이 깨지지 않는다`() {
-        val ride = json.decodeFromString<PartyDetailResponse>(
-            """{"id":9,"departure":"성결대 정문","destination":"안양역","capacity":3,"status":"ACTIVE"}""",
-        ).toRide()
-
-        assertNull(ride.fingerprint)
+        assertEquals("7", ride.id)
+        assertEquals(RideStatus.DISPATCHING, ride.status)
     }
 
     /**
-     * 두 매퍼가 지문을 **비교 가능한 자리**에 넣는지 — 폴링의 존재 이유가 이 비교다.
-     * 한쪽만 빈 문자열을 접거나 한쪽이 상태 변환표를 달리 쓰면 여기서 깨진다.
+     * 상세 DTO 에 지문 필드가 **되살아나지 않는 것**을 못박는다. 서버가 지웠으니 되살리면 항상 null 인
+     * 필드가 되고, 그 null 을 근거로 「바뀌었나」를 판정하던 옛 분기가 따라 돌아온다
+     * (「지문이 없으면 매 주기 상세를 읽는다」 같은 예외 조건).
      */
     @Test
-    fun `같은 방의 상세와 상태를 매핑하면 서로 같다고 판정한다`() {
-        val ride = detailResponse().toRide(currentUuid = UUID_ME)
-        val same = PartyStatusResponse("MATCHING", ride.members.size, FINGERPRINT).toPartyStatus()
-        val changed = PartyStatusResponse("MATCHING", ride.members.size, "0000000000000000").toPartyStatus()
+    fun `상세 응답 DTO 에 지문 필드가 없다`() {
+        val fields = PartyDetailResponse.serializer().fieldNames()
 
-        assertTrue(same.isSameAs(ride))
-        // 인원수가 같아도 지문이 다르면 바뀐 것이다(한 명 나가고 한 명 들어온 경우).
-        assertFalse(changed.isSameAs(ride))
+        assertFalse("PartyDetailResponse 에 fingerprint 가 되살아났다", fields.contains("fingerprint"))
+        // 폴링이 읽는 값들은 그대로 있어야 한다 — 상세가 25·26 의 유일한 전이 근거다.
+        assertTrue(fields.containsAll(listOf("status", "members", "taxiDriverId", "route")))
+    }
+
+    /** DTO 의 **직렬화 계약**(JSON 키 이름·순서)을 읽는다 — JVM 필드 목록과 달리 Companion 이 섞이지 않는다. */
+    private fun KSerializer<*>.fieldNames(): List<String> =
+        (0 until descriptor.elementsCount).map { descriptor.getElementName(it) }
+
+    /**
+     * 같은 방의 상세를 두 번 매핑하면 **`==` 로 같다**는 것 — 25·26 폴링이 「안 바뀌었다」를 판정하는
+     * 유일한 근거가 이 동등성이다(지문이 하던 일을 [Ride] 의 data class equals 가 대신한다).
+     *
+     * 멤버가 교체되면(인원수는 같다) 달라야 한다 — 요약 비교로는 못 잡아 지문이 필요했던 바로 그 경우가,
+     * 받는 게 상세가 된 지금은 equals 로 그냥 잡힌다.
+     */
+    @Test
+    fun `같은 방의 상세를 두 번 매핑하면 서로 같고 멤버가 교체되면 달라진다`() {
+        val held = detailResponse().toRide(currentUuid = UUID_ME)
+        val same = detailResponse().toRide(currentUuid = UUID_ME)
+        val swapped = detailResponse(
+            members = listOf(
+                member(publicId = UUID_ME, nickname = "성윤"),
+                member(publicId = UUID_STRANGER, nickname = "새로온사람"),
+            ),
+        ).toRide(currentUuid = UUID_ME)
+
+        assertEquals(held, same)
+        // 인원수가 같아도 멤버가 바뀌면 다른 방 상태다(한 명 나가고 한 명 들어온 경우).
+        assertEquals(held.members.size, swapped.members.size)
+        assertFalse(held == swapped)
     }
 
     private fun detailResponse(
         members: List<PartyDetailResponse.MemberInfo> = listOf(
-            member(publicId = UUID_ME, nickname = "성윤", joinedAt = "2026-08-17T09:00:00Z"),
-            member(publicId = UUID_OTHER, nickname = "다른사람", joinedAt = "2026-08-17T09:01:00Z"),
+            member(publicId = UUID_ME, nickname = "성윤"),
+            member(publicId = UUID_OTHER, nickname = "다른사람"),
         ),
-        fingerprint: String? = FINGERPRINT,
     ) = PartyDetailResponse(
         id = 7,
         departureLat = 37.5665,
@@ -588,7 +616,6 @@ class PartyMappersTest {
         estimateTime = 14,
         route = "_p~iF~ps|U",
         taxiDriverId = 42,
-        fingerprint = fingerprint,
     )
 
     private fun member(
@@ -596,14 +623,12 @@ class PartyMappersTest {
         nickname: String? = "성윤",
         imageUrl: String? = null,
         rideCount: Int = 0,
-        joinedAt: String? = "2026-08-17T09:00:00Z",
     ) = PartyDetailResponse.MemberInfo(
         publicId = publicId,
         nickname = nickname,
         imageUrl = imageUrl,
         badgeId = null,
         rideCount = rideCount,
-        joinedAt = joinedAt,
     )
 
     private companion object {
@@ -611,7 +636,7 @@ class PartyMappersTest {
         const val UUID_ME = "01a06145-3caf-7614-a3bd-cee6e25316b1"
         const val UUID_OTHER = "01a06145-3caf-7614-a3bd-cee6e2531999"
 
-        /** 서버가 내려보내는 지문 형식 그대로 — HMAC-SHA256 앞 8바이트의 16진수 16글자. */
-        const val FINGERPRINT = "9f3c1a7b4e2d0586"
+        /** 멤버 교체(인원수는 그대로)를 만들 때 쓰는 제3의 계정. */
+        const val UUID_STRANGER = "01a06145-3caf-7614-a3bd-cee6e2531aaa"
     }
 }

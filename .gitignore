@@ -37,3 +37,24 @@ local.properties
 # 에이전트 작업 스크린샷 (용량 큼 — 리포트 md만 추적)
 _workspace/screenshots/
 _workspace_*/
+_workspace/*logcat*.txt
+
+# 비밀 (실수로 커밋되면 되돌릴 수 없다 — 히스토리에 남는다)
+*.pem
+*.p12
+*.pfx
+*.der
+secrets/
+.env
+.env.*
+!.env.example
+*service-account*.json
+
+# 다른 AI 도구의 로컬 설정 (이 저장소는 Claude Code 설정만 추적한다)
+.agents/
+.codex/
+AGENTS.md
+
+# 에이전트가 만든 임시 산출물
+_workspace/tmp/
+_workspace/**/shots-raw/

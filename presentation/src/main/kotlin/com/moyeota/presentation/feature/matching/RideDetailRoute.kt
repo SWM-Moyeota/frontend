@@ -82,6 +82,8 @@ class RideDetailViewModel(
 fun RideDetailRoute(
     repository: RideRepository,
     partyId: Long?,
+    /** 택시 모드(서버 설정). 정원 안내 문구가 갈린다 — 기본값은 동승(모르면 동승) */
+    taxiEnabled: Boolean = false,
     onBack: () -> Unit = {},
     onPartnerClick: (User) -> Unit = {},
     onLeave: () -> Unit = {},
@@ -119,6 +121,7 @@ fun RideDetailRoute(
         is RideDetailViewModel.UiState.Success -> RideDetailScreen(
             ride = current.ride,
             pickupDistanceMeters = pickupDistanceMeters(current.ride, myLocation.coordinates),
+            taxiEnabled = taxiEnabled,
             onBack = onBack,
             onPartnerClick = onPartnerClick,
             onLeave = viewModel::leave, // 나가기 성공 후 onLeave 로 화면 전환

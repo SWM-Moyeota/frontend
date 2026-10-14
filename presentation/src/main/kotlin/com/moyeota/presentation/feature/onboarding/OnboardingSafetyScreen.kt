@@ -38,7 +38,12 @@ import com.moyeota.core.designsystem.theme.MoyeotaType
  * 03 · 온보딩 — 안심 [O03]
  *
  * 진입: 02에서 다음
- * 목적: 운행 중 긴급 신고 · 인원수 분할 요금 안내 후 가입 유도
+ * 목적: 합류하는 순간 열리는 채팅으로 만날 곳을 정한다는 안내 후 가입 유도
+ *
+ * 문구는 [OnboardingMeetingCopy] 에 있다 — 예전 본문 「운행 중 긴급 신고가 바로 되고 / 요금은
+ * 인원수대로 나눠 안내해요」는 **동승 모드가 26 운행 중에 닿지 않아 27 긴급 신고로 들어갈 길이
+ * 없고**(`docs/MODE-ROUTES.md`) **요금 정산 기능도 없어서** 지웠다(2026-10-13).
+ * 파일·라우트 이름(`safety`)은 그대로 둔다 — 내비게이션 상수를 바꿀 이유가 아니다.
  *
  * 인터랙션
  * - 「시작하기」 → 04 시작(로그인 방식) (onStart)
@@ -91,7 +96,7 @@ fun OnboardingSafetyScreen(
         Spacer(Modifier.height(32.dp))
 
         Text(
-            text = "타는 동안, 안심하도록",
+            text = OnboardingMeetingCopy.headline,
             style = MoyeotaType.DisplayMd.copy(fontSize = 26.sp, letterSpacing = (-0.52).sp),
             color = MoyeotaColor.InkPrimary,
             textAlign = TextAlign.Center,
@@ -101,7 +106,7 @@ fun OnboardingSafetyScreen(
         Spacer(Modifier.height(12.dp))
 
         Text(
-            text = "운행 중 긴급 신고가 바로 되고\n요금은 인원수대로 나눠 안내해요",
+            text = OnboardingMeetingCopy.body,
             style = MoyeotaType.BodyMd.copy(lineHeight = 22.sp, letterSpacing = (-0.3).sp),
             color = MoyeotaColor.TextMute,
             textAlign = TextAlign.Center,
@@ -142,7 +147,7 @@ fun OnboardingSafetyScreen(
     }
 }
 
-// 일러스트 — 지도(경로: 파란 점 → 빨간 핀). 공유 배지는 보호자 공유 기능이 없어 뺐고, 지도를 카드 가운데에 둔다
+// 일러스트 — 지도(만날 곳: 파란 점 → 빨간 핀). 공유 배지는 보호자 공유 기능이 없어 뺐고, 지도를 카드 가운데에 둔다
 @Composable
 private fun SafetyIllustration(modifier: Modifier = Modifier) {
     Box(

@@ -460,7 +460,10 @@ private fun PeekSummaryRow(count: Int, onRaise: () -> Unit) {
                 color = MoyeotaColor.InkPrimary,
             )
             Text(
-                text = if (isEmpty) "지도를 움직여 보세요" else "위로 올리면 리스트, 목적지 정하면 바로 자동 매칭",
+                // 「목적지 정하면 바로 자동 매칭」은 지웠다 — 목적지를 정하면 **새 방이 만들어지고**
+                // (16 「같이 탈 사람 찾기」 → `POST /matching/rooms`) 사람이 합류하기를 기다린다.
+                // 목적지로 기존 방에 자동으로 넣어 주는 기능은 없다(2026-10-13).
+                text = if (isEmpty) "지도를 움직여 보세요" else "위로 올리면 리스트, 목적지를 정하면 새 방을 만들어요",
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Medium,
                 color = GrayMute,

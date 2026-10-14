@@ -18,7 +18,6 @@ import androidx.compose.ui.unit.dp
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.naver.maps.geometry.LatLng
 import com.naver.maps.map.NaverMap
-import com.naver.maps.map.overlay.CircleOverlay
 import com.naver.maps.map.overlay.Marker
 import com.naver.maps.map.overlay.PathOverlay
 import com.naver.maps.map.util.MarkerIcons
@@ -94,7 +93,6 @@ fun latLngOrNull(latitude: Double?, longitude: Double?): LatLng? {
  *
  * @param routePath 경로 좌표. [decodePolyline] 결과를 그대로 넣는다. 2점 미만이면 그리지 않는다
  * @param driverPosition 기사 현재 위치. 아직 못 받았으면 null (마커 미표시)
- * @param radiusCircle 반경 원(21 매칭 대기의 탐색 반경). null 이면 그리지 않는다
  * @param myPosition 내 위치 파란 점. **null 이면 SDK 의 locationOverlay 를 아예 건드리지 않는다** —
  *   26 운행중처럼 화면이 오버레이를 직접 관리하는 경우와 충돌하지 않기 위해서다
  * @param useTextureView 기본 true(전환 시 검은 깜빡임 방지) — [NaverMapView] 설명 참고
@@ -108,7 +106,6 @@ fun RouteMapView(
     driverPosition: LatLng? = null,
     originPosition: LatLng? = null,
     destinationPosition: LatLng? = null,
-    radiusCircle: MapRadiusCircle? = null,
     myPosition: LatLng? = null,
     center: LatLng = originPosition ?: routePath.firstOrNull() ?: MoyeotaDefaultCamera,
     zoom: Double = 14.0,
@@ -155,23 +152,10 @@ fun RouteMapView(
         onDispose { overlay?.map = null }
     }
 
-    // 반경 원 — 경로·마커보다 먼저 붙여 마커가 원 위로 오게 한다
-    DisposableEffect(map, radiusCircle, density) {
-        val naverMap = map
-        val circle = if (naverMap != null && radiusCircle != null && radiusCircle.radiusMeters > 0.0) {
-            CircleOverlay().apply {
-                this.center = radiusCircle.center
-                this.radius = radiusCircle.radiusMeters
-                this.color = MoyeotaColor.Primary500.copy(alpha = RadiusFillAlpha).toArgb()
-                this.outlineColor = MoyeotaColor.Primary500.toArgb()
-                this.outlineWidth = with(density) { 2.dp.roundToPx() }
-                this.map = naverMap
-            }
-        } else {
-            null
-        }
-        onDispose { circle?.map = null }
-    }
+    // 반경 원(CircleOverlay)은 지웠다 — 21 매칭 대기의 「탐색 반경」이 유일한 사용처였고,
+    // 서버가 반경을 고정값으로 정하면서(Backend `a668aee`) 매칭이 읽지 않는 값이 됐다.
+    // 원은 「이 범위에서 찾는다」는 없는 약속이었다. 되살릴 때는 그 범위를 실제로 쓰는 매칭이
+    // 생긴 뒤여야 한다(MapRadiusCircle·circleBoundsPoints 도 같은 커밋에서 함께 지웠다).
 
     // 내 위치 파란 점. locationOverlay 는 지도에 붙어 있는 **싱글턴**이라, 쓰지 않는 화면에서는
     // 손대지 않고(overlay = null) 떠날 때만 숨긴다 — 남겨 두면 다음 화면에 낡은 점이 그대로 뜬다.
@@ -192,12 +176,6 @@ fun RouteMapView(
     MapMarker(map, destinationPosition, MoyeotaColor.MarkerDestination.toArgb(), "도착")
     MapMarker(map, driverPosition, MoyeotaColor.InkPrimary.toArgb(), "기사님")
 }
-
-/** 지도에 그리는 반경 원. 중심과 반경(m)만 있으면 된다 — 색은 디자인 토큰으로 고정한다. */
-data class MapRadiusCircle(val center: LatLng, val radiusMeters: Double)
-
-// 원 안쪽 채우기 투명도. 지도의 도로·지명이 비쳐야 「이 범위」로 읽히지 덮개로 보이지 않는다.
-private const val RadiusFillAlpha = 0.12f
 
 /**
  * 지도 위 핀 하나. 좌표가 null 이면 그리지 않고, 화면을 떠날 때 지운다.

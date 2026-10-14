@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>모여타 — 택시비, 혼자 다 내지 마요</title>
+<meta name="description" content="같은 방향으로 가는 사람을 모아 택시 한 대를 나눠 타는 합승 매칭 앱. 모여타가 택시를 부르지는 않습니다 — 모인 사람들이 채팅으로 만날 곳을 정해 직접 탑니다. 앱 이용은 무료이고, 택시 요금은 탑승한 사람들이 냅니다.">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f1319" media="(prefers-color-scheme: dark)">
+<!-- ⚠ 배포 주소 미정. 2026-10-14 기준 moyeota.p-e.kr 은 아직 DNS 가 없다.
+     주소가 정해지면 아래 canonical 과 og:url 을 **같이** 고칠 것. (README 참고) -->
+<link rel="canonical" href="https://moyeota.p-e.kr/">
+<meta property="og:type" content="website">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:site_name" content="모여타">
+<meta property="og:title" content="모여타 — 택시비, 혼자 다 내지 마요">
+<meta property="og:description" content="같은 방향으로 가는 사람을 모아 택시 한 대를 나눠 타는 합승 매칭 앱. 모여타가 택시를 부르지는 않습니다 — 모인 사람들이 채팅으로 만날 곳을 정해 직접 탑니다.">
+<meta property="og:url" content="https://moyeota.p-e.kr/">
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20rx='8'%20fill='%23085AF5'/%3E%3Ccircle%20cx='12.5'%20cy='16'%20r='5.6'%20fill='%23ffffff'%20fill-opacity='.95'/%3E%3Ccircle%20cx='20.5'%20cy='16'%20r='5.6'%20fill='%23ffffff'%20fill-opacity='.55'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<a class="skip-link" href="#content">본문으로 건너뛰기</a>
+
+<header class="topbar">
+  <div class="topbar__inner">
+    <span class="topbar__mark">MOYEOTA</span>
+    <span class="topbar__sep" aria-hidden="true">/</span>
+    <span class="topbar__doc">서비스 소개</span>
+    <nav class="topbar__nav" aria-label="섹션 바로가기">
+      <a href="#how">어떻게 쓰나</a>
+      <a href="#why">왜 모여타</a>
+      <a href="#docs">문서</a>
+    </nav>
+  </div>
+</header>
+
+<main id="content" tabindex="-1">
+
+  <!-- ── 1. 히어로 ─────────────────────────────────────────────────────── -->
+  <section id="hero" class="hero" aria-labelledby="hero-h">
+    <div class="hero__grid wrap wrap--rail">
+      <div class="hero__copy">
+        <p class="eyebrow">모여타 · 택시 합승 매칭</p>
+        <h1 id="hero-h">택시비,<br>혼자 다 내지 마요</h1>
+        <p class="hero__lead">같은 방향으로 가는 사람을 모아 드려요. 사람이 모이면 채팅방이 열리고, 어디서 만날지 서로 정해 한 대에 함께 탑니다. 요금은 1/N로 줄어요.</p>
+        <p class="hero__fine">모여타가 택시를 부르지는 않습니다. 택시는 모인 사람들이 직접 탑니다. 앱 이용은 무료이고, 택시 요금은 탑승한 사람들이 냅니다.</p>
+        <p class="hero__actions">
+          <a class="btn btn--primary" href="#how">어떻게 쓰는지 보기</a>
+          <span class="store-note">Google Play 출시 준비 중</span>
+        </p>
+      </div>
+      <div class="hero__stage">
+        <figure class="device device--lg">
+          <span class="device__screen">
+            <img src="assets/shots/14-home.webp" width="648" height="1440"
+                 alt="모여타 홈 화면. 부산대 일대 지도 위에 내 위치가 있고, 아래 시트에 「어디로 갈까요?」 목적지 검색 칸이 있다"
+                 fetchpriority="high" decoding="async">
+          </span>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 2. 화면 띠 ────────────────────────────────────────────────────── -->
+  <section id="shots" class="strip" aria-labelledby="shots-h">
+    <h2 id="shots-h" class="visually-hidden">앱 화면 둘러보기</h2>
+    <div class="strip__viewport" tabindex="0" role="group" aria-label="모여타 앱 화면 8장. 좌우로 밀어서 볼 수 있습니다">
+      <!-- 띠 이미지에는 loading="lazy" 를 쓰지 않는다. 복제 묶음은 가로로만 바깥에 있어
+           세로 스크롤로는 영영 뷰포트에 들어오지 않고, 마퀴가 translateX 로 밀어 넣어도
+           크롬의 네이티브 지연 로딩이 따라오지 못한다(실측: 40초에 8장 중 1장).
+           그대로 두면 루프 두 번째 바퀴에 빈 기기 틀이 지나간다.
+           9개 URL 은 어차피 중복이라 요청 수는 늘지 않는다. -->
+      <ul class="strip__row">
+        <li><figure class="device device--sm"><span class="device__screen"><img src="assets/shots/14-home.webp" width="648" height="1440" decoding="async" alt="모여타 홈 화면. 지도 위에 내 위치가 있고 아래 시트에 목적지 검색 칸이 있다"></span></figure></li>
+        <li><figure class="device device--sm"><span class="device__screen"><img src="assets/shots/15-destination.webp" width="648" height="1440" decoding="async" alt="목적지 검색 화면. 「서면」을 넣으니 검색 결과가 주소와 함께 줄지어 나왔다"></span></figure></li>
+        <li><figure class="device device--sm"><span class="device__screen"><img src="assets/shots/17-explore-map.webp" width="648" height="1440" decoding="async" alt="탐색 화면. 지도에 모집 중인 동승 위치가 찍혀 있고 아래 시트에 같은 방들이 카드로 깔려 있다"></span></figure></li>
+        <li><figure class="device device--sm"><span class="device__screen"><img src="assets/shots/20-join-confirm.webp" width="648" height="1440" decoding="async" alt="합류 확인 화면. 총 예상 요금 12,700원과 그것을 정원 3명으로 나눈 1인 부담 4,233원이 함께 보인다"></span></figure></li>
+        <li><figure class="device device--sm"><span class="device__screen"><img src="assets/shots/21-match-waiting.webp" width="648" height="1440" decoding="async" alt="매칭 대기 화면. 「지금 같은 방향 2명 · 목표 3명」 진행 바와 모인 사람들의 탑승 횟수가 보인다"></span></figure></li>
+        <li><figure class="device device--sm"><span class="device__screen"><img src="assets/shots/21-match-full.webp" width="648" height="1440" decoding="async" alt="정원이 찬 매칭 화면. 세 명이 모였고 채팅으로 만날 곳을 정하라는 안내가 있다"></span></figure></li>
+        <li><figure class="device device--sm"><span class="device__screen"><img src="assets/shots/24-chat.webp" width="648" height="1440" decoding="async" alt="동승 채팅방. 만날 장소와 도착 시간을 주고받는 메시지가 쌓여 있다"></span></figure></li>
+        <li><figure class="device device--sm"><span class="device__screen"><img src="assets/shots/01-onboarding-saving.webp" width="648" height="1440" decoding="async" alt="온보딩 첫 화면. 9,600원이 3,200원으로 줄어드는 그림과 「택시비, 혼자 다 내지 마요」"></span></figure></li>
+        <!-- 끊김 없는 루프를 위한 두 번째 묶음. 같은 8장이므로 접근성 트리에서 제외한다 -->
+        <li aria-hidden="true"><figure class="device device--sm"><span class="device__screen"><img src="assets/shots/14-home.webp" width="648" height="1440" decoding="async" alt=""></span></figure></li>
+        <li aria-hidden="true"><figure class="device device--sm"><span class="device__screen"><img src="assets/shots/15-destination.webp" width="648" height="1440" decoding="async" alt=""></span></figure></li>
+        <li aria-hidden="true"><figure class="device device--sm"><span class="device__screen"><img src="assets/shots/17-explore-map.webp" width="648" height="1440" decoding="async" alt=""></span></figure></li>
+        <li aria-hidden="true"><figure class="device device--sm"><span class="device__screen"><img src="assets/shots/20-join-confirm.webp" width="648" height="1440" decoding="async" alt=""></span></figure></li>
+        <li aria-hidden="true"><figure class="device device--sm"><span class="device__screen"><img src="assets/shots/21-match-waiting.webp" width="648" height="1440" decoding="async" alt=""></span></figure></li>
+        <li aria-hidden="true"><figure class="device device--sm"><span class="device__screen"><img src="assets/shots/21-match-full.webp" width="648" height="1440" decoding="async" alt=""></span></figure></li>
+        <li aria-hidden="true"><figure class="device device--sm"><span class="device__screen"><img src="assets/shots/24-chat.webp" width="648" height="1440" decoding="async" alt=""></span></figure></li>
+        <li aria-hidden="true"><figure class="device device--sm"><span class="device__screen"><img src="assets/shots/01-onboarding-saving.webp" width="648" height="1440" decoding="async" alt=""></span></figure></li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ── 3. 어떻게 쓰나 ────────────────────────────────────────────────── -->
+  <section id="how" class="how" aria-labelledby="how-h">
+    <div class="wrap wrap--rail">
+      <p class="eyebrow">어떻게 쓰나</p>
+      <h2 id="how-h" class="section-h">목적지를 넣으면<br>같은 방향 사람을 찾아요</h2>
+
+      <ol class="steps">
+        <li class="step">
+          <div class="step__text">
+            <p class="step__num">01</p>
+            <h3>목적지를 넣어요</h3>
+            <p>목적지를 검색해 고르면 경로와 예상 요금을 알려드려요.</p>
+          </div>
+          <div class="step__art">
+            <figure class="device device--md">
+              <span class="device__screen">
+                <img src="assets/shots/15-destination.webp" width="648" height="1440" loading="lazy" decoding="async"
+                     alt="목적지 검색 화면. 「서면」을 넣으니 검색 결과가 주소와 함께 줄지어 나왔다">
+              </span>
+            </figure>
+          </div>
+        </li>
+
+        <li class="step">
+          <div class="step__text">
+            <p class="step__num">02</p>
+            <h3>같은 방향 동승을 골라요</h3>
+            <p>지금 모집 중인 동승이 지도와 목록에 보여요. 합류하기 전에 총 예상 요금과 「합류 시 1인 부담」을 먼저 확인해요.</p>
+          </div>
+          <div class="step__art">
+            <figure class="device device--md">
+              <span class="device__screen">
+                <img src="assets/shots/20-join-confirm.webp" width="648" height="1440" loading="lazy" decoding="async"
+                     alt="합류 확인 화면. 총 예상 요금 12,700원과 그것을 정원 3명으로 나눈 1인 부담 4,233원이 함께 보인다">
+              </span>
+            </figure>
+          </div>
+        </li>
+
+        <li class="step">
+          <div class="step__text">
+            <p class="step__num">03</p>
+            <h3>사람이 모일 때까지 기다려요</h3>
+            <p>지금 몇 명이 모였고 목표가 몇 명인지 보여요. 기다리다 그만두고 방을 나올 수도 있어요.</p>
+          </div>
+          <div class="step__art">
+            <figure class="device device--md">
+              <span class="device__screen">
+                <img src="assets/shots/21-match-waiting.webp" width="648" height="1440" loading="lazy" decoding="async"
+                     alt="매칭 대기 화면. 「지금 같은 방향 2명 · 목표 3명」 진행 바와 모인 사람들의 탑승 횟수가 보인다">
+              </span>
+            </figure>
+          </div>
+        </li>
+
+        <li class="step">
+          <div class="step__text">
+            <p class="step__num">04</p>
+            <h3>모이면 채팅으로 만나 함께 타요</h3>
+            <p>합류하는 순간 채팅방이 열려요. 어디서 만날지 서로 정하고, 다 타고 나면 「합승 완료」를 누르면 끝이에요.</p>
+          </div>
+          <div class="step__art">
+            <figure class="device device--md">
+              <span class="device__screen">
+                <img src="assets/shots/24-chat.webp" width="648" height="1440" loading="lazy" decoding="async"
+                     alt="동승 채팅방. 만날 장소와 도착 시간을 주고받는 메시지가 쌓여 있다">
+              </span>
+            </figure>
+          </div>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- ── 4. 왜 모여타 ─────────────────────────────────────────────────── -->
+  <section id="why" class="values" aria-labelledby="why-h">
+    <div class="values__bg" aria-hidden="true"></div>
+    <div class="values__in wrap wrap--rail">
+      <div class="values__head">
+        <p class="eyebrow">왜 모여타</p>
+        <h2 id="why-h" class="section-h">혼자 낼 이유가<br>없으니까요</h2>
+        <p class="values__lead">모여타가 하는 일은 세 가지뿐입니다. 하지 않는 일도 분명히 적어 두었어요.</p>
+      </div>
+
+      <ul class="value-cards">
+        <li class="value-card value-card--shot">
+          <div class="value-card__text">
+            <h3>요금은 1/N 로</h3>
+            <p>총 예상 요금을 정원으로 나눈 금액을, 합류하기 전에 보여줘요.</p>
+          </div>
+          <div class="value-card__shot">
+            <img src="assets/shots/20-fare-crop.webp" width="648" height="252" loading="lazy" decoding="async"
+                 alt="합류 확인 화면의 요금 부분. 총 예상 요금과, 정원으로 나눈 1인 부담 금액">
+          </div>
+        </li>
+
+        <li class="value-card value-card--device">
+          <div class="value-card__text">
+            <h3>누가 타는지 보고 타요</h3>
+            <p>휴대폰 인증을 마친 사람만 가입할 수 있어요. 같이 탈 사람의 닉네임과 탑승 횟수가 보이고, 실명과 연락처는 서로에게 공개되지 않아요.</p>
+          </div>
+          <div class="value-card__art">
+            <figure class="device device--md">
+              <span class="device__screen">
+                <img src="assets/shots/21-match-full.webp" width="648" height="1440" loading="lazy" decoding="async"
+                     alt="정원이 찬 매칭 화면. 세 명이 모였고 각자의 탑승 횟수와, 채팅으로 만날 곳을 정하라는 안내가 보인다">
+              </span>
+            </figure>
+          </div>
+        </li>
+
+        <li class="value-card value-card--text">
+          <div class="value-card__text">
+            <h3>모이면 채팅으로</h3>
+            <p>합류하는 순간 채팅방이 열려요. 모여타가 택시를 부르거나 요금을 정산하지는 않습니다 — 만나는 일과 타는 일은 사람이 해요.</p>
+          </div>
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ── 5. 다운로드 (자리만) ─────────────────────────────────────────── -->
+  <section id="get" class="cta" aria-labelledby="get-h">
+    <div class="wrap">
+      <div class="cta__panel">
+        <h2 id="get-h">설치는 아직<br>준비 중이에요</h2>
+        <p>모여타는 안드로이드 앱입니다. Google Play 에 올라가면 이 자리에 설치 링크를 둡니다.</p>
+        <p class="cta__chips">
+          <!-- 출시 후: 아래 span 을 <a class="btn btn--primary" href="스토어주소"> 로 교체 -->
+          <span class="chip" aria-label="Google Play 출시 준비 중">Google Play · 준비 중</span>
+        </p>
+        <p class="cta__fine">만 14세 이상부터 가입할 수 있어요. 출시 소식은 <a href="mailto:codingforest17@gmail.com">codingforest17@gmail.com</a> 으로 물어보실 수 있어요.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 6. 문서 ──────────────────────────────────────────────────────── -->
+  <section id="docs" class="docs wrap wrap--rail" aria-labelledby="docs-h">
+    <p class="eyebrow">문서</p>
+    <h2 id="docs-h" class="section-h">약속은 문서에<br>적어 뒀어요</h2>
+    <p class="docs__lead">어떤 개인정보를 받아 어떻게 쓰는지, 계정을 어떻게 지우는지, 어떤 조건으로 서비스를 쓰는지. 세 문서의 최신본은 항상 legal.moyeota.p-e.kr 에 있습니다.</p>
+
+    <ul class="doc-cards">
+      <li class="doc-card">
+        <p class="doc-card__num" aria-hidden="true">01</p>
+        <h3 class="doc-card__title"><a href="https://legal.moyeota.p-e.kr/privacy/">개인정보 처리방침</a></h3>
+        <p class="doc-card__desc">어떤 개인정보를 수집해 어떤 목적으로 쓰고 언제 지우는지, 이용자가 행사할 수 있는 권리는 무엇인지 설명합니다.</p>
+        <p class="doc-card__go" aria-hidden="true">읽기</p>
+      </li>
+      <li class="doc-card">
+        <p class="doc-card__num" aria-hidden="true">02</p>
+        <h3 class="doc-card__title"><a href="https://legal.moyeota.p-e.kr/account-deletion/">계정 및 데이터 삭제 안내</a></h3>
+        <p class="doc-card__desc">계정을 지우는 방법과, 삭제한 뒤 어떤 데이터가 바로 사라지고 어떤 데이터가 얼마나 더 보관되는지 안내합니다.</p>
+        <p class="doc-card__go" aria-hidden="true">읽기</p>
+      </li>
+      <li class="doc-card">
+        <p class="doc-card__num" aria-hidden="true">03</p>
+        <h3 class="doc-card__title"><a href="https://legal.moyeota.p-e.kr/terms/">이용약관</a></h3>
+        <p class="doc-card__desc">서비스 이용 조건과 이용자·운영자의 권리와 의무, 이용 제한과 책임의 범위를 정한 약관입니다.</p>
+        <p class="doc-card__go" aria-hidden="true">읽기</p>
+      </li>
+    </ul>
+  </section>
+
+  <!-- ── 7. 문의 ──────────────────────────────────────────────────────── -->
+  <section id="contact" class="wrap home-section" aria-labelledby="contact-h">
+    <h2 id="contact-h">문의</h2>
+    <p>서비스나 개인정보 처리에 관해 물어볼 것이 있으면 아래로 보내 주세요.</p>
+    <address>
+      <strong>운영 주체</strong> 모여타<br>
+      이메일 <a href="mailto:codingforest17@gmail.com">codingforest17@gmail.com</a>
+    </address>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap wrap--rail">
+    <ul class="footer-nav">
+      <li><a href="https://legal.moyeota.p-e.kr/privacy/">개인정보 처리방침</a></li>
+      <li><a href="https://legal.moyeota.p-e.kr/account-deletion/">계정 및 데이터 삭제 안내</a></li>
+      <li><a href="https://legal.moyeota.p-e.kr/terms/">이용약관</a></li>
+    </ul>
+    <p>세 문서의 최신본은 항상 legal.moyeota.p-e.kr 에서 확인할 수 있습니다.</p>
+    <p class="site-footer__fine">모여타 · 화면은 개발 중 빌드에서 찍은 것으로 실제와 다를 수 있습니다 · 최종 수정일 2026년 10월 14일</p>
+  </div>
+</footer>
+
+</body>
+</html>
