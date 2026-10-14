@@ -226,7 +226,7 @@ fun MatchWaitingRoute(
      * 서버 운영 설정의 택시 모드([AppConfig.taxiEnabled][com.moyeota.domain.model.AppConfig.taxiEnabled]).
      * false(1차 배포)면 정원이 찼을 때 기사 대기 대신 「합승 완료」를 보여 준다.
      */
-    taxiEnabled: Boolean = true,
+    taxiEnabled: Boolean = false,
     onCancelSearch: () -> Unit = {},
     /** 방을 유지한 채 화면만 벗어난다(나가기가 막힌 단계의 뒤로가기) */
     onExitKeepingParty: () -> Unit = {},

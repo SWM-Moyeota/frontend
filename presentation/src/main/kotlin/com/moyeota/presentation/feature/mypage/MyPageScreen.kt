@@ -2,6 +2,7 @@ package com.moyeota.presentation.feature.mypage
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -64,6 +65,7 @@ private val CardShadow = Color(0x0F1B2A4A)
  * - 탑승 횟수 요약·탑승 기록은 내 탑승 집계/이력 API 가 없어 뺐다. 이름만 서버 값이다(GET /users/info).
  * - 프로필 카드는 갈 화면(프로필 편집)이 없어 탭 동작·꺾쇠 없이 표시만 한다.
  * - 하단 버전 표기는 설치된 패키지의 versionName 이다(읽기 실패 시 숨김).
+ * - 개발자 옵션(동승/택시 모드 강제)은 [modeDebug] 가 있을 때만, 즉 디버그 빌드에서만 그린다.
  */
 @Composable
 fun MyPageScreen(
@@ -71,6 +73,7 @@ fun MyPageScreen(
     userName: UserNameState = UserNameState.Loading,
     onLogout: () -> Unit = {},               // → 04a 로그인 (세션 정리 후)
     onTabSelect: (MoyeotaTab) -> Unit = {},  // → 14 / 17 / 24
+    modeDebug: ModeDebugOptions? = null,     // 디버그 빌드 전용 개발자 옵션. 릴리스는 null
 ) {
     // 오탭 한 번으로 세션이 날아가지 않도록 확인을 한 단계 둔다 (와이어프레임의 확인 다이얼로그)
     var logoutConfirming by remember { mutableStateOf(false) }
@@ -162,6 +165,11 @@ fun MyPageScreen(
                 }
             }
 
+            if (modeDebug != null) {
+                Spacer(Modifier.height(32.dp))
+                ModeDebugSection(options = modeDebug)
+            }
+
             Spacer(Modifier.height(24.dp))
         }
 
@@ -192,10 +200,89 @@ fun MyPageScreen(
     }
 }
 
+/**
+ * 디버그 빌드 전용 개발자 옵션 — 서버 모드와 무관하게 동승/택시 화면을 강제한다.
+ *
+ * 택시 화면(25·26)은 서버가 배차 status 를 줘야 열리므로, 동승 서버에 택시를 강제해도 21 의 문구·버튼만
+ * 바뀐다. 25·26 까지 보려면 `TAXI_ENABLED=true` 로 띄운 로컬 서버가 필요하다(docs/MODE-ROUTES.md).
+ */
+data class ModeDebugOptions(
+    /** 서버가 준 값(강제 미적용). */
+    val serverTaxiEnabled: Boolean,
+    /** 서버 응답을 받았는가. false 면 서버 값은 아직 기본값이다. */
+    val serverResolved: Boolean,
+    /** 강제값. null 이면 서버 값을 따른다. */
+    val override: Boolean?,
+    val onOverride: (Boolean?) -> Unit,
+)
+
+@Composable
+private fun ModeDebugSection(options: ModeDebugOptions) {
+    Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+        Text(
+            text = "개발자 옵션 · 디버그 빌드에만 보여요",
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Medium,
+            color = GrayAsh,
+        )
+        Spacer(Modifier.height(8.dp))
+        val serverLabel = when {
+            !options.serverResolved -> "미수신 (기본값 동승)"
+            options.serverTaxiEnabled -> "택시"
+            else -> "동승"
+        }
+        Text(
+            text = "서버 모드: $serverLabel",
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+            color = MoyeotaColor.InkPrimary,
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ModeChip(text = "서버 값", selected = options.override == null) { options.onOverride(null) }
+            ModeChip(text = "동승 강제", selected = options.override == false) { options.onOverride(false) }
+            ModeChip(text = "택시 강제", selected = options.override == true) { options.onOverride(true) }
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = "강제값은 앱을 완전히 종료하면 풀려요. 25 배차·26 운행 화면은 택시 모드 서버가 있어야 열려요.",
+            fontSize = 11.sp,
+            color = GrayAsh,
+        )
+    }
+}
+
+@Composable
+private fun ModeChip(text: String, selected: Boolean, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(if (selected) MoyeotaColor.Primary500 else MoyeotaColor.SurfaceCanvas)
+            .clickable { onClick() }
+            .padding(horizontal = 12.dp, vertical = 7.dp),
+    ) {
+        Text(
+            text = text,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+            color = if (selected) Color.White else GrayMute,
+        )
+    }
+}
+
 @Preview(showBackground = true, widthDp = 393, heightDp = 852)
 @Composable
 private fun MyPageScreenPreview() {
     MyPageScreen(userName = UserNameState.Resolved("김성윤"))
+}
+
+@Preview(showBackground = true, widthDp = 393, heightDp = 852, name = "개발자 옵션")
+@Composable
+private fun MyPageScreenDebugPreview() {
+    MyPageScreen(
+        userName = UserNameState.Resolved("김성윤"),
+        modeDebug = ModeDebugOptions(serverTaxiEnabled = false, serverResolved = true, override = true, onOverride = {}),
+    )
 }
 
 @Preview(showBackground = true, widthDp = 393, heightDp = 852, name = "이름 미설정")

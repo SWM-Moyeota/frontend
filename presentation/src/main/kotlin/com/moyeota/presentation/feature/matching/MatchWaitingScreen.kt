@@ -140,7 +140,7 @@ fun MatchWaitingScreen(
      * 택시 모드(서버 설정). false = 1차 배포 — 정원이 차도 기사를 부르지 않는다.
      * 문구(「기사님을 찾아요」 → 「채팅으로 만나요」)와 정원 찼을 때의 CTA(「합승 완료」)가 갈린다.
      */
-    taxiEnabled: Boolean = true,
+    taxiEnabled: Boolean = false,
     actionInProgress: Boolean = false,
     actionErrorMessage: String? = null,
     onCancelSearch: () -> Unit = {},
