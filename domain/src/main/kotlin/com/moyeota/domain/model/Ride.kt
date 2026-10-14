@@ -38,16 +38,14 @@ data class Ride(
     val routePolyline: String? = null,
     /** 배정된 기사 id. 미배정이면 null. 서버 taxiDriverId. */
     val driverId: Long? = null,
-    /**
-     * 방 생성 시 정해진 탐색 반경(m). 서버 departureRadius / destinationRadius.
-     *
-     * 목록 응답에는 없어 null 이다 — 21 대기 화면이 「탐색 반경」을 하드코딩("1km")하지 않고
-     * 실제 방 값으로 보여 주기 위해 상세·생성 응답에서만 채운다(QA D-3).
-     * 서버가 0 을 내려보내면(값 없음) null 로 접는다 — 0m 반경은 의미가 없다.
-     */
-    val departureRadiusMeters: Int? = null,
-    val destinationRadiusMeters: Int? = null,
 )
+// 방의 **반경**(서버 `departureRadius`/`destinationRadius`) 필드는 없다 — 백엔드가 방 생성 요청에서
+// 반경을 빼고 서버 고정값(500m)으로 바꿨다(Backend `a668aee`). 응답에는 아직 실려 오지만
+// (`PartyDetailResponse`) 그건 **사용자가 정한 값이 아니고**, 서버의 어떤 조회·판정도 읽지 않는다 —
+// 합류에 거리 검사가 없고 목록은 지도 뷰포트만 본다. 도메인에 태우면 21 대기 화면의 「탐색 반경」처럼
+// 아무것도 걸러내지 않는 숫자를 사용자가 고른 조건으로 보여 주게 된다. 경로 매칭이 실제로 이 값을
+// 쓰기 시작하면 그때 다시 태운다.
+//
 // 방의 **지문**(서버 `fingerprint`) 필드는 없다 — 백엔드가 지웠다(Backend `04f6be7`).
 // 지문은 「가벼운 상태 요약이 내가 그린 상세와 같은가」를 비교하려고 만든 값이고, 그 비교 대상인
 // 상태 조회 API(`GET /matching/rooms/{id}/status`)가 함께 사라지면서 비교할 짝을 잃었다.

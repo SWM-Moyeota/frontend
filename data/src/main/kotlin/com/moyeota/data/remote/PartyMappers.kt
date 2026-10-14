@@ -114,8 +114,8 @@ fun PartyDetailResponse.toRide(currentUuid: String? = null): Ride {
         estimatedMinutes = estimateTime,
         routePolyline = route,
         driverId = taxiDriverId,
-        departureRadiusMeters = departureRadius.takeIf { it > 0 },
-        destinationRadiusMeters = destinationRadius.takeIf { it > 0 },
+        // 응답의 departureRadius/destinationRadius 는 **옮기지 않는다** — 서버 고정값이고
+        // 아무 조회·판정도 읽지 않는다([PartyDetailResponse.departureRadius] KDoc).
     )
 }
 
@@ -178,11 +178,16 @@ fun OpenPartyResponse.toRide(): Ride = Ride(
     estimatedMinutes = estimateTime,
     routePolyline = route,
     driverId = taxiDriverId,
-    departureRadiusMeters = departureRadius.takeIf { it > 0 },
-    destinationRadiusMeters = destinationRadius.takeIf { it > 0 },
+    // 반경은 상세 매퍼와 같은 이유로 옮기지 않는다([PartyDetailResponse.departureRadius] KDoc).
 )
 
-// 방장 id 는 요청에도 도메인 모델에도 없다 — 방 생성자는 서버가 토큰에서 정한다(NewParty KDoc 참고).
+/**
+ * 방 생성 요청 본문. 실리는 것은 **좌표·라벨·정원뿐**이다.
+ *
+ * 방장 id 는 요청에도 도메인 모델에도 없다 — 방 생성자는 서버가 토큰에서 정한다(NewParty KDoc 참고).
+ * 반경도 없다 — 서버가 요청에서 빼고 고정값을 쓴다(Backend `a668aee`). 둘 다 **보내도 서버가 버리는**
+ * 값이라, 되살리면 앱이 정한 값이 반영된다는 착각만 남는다. 「본문에 없다」는 PartyMappersTest 가 못 박는다.
+ */
 fun NewParty.toRequestDto(): OpenPartyRequestDto = OpenPartyRequestDto(
     departureLat = departureLat,
     departureLng = departureLng,
@@ -191,8 +196,6 @@ fun NewParty.toRequestDto(): OpenPartyRequestDto = OpenPartyRequestDto(
     departure = departure,
     destination = destination,
     capacity = capacity,
-    departureRadius = departureRadius,
-    destinationRadius = destinationRadius,
 )
 
 fun DriverSummaryResponse.toAssignedDriver(): AssignedDriver = AssignedDriver(

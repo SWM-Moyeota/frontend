@@ -91,6 +91,8 @@ interface RideRepository {
      * 생성자는 **로그인 토큰이 정한다**(@CurrentUser) — 합류·나가기와 같다. 요청 본문에 사용자 id 를
      * 싣지 않는다. 생성 응답에는 멤버 목록이 없어 인원 수만큼 자리 표시용 멤버가 채워지므로,
      * 실제 멤버 식별자가 필요하면 [getPartyDetail] 로 다시 읽는다.
+     *
+     * 앱이 정하는 조건은 **좌표·라벨·정원뿐**이다([NewParty]) — 반경은 서버가 고정값으로 정한다.
      */
     suspend fun createParty(request: NewParty): Ride
 

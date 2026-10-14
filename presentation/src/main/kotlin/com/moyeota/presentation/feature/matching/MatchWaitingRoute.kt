@@ -692,7 +692,6 @@ fun MatchWaitingRoute(
                 ride = ride,
                 foundCount = ride.members.size,
                 conditionLabel = "${ride.capacity}인",
-                radiusLabel = radiusLabel(ride),
                 myLocation = myLocation.coordinates,
                 taxiEnabled = taxiEnabled,
                 actionInProgress = action.inProgress,
@@ -707,21 +706,6 @@ fun MatchWaitingRoute(
     }
 }
 
-/**
- * 21 「탐색 반경」 라벨. 방 생성 시 고른 값을 그대로 보여 준다 — 예전에는 화면 기본값 "1km" 가
- * 서버 값과 무관하게 늘 떠 있었다(QA D-3).
- *
- * 출발지·도착지 반경은 16 에서 따로 고를 수 있어 다를 수 있다. 같으면 한 값으로, 다르면 둘 다 적는다.
- * 목록 응답으로 만든 [Ride] 에는 반경이 없어 null 이며 그때는 "—" 다(값을 지어내지 않는다).
- */
-private fun radiusLabel(ride: Ride): String {
-    val departure = ride.departureRadiusMeters
-    val destination = ride.destinationRadiusMeters
-    return when {
-        departure == null && destination == null -> "—"
-        departure == destination -> "${departure}m"
-        else -> "출발 ${meters(departure)} · 도착 ${meters(destination)}"
-    }
-}
-
-private fun meters(value: Int?): String = if (value == null) "—" else "${value}m"
+// 21 「탐색 반경」 라벨을 만들던 radiusLabel/meters 는 지웠다(2026-10-14) — 반경이 서버 고정값이
+// 되면서(Backend `a668aee`) 사용자가 정한 조건이 아니게 됐고, 매칭은 그 값을 읽지도 않는다
+// (합류에 거리 검사 없음, 목록은 지도 뷰포트). 도메인 [Ride] 에서도 반경 필드를 뺐다.

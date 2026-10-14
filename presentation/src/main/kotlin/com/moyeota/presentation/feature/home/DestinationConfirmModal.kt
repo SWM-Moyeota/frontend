@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -80,32 +79,20 @@ data class RoutePreviewUi(
     val encodedPath: String? = null, // Google Encoded Polyline — 25 배차 화면과 같은 형식
 )
 
-// 16 에서 고른 매칭 조건. 반경은 m 단위(서버 OpenPartyRequest 와 같은 단위).
-//
-// 「동성만」은 조건이 아니다 — 모여타는 같은 성별끼리만 매칭되는 서비스라 항상 참이고,
-// 서버 요청에도 실리지 않는다. 사용자가 끌 수 있는 것처럼 보이는 토글은 두지 않는다.
+/**
+ * 16 에서 고른 매칭 조건. 지금은 **정원 하나뿐**이다.
+ *
+ * 「출발지 반경」·「도착지 반경」 칩은 지웠다(2026-10-14). 서버가 방 생성 요청에서 반경을 빼고
+ * 고정값(500m)을 쓰기로 했다(Backend `a668aee`) — 보내도 버려진다. 그전에도 어떤 조회·판정도
+ * 그 값을 읽지 않아(합류에 거리 검사가 없고 목록은 지도 뷰포트만 본다) 사용자는 **아무 영향 없는
+ * 값**을 「매칭 조건」이라는 이름으로 고르고 있었다. 「준비 중」 자리표시를 두지 않고 요소째 내렸다.
+ *
+ * 「동성만」 토글도 없다 — 성별은 매칭에 쓰이지 않는다(백엔드 `matching` 패키지에 성별 필드 0건).
+ * 고를 수는 있는데 아무 일도 일어나지 않는 조건은 두지 않는다.
+ */
 data class MatchConditions(
     val capacity: Int,
-    val departureRadiusMeters: Int,
-    val destinationRadiusMeters: Int,
 )
-
-/**
- * 칩 라벨 → m.
- *
- * 칩 값은 **서버 검증 범위(100~500m)와 같은 집합**이다. 예전에는 500m/1km/2km 를 보여 주고
- * 호출부가 1km·2km 를 조용히 500m 로 깎았는데(QA D-2), 사용자가 고른 값이 아무 표시 없이
- * 버려지는 셈이었다. UI 가 서버 계약보다 넓은 선택지를 내지 않는 쪽으로 맞춘다.
- */
-private fun radiusLabelToMeters(label: String): Int = when (label) {
-    "100m" -> 100
-    "300m" -> 300
-    else -> 500
-}
-
-/** 반경 칩 목록·기본값. 기본 300m 는 가운데 값이자 서버 기본 동작에 가장 가깝다. */
-private val RadiusOptions = listOf("100m", "300m", "500m")
-private const val DefaultRadiusLabel = "300m"
 
 /**
  * 16 · 도착지 확인 · 매칭 조건 (모달) [신규]
@@ -113,13 +100,12 @@ private const val DefaultRadiusLabel = "300m"
  * 이동(디스크립션):
  * - 닫기·배경 탭 → 15 (onDismiss) — 공통 규칙: 모달은 배경 탭·닫기로만 종료
  * - 「같이 탈 사람 찾기」 → 방 생성(POST /matching/rooms) 성공 시 21 매칭 대기 (onFindCompanions)
- *   선택한 매칭 조건(인원·반경)을 그대로 넘긴다. 반경은 m 단위.
+ *   선택한 매칭 조건(인원)을 그대로 넘긴다.
  *
  * 선택 규칙(디스크립션):
  * - 인원 1인/2인/3인 → 예상 1인 요금 재계산 ([RoutePreviewUi.estimatedFare] ÷ 인원, 10원 단위 반올림)
- * - 출발지·도착지 반경 100m/300m/500m 각 1개 필수 선택, 기본값 3인 / 300m
- *   (서버 검증 범위와 같은 집합이라 고른 값이 그대로 POST 본문에 실린다 — QA D-2)
- * - 매칭 방식은 「주요 승차지점」 하나뿐 — 선택된 상태로 고정한다
+ *   기본값 3인. **고를 수 있는 조건은 이것뿐이다** — 반경 칩과 「매칭 방식」 행은 지웠다
+ *   ([MatchConditions] KDoc: 서버가 반경을 고정값으로 정하고, 승차지점 개념 자체가 없다)
  *
  * 레이아웃(디스크립션):
  * - 지도가 헤더 아래를 전부 채우고, 그 위에 **드래그로 접었다 펴는 시트**가 얹힌다
@@ -147,10 +133,8 @@ fun DestinationConfirmModal(
     onAdjustPositions: (LatLng?, LatLng?) -> Unit = { _, _ -> },
     onFindCompanions: (MatchConditions) -> Unit = {},
 ) {
-    // 기본값: 3인 / 300m (디스크립션 유효값 규칙)
+    // 기본값: 3인 (디스크립션 유효값 규칙)
     var peopleCount by rememberSaveable { mutableIntStateOf(3) }
-    var originRadius by rememberSaveable { mutableStateOf(DefaultRadiusLabel) }
-    var destinationRadius by rememberSaveable { mutableStateOf(DefaultRadiusLabel) }
     // 핀 조정 화면(모달 내 확장 상태). null 이면 닫혀 있다.
     var adjustTarget by remember { mutableStateOf<PinTarget?>(null) }
     val canAdjust = destinationPosition != null || originPosition != null
@@ -423,29 +407,16 @@ fun DestinationConfirmModal(
                                     )
                                 }
                             }
-                            HorizontalDivider(color = MoyeotaColor.Hairline)
-                            ConditionRow(label = "출발지 반경") {
-                                RadiusOptions.forEach { radius ->
-                                    ConditionChip(
-                                        text = radius,
-                                        selected = originRadius == radius,
-                                        onClick = { originRadius = radius },
-                                    )
-                                }
-                            }
-                            HorizontalDivider(color = MoyeotaColor.Hairline)
-                            ConditionRow(label = "도착지 반경") {
-                                RadiusOptions.forEach { radius ->
-                                    ConditionChip(
-                                        text = radius,
-                                        selected = destinationRadius == radius,
-                                        onClick = { destinationRadius = radius },
-                                    )
-                                }
-                            }
+                            // 「출발지 반경」·「도착지 반경」 행은 지웠다(2026-10-14) — 서버가 방 생성
+                            // 요청에서 반경을 빼고 고정값(500m)을 쓴다(Backend `a668aee`). 고른 값이
+                            // 전송조차 되지 않고, 전송됐을 때도 매칭이 읽지 않던 값이다([MatchConditions]).
+                            //
                             // 「매칭 방식 · 주요 승차지점」 행은 지웠다(2026-10-13) — 그런 매칭 방식이
                             // 없다. 서버에 승차지점 개념이 없고(방은 사용자가 찍은 좌표 그대로 만들어진다)
                             // 칩도 항상 선택된 채 무동작이었다. 고를 것도, 가리킬 기능도 없는 줄이었다.
+                            //
+                            // 남은 행이 「인원」 하나라 구분선도 없다 — 카드는 그대로 둔다. 실제 매칭
+                            // 조건이 하나뿐이라는 사실을 그대로 보여 주는 모양이다.
                         }
 
                         Spacer(Modifier.height(16.dp))
@@ -484,13 +455,7 @@ fun DestinationConfirmModal(
                     PrimaryCtaButton(
                         text = "같이 탈 사람 찾기",
                         onClick = {
-                            onFindCompanions(
-                                MatchConditions(
-                                    capacity = peopleCount,
-                                    departureRadiusMeters = radiusLabelToMeters(originRadius),
-                                    destinationRadiusMeters = radiusLabelToMeters(destinationRadius),
-                                ),
-                            )
+                            onFindCompanions(MatchConditions(capacity = peopleCount))
                         },
                         loading = creating,
                         modifier = Modifier.padding(horizontal = 16.dp),

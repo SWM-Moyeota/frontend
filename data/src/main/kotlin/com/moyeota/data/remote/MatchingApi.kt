@@ -66,6 +66,9 @@ interface MatchingApi {
      * 토큰 주체를 쓴다 — 구버전 호환용 잔재다. 그래서 앱은 아예 보내지 않는다
      * (실측: creatorId 없이 200, 토큰 주체가 방장으로 기록됨).
      * 리포트 22번 D-5("내가 만든 방에 내가 없는" 상태)는 이것으로 해소됐다.
+     *
+     * **반경도 요청에 없다** — 서버가 `OpenPartyRequest` 에서 빼고 고정값(500m)을 쓴다
+     * (Backend `a668aee`, Swagger 「반경은 서버 고정값(500m)」). 400 목록에서 `INVALID_RADIUS` 도 빠졌다.
      */
     @POST("api/v1/matching/rooms")
     suspend fun openParty(@Body request: OpenPartyRequestDto): OpenPartyResponse

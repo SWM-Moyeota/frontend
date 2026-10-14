@@ -159,7 +159,6 @@ class WaitingSseStateTest {
             routePolyline = "abc",
             estimatedFare = 14_000,
             estimatedMinutes = 21,
-            departureRadiusMeters = 500,
         )
 
         val joined = before.withMemberJoined(user("u2"), RideStatus.RECRUITING)

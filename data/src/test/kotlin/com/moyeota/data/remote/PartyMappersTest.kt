@@ -12,6 +12,7 @@ import com.moyeota.domain.model.NewParty
 import com.moyeota.domain.model.RideStatus
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -284,12 +285,15 @@ class PartyMappersTest {
     }
 
     /**
-     * 방 생성자는 서버가 토큰에서 정한다. 사용자 id 가 **본문에 실려서는 안 된다** — 실려도 서버는
-     * 조용히 무시하므로(테스트가 없으면) 되살아난 걸 아무도 눈치채지 못하고,
-     * "앱이 보낸 생성자"가 유효하다는 착각만 남는다.
+     * 방 생성 요청 본문의 **계약**을 통째로 못 박는다 — 좌표·라벨·정원 7개 키뿐이다.
+     *
+     * 서버가 버리는 값(사용자 id·반경)이 본문에 되살아나도 응답은 200 이라 **아무 증상이 없다.**
+     * 그래서 키 목록을 여기서 고정한다: 되살아나면 "앱이 보낸 생성자/반경이 유효하다"는 착각만 남는다.
+     * - 사용자 id: 서버가 `@CurrentUser`(토큰 주체)를 쓰고 본문 `creatorId` 는 버린다.
+     * - 반경: 서버가 `OpenPartyRequest` 에서 빼고 고정값 500m 를 쓴다(Backend `a668aee`).
      */
     @Test
-    fun `생성 요청 본문에 사용자 id 를 싣지 않는다`() {
+    fun `생성 요청 본문에는 좌표 라벨 정원만 실린다 — 사용자 id 도 반경도 없다`() {
         val dto: OpenPartyRequestDto = NewParty(
             departureLat = 37.5665,
             departureLng = 126.9780,
@@ -302,13 +306,20 @@ class PartyMappersTest {
 
         assertEquals("서울시청", dto.departure)
         assertEquals(3, dto.capacity)
-        // 서버 검증 범위(100~500)를 만족하는 기본 반경이 채워져야 한다.
-        assertEquals(500, dto.departureRadius)
-        assertEquals(500, dto.destinationRadius)
 
         val encoded = json.encodeToString(dto)
         assertFalse("생성자 id 가 본문에 되살아났다: $encoded", encoded.contains("creatorId"))
         assertFalse("생성자 id 가 본문에 되살아났다: $encoded", encoded.contains("hostId"))
+        assertFalse("반경이 본문에 되살아났다: $encoded", encoded.contains("Radius"))
+        assertFalse("반경이 본문에 되살아났다: $encoded", encoded.contains("radius"))
+        // 키 집합 자체를 고정한다 — 새 필드가 몰래 끼어드는 것까지 잡는다.
+        assertEquals(
+            setOf(
+                "departureLat", "departureLng", "destinationLat", "destinationLng",
+                "departure", "destination", "capacity",
+            ),
+            json.parseToJsonElement(encoded).jsonObject.keys,
+        )
     }
 
     @Test
@@ -346,8 +357,12 @@ class PartyMappersTest {
              "estimateFare":9600,"estimateTime":14,"route":"_p~iF~ps|U","taxiDriverId":42}
         """.trimIndent()
 
-        val ride = json.decodeFromString<PartyDetailResponse>(body).toRide(currentUuid = UUID_ME)
+        val decoded = json.decodeFromString<PartyDetailResponse>(body)
+        val ride = decoded.toRide(currentUuid = UUID_ME)
 
+        // 서버는 아직 반경을 내려보낸다(고정 500m) — DTO 는 그 모양대로 받는다.
+        assertEquals(500, decoded.departureRadius)
+        assertEquals(500, decoded.destinationRadius)
         assertEquals("7", ride.id)
         assertEquals(RideStatus.DISPATCHING, ride.status)
         assertEquals(listOf(UUID_ME, ""), ride.members.map { it.id })

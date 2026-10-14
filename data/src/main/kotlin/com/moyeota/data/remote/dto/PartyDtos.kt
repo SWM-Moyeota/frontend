@@ -49,6 +49,15 @@ data class PartyDetailResponse(
     val destination: String = "",
     val capacity: Int = 0,
     val currentMembers: Int = 0,
+    /**
+     * 서버가 방에 박아 둔 반경(m). **사용자가 고른 값이 아니다** — 요청에서 빠지고 서버 고정값
+     * (`Radius.DEFAULT` = 500m)이 됐다(Backend `a668aee`). 응답에는 남아 있어 서버 record 와 모양을
+     * 맞추려고 받아 두지만, **도메인 [com.moyeota.domain.model.Ride] 로는 옮기지 않는다.**
+     *
+     * 옮기지 않는 이유: 서버의 어떤 조회·판정도 이 값을 읽지 않는다 — 합류(`party.join`)에 거리 검사가
+     * 없고 목록은 지도 뷰포트만 본다. 화면에 띄우면 아무것도 걸러내지 않는 숫자를 「탐색 범위」로
+     * 약속하는 셈이고, 사용자가 바꿀 수도 없다. 경로 매칭이 실제로 이 값을 쓰기 시작하면 그때 태운다.
+     */
     val departureRadius: Int = 0,
     val destinationRadius: Int = 0,
     val status: String = "",
@@ -148,6 +157,11 @@ data class PartyStatusResponse(
  * **생성자 id 필드는 없다.** 서버 record 에 `creatorId` 가 구버전 호환으로 남아 있지만
  * `toCommand()` 가 그 값을 버리고 `@CurrentUser` 로 받은 토큰 주체를 쓴다 — 보내 봐야 무시되는
  * 값이라 아예 싣지 않는다. 되살리면 "앱이 보낸 생성자"가 유효하다는 착각을 부른다.
+ *
+ * **반경 필드도 없다**(Backend `a668aee`). `departureRadius`·`destinationRadius` 가 서버 record 에서
+ * 빠지고 서버가 고정값(`Radius.DEFAULT` = 500m)을 쓴다. 계속 보내도 서버는 모르는 키로 흘려 버리므로
+ * (Jackson 기본 동작) 되살리면 **사용자가 고른 값이 조용히 버려지는** 상태로 돌아간다.
+ * 응답에는 반경이 남아 있지만 그건 서버가 정한 값이다([PartyDetailResponse.departureRadius]).
  */
 @Serializable
 data class OpenPartyRequestDto(
@@ -158,8 +172,6 @@ data class OpenPartyRequestDto(
     val departure: String,
     val destination: String,
     val capacity: Int,
-    val departureRadius: Int,
-    val destinationRadius: Int,
 )
 
 // POST /api/v1/matching/rooms 응답 (백엔드 OpenPartyResponse — members 목록이 없다)
@@ -174,6 +186,7 @@ data class OpenPartyResponse(
     val destination: String = "",
     val capacity: Int = 0,
     val currentMembers: Int = 0,
+    /** 서버 고정값(500m). 요청에 없는 값이고 도메인으로도 옮기지 않는다 — [PartyDetailResponse.departureRadius] 참고. */
     val departureRadius: Int = 0,
     val destinationRadius: Int = 0,
     val status: String = "",
