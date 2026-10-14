@@ -128,7 +128,10 @@ jarsigner -verify -verbose -certs app/build/outputs/bundle/release/app-release.a
 
 워크플로가 주입하는 버전:
 
-- `MOYEOTA_VERSION_CODE` = `github.run_number` — 워크플로 실행마다 1 씩 올라간다.
+- `MOYEOTA_VERSION_CODE` = `YYMMDD × 100 + 당일 순번` (예: 2026-10-14 첫 빌드 → `26101401`).
+  **`github.run_number` 를 쓰지 않는다** — 워크플로를 재실행하면 같은 값이 나오고, Play 는 같은
+  versionCode 를 두 번 받지 않아 그 업로드가 거부된다. 날짜와 순번은 `versionName` 과 같은 출처라
+  둘이 어긋나지 않는다. 하루 99 번을 넘으면 날짜 순서가 깨지므로 워크플로가 실패한다.
 - `MOYEOTA_VERSION_NAME` = 위에서 계산한 `YYYY.MMDD.N` — 35 마이페이지 하단에 이 값이 뜬다.
 
 > **시크릿이 없으면 워크플로가 실패한다.** 예전처럼 서명 없는 APK 가 조용히 릴리스에 붙는 일은 없다. 「서명 키스토어 복원」에서 한 번, 빌드 뒤 「서명 검증」에서 또 한 번 막는다. 두 단계 중 하나라도 실패하면 `release` 잡이 실행되지 않아 GitHub Release 가 아예 만들어지지 않는다.
