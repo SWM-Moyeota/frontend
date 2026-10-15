@@ -201,8 +201,8 @@ class RemoteAuthRepository(
         authCall { api.checkNickname(NicknameCheckRequestDto(nickname.trim())) }.exists
 
     /** 204 라 돌려받을 값이 없다. 실패는 전부 [AuthException] 으로 좁혀 올린다. */
-    override suspend fun updateProfile(nickname: String?, imageUrl: String?) {
-        authCall { userApi.updateProfile(UpdateProfileRequest(nickname?.trim(), imageUrl)) }
+    override suspend fun updateProfile(nickname: String?, imageKey: String?) {
+        authCall { userApi.updateProfile(UpdateProfileRequest(nickname?.trim(), imageKey)) }
     }
 
     /**

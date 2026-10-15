@@ -73,7 +73,12 @@ data class SmsVerifyResponse(
     val verificationToken: String = "",
 )
 
-/** 201 응답. 백엔드 `UserResponse(UUID uuid)`. 토큰은 주지 않는다 — 가입 후 로그인을 따로 해야 한다. */
+/**
+ * 201 응답. 토큰은 주지 않는다 — 가입 후 로그인을 따로 해야 한다.
+ *
+ * 서버 `UserResponse` 는 2026-10-15 배포(Backend #235)로 `imageUrl` 이 붙어 두 필드가 됐지만,
+ * 가입 직후 화면이 쓰는 값은 `uuid` 하나뿐이라 여기선 받지 않는다(디코더의 `ignoreUnknownKeys` 가 흘린다).
+ */
 @Serializable
 data class RegisterResponse(
     val uuid: String = "",

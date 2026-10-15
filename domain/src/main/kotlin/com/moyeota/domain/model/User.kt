@@ -17,7 +17,14 @@ data class User(
     val verifiedLabel: String, // 예: "성결대 인증", "직장 인증"
     val rating: Double,
     val rideCount: Int,
-    /** 프로필 이미지 URL. 서버가 주지 않으면 null — 화면은 이니셜 원 같은 대체 표현을 쓴다. */
+    /**
+     * 프로필 이미지 URL(전체 주소). 화면은 아직 이것을 그리지 않는다 — `MemberAvatar` 참고.
+     *
+     * **null 을 "이미지 없음"으로 읽지 말 것.** 2026-10-15 배포(Backend #235)부터 서버는 고른 적
+     * 없는 사용자에게도 **기본 이미지의 전체 URL** 을 준다. 여기가 null 인 경우는 사실상 하나뿐인데,
+     * 그건 유저 요약 자체가 없는 멤버(탈퇴 등)라 publicId·nickname 과 **함께** null 로 오는 경우다.
+     * 그 판정은 [id] 가 비었는지로 한다(`User.isWithdrawn`) — 이 필드로 하지 마라.
+     */
     val imageUrl: String? = null,
     /**
      * 이 멤버가 로그인한 본인인가. `publicId == UserSession.currentUserUuid` 로 판정한다.

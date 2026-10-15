@@ -127,7 +127,7 @@ interface AuthRepository {
      *   [com.moyeota.domain.model.AuthError.NICKNAME_DUPLICATED] (409 `USER108`) /
      *   [com.moyeota.domain.model.AuthError.SESSION_EXPIRED] (401)
      */
-    suspend fun updateProfile(nickname: String?, imageUrl: String?)
+    suspend fun updateProfile(nickname: String?, imageKey: String?)
 
     /**
      * 로그인. POST /api/v1/auth/login.
