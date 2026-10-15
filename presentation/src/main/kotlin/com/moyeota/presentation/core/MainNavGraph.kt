@@ -10,6 +10,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
@@ -200,23 +201,50 @@ private fun MainNavHost(
     // (아래 LaunchedEffect 가 NavHost 보다 앞에 선언돼 있어 같은 컴포지션에서 먼저 돈다).
     // 탈퇴가 실패하면 AccountDeleteRoute 가 되돌린다 — 안 되돌리면 나중의 진짜 세션 만료가 조용해진다.
     var accountDeleted by remember { mutableStateOf(false) }
+    // 14 홈이 넘기는 첫 검색어. **remember 로 남긴다** — 15 는 이 값을 첫 진입에 한 번만 읽고
+    // (DestinationRoute: `state.query.isBlank()` 일 때만) 그 뒤 검색어는 ViewModel 이 들고 있어
+    // 구성 변경에서 이미 살아남는다. 여기서 "" 로 돌아가도 화면에 보이는 것은 달라지지 않는다.
     var searchInitialQuery by remember { mutableStateOf("") }
     // 15 에서 고른 출발지·도착지(좌표 포함) — 16 방 생성에 필요하다.
     // 15 는 출발지(고른 곳 또는 실위치)가 있어야만 16 으로 넘긴다. 15 를 거치지 않은 복원 진입이면 null — 16 이 안내만 한다.
-    var confirmedOrigin by remember { mutableStateOf<Place?>(null) }
-    var confirmedDestination by remember { mutableStateOf<Place?>(null) }
-    // 26 에서 방금 끝난 방 — 33 도착 완료 요약용. 전이 직전 clearParty() 가 activeRide 를 비우므로 따로 잡아 둔다
+    //
+    // **구성 변경에 살아남아야 한다.** 16 은 dialog 목적지라 회전하면 다시 만들어지는데, 이 값이
+    // 사라지면 방금 고른 경로가 없어져 「출발지가 없어요. 15 목적지 화면에서 출발지를 검색해 주세요」가
+    // 뜬다 — 이미 끝낸 단계를 다시 하라는 안내다. [Place] 는 문자열 둘·실수 둘뿐이라 Bundle 에 담아도
+    // 가볍다([PlaceSaver] — ChatRoute 의 ChatRoomSaver 와 같은 방식).
+    var confirmedOrigin by rememberSaveable(stateSaver = PlaceSaver) { mutableStateOf<Place?>(null) }
+    var confirmedDestination by rememberSaveable(stateSaver = PlaceSaver) { mutableStateOf<Place?>(null) }
+    // 26 에서 방금 끝난 방 — 33 도착 완료 요약용. 전이 직전 clearParty() 가 activeRide 를 비우므로 따로 잡아 둔다.
+    //
+    // **일부러 remember 로 남긴다.** [Ride] 는 멤버 목록까지 안은 큰 객체여서 Bundle 에 담을 값이 아니고
+    // (저장 상태가 커지면 TransactionTooLargeException 으로 앱이 죽는다), 33 은 이 값이 없어도
+    // **거짓을 말하지 않는다** — 경로·금액·동승자 수를 지어내는 대신 그 줄을 숨긴다. 회전하면 요약이
+    // 빠진 완료 화면이 되지만 거기서 할 일(「확인」 → 홈)은 그대로 남는다.
     var finishedRide by remember { mutableStateOf<Ride?>(null) }
-    var selectedPartyId by remember { mutableStateOf<Long?>(null) }
+    // ── 방 id 는 구성 변경에서 살아남아야 한다 (selectedPartyId · createdPartyId · activePartyId) ──
+    //
+    // 회전·다크모드 전환·글꼴 크기·언어 변경은 액티비티를 다시 만든다. 그때 [rememberNavController] 의
+    // 백스택은 **복원되므로** 20·21·22·25·26·27 목적지로 그대로 돌아오는데, 이 id 들이 `remember` 였던
+    // 탓에 null 로 돌아가 라우트가 「어느 방인지 모르는」 상태가 됐다. 21·25 는 그 상태에서 예시 방을
+    // 그려 **남의 가짜 방**을 보여 줬다(출시 차단 결함, 2026-10-15). 되돌릴 길도 막혀 있었다 —
+    // 진행 중 방 재진입의 빗장([startupStageHandled])은 `rememberSaveable` 이라 true 로 복원돼
+    // 즉시 return 한다.
+    //
+    // `Long?` 은 Bundle 이 그대로 담는 원시 타입이라 저장 비용이 없다.
+    var selectedPartyId by rememberSaveable { mutableStateOf<Long?>(null) }
     // 20·22 에서 탭한 동승자 — 23 프로필이 이 값을 그린다.
     // 라우트 인자로 넘기지 않는 이유: User 는 방 상세 응답의 일부라 id 만 넘기면 23 이 방을 다시
     // 조회해야 하는데, 그 조회 API 는 "멤버 한 명"이 아니라 방 전체다.
+    //
+    // **일부러 remember 로 남긴다.** [User] 는 Bundle 에 담을 타입이 아니고, 23 은 null 이면 예시
+    // 프로필을 그리는 대신 사실대로 말하고 되돌린다(아래 [Routes.PARTNER_PROFILE]) — 회전하면
+    // 그 안내로 떨어지지만, 20·22 가 백스택에 그대로 있어 다시 탭하면 된다.
     var selectedPartner by remember { mutableStateOf<User?>(null) }
-    // 16 에서 만든 방 — 21 매칭 대기가 이 방을 조회한다
-    var createdPartyId by remember { mutableStateOf<Long?>(null) }
+    // 16 에서 만든 방 — 21 매칭 대기가 이 방을 조회한다. 위 selectedPartyId 와 같은 이유로 saveable
+    var createdPartyId by rememberSaveable { mutableStateOf<Long?>(null) }
     // 지금 배차·운행 중인 방 — 25 배차 현황과 27 신고가 이 id 로 서버를 조회한다.
     // 탐색용 selectedPartyId 와 분리한다(탐색 중 다른 방을 눌러도 내 운행이 바뀌면 안 된다).
-    var activePartyId by remember { mutableStateOf<Long?>(null) }
+    var activePartyId by rememberSaveable { mutableStateOf<Long?>(null) }
 
     fun back() {
         navController.popBackStack()
@@ -848,3 +876,29 @@ private fun MainNavHost(
         }
     }
 }
+
+/**
+ * 15 에서 확정한 출발지·도착지를 **구성 변경 뒤에도** 되살린다.
+ *
+ * [Place] 는 Parcelable 이 아니다(도메인 모델에 안드로이드 타입을 넣지 않는다) — 그래서 네 필드를
+ * 그대로 풀어 담는다. ChatRoute 의 `ChatRoomSaver` 와 같은 방식이고, 담기는 값은 문자열 둘·실수
+ * 둘뿐이라 저장 상태가 커질 걱정이 없다.
+ */
+private val PlaceSaver = listSaver<Place?, Any>(
+    save = { place ->
+        if (place == null) emptyList()
+        else listOf(place.name, place.roadName, place.latitude, place.longitude)
+    },
+    restore = { values ->
+        if (values.isEmpty()) {
+            null
+        } else {
+            Place(
+                name = values[0] as String,
+                roadName = values[1] as String,
+                latitude = values[2] as Double,
+                longitude = values[3] as Double,
+            )
+        }
+    },
+)

@@ -10,6 +10,7 @@ import com.moyeota.data.remote.dto.RouteEstimateResponse
 import com.moyeota.data.remote.dto.RouteRequestDto
 import com.moyeota.domain.model.NewParty
 import com.moyeota.domain.model.RideStatus
+import com.moyeota.domain.model.isHostedByMe
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -141,12 +142,13 @@ class PartyMappersTest {
     }
 
     /**
-     * 백엔드가 자동 기사 매칭으로 바뀌며 방장 개념이 사라졌다. 예전엔 입장 시각(joinedAt)이 가장 이른
-     * 멤버를 방장으로 추정해 "방장" 닉네임을 붙였는데, 그 추정이 되살아나지 않는지 못박는다.
-     * 서버가 그 필드를 아예 없앴으므로(Backend #218) 추정의 재료조차 남지 않았다.
+     * 방장은 **서버가 멤버마다 표시해 준다**(`MemberInfo.host`, Backend #240) — 앱이 셈하지 않는다.
+     * 예전엔 입장 시각(joinedAt)이 가장 이른 멤버를 방장으로 추정해 "방장" 닉네임을 붙였는데,
+     * 그 추정이 되살아나지 않는지 못박는다: 서버가 `joinedAt` 을 아예 없앴고(Backend #218) 방장
+     * 판정은 `Party.isHost` 하나로 들어왔으므로, 목록 순서나 첫째 원소로 방장을 **고르면 안 된다**.
      */
     @Test
-    fun `멤버는 전부 동등하게 매핑된다 — 방장 추정이 없다`() {
+    fun `멤버 순서와 표시는 서버가 준 그대로다 — 앱이 방장을 추정하지 않는다`() {
         val detail = detailResponse(
             members = listOf(
                 member(publicId = UUID_OTHER, nickname = "다른사람"),
@@ -159,6 +161,158 @@ class PartyMappersTest {
         // 서버가 준 순서 그대로, 재정렬하거나 특별 취급하지 않는다.
         assertEquals(listOf(UUID_OTHER, UUID_ME), ride.members.map { it.id })
         assertEquals(listOf("다른사람", "성윤"), ride.members.map { it.nickname })
+        // 닉네임에 "방장" 같은 꾸밈이 붙지 않는다 — 방장 표시는 isHost 필드 하나뿐이다.
+        assertTrue(ride.members.none { it.nickname.contains("방장") })
+    }
+
+    /** 서버가 `host` 로 말해 준 방장이 그대로 [com.moyeota.domain.model.User.isHost] 가 된다. */
+    @Test
+    fun `서버가 준 host 를 멤버의 isHost 로 옮긴다`() {
+        val detail = detailResponse(
+            members = listOf(
+                member(publicId = UUID_OTHER, nickname = "다른사람", host = true),
+                member(publicId = UUID_ME, nickname = "성윤", host = false),
+            ),
+        )
+
+        val ride = detail.toRide(currentUuid = UUID_ME)
+
+        assertEquals(listOf(true, false), ride.members.map { it.isHost })
+        // 「내가 방장인가」의 단일 창구 — 방장은 내가 아니다.
+        assertFalse(ride.isHostedByMe)
+    }
+
+    /** 내가 방장이면 [com.moyeota.domain.model.isHostedByMe] 가 참이다 — 목록 순서와 무관하다. */
+    @Test
+    fun `내가 방장이면 isHostedByMe 가 참이다 — 목록 순서와 무관하다`() {
+        val detail = detailResponse(
+            members = listOf(
+                member(publicId = UUID_OTHER, nickname = "다른사람", host = false),
+                member(publicId = UUID_ME, nickname = "성윤", host = true),
+            ),
+        )
+
+        val ride = detail.toRide(currentUuid = UUID_ME)
+
+        // 방장이 목록의 **둘째**다 — 첫째 원소를 방장으로 보던 추정이 되살아나면 여기서 깨진다.
+        assertTrue(ride.isHostedByMe)
+        assertEquals(UUID_ME, ride.members.single { it.isHost }.id)
+    }
+
+    /**
+     * 세션 uuid 를 모르면 나를 특정할 수 없으므로 「내가 방장인가」는 거짓이다 —
+     * 서버가 누군가를 방장이라고 말했더라도 그게 나라는 근거가 없다.
+     */
+    @Test
+    fun `세션 uuid 를 모르면 방장이 있어도 내가 방장은 아니다`() {
+        val detail = detailResponse(members = listOf(member(publicId = UUID_ME, host = true)))
+
+        val ride = detail.toRide(currentUuid = null)
+
+        assertTrue(ride.members.single().isHost)
+        assertFalse(ride.isHostedByMe)
+    }
+
+    /**
+     * ### 서버가 `host` 를 말하지 않은 응답 ★
+     * 옛 배포를 보고 있거나 서버가 필드를 빼면 `host` 가 없다. 그때 전부 false 로 접으면
+     * **방장조차 「합승 완료」를 못 보고** 방을 끝낼 길이 사라진다(30분 만료 대기 = 복구 불가).
+     * 반대로 나를 방장으로 보면 눌러도 서버가 403 `NOT_PARTY_HOST` 로 막고 앱이 사유별 문구로
+     * 안내한다(복구됨). 그래서 누락은 **나에 대해서만** 방장으로 떨어진다.
+     */
+    @Test
+    fun `host 키가 빠지면 나만 방장으로 본다 — 서버 403 에 맡긴다`() {
+        val detail = detailResponse(
+            members = listOf(
+                member(publicId = UUID_OTHER, nickname = "다른사람", host = null),
+                member(publicId = UUID_ME, nickname = "성윤", host = null),
+            ),
+        )
+
+        val ride = detail.toRide(currentUuid = UUID_ME)
+
+        // 남에 대해서는 false — 모두에게 "방장" 표시가 붙지 않는다.
+        assertEquals(listOf(false, true), ride.members.map { it.isHost })
+        assertTrue(ride.isHostedByMe)
+    }
+
+    /** `host` 키가 아예 없는 JSON(옛 서버 응답 그대로)도 같은 길로 떨어진다 — 파싱이 깨지지 않는다. */
+    @Test
+    fun `host 키가 없는 상세 JSON 도 파싱되고 나만 방장으로 떨어진다`() {
+        val body = """
+            {"id":7,"departure":"서울시청","destination":"강남역","capacity":3,"currentMembers":2,
+             "status":"ACTIVE",
+             "members":[{"publicId":"$UUID_ME","nickname":"성윤","badgeId":null,"rideCount":4},
+                        {"publicId":"$UUID_OTHER","nickname":"철수","badgeId":null,"rideCount":3}]}
+        """.trimIndent()
+
+        val ride = json.decodeFromString<PartyDetailResponse>(body).toRide(currentUuid = UUID_ME)
+
+        assertEquals(listOf(true, false), ride.members.map { it.isHost })
+        assertTrue(ride.isHostedByMe)
+    }
+
+    /** 서버가 `"host": null` 을 실어 보내도(원시 boolean 이라 없을 일이지만) 누락과 같게 다룬다. */
+    @Test
+    fun `host 가 명시적 null 이어도 파싱이 깨지지 않는다`() {
+        val body = """
+            {"id":7,"status":"ACTIVE",
+             "members":[{"publicId":"$UUID_ME","nickname":"성윤","rideCount":0,"host":null}]}
+        """.trimIndent()
+
+        val ride = json.decodeFromString<PartyDetailResponse>(body).toRide(currentUuid = UUID_ME)
+
+        assertTrue(ride.isHostedByMe)
+    }
+
+    /**
+     * 요약 없는 멤버(전 필드 null)에도 서버는 `host` 를 실어 준다 — 파티 쪽 데이터라 요약과 무관하다.
+     * 그래도 **나로 특정되지 않으므로** 「내가 방장인가」에는 영향이 없고, 매핑도 터지지 않아야 한다.
+     */
+    @Test
+    fun `요약이 없는 멤버가 방장이어도 매핑이 깨지지 않는다`() {
+        val detail = detailResponse(
+            members = listOf(
+                member(publicId = null, nickname = null, rideCount = 3, host = true),
+                member(publicId = UUID_ME, nickname = "성윤", host = false),
+            ),
+        )
+
+        val ride = detail.toRide(currentUuid = UUID_ME)
+
+        assertEquals("", ride.members.first().id)
+        assertEquals("탈퇴한 회원", ride.members.first().nickname)
+        assertTrue(ride.members.first().isHost)
+        assertFalse(ride.isHostedByMe)
+    }
+
+    /**
+     * 요약도 없고 `host` 도 없는 멤버 — 폴백이 [com.moyeota.domain.model.User.isMe] 를 타므로
+     * publicId 가 null 인 멤버는 방장이 되지 않는다. 누군지 모르는 멤버를 방장으로 세우면 안 된다.
+     */
+    @Test
+    fun `요약도 host 도 없는 멤버는 방장이 되지 않는다`() {
+        val detail = detailResponse(members = listOf(member(publicId = null, nickname = null, host = null)))
+
+        val ride = detail.toRide(currentUuid = null)
+
+        assertFalse(ride.members.single().isHost)
+        assertFalse(ride.isHostedByMe)
+    }
+
+    /**
+     * 서버 record 에서 **`hostId`(Long) 가 지워졌다** — 내부 PK 를 밖으로 내보내지 않는다(Backend #240).
+     * 방 수준 방장 필드를 되살리면 「목록이 말하는 방장」과 「방이 말하는 방장」이 어긋날 수 있다.
+     */
+    @Test
+    fun `상세 응답 DTO 에 방 수준 hostId 필드가 없다`() {
+        val fields = PartyDetailResponse.serializer().fieldNames()
+
+        assertFalse(fields.contains("hostId"))
+        // 방장은 멤버마다 실린다 — 키 이름은 isHost 가 아니라 host 다(서버 record 컴포넌트 이름).
+        val memberFields = PartyDetailResponse.MemberInfo.serializer().fieldNames()
+        assertTrue(memberFields.contains("host"))
+        assertFalse(memberFields.contains("isHost"))
     }
 
     /** 서버가 주는 값(닉네임·이미지·탑승 횟수)은 그대로, 주지 않는 값(별점·인증)은 지어내지 않는다. */
@@ -618,17 +772,23 @@ class PartyMappersTest {
         taxiDriverId = 42,
     )
 
+    /**
+     * [host] 기본값이 null 인 건 **옛 테스트들이 쓰던 모양 그대로**를 뜻한다(서버가 `host` 를 말하지
+     * 않은 응답). 방장을 보는 테스트만 명시적으로 true/false 를 넘긴다.
+     */
     private fun member(
         publicId: String? = UUID_ME,
         nickname: String? = "성윤",
         imageUrl: String? = null,
         rideCount: Int = 0,
+        host: Boolean? = null,
     ) = PartyDetailResponse.MemberInfo(
         publicId = publicId,
         nickname = nickname,
         imageUrl = imageUrl,
         badgeId = null,
         rideCount = rideCount,
+        host = host,
     )
 
     private companion object {

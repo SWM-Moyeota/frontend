@@ -91,7 +91,8 @@ private const val PICKUP_SPEED_KMH = 25.0
  */
 @Composable
 fun DriverSearchScreen(
-    ride: Ride = stageRideDummy,
+    /** 그릴 방. **기본값이 없다** — 예시 방이 프로덕션에 새는 길을 막는다([stageRideDummy]) */
+    ride: Ride,
     /** 이 방의 채팅방을 연다(독립 목적지 push — 뒤로가기로 여기 복귀). 아직 방이 없으면 null */
     onOpenChat: (() -> Unit)? = null,
     onBack: () -> Unit = {},
@@ -192,7 +193,8 @@ fun DriverSearchFailedScreen(
  */
 @Composable
 fun DriverAssignedScreen(
-    ride: Ride = stageRideDummy,
+    /** 그릴 방. **기본값이 없다** — 예시 방이 프로덕션에 새는 길을 막는다([stageRideDummy]) */
+    ride: Ride,
     driver: AssignedDriver? = null,
     /** 폴링으로 갱신되는 기사 위치. 아직 보고 전이면 null — 마커 없이 탑승지·내 위치만 그린다 */
     driverLocation: DriverLocation? = null,
@@ -433,6 +435,13 @@ private fun androidx.compose.foundation.layout.ColumnScope.StageSheet(
     }
 }
 
+/**
+ * 아래 미리보기 **전용** 예시 방(25b·25c). 프로덕션 경로에서는 쓰이지 않는다.
+ *
+ * [DriverSearchScreen]·[DriverAssignedScreen] 의 `ride` **기본 인자** 자리에서 걷어냈다 —
+ * 21·25 가 방을 모르는 상태에서 예시 방을 그려 남의 가짜 방을 보여 준 사고(2026-10-15)와 같은
+ * 트랩이다. 두 화면도 같은 배차 흐름에서 불리므로 같은 규칙을 적용한다: **방은 호출부가 넘긴다.**
+ */
 internal val stageRideDummy = Ride(
     id = "ride-25b",
     origin = "센텀시티역 3번 출구",
@@ -451,7 +460,7 @@ internal val stageRideDummy = Ride(
 @Preview(showBackground = true, widthDp = 393, heightDp = 852)
 @Composable
 private fun DriverSearchScreenPreview() {
-    DriverSearchScreen()
+    DriverSearchScreen(ride = stageRideDummy)
 }
 
 @Preview(showBackground = true, widthDp = 393, heightDp = 852)
@@ -464,6 +473,7 @@ private fun DriverSearchFailedScreenPreview() {
 @Composable
 private fun DriverAssignedScreenPreview() {
     DriverAssignedScreen(
+        ride = stageRideDummy,
         driver = AssignedDriver(seats = 4, plateNumber = "12가 3456", vehicleType = "쏘나타"),
         pickupEtaMinutes = 4,
     )

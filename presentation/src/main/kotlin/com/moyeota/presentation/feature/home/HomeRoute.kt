@@ -74,7 +74,10 @@ fun HomeRoute(
         favoritePlaces = favorites,
         onSearchClick = onSearchClick,
         onActiveRideClick = onActiveRideClick,
-        onFavoritePlaceClick = { onPlaceQuery(it.roadName) },
+        // 도로명이 없는 장소가 있다 — 서버가 카카오의 road_address_name 을 그대로 흘리고,
+        // 지번만 있는 건물·지하철역에서 그 값이 빈다(매퍼가 null 을 "" 로 떨군다).
+        // 빈 값을 그대로 넘기면 **빈 검색어로 15 가 열려** 아무것도 안 뜬다. 이름으로 되돌린다.
+        onFavoritePlaceClick = { onPlaceQuery(it.roadName.ifBlank { it.name }) },
         onTabSelect = onTabSelect,
     )
 }

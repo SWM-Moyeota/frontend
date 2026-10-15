@@ -3,6 +3,7 @@ package com.moyeota.data.remote.matching
 import com.moyeota.data.remote.toPartyEvent
 import com.moyeota.domain.model.PartyEvent
 import com.moyeota.domain.model.RideStatus
+import com.moyeota.domain.model.isHostedByMe
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -191,6 +192,124 @@ class PartySseEventTest {
     @Test
     fun `끊김 신호는 그대로 도메인으로 올라간다`() {
         assertEquals(PartyEvent.Disconnected, PartySseEvent.Disconnected.toPartyEvent())
+    }
+
+    // ─────────────────────────────── 방장(Backend #240) ───────────────────────────────
+
+    /**
+     * `connected` 스냅샷에도 `host` 가 실린다 — 상세 조회와 **같은 record** 이므로 당연하지만,
+     * 스냅샷이 전체 교체이기 때문에 **방장 표시의 기준선**이 바로 이 프레임이다.
+     */
+    @Test
+    fun `connected 스냅샷이 멤버의 host 를 그대로 올린다`() {
+        val data = connectedData.replace(
+            """"badgeId":null,"rideCount":4""",
+            """"badgeId":null,"rideCount":4,"host":true""",
+        ).replace(
+            """"badgeId":null,"rideCount":3""",
+            """"badgeId":null,"rideCount":3,"host":false""",
+        )
+
+        val snapshot = parse(EVENT_CONNECTED, data).toPartyEvent(currentUuid = UUID_ME) as PartyEvent.Snapshot
+
+        assertEquals(listOf(true, false), snapshot.ride.members.map { it.isHost })
+        assertTrue(snapshot.ride.isHostedByMe)
+    }
+
+    /**
+     * **키 이름은 `isHost` 가 아니라 `host` 다**(서버 record 컴포넌트 이름 그대로). 틀리게 적으면
+     * `ignoreUnknownKeys` 가 흘려서 **조용히 늘 누락**이 되므로, 틀린 이름이 먹히지 않음을 못박는다.
+     */
+    @Test
+    fun `isHost 라는 키는 방장으로 읽히지 않는다 — 계약 키는 host 다`() {
+        val data = """{"id":7,"status":"ACTIVE","members":[
+            {"publicId":"$UUID_OTHER","nickname":"철수","rideCount":0,"isHost":true}]}"""
+
+        val snapshot = parse(EVENT_CONNECTED, data).toPartyEvent(currentUuid = UUID_ME) as PartyEvent.Snapshot
+
+        // 내가 아닌 멤버 + host 누락 → false. isHost 키를 읽었다면 true 가 됐을 것이다.
+        assertFalse(snapshot.ride.members.single().isHost)
+    }
+
+    /** `host` 가 없는 옛 스냅샷에서도 **나만** 방장으로 떨어진다 — 근거는 `PartyMappers.toUser` KDoc. */
+    @Test
+    fun `host 가 없는 스냅샷에서는 나만 방장으로 떨어진다`() {
+        val snapshot = parse(EVENT_CONNECTED, connectedData)
+            .toPartyEvent(currentUuid = UUID_ME) as PartyEvent.Snapshot
+
+        assertEquals(listOf(true, false), snapshot.ride.members.map { it.isHost })
+        assertTrue(snapshot.ride.isHostedByMe)
+    }
+
+    /**
+     * `member-joined` 의 본문은 Backend #240 에서 바뀌지 않았지만, 품고 있는 `MemberInfo` 에
+     * `host` 가 실려 온다(`PartyService.join` 이 `saved.isHost(memberId)` 로 채운다).
+     * 합류자는 가장 늦게 들어온 사람이라 사실상 늘 false 지만, 앱은 **서버 값을 그대로** 옮긴다.
+     */
+    @Test
+    fun `member-joined 의 멤버에도 host 가 실려 온다`() {
+        val data = """{"member":{"publicId":"$UUID_OTHER","nickname":"철수","imageUrl":null,
+            "badgeId":null,"rideCount":3,"host":false},"status":"ACTIVE"}"""
+
+        val joined = parse(EVENT_MEMBER_JOINED, data).toPartyEvent(currentUuid = UUID_ME) as PartyEvent.MemberJoined
+
+        assertFalse(joined.member.isHost)
+    }
+
+    /**
+     * **승계 신호** — `member-left` 의 `hostPublicId` 는 서버가 이탈을 반영한 **뒤** 읽은 방장이다.
+     * 이 값을 버리면 방장이 나간 뒤 승계된 사람이 자기 권한을 모른다(서버는 다시 보내지 않는다).
+     */
+    @Test
+    fun `member-left 는 승계 후 방장의 publicId 를 올린다`() {
+        val data = """{"publicId":"$UUID_OTHER","status":"ACTIVE","hostPublicId":"$UUID_ME"}"""
+
+        val left = parse(EVENT_MEMBER_LEFT, data).toPartyEvent(currentUuid = UUID_ME) as PartyEvent.MemberLeft
+
+        assertEquals(UUID_OTHER, left.publicId)
+        assertEquals(UUID_ME, left.hostPublicId)
+        assertEquals(RideStatus.RECRUITING, left.status)
+    }
+
+    /**
+     * 승계된 멤버의 유저 요약을 서버가 못 찾으면 `hostPublicId` 가 null 이다
+     * (`PartyService.leave` 의 `hostSummary == null`). 받는 쪽은 "새 방장을 모름"으로 다뤄야 한다.
+     */
+    @Test
+    fun `member-left 의 hostPublicId 가 null 이어도 파싱이 깨지지 않는다`() {
+        val left = parse(EVENT_MEMBER_LEFT, """{"publicId":"$UUID_OTHER","status":"ACTIVE","hostPublicId":null}""")
+            .toPartyEvent(currentUuid = UUID_ME) as PartyEvent.MemberLeft
+
+        assertNull(left.hostPublicId)
+    }
+
+    /** 옛 서버는 `hostPublicId` 를 아예 싣지 않는다 — 누락도 "모름"(null)으로 같게 떨어진다. */
+    @Test
+    fun `hostPublicId 가 없는 member-left 도 그대로 읽는다`() {
+        val left = parse(EVENT_MEMBER_LEFT, """{"publicId":"$UUID_OTHER","status":"ACTIVE"}""")
+            .toPartyEvent(currentUuid = UUID_ME) as PartyEvent.MemberLeft
+
+        assertEquals(UUID_OTHER, left.publicId)
+        assertNull(left.hostPublicId)
+    }
+
+    /** publicId 와 같은 이유로 빈 문자열까지 null 로 접는다 — "모름"은 한 가지 모양이어야 한다. */
+    @Test
+    fun `hostPublicId 가 빈 문자열이면 null 로 접는다`() {
+        val left = parse(EVENT_MEMBER_LEFT, """{"publicId":"$UUID_OTHER","status":"ACTIVE","hostPublicId":""}""")
+            .toPartyEvent() as PartyEvent.MemberLeft
+
+        assertNull(left.hostPublicId)
+    }
+
+    /** 누가 나갔는지 모르는 프레임(publicId null)에도 승계는 실린다 — 둘은 서로 독립이다. */
+    @Test
+    fun `나간 사람을 몰라도 승계 후 방장은 전해진다`() {
+        val left = parse(EVENT_MEMBER_LEFT, """{"publicId":null,"status":"ACTIVE","hostPublicId":"$UUID_ME"}""")
+            .toPartyEvent(currentUuid = UUID_ME) as PartyEvent.MemberLeft
+
+        assertNull(left.publicId)
+        assertEquals(UUID_ME, left.hostPublicId)
     }
 
     private fun parse(type: String, data: String): PartySseEvent =

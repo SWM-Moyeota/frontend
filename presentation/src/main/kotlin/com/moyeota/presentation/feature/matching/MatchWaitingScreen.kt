@@ -61,13 +61,16 @@ import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.model.User
+import com.moyeota.presentation.core.HostBadge
 import com.moyeota.presentation.core.MeBadge
 import com.moyeota.presentation.core.OpenChatButton
 import com.moyeota.presentation.core.location.UserCoordinates
 import com.moyeota.presentation.core.MemberAvatar
 import com.moyeota.presentation.core.displayNickname
+import com.moyeota.presentation.core.hostDisplayNameOrNull
 import com.moyeota.presentation.core.isWithdrawn
 import com.moyeota.presentation.core.rideCountLabel
+import com.moyeota.presentation.core.showsHostBadge
 
 // 와이어프레임 그레이 (core token 미정의 색 — 화면 재현용)
 private val CanvasBg = Color(0xFFF5F7FA)
@@ -79,6 +82,14 @@ private val GrayButtonBg = Color(0xFFEEF1F6)
 private val DividerGray = Color(0xFFE7EAF0)
 private val ProgressTrack = Color(0xFFE6EAF0)
 
+/**
+ * 아래 [MatchWaitingScreenPreview] **전용** 예시 방. 프로덕션 경로에서는 쓰이지 않는다.
+ *
+ * 예전에는 이 값이 [MatchWaitingScreen] 의 `ride` **기본 인자**이기도 했다. 그래서 호출부가 방을
+ * 모르는 상태(구성 변경에 방 id 가 날아간 21)에서 `ride` 를 빼고 부르면, 진짜 방에 들어 있던
+ * 사용자에게 이 센텀시티역→서면역 방이 떴다(출시 차단 결함, 2026-10-15). 기본값을 걷어내 호출부가
+ * **반드시** 방을 넘기게 했다 — 같은 사고가 다시 나려면 컴파일이 먼저 깨진다.
+ */
 private val waitingRideDummy = Ride(
     id = "ride-21",
     origin = "센텀시티역 3번 출구",
@@ -108,8 +119,8 @@ private val waitingRideDummy = Ride(
  * - 「채팅 열기」 → 24 채팅방(독립 목적지, 뒤로가기로 여기 복귀) — [onOpenChat] 이 null 이 아닐 때만 그린다.
  *   채팅방은 **정원이 찬 뒤에** 생기므로 모집 중에는 대개 null 이다. 눌러도 열 것이 없는 버튼을 두지 않는다.
  * - 매칭 성사(서버 status 전이) → 25 배차 현황 — 화면이 아니라 Route 가 관찰해 넘긴다
- * - 매칭 조건(인원)은 **읽기 전용**이다. 방을 만들 때(16) 정해진 값이고 바꾸는 API 도 없다 —
- *   방장 개념이 사라진 뒤로 「누가 조건을 고치는가」에 답이 없어졌다. 눌러도 아무 일 없는
+ * - 매칭 조건(인원)은 **읽기 전용**이다. 방을 만들 때(16) 정해진 값이고 **바꾸는 API 가 없다** —
+ *   방장이 있더라도(서버 `MemberInfo.host`) 조건을 고치는 엔드포인트는 없다. 눌러도 아무 일 없는
  *   「수정」 버튼을 두는 대신 카드 아래 한 줄로 이유를 적는다.
  *   「탐색 반경」 행은 지웠다(2026-10-14) — 서버가 반경을 요청에서 빼고 고정값(500m)으로 정하면서
  *   **사용자가 정한 값이 아니게 됐다.** 게다가 합류에 거리 검사가 없고 목록은 지도 뷰포트만 보므로
@@ -123,6 +134,12 @@ private val waitingRideDummy = Ride(
  * **누가 모였는지**를 실제로 보여줄 수 있게 됐다. 내 줄은 `isMe`(publicId == 세션 uuid)로
  * 판정한다 — 예전처럼 고정 memberId 1 과 비교하지 않는다.
  *
+ * 방장 표시(2026-10-15): `members[]` 에 `host` 가 함께 오면서(Backend #240) **방장을 말할 수 있게
+ * 됐다** — 2026-08-30 에 지운 「`joinedAt` 최소값 추정」과 달리 이건 **서버 값**이다. 그래서
+ * ① 「합승 완료」를 방장에게만 보이고(서버가 그 API 를 방장 전용으로 좁혔다, Backend #237)
+ * ② 멤버 목록에 「방장」 배지를 붙인다([com.moyeota.presentation.core.showsHostBadge] —
+ * 폴백 때문에 **내 줄에는 붙지 않는다**).
+ *
  * 레이아웃(2026-09-08): 배경이 레이더 애니메이션에서 **실지도**로 바뀌었다. 출발지·도착지 마커와
  * 경로, 내 위치 파란 점을 그린다. **탐색 반경 원은 2026-10-14 에 지웠다** — 서버가 반경을
  * 고정값으로 정하고 매칭은 그 값을 읽지 않으므로, 원은 「이 범위에서 찾는다」는 없는 약속이었다.
@@ -131,7 +148,8 @@ private val waitingRideDummy = Ride(
  */
 @Composable
 fun MatchWaitingScreen(
-    ride: Ride = waitingRideDummy,
+    /** 그릴 방. **기본값이 없다** — 예시 방이 프로덕션에 새는 길을 막는다([waitingRideDummy]) */
+    ride: Ride,
     foundCount: Int = 1,
     conditionLabel: String = "3인",
     /** 내 현재 위치(파란 점). 권한이 없거나 아직 못 받았으면 null — 지도에 점을 찍지 않는다 */
@@ -144,7 +162,12 @@ fun MatchWaitingScreen(
     actionInProgress: Boolean = false,
     actionErrorMessage: String? = null,
     onCancelSearch: () -> Unit = {},
-    /** 1차 배포 모드 「합승 완료」 — 참여자 누구든 한 명이 누르면 모두의 방이 닫힌다. 확인 다이얼로그 뒤에만 호출된다 */
+    /**
+     * 1차 배포 모드 「합승 완료」 — 누르면 모두의 방이 닫힌다. 확인 다이얼로그 뒤에만 호출된다.
+     *
+     * 버튼은 **방장에게만** 보인다(서버가 방장 전용으로 좁혔다 — [canFinishParty]).
+     * 비방장에게는 같은 자리에 누가 끝내는지를 말하는 안내문이 들어가고 이 콜백은 쓰이지 않는다.
+     */
     onFinish: () -> Unit = {},
     /** 방을 **유지한 채** 화면만 벗어난다. 나가기가 막힌 단계의 뒤로가기가 여기로 온다 */
     onExitKeepingParty: () -> Unit = {},
@@ -159,8 +182,11 @@ fun MatchWaitingScreen(
 
     // 서버가 나가기를 허용하는 단계인가. 모드에 따라 다르다 — canLeaveParty KDoc 참고.
     val canLeave = canLeaveParty(ride.status, taxiEnabled)
-    // 1차 배포 모드에서 정원이 찼다 — 「합승 완료」를 보여 준다
-    val canFinish = canFinishParty(ride.status, taxiEnabled)
+    // 1차 배포 모드에서 정원이 찼다 — **방을 손으로 닫는 단계**. 방장 여부와 무관한 표시가 이걸 본다.
+    val finishStage = isFinishStage(ride.status, taxiEnabled)
+    // 그 단계에서 **내가 방장일 때만** 「합승 완료」 버튼을 보여 준다(서버가 방장 전용으로 좁혔다).
+    // 비방장에게는 비활성 버튼 대신 아래 footer 의 안내문이 간다 — canFinishParty KDoc 참고.
+    val canFinish = canFinishParty(ride, taxiEnabled)
 
     // 정원 도달. 기사 모드에선 서버가 기사 매칭을 시작하는 시점이고, 1차 배포 모드에선 채팅으로 만나는 시점이다.
     // 문구·진행바가 이 경계로 갈린다.
@@ -194,8 +220,9 @@ fun MatchWaitingScreen(
                 onClick = { if (canLeave) cancelConfirming = true else onExitKeepingParty() },
             ) { BackArrowIcon() }
             Text(
-                // 1차 배포 모드에서 정원이 찼으면 더는 「찾는 중」이 아니다 — 만나는 단계다
-                text = if (canFinish) "같이 탈 사람이 모였어요" else "같이 탈 사람 찾는 중",
+                // 1차 배포 모드에서 정원이 찼으면 더는 「찾는 중」이 아니다 — 만나는 단계다.
+                // **방장 여부가 아니라 단계**를 본다: 비방장도 같은 방을 보고 있다.
+                text = if (finishStage) "같이 탈 사람이 모였어요" else "같이 탈 사람 찾는 중",
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
                 color = MoyeotaColor.InkPrimary,
@@ -316,7 +343,11 @@ fun MatchWaitingScreen(
                     NoticeBanner(
                         kind = if (isFull) NoticeKind.WAITING else NoticeKind.INFO,
                         text = when {
-                            isFull && !taxiEnabled -> "채팅으로 만날 곳을 정해요. 다 타면 「합승 완료」를 눌러 주세요"
+                            // 「눌러 주세요」는 **버튼이 보이는 사람에게만** 하는 말이다 —
+                            // 비방장에게 하면 없는 버튼을 누르라고 시키는 셈이다.
+                            canFinish -> "채팅으로 만날 곳을 정해요. 다 타면 「합승 완료」를 눌러 주세요"
+                            // 비방장: 누가 끝내는지는 footer 안내문이 이름까지 말한다 — 여기서 겹쳐 쓰지 않는다.
+                            isFull && !taxiEnabled -> "채팅으로 만날 곳을 정해요"
                             isFull -> "곧 기사님을 찾기 시작해요"
                             !taxiEnabled -> "정원이 차면 채팅으로 만날 곳을 정해요"
                             else -> "정원이 차면 기사님을 자동으로 찾아요"
@@ -389,13 +420,25 @@ fun MatchWaitingScreen(
                     Spacer(Modifier.height(8.dp))
                 }
 
-                // 1차 배포 모드 · 정원이 찼을 때만 — 기사 없이 합승을 끝내는 버튼. 접힘 상태에서도 보이게 시트 하단.
+                // 1차 배포 모드 · 정원이 찼을 때 — 기사 없이 합승을 끝내는 자리. 접힘 상태에서도 보이게 시트 하단.
+                //
+                // **방장에게만 버튼**을 준다(서버가 방장 전용으로 좁혔다 — canFinishParty KDoc).
+                // 비방장에게는 **비활성 버튼을 두지 않는다**: 누를 수 없는 버튼은 왜 못 누르는지
+                // 말해 주지 못한다. 대신 같은 자리에 누가 방을 끝내는지를 한 줄로 적는다 —
+                // 숨기기만 하면 정원이 찬 뒤 할 일이 하나도 없는 화면이 된다.
                 if (canFinish) {
                     PrimaryCtaButton(
                         text = if (actionInProgress) "완료하는 중…" else "합승 완료",
                         onClick = { finishConfirming = true },
                         enabled = !actionInProgress,
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                } else if (finishStage) {
+                    NoticeBanner(
+                        kind = NoticeKind.INFO,
+                        text = finishHostNotice(ride.members.hostDisplayNameOrNull()),
+                        modifier = Modifier.padding(horizontal = 16.dp),
                     )
                     Spacer(Modifier.height(8.dp))
                 }
@@ -406,7 +449,8 @@ fun MatchWaitingScreen(
                     text = when {
                         !canLeave -> "기사님을 찾는 중…"
                         actionInProgress -> "나가는 중…"
-                        canFinish -> "방 나가기"
+                        // 「그만 찾기」가 아닌 건 **단계** 때문이다 — 더는 찾는 중이 아니다.
+                        finishStage -> "방 나가기"
                         else -> "그만 찾기"
                     },
                     onClick = { cancelConfirming = true },
@@ -466,7 +510,7 @@ fun MatchWaitingScreen(
     }
 }
 
-// 대기 화면의 멤버 한 줄 — 아바타(이니셜) · 닉네임(+나 배지) · 탑승 횟수.
+// 대기 화면의 멤버 한 줄 — 아바타(이니셜) · 닉네임(+나·방장 배지) · 탑승 횟수.
 // 여기서는 프로필로 들어가지 않는다(23 진입은 20·22 에서만) — 대기 중 흐름을 끊지 않기 위해서다.
 @Composable
 private fun WaitingMemberRow(member: User) {
@@ -489,6 +533,12 @@ private fun WaitingMemberRow(member: User) {
                 if (member.isMe) {
                     Spacer(Modifier.width(6.dp))
                     MeBadge()
+                }
+                // 「방장」 — 서버가 멤버마다 내려 주는 값이다(추정이 아니다). 내 줄에는 붙지 않는다:
+                // 서버가 host 를 빼먹었을 때의 폴백이 내 줄만 true 로 만들기 때문이다(showsHostBadge KDoc).
+                if (member.showsHostBadge) {
+                    Spacer(Modifier.width(6.dp))
+                    HostBadge()
                 }
             }
             Text(
@@ -596,5 +646,5 @@ private fun GrayActionButton(
 @Preview(showBackground = true, widthDp = 393, heightDp = 852)
 @Composable
 private fun MatchWaitingScreenPreview() {
-    MatchWaitingScreen()
+    MatchWaitingScreen(ride = waitingRideDummy)
 }

@@ -15,6 +15,7 @@ import com.moyeota.domain.repository.PlaceRepository
 import com.moyeota.presentation.core.location.FormLocationIntervalMs
 import com.moyeota.presentation.core.location.UserCoordinates
 import com.moyeota.presentation.core.location.rememberMyLocationState
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -124,7 +125,17 @@ class DestinationViewModel(
             _uiState.update { it.copy(searchLoading = true) }
             try {
                 val results = repository.searchPlaces(query.trim())
-                _uiState.update { it.copy(searchLoading = false, searchResults = results) }
+                // 성공하면 **이전 실패 문구를 반드시 지운다.** 화면은 에러를 `when` 의 첫 가지로 두므로
+                // (DestinationScreen), 남겨 두면 결과가 와도 그 문구에 가려 한 건도 안 보인다.
+                _uiState.update {
+                    it.copy(searchLoading = false, searchResults = results, searchErrorMessage = null)
+                }
+            } catch (e: CancellationException) {
+                // **취소는 실패가 아니다.** 글자를 칠 때마다 위에서 `searchJob?.cancel()` 로 이전 요청을
+                // 끊는데, 그 취소가 여기까지 올라온다. `catch (Exception)` 하나로 받으면 타이핑하는
+                // 족족 「검색하지 못했어요」가 서고, 뒤따라 성공한 검색의 결과까지 그 문구에 가려진다.
+                // 다시 던져야 구조적 동시성도 깨지지 않는다 — 상태는 새 요청이 곧 덮는다.
+                throw e
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(searchLoading = false, searchResults = emptyList(), searchErrorMessage = "장소를 검색하지 못했어요")

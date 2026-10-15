@@ -159,18 +159,4 @@ class DummyRideRepository : RideRepository {
     override suspend fun reportEmergency(partyId: Long?): Long = 1L
 
     override suspend fun confirmEmergencyCall(called: Boolean) = Unit
-
-    override fun getMyRides(): List<Ride> = listOf(
-        Ride(
-            id = "r3",
-            origin = "안양역",
-            destination = "성결대 정문",
-            departureLabel = "내일 08:40",
-            capacity = 3,
-            members = listOf(me, minji),
-            farePerPerson = 3_200,
-            totalFare = 9_600,
-            status = RideStatus.MATCHED,
-        ),
-    )
 }

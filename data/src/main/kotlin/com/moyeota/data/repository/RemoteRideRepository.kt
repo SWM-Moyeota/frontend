@@ -5,6 +5,7 @@ import com.moyeota.data.remote.matching.PartyEventSource
 import com.moyeota.data.remote.ReportApi
 import com.moyeota.data.remote.dto.CallResultRequestDto
 import com.moyeota.data.remote.dto.ReportRequestDto
+import com.moyeota.data.remote.partyFinishException
 import com.moyeota.data.remote.partyJoinException
 import com.moyeota.data.remote.readApiError
 import com.moyeota.data.remote.routeRequestDto
@@ -17,6 +18,7 @@ import com.moyeota.data.remote.toRouteEstimate
 import com.moyeota.domain.model.AssignedDriver
 import com.moyeota.domain.model.NewParty
 import com.moyeota.domain.model.PartyEvent
+import com.moyeota.domain.model.PartyFinishException
 import com.moyeota.domain.model.PartyJoinException
 import com.moyeota.domain.model.PartyStatus
 import com.moyeota.domain.model.Ride
@@ -59,8 +61,6 @@ class RemoteRideRepository(
         partyEvents?.events(partyId)?.map { it.toPartyEvent(session.currentUserUuid) } ?: emptyFlow()
 
     override fun getNearbyParties(): List<Ride> = local.getNearbyParties()
-
-    override fun getMyRides(): List<Ride> = local.getMyRides()
 
     override suspend fun getParties(): List<Ride> = api.getParties().list.map { it.toRide() }
 
@@ -125,7 +125,20 @@ class RemoteRideRepository(
 
     override suspend fun leaveParty(partyId: Long) = api.leaveParty(partyId)
 
-    override suspend fun finishParty(partyId: Long) = api.finishParty(partyId)
+    /**
+     * 실패를 전부 [PartyFinishException] 으로 좁힌다 — **403 과 409 가 각각 두 가지 뜻**이라
+     * 화면이 상태 코드만으로는 안내 문구를 가를 수 없다(그 예외 KDoc 참고).
+     *
+     * 에러 본문은 스트림이라 한 번만 읽을 수 있다 — 읽어서 들고 넘긴다([readApiError]).
+     * 합류와 달리 멤버십 복구 조회는 없다: 완료는 서버가 **검사를 먼저** 하고 상태를 바꾸므로,
+     * 실패했으면 방은 그대로다(확인할 것이 없다).
+     */
+    override suspend fun finishParty(partyId: Long) {
+        val failure = runCatching { api.finishParty(partyId) }.exceptionOrNull() ?: return
+        // runCatching 은 취소까지 삼키므로 되던져 화면 이탈이 에러로 보이지 않게 한다.
+        if (failure is CancellationException) throw failure
+        throw partyFinishException(failure, failure.readApiError())
+    }
 
     override suspend fun getAssignedDriver(partyId: Long): AssignedDriver =
         api.getAssignedDriver(partyId).toAssignedDriver()

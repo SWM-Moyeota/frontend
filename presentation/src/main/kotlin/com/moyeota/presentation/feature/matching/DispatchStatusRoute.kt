@@ -201,7 +201,7 @@ class DispatchStatusViewModel(
  *
  * 26 운행 중으로의 전이 신호는 **서버 status IN_RIDE**(기사측 board) **하나뿐**이다([isRideStarted]).
  * [DispatchStatusScreen] 에는 [onStartRide] 를 부르는 수동 트리거가 없다 — 이 Route 의 폴링이 유일한 발화점이다.
- * partyId 가 없으면 폴링도 없어 전이도 없다(채팅·34 내 기록에서 직행한 경우의 폴백 화면).
+ * partyId 가 없으면 조회할 방이 없어 오류 안내 후 되돌린다(20·21·22·23 과 같은 방식).
  *
  * **이 화면은 택시 모드에서만 보인다** — 동승 모드 서버는 `DISPATCHING` 을 내지 않는다
  * (`docs/MODE-ROUTES.md`). 그래서 [DispatchStatusViewModel.pollDriver] 의 상세 폴링도 택시 모드에서만 돈다.
@@ -219,14 +219,29 @@ fun DispatchStatusRoute(
     /** 이 방의 채팅방을 여는 길. 채팅방이 아직 없으면 null — 화면이 버튼을 그리지 않는다 */
     onOpenChat: (() -> Unit)? = null,
 ) {
+    // 방 id 없이 닿을 길은 없다(21 의 status 전이 · 홈 배너가 모두 id 를 넘긴다). 그래도 null 이면
+    // 예시 방을 그리는 대신 사실대로 말하고 되돌린다 — 20·22·23 과 같은 방식이다.
+    //
+    // 예전에는 여기서 [DispatchStatusScreen] 을 `ride` 없이 불러 **예시 방**(번호판도 없는 배차
+    // 현황)을 그렸다. 21 과 같은 사고였다 — 구성 변경에 방 id 가 날아가면 진짜 배차를 기다리던
+    // 사용자에게 남의 가짜 방이 떴다. 화면 쪽 `ride` 기본값도 함께 걷어내 그 길을 막았다.
+    //
+    // 되돌아갈 곳은 [onBack] — 이 단계에는 나가기가 없어(서버가 막는다) 호출자가 방을 그대로 둔 채
+    // 홈으로만 보낸다. 홈 배너가 그 방으로 다시 들어갈 길이다.
+    if (partyId == null) {
+        BackStateScaffold("배차 현황", onBack) {
+            ErrorBox(
+                message = "어느 방의 배차인지 알 수 없어요. 홈에서 진행 중인 방으로 다시 들어가 주세요",
+                onRetry = onBack,
+                actionLabel = "홈으로 가기",
+            )
+        }
+        return
+    }
+
     // 내 현재 위치 — 25c·25 지도의 파란 점. 권한 다이얼로그는 새로 띄우지 않는다(배차 흐름을 끊지 않게,
     // 26 RideOngoingRoute 와 같은 이유). 15~19 에서 이미 허용한 사용자라면 점이 뜨고, 아니면 마커만 그린다.
     val myLocation = rememberMyLocationState(autoRequestPermission = false)
-
-    if (partyId == null) {
-        DispatchStatusScreen(myLocation = myLocation.coordinates, onOpenChat = onOpenChat, onBack = onBack)
-        return
-    }
 
     val viewModel: DispatchStatusViewModel = viewModel(
         key = "dispatch-$partyId",

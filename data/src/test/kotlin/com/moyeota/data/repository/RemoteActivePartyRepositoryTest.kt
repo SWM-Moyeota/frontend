@@ -345,7 +345,6 @@ private class FakeRideRepository(
     }
 
     override fun getNearbyParties(): List<Ride> = emptyList()
-    override fun getMyRides(): List<Ride> = emptyList()
     override suspend fun getParties(): List<Ride> = emptyList()
     override suspend fun getPartiesWithin(swLat: Double, swLng: Double, neLat: Double, neLng: Double): List<Ride> =
         emptyList()

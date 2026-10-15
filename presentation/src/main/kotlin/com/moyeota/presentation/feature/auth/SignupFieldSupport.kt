@@ -2,9 +2,10 @@ package com.moyeota.presentation.feature.auth
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -12,11 +13,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.core.designsystem.theme.MoyeotaType
 import com.moyeota.domain.model.AuthPolicy
+import com.moyeota.domain.model.Gender
 import java.time.LocalDate
 
 /**
@@ -145,12 +149,70 @@ internal val BirthDateHelperText = "만 ${AuthPolicy.MIN_AGE}세 이상만 가�
  */
 internal val SimpleEmailRegex = Regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")
 
+// ─────────────────────────────── 성별 선택지 ───────────────────────────────
+
+/** 성별 칩 하나 — 값과 화면에 보일 라벨. */
+internal data class GenderChoice(val gender: Gender, val label: String)
+
+/**
+ * **운영 서버가 [Gender.UNDISCLOSED] 를 받는가.**
+ *
+ * 제품 토글이 아니라 **서버에 대한 사실**이다. 백엔드 PR #235 가 2026-10-15 운영에 배포되면서
+ * 운영 스펙(`/v3/api-docs`)의 `gender` 가 `["MALE","FEMALE","UNDISCLOSED"]` 가 된 것을
+ * 실측 확인하고 `true` 로 열었다.
+ *
+ * **상수를 남겨 두는 이유**는 서버가 값을 **되돌릴 수도** 있기 때문이다. 마이그레이션을 되감거나
+ * 운영을 옛 버전으로 롤백하면 `user_profile.gender` 의 CHECK 제약이 다시 이 값을 거부한다.
+ * 그때 선택지를 숨기는 길이 이 한 줄이면 되게 둔다.
+ *
+ * 켜고 끄는 판단이 왜 중요한지 — **400 이 떨어지는 자리** 때문이다. 가입 제출은 10 이 아니라
+ * 12 매너 서약의 「동의하고 가입 완료」 한 곳이고, 그때 사용자는 이미 9개 필드를 다 채우고
+ * 문자 인증까지 끝낸 상태다(인증 문자는 하루 [AuthPolicy.SMS_DAILY_LIMIT] 번이 한도다).
+ * 돌아오는 문구는 [AuthError.INVALID_REQUEST] 의 "입력한 정보를 다시 확인해 주세요" 뿐이라
+ * 성별이 원인이라는 단서가 없다 — 사용자는 고칠 곳을 못 찾고 재시도로 문자 한도를 태운다.
+ * 고를 수 있게 해 놓고 고르면 가입이 안 되는 선택지는 없는 선택지보다 나쁘다.
+ *
+ * `SignupGenderChoicesTest` 가 이 상수와 선택지 목록이 어긋나지 않게 잡는다.
+ */
+internal const val ServerAcceptsUndisclosedGender = true
+
+/**
+ * 「선택 안 함」 선택지. [ServerAcceptsUndisclosedGender] 가 `false` 인 동안에도 **라벨은 여기
+ * 고정**된다 — 노출이 켜지는 시점에 「비공개」·「밝히지 않음」 같은 다른 말로 갈리지 않게 한다.
+ */
+internal val UndisclosedGenderChoice = GenderChoice(Gender.UNDISCLOSED, "선택 안 함")
+
+/**
+ * 가입 화면의 성별 선택지 — **라벨·순서·노출 여부의 유일한 출처.**
+ *
+ * 화면이 칩을 직접 나열하면 선택지가 늘 때 두 화면이 어긋난다(09 가 10 과 성별 UI 를 복제하고
+ * 있던 것이 그 예다). 목록을 돌려 그리면 노출 판정이 한 곳에만 있다.
+ *
+ * **고르지 않은 상태(`null`)는 이 목록에 없다.** 성별은 여전히 필수라서 `null` 은 제출 불가를
+ * 뜻하고([SignupDraft.toNewUser]), 「선택 안 함」은 그와 **다른** 하나의 값이다.
+ */
+internal val SignupGenderChoices: List<GenderChoice> = listOfNotNull(
+    GenderChoice(Gender.MALE, "남성"),
+    GenderChoice(Gender.FEMALE, "여성"),
+    UndisclosedGenderChoice.takeIf { ServerAcceptsUndisclosedGender },
+)
+
 /** 선택지 칩 안의 글자색 (미선택 상태) */
 private val SlateGray = Color(0xFF4B5563)
 
 /**
- * 가입 폼의 한 줄 선택지 칩 — 성별 2택처럼 값이 몇 개 안 되는 선택에 쓴다.
+ * 가입 폼의 한 줄 선택지 칩 — 성별 3택처럼 값이 몇 개 안 되는 선택에 쓴다.
  * (09 의 통신사 4택에서 쓰던 모양 그대로다)
+ *
+ * **라디오 버튼으로 읽힌다.** [selected] 를 색과 테두리로만 그리면 스크린리더에는 칩 셋이 전부
+ * 같은 「버튼」으로 들린다. 성별에서는 그 손실이 특히 크다 — 「선택 안 함」이 **골라서** 그런
+ * 것인지 **아직 아무것도 고르지 않아서** 그렇게 적혀 있는 것인지 구분할 길이 사라진다.
+ * 그래서 `clickable` 대신 [selectable] 로 선택 상태와 [Role.RadioButton] 을 의미 트리에 싣는다
+ * (호출부 `Row` 에는 `selectableGroup()` 을 건다).
+ *
+ * 높이는 고정이 아니라 **최솟값**이다. 글꼴을 크게 쓰는 기기에서 「선택 안 함」은 두 줄이 되는데
+ * 고정 44dp 였다면 둘째 줄이 잘려 「선택」만 남는다 — 선택지의 뜻이 반대로 읽히는 쪽이 칩 높이가
+ * 들쭉날쭉한 쪽보다 나쁘다. 기본 배율에서는 셋 다 44dp 그대로다.
  */
 @Composable
 internal fun SignupChoiceChip(
@@ -162,17 +224,21 @@ internal fun SignupChoiceChip(
     val shape = RoundedCornerShape(12.dp)
     val base = if (selected) {
         modifier
-            .height(44.dp)
+            .heightIn(min = 44.dp)
             .background(MoyeotaColor.Primary50, shape)
             .border(1.5.dp, MoyeotaColor.Primary500, shape)
     } else {
         modifier
-            .height(44.dp)
+            .heightIn(min = 44.dp)
             .shadow(2.dp, shape)
             .background(Color.White, shape)
     }
     Box(
-        modifier = base.clickable { onClick() },
+        modifier = base.selectable(
+            selected = selected,
+            role = Role.RadioButton,
+            onClick = onClick,
+        ),
         contentAlignment = Alignment.Center,
     ) {
         Text(
@@ -181,6 +247,11 @@ internal fun SignupChoiceChip(
                 fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
             ),
             color = if (selected) MoyeotaColor.Primary500 else SlateGray,
+            textAlign = TextAlign.Center,
+            // 3분할에서 테두리에 글자가 닿지 않게 한다. 360dp 폭 기준 칩 하나가 104dp 이고
+            // 「선택 안 함」은 13sp 에서 60dp 가 채 안 되므로 기본 배율에서는 한 줄로 들어간다.
+            maxLines = 2,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
         )
     }
 }
