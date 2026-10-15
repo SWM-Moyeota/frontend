@@ -87,6 +87,49 @@ class AuthMappersTest {
     }
 
     /**
+     * 성별은 **세 값 모두** enum 이름 그대로 나가야 서버가 `Gender` 로 역직렬화한다.
+     *
+     * `UNDISCLOSED`(선택 안 함)를 못 박는 게 목적이다. 서버 필드는 `@NotNull` 이 그대로라
+     * 「밝히지 않음」도 **필드를 비우는 게 아니라 값을 보내는 것**인데, 도메인에 세 번째 상수를 더하는
+     * 대신 빈 문자열이나 필드 누락으로 "구현"하면 가입이 전부 400 으로 막힌다.
+     *
+     * **받는 쪽은 테스트할 게 없다** — 서버 `UserResponse(uuid, name)` 에 성별이 없고, 앱의 어떤
+     * 응답 DTO 도 `gender` 를 갖지 않는다(2026-10-15, Backend PR #235 포함해 확인). 즉 성별은
+     * 지금 **요청 전용 필드**다. 응답에 생기면 모르는 값에 대한 폴백부터 정해야 한다.
+     */
+    @Test
+    fun `성별 세 값이 모두 서버 enum 이름 그대로 실려 나간다`() {
+        val sent = Gender.entries.associateWith { newUser.copy(gender = it).toDto().gender }
+
+        assertEquals("MALE", sent[Gender.MALE])
+        assertEquals("FEMALE", sent[Gender.FEMALE])
+        assertEquals("UNDISCLOSED", sent[Gender.UNDISCLOSED])
+        // 값이 늘면 서버가 모르는 이름이 나가 400 이 된다 — 백엔드 enum 과 같이 늘려야 한다.
+        assertEquals("백엔드 Gender 와 값 개수가 어긋났다: ${Gender.entries}", 3, Gender.entries.size)
+    }
+
+    /**
+     * 「선택 안 함」이 본문에 **값으로** 실리는지. 위 테스트가 DTO 필드를 보는 것과 달리 이쪽은
+     * 직렬화 결과를 본다 — 빈 문자열이나 필드 누락(둘 다 서버 `@NotNull` 에서 400)과 갈리는 지점이다.
+     */
+    @Test
+    fun `성별 선택 안 함은 빈 값이 아니라 UNDISCLOSED 로 직렬화된다`() {
+        val encoded = json.encodeToString(
+            RegisterRequestDto.serializer(),
+            newUser.copy(gender = Gender.UNDISCLOSED).toDto(),
+        )
+
+        assertTrue(
+            "gender 가 값으로 실리지 않았다: $encoded",
+            encoded.contains("\"gender\":\"UNDISCLOSED\""),
+        )
+        assertFalse(
+            "빈 값을 보내면 서버가 400 이다: $encoded",
+            encoded.contains("\"gender\":\"\""),
+        )
+    }
+
+    /**
      * 발송·확인·가입 세 요청이 같은 번호 형태를 써야 한다. 서버는 요청마다 `PhoneNumber` VO 로
      * 하이픈을 떼고 해시하므로 결과는 같지만, 앱이 화면마다 다른 형태를 보내면
      * "인증은 통과했는데 가입이 400"을 추적할 때 번호 표기부터 의심해야 한다.

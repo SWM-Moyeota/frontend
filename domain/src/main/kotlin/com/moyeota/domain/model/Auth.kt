@@ -3,7 +3,33 @@ package com.moyeota.domain.model
 import java.time.LocalDate
 import java.time.ZoneOffset
 
-enum class Gender { MALE, FEMALE }
+/**
+ * 성별. 서버 `UserRegisterRequest.gender` 는 `@NotNull` 이라 **셋 중 하나를 반드시 고른다** —
+ * 전송 값은 enum 이름 그대로이고(`Gender.name`, data 매퍼) 비워 보낼 수 있는 필드가 아니다.
+ */
+enum class Gender {
+    MALE,
+    FEMALE,
+
+    /**
+     * 선택 안 함 — 사용자가 성별을 밝히지 않기로 **고른** 상태.
+     *
+     * **값을 비우는 게 아니라 명시적인 값이다.** 서버의 `@NotNull` 은 그대로라서(빈 값은 여전히 400)
+     * 「밝히지 않음」도 `"UNDISCLOSED"` 라는 하나의 값으로 실려 나간다. 그래서 도메인에서도
+     * `Gender?` 로 뭉개지 않고 **세 번째 상수**로 둔다 — 화면은 `null` 을 "아직 안 골랐다"(제출 불가)로
+     * 쓰고 있어서, 비공개를 같은 `null` 에 얹으면 제출 가능 여부 판정부터 무너진다.
+     *
+     * 상수를 따로 두는 값어치는 **집계**에 있다: 나중에 성비를 볼 때 「입력 안 함」과 「응답 거부」는
+     * 서로 다른 사실이다. 앞은 가입 흐름이 값을 못 받았다는 **앱 쪽 결함**이고, 뒤는 사용자가 행사한
+     * **선택**이다. 비워서 저장하면 둘이 한 칸에 섞여 들어가 그 구분이 영구히 사라진다 — 나중에
+     * 되살릴 방법이 없으므로 처음부터 나눠 적는다.
+     *
+     * **운영 서버는 2026-10-15 현재 이 값을 모른다**(Backend PR #235 미머지·미배포).
+     * 보내면 400 이므로 배포 전까지 화면에 노출하면 안 된다 — 자세한 사정은 data 쪽
+     * `RegisterRequestDto` KDoc 에 적었다(domain 은 data 를 모르므로 링크가 아니라 이름만 적는다).
+     */
+    UNDISCLOSED,
+}
 
 /**
  * 회원가입 요청. 백엔드 `UserRegisterRequest` 와 필드 1:1.

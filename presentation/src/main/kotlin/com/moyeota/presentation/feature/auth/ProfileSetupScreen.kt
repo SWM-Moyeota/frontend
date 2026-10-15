@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -327,21 +328,24 @@ fun ProfileSetupScreen(
             Text(text = "성별", style = MoyeotaType.BodySm, color = LabelGray)
             Spacer(Modifier.height(8.dp))
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                // selectableGroup: 칩 셋이 **한 묶음의 라디오**라는 사실을 스크린리더에 싣는다.
+                // 없으면 독립된 버튼 셋으로 들려 "하나만 고르는 선택"이라는 규칙이 사라진다.
+                modifier = Modifier.fillMaxWidth().selectableGroup(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                SignupChoiceChip(
-                    text = "남성",
-                    selected = gender == Gender.MALE,
-                    onClick = { gender = Gender.MALE },
-                    modifier = Modifier.weight(1f),
-                )
-                SignupChoiceChip(
-                    text = "여성",
-                    selected = gender == Gender.FEMALE,
-                    onClick = { gender = Gender.FEMALE },
-                    modifier = Modifier.weight(1f),
-                )
+                // 선택지·라벨·순서는 [SignupGenderChoices] 가 갖는다 — 화면이 칩을 직접 나열하면
+                // 「선택 안 함」 노출 여부가 목록과 화면 두 곳에서 갈린다.
+                // 균등 3분할: 360dp 폭에서도 칩 하나가 104dp 라 「선택 안 함」이 한 줄로 들어간다.
+                SignupGenderChoices.forEach { choice ->
+                    SignupChoiceChip(
+                        text = choice.label,
+                        // 고르지 않은 상태(gender == null)에서는 **어느 칩도** 선택으로 그려지지
+                        // 않는다 — 「선택 안 함」 칩이 기본 선택처럼 보이면 안 되기 때문이다.
+                        selected = gender == choice.gender,
+                        onClick = { gender = choice.gender },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
             }
             Spacer(Modifier.height(8.dp))
             Text(

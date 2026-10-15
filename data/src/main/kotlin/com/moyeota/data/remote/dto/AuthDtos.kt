@@ -7,7 +7,13 @@ import kotlinx.serialization.Serializable
  *
  * [birthDate] 는 서버가 `Instant` 로 받는다(예: "2000-01-01T00:00:00Z"). 날짜만 보내면
  * Jackson 이 역직렬화에 실패해 400 이 나므로 매퍼에서 UTC 자정으로 확장해 넣는다.
- * [gender] 는 서버 enum 이름 그대로 "MALE" / "FEMALE".
+ * [gender] 는 서버 enum 이름 그대로 "MALE" / "FEMALE" / "UNDISCLOSED"(선택 안 함)다.
+ * 서버 필드는 `@NotNull` 이라 **셋 중 하나가 반드시 실려야 한다** — 「선택 안 함」도 빈 문자열이나
+ * 필드 누락이 아니라 `"UNDISCLOSED"` 라는 이름을 보내는 것이다(그래서 이 필드는 nullable 이 아니다).
+ *
+ * **"UNDISCLOSED" 는 2026-10-15 현재 운영 서버가 모르는 값이다.** 추가는 백엔드 PR #235 에 있고
+ * 아직 머지·배포되지 않았다 — 운영 스펙(`/v3/api-docs`)의 이 필드는 여전히 `["MALE","FEMALE"]` 이라
+ * 지금 보내면 400 `INVALID_REQUEST` 다. 앱 코드는 미리 맞춰 두고, 화면 노출은 서버 배포 뒤에 켠다.
  *
  * [nickname] 은 나중에 추가된 **필수** 필드다(서버 record 필드 순서도 password 다음이다).
  * 빠뜨리면 400, 형식이 틀리면 400 `USER107`, 이미 쓰는 값이면 409 `USER108` 이다.
