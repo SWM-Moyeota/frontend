@@ -82,6 +82,14 @@ private val GrayButtonBg = Color(0xFFEEF1F6)
 private val DividerGray = Color(0xFFE7EAF0)
 private val ProgressTrack = Color(0xFFE6EAF0)
 
+/**
+ * 아래 [MatchWaitingScreenPreview] **전용** 예시 방. 프로덕션 경로에서는 쓰이지 않는다.
+ *
+ * 예전에는 이 값이 [MatchWaitingScreen] 의 `ride` **기본 인자**이기도 했다. 그래서 호출부가 방을
+ * 모르는 상태(구성 변경에 방 id 가 날아간 21)에서 `ride` 를 빼고 부르면, 진짜 방에 들어 있던
+ * 사용자에게 이 센텀시티역→서면역 방이 떴다(출시 차단 결함, 2026-10-15). 기본값을 걷어내 호출부가
+ * **반드시** 방을 넘기게 했다 — 같은 사고가 다시 나려면 컴파일이 먼저 깨진다.
+ */
 private val waitingRideDummy = Ride(
     id = "ride-21",
     origin = "센텀시티역 3번 출구",
@@ -140,7 +148,8 @@ private val waitingRideDummy = Ride(
  */
 @Composable
 fun MatchWaitingScreen(
-    ride: Ride = waitingRideDummy,
+    /** 그릴 방. **기본값이 없다** — 예시 방이 프로덕션에 새는 길을 막는다([waitingRideDummy]) */
+    ride: Ride,
     foundCount: Int = 1,
     conditionLabel: String = "3인",
     /** 내 현재 위치(파란 점). 권한이 없거나 아직 못 받았으면 null — 지도에 점을 찍지 않는다 */
@@ -637,5 +646,5 @@ private fun GrayActionButton(
 @Preview(showBackground = true, widthDp = 393, heightDp = 852)
 @Composable
 private fun MatchWaitingScreenPreview() {
-    MatchWaitingScreen()
+    MatchWaitingScreen(ride = waitingRideDummy)
 }

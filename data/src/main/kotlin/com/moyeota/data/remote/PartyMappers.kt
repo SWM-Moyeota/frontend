@@ -20,6 +20,7 @@ import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.model.RouteEstimate
 import com.moyeota.domain.model.User
+import com.moyeota.domain.model.WithdrawnMemberNames
 import kotlinx.serialization.json.Json
 import retrofit2.HttpException
 import java.io.IOException
@@ -55,8 +56,10 @@ private fun placeholderMembers(count: Int): List<User> = List(count.coerceAtLeas
 /**
  * 방 상세의 멤버 한 명 → 표시용 [User].
  *
- * 유저 요약이 없으면(탈퇴 등) 서버가 [PartyDetailResponse.MemberInfo.publicId] 부터 전부 null 로 준다.
- * 그때 id 는 빈 문자열이 되고 닉네임은 "탈퇴한 회원"이다 — 화면은 빈 id 를 탭 불가로 다뤄야 한다.
+ * 서버가 유저 요약 자체를 못 찾으면 [PartyDetailResponse.MemberInfo.publicId] 부터 전부 null 로 준다.
+ * 그때 id 는 빈 문자열이 되고 닉네임은 [WithdrawnMemberNames.NO_SUMMARY] 다 — 화면은 빈 id 를 탭
+ * 불가로 다뤄야 한다. **탈퇴(soft delete)와는 다른 경우다**: 탈퇴한 사용자는 publicId 가 살아 있고
+ * 닉네임만 서버가 [WithdrawnMemberNames.SERVER_DELETED] 로 가려 보낸다(그쪽은 이 매퍼를 그냥 통과한다).
  *
  * [currentUuid] 는 로그인한 사용자의 UUID(`UserSession.currentUserUuid`). publicId 가 JWT `sub` 와
  * 같은 값이라 이 비교가 곧 "나" 판정이다. 미로그인이거나 요약이 없으면 [User.isMe] 는 false 다
@@ -86,7 +89,9 @@ private fun PartyDetailResponse.MemberInfo.toUser(currentUuid: String?): User {
     val isMe = publicId != null && publicId == currentUuid
     return User(
         id = publicId ?: "",
-        nickname = nickname ?: "탈퇴한 회원",
+        // 요약이 없는 멤버의 자리값. 서버가 탈퇴로 가린 이름(SERVER_DELETED)은 여기가 아니라
+        // 서버가 직접 넣어 보내므로 그대로 흘러간다 — 두 문자열의 출처 구분은 WithdrawnMemberNames 에 있다.
+        nickname = nickname ?: WithdrawnMemberNames.NO_SUMMARY,
         verifiedLabel = "",
         rating = 0.0,
         rideCount = rideCount,

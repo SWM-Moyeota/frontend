@@ -133,11 +133,16 @@ interface RideRepository {
      * 1차 배포 모드([AppConfig.taxiEnabled][com.moyeota.domain.model.AppConfig.taxiEnabled] = false)에서
      * 정원이 찬(`COMPLETED`) 방을 닫는다 — 한 명이 닫으면 **모두의** 방이 `FINISHED` 가 된다.
      *
-     * **누가 닫을 수 있는지가 서버에서 바뀌었다**: Backend #237(develop 머지, 2026-10 기준 운영 미배포)이
-     * 이 API 를 **방장 전용**으로 좁혔다. 방장은 저장되는 값이 아니라 **지금 멤버 중 가장 먼저 합류한
-     * 사람**이고(`Party.hostId()`), 방장이 나가면 자동 승계된다. 앱은 아직 방장을 식별할 수단이 없다 —
-     * 서버가 주는 `hostId` 는 내부 PK `Long` 인데 멤버 목록에는 `publicId` UUID 뿐이다(Backend #240 요청).
-     * 그래서 **버튼 노출로 막지 못하고, 실패 사유로 안내한다.**
+     * **방장 전용이다**: Backend #237 이 이 API 를 방장에게만 허용했고, 2026-10-15 **운영에 배포됐다**.
+     * 방장은 저장되는 값이 아니라 **지금 멤버 중 가장 먼저 합류한 사람**이고(`Party.hostId()` =
+     * `min(joinedAt, memberId)`), 방장이 나가면 자동 승계된다.
+     *
+     * **앱은 방장을 식별할 수 있다** — 서버가 멤버마다 `members[].host` 를 내려 준다(Backend #240,
+     * 반영 완료). 내부 PK `hostId` 는 응답에서 제거됐다. 그래서 호출부는 **버튼 노출을 먼저 막고**
+     * (`canFinishParty` = 손으로 닫는 단계 && [Ride.isHostedByMe]), 실패 사유 안내는 그 뒤에 남는
+     * 틈을 받는다 — 승계 신호를 놓치거나 순서가 역전돼 **내 스냅샷이 낡았을** 때 403 이 온다.
+     * **「앱은 방장을 알 수 없다」로 되돌리지 말 것**: 그 서술은 `host` 가 붙기 전의 사실이고,
+     * 그대로 믿으면 방장 게이팅이 근거 없는 추정으로 읽혀 지워진다.
      *
      * 실패는 모두 [PartyFinishException] 으로 올라온다 — **403·409 가 각각 두 가지 뜻**이라
      * (403 `NOT_PARTY_HOST`·`NOT_PARTY_MEMBER` / 409 `PARTY_NOT_COMPLETED`·`DRIVER_ALREADY_ASSIGNED`)

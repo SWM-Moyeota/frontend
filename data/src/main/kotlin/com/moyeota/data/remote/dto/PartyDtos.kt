@@ -84,9 +84,20 @@ data class PartyDetailResponse(
      * 승계된다). 지금은 서버가 `Party.isHost(memberId)` 의 결과를 직접 실어 주므로 앱이 셈하지 않는다.
      * **`joinedAt` 을 되살려 방장을 다시 추정하지 말 것** — 판별 창구는 [host] 하나다.
      *
-     * **네 문자열 필드가 전부 nullable 인 건 방어가 아니라 서버 계약이다** — 탈퇴 등으로 유저 요약을
-     * 못 찾으면 서버가 `MemberInfo(null, null, null, null, rideCount)` 을 그대로 내려보낸다
+     * **네 문자열 필드가 전부 nullable 인 건 방어가 아니라 서버 계약이다** — 서버가 유저 요약을
+     * 못 찾으면 `MemberInfo(null, null, null, null, rideCount)` 을 그대로 내려보낸다
      * (방 상세 조회 자체는 깨지면 안 되므로). 논-널로 선언하면 그 순간 파싱이 터져 방 화면이 열리지 않는다.
+     *
+     * **그 경우를 「탈퇴」와 같다고 읽지 말 것 — 서버에서 둘은 다른 일이다**
+     * (`com.moyeota.domain.model.WithdrawnMemberNames` 에 표로 정리해 두었다):
+     *
+     * | 경우 | 이 응답의 모양 | 근거 |
+     * |---|---|---|
+     * | **요약 없음** | publicId·nickname·imageUrl 이 **전부 null** | 서버가 `MemberSummary` 를 못 만든 경우 |
+     * | **탈퇴(soft delete)** | [publicId] 는 **그대로 오고** [nickname] 만 `"탈퇴한 사용자"` | `User.getNickname()` 이 `isDeleted() ? DELETED_DISPLAY_NAME : nickname` 이다 — 행이 지워지지 않는다 |
+     *
+     * 즉 **탈퇴한 사용자는 식별자가 살아 있다.** 「요약 없음」만 보고 탈퇴를 판정하면(빈 publicId 검사)
+     * 탈퇴한 사용자를 멀쩡한 사람으로 읽어 **이름으로 부르는** 문구가 나간다.
      */
     @Serializable
     data class MemberInfo(

@@ -118,7 +118,7 @@ class WaitingSseStateTest {
     fun `퇴장 - publicId 로 그 한 명만 지우고 상태를 바꾼다`() {
         val before = ride(status = RideStatus.MATCHED, members = listOf(me, user("u2"), user("u3")))
 
-        val after = before.withMemberLeft("u2", RideStatus.RECRUITING)
+        val after = before.withMemberLeft("u2", RideStatus.RECRUITING).ride
 
         assertEquals(listOf("me", "u3"), after.members.map { it.id })
         assertEquals(RideStatus.RECRUITING, after.status)
@@ -129,7 +129,7 @@ class WaitingSseStateTest {
         // 그 사람의 입장 신호를 놓쳤다는 뜻이다. 없는 사람을 지우려 상세를 또 읽지는 않는다.
         val before = ride(status = RideStatus.MATCHED, members = listOf(me, user("u2")))
 
-        val after = before.withMemberLeft("u9", RideStatus.RECRUITING)
+        val after = before.withMemberLeft("u9", RideStatus.RECRUITING).ride
 
         assertEquals(listOf("me", "u2"), after.members.map { it.id })
         assertEquals(RideStatus.RECRUITING, after.status)
@@ -140,7 +140,7 @@ class WaitingSseStateTest {
         // 요약이 없는 멤버(빈 id)들을 한꺼번에 날리는 사고를 막는다.
         val before = ride(members = listOf(me, user(""), user("")))
 
-        val after = before.withMemberLeft("", RideStatus.RECRUITING)
+        val after = before.withMemberLeft("", RideStatus.RECRUITING).ride
 
         assertEquals(3, after.members.size)
     }
@@ -152,6 +152,7 @@ class WaitingSseStateTest {
         val after = before
             .withMemberJoined(user("u3"), RideStatus.RECRUITING)
             .withMemberLeft("u3", RideStatus.RECRUITING)
+            .ride
 
         assertEquals(before.members, after.members)
     }
@@ -169,7 +170,7 @@ class WaitingSseStateTest {
         )
 
         val joined = before.withMemberJoined(user("u2"), RideStatus.RECRUITING)
-        val left = joined.withMemberLeft("u2", RideStatus.RECRUITING)
+        val left = joined.withMemberLeft("u2", RideStatus.RECRUITING).ride
 
         assertEquals(before, left)
     }
@@ -192,9 +193,11 @@ class WaitingSseStateTest {
 
         val after = before.withMemberLeft("u1", RideStatus.RECRUITING, hostPublicId = "me")
 
-        assertEquals(listOf("me", "u3"), after.members.map { it.id })
-        assertEquals(listOf(true, false), after.members.map { it.isHost })
-        assertTrue(after.isHostedByMe)
+        assertEquals(listOf("me", "u3"), after.ride.members.map { it.id })
+        assertEquals(listOf(true, false), after.ride.members.map { it.isHost })
+        assertTrue(after.ride.isHostedByMe)
+        // 지목된 사람이 목록에 있었으므로 서버에 다시 물을 이유가 없다
+        assertFalse(after.needsDetail)
     }
 
     /** 승계가 나에게 오지 않았으면 내 방장 표시는 **지워져야** 한다 — 서버 말이 곧 「방장은 한 명」이다. */
@@ -204,8 +207,9 @@ class WaitingSseStateTest {
 
         val after = before.withMemberLeft("u2", RideStatus.RECRUITING, hostPublicId = "u3")
 
-        assertFalse(after.isHostedByMe)
-        assertEquals(listOf("u3"), after.members.filter { it.isHost }.map { it.id })
+        assertFalse(after.ride.isHostedByMe)
+        assertEquals(listOf("u3"), after.ride.members.filter { it.isHost }.map { it.id })
+        assertFalse(after.needsDetail)
     }
 
     /** 방장이 아닌 사람이 나가면 방장은 그대로다 — 서버가 같은 publicId 를 다시 지목한다. */
@@ -215,39 +219,82 @@ class WaitingSseStateTest {
 
         val after = before.withMemberLeft("u2", RideStatus.RECRUITING, hostPublicId = "me")
 
-        assertTrue(after.isHostedByMe)
-        assertEquals(1, after.members.count { it.isHost })
+        assertTrue(after.ride.isHostedByMe)
+        assertEquals(1, after.ride.members.count { it.isHost })
+        assertFalse(after.needsDetail)
     }
 
     /**
-     * 서버가 새 방장을 특정하지 못하면(`hostSummary == null`) 들고 있던 표시를 **그대로 둔다**.
-     * 로그인한 본인의 요약은 늘 찾히므로 그 상황은 사실상 "새 방장은 내가 아니다" 이고, 모른다고
-     * 전부 false 로 밀면 반대로 **진짜 방장의 표시를 지우는** 쪽이 위험하다.
+     * 서버가 새 방장을 특정하지 못하면(`hostSummary == null`) 들고 있던 표시를 **그대로 두고**
+     * 방 상세를 다시 받는다 — 서버 Swagger 가 「null 이거나 목록에 없는 publicId 면 host 표시를
+     * 바꾸지 말고 방 상세를 다시 받는다」고 적어 두었다. 모른다고 전부 false 로 밀면 반대로
+     * **진짜 방장의 표시를 지우는** 쪽이 위험하다.
      */
     @Test
-    fun `승계 - hostPublicId 가 없으면 방장 표시를 손대지 않는다`() {
+    fun `승계 - hostPublicId 가 없으면 표시를 손대지 않고 상세를 다시 읽는다`() {
         val before = ride(members = listOf(me.copy(isHost = true), user("u2")))
 
         val after = before.withMemberLeft("u2", RideStatus.RECRUITING, hostPublicId = null)
 
-        assertTrue(after.isHostedByMe)
+        assertTrue(after.ride.isHostedByMe)
+        assertTrue("서버가 승계를 말하지 않았으니 상세로 확인해야 한다", after.needsDetail)
+
         // 빈 문자열도 같다 — "모름"은 한 가지 모양으로만 다룬다.
-        assertTrue(before.withMemberLeft("u2", RideStatus.RECRUITING, hostPublicId = "").isHostedByMe)
+        val blank = before.withMemberLeft("u2", RideStatus.RECRUITING, hostPublicId = "")
+        assertTrue(blank.ride.isHostedByMe)
+        assertTrue(blank.needsDetail)
     }
 
     /**
-     * 지목된 publicId 가 들고 있는 목록에 없으면 결과적으로 아무도 방장이 아니다 — 그게 맞다:
-     * 서버가 나 아닌 누군가를 방장이라고 말한 것이므로 적어도 「내가 방장이다」는 거짓이다.
-     * (빠진 멤버는 [hasMemberDrift] 나 다음 스냅샷이 메운다.)
+     * **지목된 publicId 가 목록에 없으면 표시를 바꾸지 않는다** — 서버 계약 그대로다
+     * (「단 null 이거나 목록에 없는 publicId 면 host 표시를 바꾸지 말고 방 상세를 다시 받는다 —
+     * 이벤트 순서 역전 대비」, 백엔드 `PartySseController` Swagger).
+     *
+     * 예전에는 여기서 **전원 false** 가 됐다(아무도 `it.id == host` 가 아니므로). 그게 서버 계약과
+     * 반대이고, 역전 프레임에서 진짜 방장의 표시를 지웠다 — 아래 역전 테스트가 그 경로다.
      */
     @Test
-    fun `승계 - 모르는 사람이 방장으로 지목되면 내 표시만 지워진다`() {
+    fun `승계 - 목록에 없는 사람이 지목되면 표시를 손대지 않고 상세를 다시 읽는다`() {
         val before = ride(members = listOf(me.copy(isHost = true), user("u2")))
 
         val after = before.withMemberLeft("u2", RideStatus.RECRUITING, hostPublicId = "u9")
 
-        assertFalse(after.isHostedByMe)
-        assertTrue(after.members.none { it.isHost })
+        assertTrue("전원 false 로 밀면 진짜 방장이 버튼을 잃는다", after.ride.isHostedByMe)
+        assertEquals(listOf("me"), after.ride.members.filter { it.isHost }.map { it.id })
+        assertTrue("서버에 다시 물어야 한다", after.needsDetail)
+    }
+
+    /**
+     * ### 프레임 순서 역전 ★ — **이 테스트가 깨지면 진짜 방장이 「합승 완료」를 영구히 잃는다**
+     *
+     * 두 멤버가 연달아 나가면 서버는 프레임 둘을 따로 발행하고, 각 프레임의 `hostPublicId` 는
+     * **그 프레임을 반영한 뒤의** 방장이다. 전송 중 순서가 뒤집히면 뒤늦게 온 프레임이
+     * **이미 나간 사람**을 방장으로 지목한다(아래 `u2`).
+     *
+     * 그때 「목록에 없으니 전원 false」로 밀면 그 순간 진짜 방장(나)의 [User.isHost] 가 지워지고
+     * 복구 수단이 없다: [hasMemberDrift] 는 **인원수만** 보므로 못 잡고(목록 길이는 맞다),
+     * SSE 가 살아 있으면 폴백 폴링도 돌지 않는다([shouldPollFallback]).
+     */
+    @Test
+    fun `승계 - 프레임 순서가 역전돼도 진짜 방장은 표시를 잃지 않는다`() {
+        val before = ride(
+            status = RideStatus.MATCHED,
+            capacity = 3,
+            members = listOf(user("u1", isHost = true), user("u2"), me),
+        )
+
+        // 나중 프레임(u2 이탈 → 승계 = me)이 먼저 도착했다
+        val first = before.withMemberLeft("u2", RideStatus.RECRUITING, hostPublicId = "me")
+        assertTrue(first.ride.isHostedByMe)
+        assertFalse(first.needsDetail)
+
+        // 앞 프레임(u1 이탈 → 승계 = u2, **이미 나간 사람**)이 뒤늦게 도착했다
+        val second = first.ride.withMemberLeft("u1", RideStatus.RECRUITING, hostPublicId = "u2")
+
+        assertTrue("역전 프레임이 진짜 방장의 표시를 지우면 안 된다", second.ride.isHostedByMe)
+        assertTrue("표시를 믿을 수 없으니 상세를 다시 읽어야 한다", second.needsDetail)
+        // 이 구멍을 기존 장치로는 메울 수 없다는 근거 — 인원수는 어긋나지 않는다
+        assertFalse(hasMemberDrift(second.ride))
     }
 
     /** id 가 빈 멤버(요약 없음)를 방장으로 세우지 않는다 — 빈 문자열끼리 맞아떨어지면 안 된다. */
@@ -255,7 +302,7 @@ class WaitingSseStateTest {
     fun `승계 - id 가 빈 멤버는 방장이 되지 않는다`() {
         val before = ride(members = listOf(me, user(""), user("")))
 
-        val after = before.withMemberLeft("u9", RideStatus.RECRUITING, hostPublicId = "me")
+        val after = before.withMemberLeft("u9", RideStatus.RECRUITING, hostPublicId = "me").ride
 
         assertEquals(listOf("me"), after.members.filter { it.isHost }.map { it.id })
     }
@@ -270,8 +317,9 @@ class WaitingSseStateTest {
 
         val after = before.withHostSuccession("me")
 
-        assertEquals(before.members.map { it.id }, after.members.map { it.id })
-        assertTrue(after.isHostedByMe)
+        assertEquals(before.members.map { it.id }, after.ride.members.map { it.id })
+        assertTrue(after.ride.isHostedByMe)
+        assertFalse(after.needsDetail)
     }
 
     /**
@@ -293,7 +341,7 @@ class WaitingSseStateTest {
         )
 
         // delta: u1(방장) 이탈 → 서버가 me 를 승계로 지목
-        val delta = before.withMemberLeft("u1", RideStatus.RECRUITING, hostPublicId = "me")
+        val delta = before.withMemberLeft("u1", RideStatus.RECRUITING, hostPublicId = "me").ride
 
         // snapshot: 같은 시점의 상세를 서버가 통째로 다시 내려 준 모양
         val snapshot = before.copy(
@@ -313,6 +361,57 @@ class WaitingSseStateTest {
 
         assertTrue(after.isHostedByMe)
         assertEquals(1, after.members.count { it.isHost })
+    }
+
+    // ─── 상세 재조회 판정 (되돌이 방지) ────────────────────────────────────
+
+    /**
+     * 변경분 적용 뒤 상세를 읽는 사유는 둘이고 처방이 같다 — 그래서 판정도 하나다.
+     *
+     * **되돌이가 없는 근거**: 이 판정은 **이벤트 프레임에만** 걸린다. 읽어 온 상세는
+     * `MatchWaitingViewModel.readDetail` 이 화면 상태로 직접 세우고 이 판정을 다시 지나지 않으므로,
+     * 프레임 하나당 추가 조회는 최대 1건이고 그 조회가 또 조회를 부르는 길이 없다.
+     */
+    @Test
+    fun `재조회 - 지목된 방장을 못 맞춘 프레임은 상세를 읽는다`() {
+        // 인원은 어긋나지 않는다(정원 4, 1명, 모집 중) — needsDetail 하나만 세워진 경우
+        val delta = ride(status = RideStatus.RECRUITING, capacity = 4, members = listOf(me))
+            .withMemberLeft("u9", RideStatus.RECRUITING, hostPublicId = "u9")
+
+        assertTrue(delta.needsDetail)
+        assertFalse(hasMemberDrift(delta.ride))
+        assertTrue(needsDetailAfterDelta(delta))
+    }
+
+    @Test
+    fun `재조회 - 인원이 어긋난 프레임도 상세를 읽는다`() {
+        // 방장은 맞췄지만(me) 정원이 찼다는 status 에 목록이 모자란다
+        val delta = ride(status = RideStatus.MATCHED, capacity = 4, members = listOf(me))
+            .withMemberLeft("u9", RideStatus.MATCHED, hostPublicId = "me")
+
+        assertFalse(delta.needsDetail)
+        assertTrue(needsDetailAfterDelta(delta))
+    }
+
+    @Test
+    fun `재조회 - 사유가 둘 다여도 판정은 하나다 (상세는 1회)`() {
+        val delta = ride(status = RideStatus.MATCHED, capacity = 4, members = listOf(me))
+            .withMemberLeft("u9", RideStatus.MATCHED, hostPublicId = "u9")
+
+        assertTrue(delta.needsDetail)
+        assertTrue(hasMemberDrift(delta.ride))
+        assertTrue(needsDetailAfterDelta(delta))
+    }
+
+    @Test
+    fun `재조회 - 방장도 인원도 멀쩡하면 서버를 부르지 않는다`() {
+        val delta = ride(
+            status = RideStatus.RECRUITING,
+            capacity = 4,
+            members = listOf(me.copy(isHost = true), user("u2")),
+        ).withMemberLeft("u2", RideStatus.RECRUITING, hostPublicId = "me")
+
+        assertFalse(needsDetailAfterDelta(delta))
     }
 
     // ─── 어긋남 감지 ────────────────────────────────────────────────────────

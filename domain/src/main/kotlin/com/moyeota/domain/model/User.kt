@@ -52,6 +52,34 @@ data class User(
 )
 
 /**
+ * 멤버의 이름 자리에 **사람 이름이 아닌 것**이 들어오는 두 경우의 문자열 — 한 곳에 모아 둔다.
+ *
+ * 흩어 놓으면 둘 중 하나를 못 걸러 안내문이 **지킬 수 없는 약속**을 한다(「다 타면 방장 탈퇴한
+ * 사용자님이 「합승 완료」를 눌러…」 — 그 사람은 영원히 누를 수 없다). 그래서 넣는 쪽(데이터 매퍼)과
+ * 거르는 쪽(화면)이 **같은 상수**를 본다.
+ *
+ * | 상수 | 넣는 쪽 | 서버 쪽 사실 |
+ * |---|---|---|
+ * | [SERVER_DELETED] | **서버** (`user/users/domain/User.DELETED_DISPLAY_NAME`) | **soft delete** 다 — `publicId` 는 **살아 있고** 닉네임만 이 상수로 가려진다(`isDeleted() ? DELETED_DISPLAY_NAME : nickname`) |
+ * | [NO_SUMMARY] | **앱 매퍼** (`PartyMappers.toUser`) | 서버가 유저 요약 자체를 못 찾아 `MemberInfo` 의 publicId·nickname·imageUrl 을 **전부 null** 로 내린 경우 |
+ *
+ * **두 경우를 하나로 접지 말 것.** 모양이 다르다: 앞은 식별자가 있어 프로필로 들어갈 수 있고(배지도
+ * 붙는다), 뒤는 식별자가 없어 탭조차 막아야 한다(`User.isWithdrawn` = [id] 가 빈 값). 겹치는 것은
+ * **이름으로 부를 수 없다**는 한 가지뿐이고, 그 판정만 [ALL] 로 함께 한다.
+ */
+object WithdrawnMemberNames {
+
+    /** 서버가 soft delete 된 사용자의 닉네임 자리에 직접 넣는 값. publicId 는 살아 있다. */
+    const val SERVER_DELETED = "탈퇴한 사용자"
+
+    /** 유저 요약이 없는 멤버(전 필드 null)에 **앱이** 채우는 자리값. */
+    const val NO_SUMMARY = "탈퇴한 회원"
+
+    /** 어느 쪽이든 **사람 이름이 아니다** — 이름으로 부르는 문구에서 걸러야 한다. */
+    val ALL = setOf(SERVER_DELETED, NO_SUMMARY)
+}
+
+/**
  * 로그인한 본인의 서버 기준 신원. GET /api/v1/local/users/info 의 결과다.
  *
  * 같은 파일의 [User] 와는 쓰임이 다르다 — [User] 는 파티 참여자를 화면에 그리기 위한 표시용 모델이고,

@@ -79,6 +79,13 @@ fun ErrorBox(
     message: String,
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
+    /**
+     * 버튼 문구. 기본값은 **다시 불러오는** 경우를 가정한다.
+     *
+     * [onRetry] 가 재조회가 아니라 **되돌아가기**일 때는 바꿔 넘긴다 — 눌러도 다시 불러오지 않는
+     * 버튼에 「다시 시도」를 적으면 거짓이 된다. 21·25 의 「방 id 없음」 분기가 그 경우다.
+     */
+    actionLabel: String = "다시 시도",
 ) {
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(
@@ -101,7 +108,7 @@ fun ErrorBox(
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    text = "다시 시도",
+                    text = actionLabel,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,
                     color = MoyeotaColor.TextOnDark,

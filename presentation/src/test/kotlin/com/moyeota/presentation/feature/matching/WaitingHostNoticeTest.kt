@@ -3,6 +3,7 @@ package com.moyeota.presentation.feature.matching
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.model.User
+import com.moyeota.domain.model.WithdrawnMemberNames
 import com.moyeota.presentation.core.hostDisplayNameOrNull
 import com.moyeota.presentation.core.showsHostBadge
 import org.junit.Assert.assertEquals
@@ -42,8 +43,21 @@ class WaitingHostNoticeTest {
         isHost = isHost,
     )
 
-    /** 요약이 없는 멤버(탈퇴 등) — 서버가 publicId·nickname 을 전부 null 로 주고 매퍼가 이렇게 접는다. */
-    private fun withdrawn(isHost: Boolean = false) = member(id = "", nickname = "탈퇴한 회원", isHost = isHost)
+    /**
+     * **탈퇴(soft delete) 모양** — 서버는 행을 지우지 않는다. `publicId` 는 **그대로 오고** 닉네임만
+     * 서버 상수로 가려진다(`user/users/domain/User` 의
+     * `return isDeleted() ? DELETED_DISPLAY_NAME : nickname`).
+     *
+     * 예전 헬퍼는 여기에 `id = ""` 를 넣어 **서버가 내지 않는 모양**을 만들고 있었다 — 그래서 빈 id
+     * 검사(`isWithdrawn`)에 걸려 테스트는 통과했지만, 실제 응답은 식별자가 살아 있어 그 검사를 그냥
+     * 통과했고 안내문에 「탈퇴한 사용자」가 찍혔다.
+     */
+    private fun softDeleted(id: String = "u2", isHost: Boolean = false) =
+        member(id = id, nickname = WithdrawnMemberNames.SERVER_DELETED, isHost = isHost)
+
+    /** **요약이 없는 멤버** — 서버가 publicId·nickname 을 전부 null 로 주고 매퍼가 이렇게 접는다. */
+    private fun noSummary(isHost: Boolean = false) =
+        member(id = "", nickname = WithdrawnMemberNames.NO_SUMMARY, isHost = isHost)
 
     private fun fullParty(members: List<User>) = Ride(
         id = "1",
@@ -116,12 +130,46 @@ class WaitingHostNoticeTest {
     }
 
     /**
-     * 이름을 못 쓰는 경우 — 방장이 탈퇴해 요약이 없다. 매퍼가 닉네임을 "탈퇴한 회원" 으로 채우므로
-     * **공백 검사로는 걸러지지 않는다**: 「방장 탈퇴한 회원님이」가 그대로 찍히면 사람 이름이 아니다.
+     * ### 이름을 못 쓰는 경우 ① 방장이 **탈퇴했다**(soft delete) ★
+     *
+     * 서버 탈퇴는 행을 지우지 않는다 — `publicId` 는 살아 있고 닉네임만 「탈퇴한 사용자」로 가려진다.
+     * 그래서 빈 id 검사(`isWithdrawn`)로는 **걸러지지 않고**, 공백 검사로도 걸러지지 않는다(멀쩡한
+     * 문자열이다). 그대로 통과하면 안내문이 이렇게 된다 — 「다 타면 방장 **탈퇴한 사용자**님이
+     * 「합승 완료」를 눌러 방을 끝내요」. 그 사람은 **영원히 누를 수 없다**(방은 30분 만료로만 닫힌다).
      */
     @Test
-    fun `방장이 탈퇴 회원이면 이름을 쓰지 않는다`() {
-        val ride = fullParty(listOf(member("me", isMe = true), withdrawn(isHost = true)))
+    fun `방장이 탈퇴했으면 이름을 쓰지 않는다 - publicId 는 살아 있다`() {
+        val ride = fullParty(listOf(member("me", isMe = true), softDeleted(isHost = true)))
+
+        val notice = finishHostNotice(ride.members.hostDisplayNameOrNull())
+
+        assertFalse("사람 이름이 아니다", notice.contains("탈퇴한 사용자"))
+        assertEquals("다 타면 방장(가장 먼저 참여한 분)이 「합승 완료」를 눌러 방을 끝내요", notice)
+    }
+
+    /**
+     * **배지는 그대로 붙는다.** 서버가 그를 방장이라고 말한 건 사실이고, 그 사실이 방이 왜 끝나지
+     * 않는지를 설명해 준다 — 막는 것은 **이름으로 부르는 것** 하나뿐이다. 그래서 이 한 경우에만
+     * 「배지가 붙는 사람」과 「안내문이 부르는 사람」이 갈린다.
+     */
+    @Test
+    fun `탈퇴한 방장에게도 방장 배지는 붙는다 - 이름만 쓰지 않는다`() {
+        val host = softDeleted(isHost = true)
+
+        assertTrue("서버가 방장이라고 말한 건 사실이다", host.showsHostBadge)
+        assertNull("그래도 이름으로 부를 수는 없다", listOf(host).hostDisplayNameOrNull())
+    }
+
+    /**
+     * ### 이름을 못 쓰는 경우 ② 방장의 **유저 요약이 없다**
+     *
+     * 서버가 `MemberSummary` 를 못 만든 경우다 — publicId·nickname 이 전부 null 로 와서 매퍼가
+     * `id = ""` · 닉네임 「탈퇴한 회원」으로 접는다. 탈퇴와 **다른 경우**이고(식별자가 없다), 역시
+     * 공백 검사로는 걸러지지 않는다.
+     */
+    @Test
+    fun `방장의 요약이 없으면 이름을 쓰지 않는다`() {
+        val ride = fullParty(listOf(member("me", isMe = true), noSummary(isHost = true)))
 
         val notice = finishHostNotice(ride.members.hostDisplayNameOrNull())
 
@@ -193,7 +241,10 @@ class WaitingHostNoticeTest {
         assertFalse(member("me", isMe = true, isHost = true).showsHostBadge)
     }
 
-    /** 배지와 안내문이 **같은 사람**을 가리킨다 — 판정이 갈리면 화면이 서로 다른 말을 한다. */
+    /**
+     * 배지와 안내문이 **같은 사람**을 가리킨다 — 판정이 갈리면 화면이 서로 다른 말을 한다.
+     * (갈리는 경우는 이름을 쓸 수 없을 때 하나뿐이고, 그때 안내문은 **아무도 부르지 않는다**.)
+     */
     @Test
     fun `배지가 붙는 사람과 안내문이 부르는 사람이 같다`() {
         val members = listOf(member("me", isMe = true), member("u2", nickname = "부산가자", isHost = true))
