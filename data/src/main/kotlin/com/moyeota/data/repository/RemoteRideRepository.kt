@@ -62,8 +62,6 @@ class RemoteRideRepository(
 
     override fun getNearbyParties(): List<Ride> = local.getNearbyParties()
 
-    override fun getMyRides(): List<Ride> = local.getMyRides()
-
     override suspend fun getParties(): List<Ride> = api.getParties().list.map { it.toRide() }
 
     // 전체 목록과 같은 경로 + 쿼리 파라미터 4개. 매퍼가 departureLat/Lng 를 originLat/Lng 로 옮긴다.

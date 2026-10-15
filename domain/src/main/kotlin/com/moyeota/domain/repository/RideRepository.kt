@@ -13,7 +13,6 @@ import kotlinx.coroutines.flow.emptyFlow
 
 interface RideRepository {
     fun getNearbyParties(): List<Ride>
-    fun getMyRides(): List<Ride>
 
     // 조회 — GET /api/v1/matching/rooms, /rooms/{partyId}
     /** 목록 응답에는 좌표·요금·경로가 없다(partyId/출발/도착/인원/정원/상태만). 상세는 [getPartyDetail]. */
