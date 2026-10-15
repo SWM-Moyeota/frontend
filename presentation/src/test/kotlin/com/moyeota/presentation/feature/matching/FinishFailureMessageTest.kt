@@ -13,10 +13,11 @@ import org.junit.Test
  * 그 사이에 서버가 이 API 를 **방장 전용**으로 좁혔고(Backend #237), 비방장은 403 `NOT_PARTY_HOST` 를
  * 받는다. 사유를 가르지 않으면 그 사람은 **다음에 뭘 해야 하는지 알 수 없어** 같은 버튼을 계속 누른다.
  *
- * 버튼 노출 조건([canFinishParty])으로 막는 길은 아직 없다: 서버가 주는 `hostId` 는 내부 PK `Long` 인데
- * 멤버 목록에는 `publicId` UUID 뿐이라 앱이 방장을 식별할 수 없다(Backend #240 요청). 그리고 서버가
- * `isHost` 를 주어 노출 조건을 고친 뒤에도 **이 안내는 남는다** — 방장이 나가면 `joinedAt` 최소값으로
- * 자동 승계되는데 그 사실이 SSE 변경분에 실리지 않아 앱 스냅샷이 낡을 수 있다.
+ * 그 사이 버튼은 **방장에게만 보이게 됐다**([canFinishParty]) — 서버가 멤버마다 `host` 를 내려 주기
+ * 시작해(Backend #240 반영 완료) 노출 조건을 걸 근거가 생겼다. 그래도 **이 안내는 남는다**: 방장은
+ * 멤버가 나갈 때마다 남은 멤버 중 `min(joinedAt, memberId)` 로 자동 승계되는데, 그걸 알려 주는 신호는
+ * `member-left` 한 번뿐이라 놓치면 내 스냅샷이 낡은 채로 남는다. 그 틈에서 눌린 「합승 완료」를
+ * 받아 주는 자리가 여기다.
  *
  * 코드 문자열의 근거는 백엔드 `MatchingErrorCode`(enum 이름이 그대로 `getCode()`)와
  * `Party.finishWithoutDriver` 의 검사 순서다.

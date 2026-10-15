@@ -50,11 +50,13 @@ import com.moyeota.presentation.core.pickupDistanceLabel
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.model.User
+import com.moyeota.presentation.core.HostBadge
 import com.moyeota.presentation.core.MeBadge
 import com.moyeota.presentation.core.MemberAvatar
 import com.moyeota.presentation.core.displayNickname
 import com.moyeota.presentation.core.isWithdrawn
 import com.moyeota.presentation.core.rideCountLabel
+import com.moyeota.presentation.core.showsHostBadge
 
 // 와이어프레임 그레이 (core token 미정의 색 — 화면 재현용)
 private val CanvasBg = Color(0xFFF5F7FA)
@@ -77,10 +79,15 @@ private val DashGray = Color(0xFFB9C3D6)
  *   누르면 409 PARTY_CLOSED 가 온다. 눌리는 버튼을 두고 실패하게 두는 대신 아예 내린다.
  * - [미연결] 없음
  *
- * 도메인 변경(2026-08-30): 백엔드가 자동 기사 매칭으로 전환하며 방장 개념이 사라졌다.
- * 수동 출발(「이 인원으로 출발」)이라는 행위 자체가 없어져 CTA 를 화면에서 제거했고,
- * 21 매칭 대기와 같은 결정이다. 멤버는 전부 동등하게 표시한다(방장 배지 없음).
- * 25 배차 현황으로는 서버 status 전이를 관찰하는 21 이 넘긴다 — 이 화면은 넘기지 않는다.
+ * 도메인 변경(2026-08-30): 백엔드가 자동 기사 매칭으로 전환하며 **수동 출발**이 사라졌다.
+ * 「이 인원으로 출발」이라는 행위 자체가 없어져 CTA 를 화면에서 제거했고, 21 매칭 대기와 같은
+ * 결정이다. 25 배차 현황으로는 서버 status 전이를 관찰하는 21 이 넘긴다 — 이 화면은 넘기지 않는다.
+ *
+ * 방장 표시(2026-10-15): 그때 함께 지웠던 방장 배지는 **되살렸다** — 근거가 달라졌다. 그때는
+ * 서버에 방장 개념이 없어 앱이 `joinedAt` 최소값으로 추정하던 것이었고, 지금은 서버가 멤버마다
+ * `host` 를 내려 준다(Backend #240). 21 매칭 대기와 **같은 배지·같은 판정**을 쓴다
+ * ([com.moyeota.presentation.core.showsHostBadge]) — 조건 카드 한 번 탭으로 오가는 두 화면에서
+ * 같은 사람이 달라 보이면 안 된다. 이 화면은 방장 **전용 동작**은 갖지 않는다(「합승 완료」는 21 에 있다).
  *
  * 서버 계약(2026-09): 멤버가 publicId·nickname·rideCount 를 함께 준다. 「나」 판정은 [User.isMe]
  * 하나로 끝난다 — 예전에는 앱이 자기 내부 Long id 를 몰라 고정값 1 과 비교하던 자리였다.
@@ -308,7 +315,6 @@ fun RideDetailScreen(
                 // 나까지 포함해 전원을 보여준다 — 위 개수는 나를 뺀 값이라 목록에 내 줄이 없으면
                 // "나는 이 방에 있나"를 확인할 곳이 사라진다. 대신 내 줄은 배지로 구분하고 탭을 막는다.
                 ride.members.forEach { member ->
-                    // 방장 배지는 없다 — 서버에 방장 표식 자체가 없다.
                     // 탈퇴 회원과 나는 열어 볼 프로필이 없어 탭을 막는다.
                     val clickable = !member.isMe && !member.isWithdrawn
                     Row(
@@ -338,6 +344,12 @@ fun RideDetailScreen(
                                 if (member.isMe) {
                                     Spacer(Modifier.width(6.dp))
                                     MeBadge()
+                                }
+                                // 「방장」 — 21 매칭 대기와 같은 판정. 서버가 멤버마다 내려 주는
+                                // 값이고(추정이 아니다), 폴백 때문에 내 줄에는 붙지 않는다.
+                                if (member.showsHostBadge) {
+                                    Spacer(Modifier.width(6.dp))
+                                    HostBadge()
                                 }
                             }
                             // 평가 수치는 평가 API 가 생길 때까지 쓰지 않는다 — 없는 수치를 지어내면

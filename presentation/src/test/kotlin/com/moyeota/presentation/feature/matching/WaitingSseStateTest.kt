@@ -3,6 +3,7 @@ package com.moyeota.presentation.feature.matching
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.model.User
+import com.moyeota.domain.model.isHostedByMe
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -20,13 +21,19 @@ import org.junit.Test
  */
 class WaitingSseStateTest {
 
-    private fun user(id: String, isMe: Boolean = false, rideCount: Int = 0) = User(
+    private fun user(
+        id: String,
+        isMe: Boolean = false,
+        rideCount: Int = 0,
+        isHost: Boolean = false,
+    ) = User(
         id = id,
         nickname = "승객$id",
         verifiedLabel = "",
         rating = 0.0,
         rideCount = rideCount,
         isMe = isMe,
+        isHost = isHost,
     )
 
     private val me = user("me", isMe = true)
@@ -165,6 +172,147 @@ class WaitingSseStateTest {
         val left = joined.withMemberLeft("u2", RideStatus.RECRUITING)
 
         assertEquals(before, left)
+    }
+
+    // ─── 방장 승계 (Backend #240) ───────────────────────────────────────────
+
+    /**
+     * **이 테스트가 깨지면 방장이 나가도 승계된 사람이 「합승 완료」를 못 본다.**
+     *
+     * 서버는 멤버가 나갈 때마다 남은 멤버 중 `min(joinedAt, memberId)` 를 방장으로 다시 정하고,
+     * 그 결과를 `member-left` 의 `hostPublicId` 로 **한 번만** 알려 준다 — 여기서 버리면 다음
+     * 재연결 스냅샷까지 승계된 사람의 화면이 낡은 채로 남는다.
+     */
+    @Test
+    fun `승계 - 방장이 나가면 서버가 지목한 사람이 방장이 된다`() {
+        val before = ride(
+            status = RideStatus.MATCHED,
+            members = listOf(user("u1", isHost = true), me, user("u3")),
+        )
+
+        val after = before.withMemberLeft("u1", RideStatus.RECRUITING, hostPublicId = "me")
+
+        assertEquals(listOf("me", "u3"), after.members.map { it.id })
+        assertEquals(listOf(true, false), after.members.map { it.isHost })
+        assertTrue(after.isHostedByMe)
+    }
+
+    /** 승계가 나에게 오지 않았으면 내 방장 표시는 **지워져야** 한다 — 서버 말이 곧 「방장은 한 명」이다. */
+    @Test
+    fun `승계 - 내가 아닌 사람이 방장이 되면 내 표시가 지워진다`() {
+        val before = ride(members = listOf(me.copy(isHost = true), user("u2"), user("u3")))
+
+        val after = before.withMemberLeft("u2", RideStatus.RECRUITING, hostPublicId = "u3")
+
+        assertFalse(after.isHostedByMe)
+        assertEquals(listOf("u3"), after.members.filter { it.isHost }.map { it.id })
+    }
+
+    /** 방장이 아닌 사람이 나가면 방장은 그대로다 — 서버가 같은 publicId 를 다시 지목한다. */
+    @Test
+    fun `승계 - 방장이 아닌 사람이 나가면 방장은 그대로다`() {
+        val before = ride(members = listOf(me.copy(isHost = true), user("u2"), user("u3")))
+
+        val after = before.withMemberLeft("u2", RideStatus.RECRUITING, hostPublicId = "me")
+
+        assertTrue(after.isHostedByMe)
+        assertEquals(1, after.members.count { it.isHost })
+    }
+
+    /**
+     * 서버가 새 방장을 특정하지 못하면(`hostSummary == null`) 들고 있던 표시를 **그대로 둔다**.
+     * 로그인한 본인의 요약은 늘 찾히므로 그 상황은 사실상 "새 방장은 내가 아니다" 이고, 모른다고
+     * 전부 false 로 밀면 반대로 **진짜 방장의 표시를 지우는** 쪽이 위험하다.
+     */
+    @Test
+    fun `승계 - hostPublicId 가 없으면 방장 표시를 손대지 않는다`() {
+        val before = ride(members = listOf(me.copy(isHost = true), user("u2")))
+
+        val after = before.withMemberLeft("u2", RideStatus.RECRUITING, hostPublicId = null)
+
+        assertTrue(after.isHostedByMe)
+        // 빈 문자열도 같다 — "모름"은 한 가지 모양으로만 다룬다.
+        assertTrue(before.withMemberLeft("u2", RideStatus.RECRUITING, hostPublicId = "").isHostedByMe)
+    }
+
+    /**
+     * 지목된 publicId 가 들고 있는 목록에 없으면 결과적으로 아무도 방장이 아니다 — 그게 맞다:
+     * 서버가 나 아닌 누군가를 방장이라고 말한 것이므로 적어도 「내가 방장이다」는 거짓이다.
+     * (빠진 멤버는 [hasMemberDrift] 나 다음 스냅샷이 메운다.)
+     */
+    @Test
+    fun `승계 - 모르는 사람이 방장으로 지목되면 내 표시만 지워진다`() {
+        val before = ride(members = listOf(me.copy(isHost = true), user("u2")))
+
+        val after = before.withMemberLeft("u2", RideStatus.RECRUITING, hostPublicId = "u9")
+
+        assertFalse(after.isHostedByMe)
+        assertTrue(after.members.none { it.isHost })
+    }
+
+    /** id 가 빈 멤버(요약 없음)를 방장으로 세우지 않는다 — 빈 문자열끼리 맞아떨어지면 안 된다. */
+    @Test
+    fun `승계 - id 가 빈 멤버는 방장이 되지 않는다`() {
+        val before = ride(members = listOf(me, user(""), user("")))
+
+        val after = before.withMemberLeft("u9", RideStatus.RECRUITING, hostPublicId = "me")
+
+        assertEquals(listOf("me"), after.members.filter { it.isHost }.map { it.id })
+    }
+
+    /**
+     * 승계만 반영하는 경로(`member-left` 의 publicId 가 null 일 때 ViewModel 이 쓰는 자리) —
+     * 멤버 목록은 건드리지 않고 방장 표시만 옮긴다.
+     */
+    @Test
+    fun `승계 - 목록을 못 고치는 프레임에서도 방장 표시는 옮긴다`() {
+        val before = ride(members = listOf(user("u1", isHost = true), me))
+
+        val after = before.withHostSuccession("me")
+
+        assertEquals(before.members.map { it.id }, after.members.map { it.id })
+        assertTrue(after.isHostedByMe)
+    }
+
+    /**
+     * ### delta 경로와 snapshot 경로가 같은 결과를 낸다 ★
+     *
+     * `connected` 스냅샷은 전체 교체라 서버가 계산한 `host` 가 그대로 들어온다. 증분 경로는 그 값을
+     * 쌓아서 만든다 — 두 경로가 갈리면 "재연결 전에는 방장, 후에는 아님" 같은 어긋남이 생긴다.
+     *
+     * 같을 수 있는 근거: 서버가 싣는 `hostPublicId` 는 **이탈을 반영한 뒤** 읽은 `party.hostId()` 이고,
+     * 스냅샷의 `host` 도 같은 `Party.isHost` 가 만든다. 그리고 합류는 방장을 바꿀 수 없다
+     * (합류자는 가장 늦게 들어온 사람 = `min(joinedAt)` 이 될 수 없다).
+     */
+    @Test
+    fun `승계 - 증분으로 만든 방장 표시가 스냅샷과 같다`() {
+        val before = ride(
+            status = RideStatus.MATCHED,
+            capacity = 3,
+            members = listOf(user("u1", isHost = true), me, user("u3")),
+        )
+
+        // delta: u1(방장) 이탈 → 서버가 me 를 승계로 지목
+        val delta = before.withMemberLeft("u1", RideStatus.RECRUITING, hostPublicId = "me")
+
+        // snapshot: 같은 시점의 상세를 서버가 통째로 다시 내려 준 모양
+        val snapshot = before.copy(
+            members = listOf(me.copy(isHost = true), user("u3")),
+            status = RideStatus.RECRUITING,
+        )
+
+        assertEquals(snapshot, delta)
+    }
+
+    /** 합류는 방장을 바꾸지 않는다 — 합류자는 `min(joinedAt)` 이 될 수 없다(서버 보장). */
+    @Test
+    fun `승계 - 합류는 방장을 바꾸지 않는다`() {
+        val before = ride(members = listOf(me.copy(isHost = true)))
+
+        val after = before.withMemberJoined(user("u2"), RideStatus.RECRUITING)
+
+        assertTrue(after.isHostedByMe)
+        assertEquals(1, after.members.count { it.isHost })
     }
 
     // ─── 어긋남 감지 ────────────────────────────────────────────────────────

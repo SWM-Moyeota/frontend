@@ -47,8 +47,21 @@ sealed interface PartyEvent {
      * 서버는 그래도 신호는 보낸다. 그때 화면은 지울 멤버를 특정할 수 없으므로 **상세를 다시 받아야 한다**.
      *
      * 내가 나간 경우에는 이 신호가 오지 않는다 — 서버가 내 연결을 **이벤트 없이** 끊는다(`closeMember`).
+     *
+     * [hostPublicId] 는 **승계 후의 방장**이다(Backend #240). 서버의 방장은 현재 멤버 중
+     * `min(joinedAt, memberId)` 라 방장이 나가면 다음으로 이른 멤버가 자동 승계되는데, 그 사실이
+     * 실리는 자리가 여기다 — 이 값을 버리면 방장이 나간 뒤 승계된 사람이 자기 권한을 모른다
+     * (서버는 이 신호를 다시 보내지 않으므로 다음 스냅샷까지 영영 모른다).
+     *
+     * **null 이면 서버도 새 방장의 publicId 를 말하지 못했다** — 승계된 멤버의 유저 요약을 찾지
+     * 못한 경우다(`PartyService.leave` 의 `hostSummary == null`). 로그인한 본인의 요약은 늘 찾히므로
+     * null 은 사실상 "새 방장은 내가 아니다" 와 같고, 그때는 들고 있던 방장 표시를 **그대로 둔다**.
      */
-    data class MemberLeft(val publicId: String?, val status: RideStatus) : PartyEvent
+    data class MemberLeft(
+        val publicId: String?,
+        val status: RideStatus,
+        val hostPublicId: String? = null,
+    ) : PartyEvent
 
     /**
      * 방이 닫혔다(`closed` — 합승 완료·만료·마지막 멤버 이탈). 서버가 이 뒤에 그 방의 모든 구독을 끊는다.

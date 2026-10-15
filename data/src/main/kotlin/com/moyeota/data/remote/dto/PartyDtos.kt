@@ -35,8 +35,9 @@ data class PartyListResponse(
 // 같은가」를 비교하려고 만든 값인데, 그 짝인 상태 조회 API 가 함께 사라졌다. 25·26 의 주기 조회가
 // 이제 곧 이 상세이므로 「바뀌었나」는 도메인 Ride 끼리 `==` 로 본다.
 //
-// 서버 record 에 hostId 도, MemberInfo.isHost 도 **없다** — 방장 개념이 매칭 도메인에서 빠졌다.
-// 앱도 방장을 추정하지 않는다: 멤버는 전부 동등하게 매핑된다(PartyMappers 참고).
+// **방장은 멤버마다 실린다**([MemberInfo.host], Backend #240) — 방 수준 `hostId`(Long) 는 서버가
+// **지웠다**: 내부 PK 를 밖으로 내보내지 않는다. 그래서 이 DTO 에 방 수준 방장 필드는 없고, 앱도
+// 방장을 추정하지 않는다(PartyMappers 참고 — 입장 순서로 흉내 내던 추정이 지워진 자리다).
 // Party 도메인에는 matchingStartedAt 필드가 추가됐지만 PartyDetailResult 가 노출하지 않으므로 DTO 에도 없다.
 @Serializable
 data class PartyDetailResponse(
@@ -71,13 +72,17 @@ data class PartyDetailResponse(
 ) {
     /**
      * 서버 `PartyDetailResult.MemberInfo(UUID publicId, String nickname, String imageUrl,
-     * String badgeId, Integer rideCount)`.
+     * String badgeId, Integer rideCount, boolean host)`.
      *
      * **내부 PK 였던 `memberId` 는 사라졌다.** 식별자는 [publicId] 하나이며 JWT `sub` 와 같은 값이라
      * "이 멤버가 나인가"를 앱이 직접 판정할 수 있다([com.moyeota.data.remote.toRide] 의 currentUuid).
      *
      * **`joinedAt` 도 사라졌다**(Backend #218) — 서버 record 에 필드 자체가 없으니 입장 시각을
-     * 화면에 쓸 근거도 없다. 되살리면 항상 null 인 필드로 "최초 입장자 = 방장" 같은 추정이 되살아난다.
+     * 화면에 쓸 근거도 없다. 그 자리를 이제 [host] 가 대신한다(Backend #240): 예전에는 "최초 입장자
+     * = 방장" 을 앱이 `joinedAt` 으로 **추정해야** 했는데, 그 추정이 서버 판정과 어긋날 수 있었다
+     * (서버 방장은 `min(joinedAt, memberId)` 라 동시 입장의 tie-break 가 다르고, 멤버가 나가면
+     * 승계된다). 지금은 서버가 `Party.isHost(memberId)` 의 결과를 직접 실어 주므로 앱이 셈하지 않는다.
+     * **`joinedAt` 을 되살려 방장을 다시 추정하지 말 것** — 판별 창구는 [host] 하나다.
      *
      * **네 문자열 필드가 전부 nullable 인 건 방어가 아니라 서버 계약이다** — 탈퇴 등으로 유저 요약을
      * 못 찾으면 서버가 `MemberInfo(null, null, null, null, rideCount)` 을 그대로 내려보낸다
@@ -97,6 +102,20 @@ data class PartyDetailResponse(
         val badgeId: String? = null,
         /** 이 멤버가 끝낸(FINISHED) 파티 수. 서버가 없으면 0 을 채워 준다. */
         val rideCount: Int = 0,
+        /**
+         * 이 멤버가 방장인가 — 서버 `Party.isHost(memberId)` 의 결과다(Backend #240).
+         *
+         * **JSON 키는 `isHost` 가 아니라 `host` 다** — 서버 record 컴포넌트 이름이 `host` 이고
+         * Jackson 이 그 이름 그대로 직렬화한다(운영 OpenAPI 에서 `MemberInfo.host: boolean` 확인).
+         * `isHost` 로 적으면 **조용히 늘 null** 이 된다(`ignoreUnknownKeys` 가 흘린다).
+         *
+         * **서버 record 는 원시 `boolean`** 이라 운영에서는 늘 true/false 가 실린다. 그런데도
+         * nullable 로 받는 건 "서버가 말하지 않았다"(필드 누락·옛 배포·`null`)를 false 와 **갈라야**
+         * 하기 때문이다. 둘을 접으면 옛 서버를 보는 앱이 "아무도 방장이 아니다" 로 읽어
+         * 방장조차 「합승 완료」를 못 보게 된다. 그 갈라진 경우의 처리는
+         * [com.moyeota.data.remote.toRide] 가 쓰는 `toUser` 매퍼에 근거와 함께 적어 두었다.
+         */
+        val host: Boolean? = null,
     )
 }
 
@@ -108,6 +127,12 @@ data class PartyDetailResponse(
  *
  * [member] 에 기본값을 준 건 서버가 비워 보낼 수 있다고 보기 때문이 아니라, 키가 빠진 프레임 하나가
  * 스트림을 죽이지 않게 하려는 것이다 — 그때는 요약 없는 멤버("탈퇴한 회원")로 떨어진다.
+ *
+ * **본문 모양은 Backend #240 에서도 바뀌지 않았다**(승계 필드가 붙은 건 `member-left` 쪽뿐이다).
+ * 다만 [member] 가 `MemberInfo` 라서 거기에 `host` 는 **실려 온다** — 확인함:
+ * `PartyService.join` 이 `MemberInfo.of(summary, rideCount, saved.isHost(memberId))` 로 만든다.
+ * 합류자는 가장 늦게 들어온 사람이라 그 값은 사실상 늘 false 지만, 앱이 false 를 가정하지 않고
+ * 상세와 **같은 매퍼**로 그대로 옮긴다 — 서버가 판정의 단일 창구다.
  */
 @Serializable
 data class MemberJoinedPayload(
@@ -117,7 +142,7 @@ data class MemberJoinedPayload(
 )
 
 /**
- * SSE `member-left` 이벤트의 data — 백엔드 `MemberLeft(UUID publicId, String status)`.
+ * SSE `member-left` 이벤트의 data — 백엔드 `MemberLeft(UUID publicId, String status, UUID hostPublicId)`.
  *
  * [publicId] 는 **null 일 수 있다** — 서버가 `userAccess.findMemberSummaries` 로 요약을 못 찾으면
  * (탈퇴 등) null 을 그대로 싣고도 신호는 보낸다(`PartyService.leave`). 받는 쪽은 "누가 나갔는지 모름"으로
@@ -128,6 +153,17 @@ data class MemberLeftPayload(
     val publicId: String? = null,
     /** 나간 **뒤**의 방 상태. 마지막 멤버가 나가면 방은 닫히고 `member-left` 대신 `closed` 가 온다. */
     val status: String = "",
+    /**
+     * **승계 후**의 방장 publicId — 서버가 `party.leave()` 를 반영한 **뒤** `party.hostId()` 를 읽어
+     * 싣는다(Backend #240). 방장이 나가면 다음으로 이른 멤버가 자동 승계되고, 그 사실을 앱에
+     * 알려 주는 **유일한 신호**가 이것이다(서버는 다시 보내지 않는다).
+     *
+     * null 인 경우는 둘이다 — 승계된 멤버의 유저 요약을 서버가 못 찾았거나(`hostSummary == null`),
+     * 아직 이 필드를 모르는 옛 서버를 보고 있거나. 둘 다 "새 방장을 특정할 수 없다" 로 같게 다룬다.
+     *
+     * 방이 닫히는 이탈(마지막 멤버)에는 이 프레임 자체가 오지 않는다 — 서버가 `closed` 를 보낸다.
+     */
+    val hostPublicId: String? = null,
 )
 
 /**

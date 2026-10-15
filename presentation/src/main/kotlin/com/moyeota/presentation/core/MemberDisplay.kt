@@ -99,3 +99,63 @@ internal fun MeBadge(modifier: Modifier = Modifier) {
         Text(text = "나", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MoyeotaColor.Primary600)
     }
 }
+
+/**
+ * 「방장」 배지를 그릴 행인가 — **내 줄에는 그리지 않는다.**
+ *
+ * 방장 표시는 2026-10-15 에 되살렸다. 예전에 지웠던 것(`_workspace/33_api-integrator_no_host.md`·
+ * `34_compose-builder_no_host.md`)과 **근거가 다르다**: 그때는 서버에 방장 개념이 아예 없어서 앱이
+ * `joinedAt` 최소값으로 **추정**하던 것이었고, 지금 [User.isHost] 에 담긴 값은 서버가 멤버마다
+ * 내려 주는 `MemberInfo.host` 다(Backend #240). 즉 **추정이 아니라 서버 값**이다 — 앱은 입장 순서를
+ * 세지 않는다.
+ *
+ * 그런데 **서버가 `host` 를 빼먹었을 때의 폴백이 한쪽으로만 기울어 있다.** 매퍼가 `host ?: isMe` 로
+ * 접기 때문에(`PartyMappers.toUser` 의 표) 옛 배포를 보고 있으면 **내 줄만** true 가 된다. 그건
+ * 의도된 fail-open 이다 — 방장이 「합승 완료」를 못 보면 방을 끝낼 길이 없어 30분 만료를 기다려야
+ * 하는 쪽이 복구 불가이고, 반대로 틀렸을 때는 서버 403 `NOT_PARTY_HOST` 가 바로잡아 준다.
+ *
+ * **그 폴백을 배지에 그대로 쓰면 안 된다.** 버튼의 거짓은 눌렀을 때 서버가 바로잡지만, 배지의
+ * 거짓은 아무도 바로잡지 않는다 — 비방장이 자기 줄에서 「방장」을 읽고, 심지어 눌렀을 때 받는
+ * 「방장만 합승을 완료할 수 있어요」와 **정면으로 모순**되는 화면이 된다. 사람에 대해 지어낸
+ * 사실을 띄우는 건 이 저장소가 거짓 문구 19건을 들어내며 금지한 바로 그것이다(`ProductClaimsTest`).
+ *
+ * 그래서 내 줄을 뺀다. [User.isMe] 는 한 명뿐이라 폴백이 만들 수 있는 거짓 true 도 내 줄 하나뿐이고,
+ * 내 줄을 빼면 이 값은 정확히 **「서버가 이 사람을 방장이라고 말했다」** 가 된다. 잃는 것은 「내가
+ * 방장일 때 내 줄에 붙는 배지」 하나인데, 그건 21 대기 화면 하단이 이미 말한다 — 방장에게는
+ * 「합승 완료」 버튼이 보이고, 비방장에게는 방장을 가리키는 안내문이 보인다.
+ */
+internal val User.showsHostBadge: Boolean
+    get() = isHost && !isMe
+
+/**
+ * 안내문에서 **이름으로 부를 수 있는** 방장 — 부를 수 없으면 null.
+ *
+ * [showsHostBadge] 와 **같은 판정**을 쓴다(배지가 붙은 사람과 안내문이 부르는 사람이 어긋나면 안 된다).
+ * 거기에 탈퇴 조건을 하나 더 얹는다: 요약이 없는 멤버는 닉네임이 "탈퇴한 회원"으로 채워져
+ * ([displayNickname] 아님 — 매퍼가 이미 그 문자열을 넣는다) 공백 검사로는 걸러지지 않는데,
+ * 「방장 탈퇴한 회원님이…」는 사람 이름이 아니다.
+ *
+ * null 이 나오는 경우는 둘이다: 방장이 탈퇴해 이름이 없거나, 내가 멤버 목록에 없어(식별자 없는
+ * 응답) 누구도 방장으로 지목되지 않았거나. 그때 문구는 이름 대신 **조건**을 말한다
+ * ([com.moyeota.presentation.feature.matching.finishHostNotice]).
+ */
+internal fun List<User>.hostDisplayNameOrNull(): String? =
+    firstOrNull { it.showsHostBadge && !it.isWithdrawn }?.nickname?.takeIf { it.isNotBlank() }
+
+/**
+ * 「방장」 배지 — [showsHostBadge] 인 행에만 붙인다.
+ *
+ * 「나」([MeBadge])와 색을 달리한다. 둘은 같은 목록에 함께 뜨지만(내 줄에 「나」, 방장 줄에 「방장」)
+ * 뜻이 다르다 — 하나는 신원, 하나는 **역할**이다. 같은 Primary 알약으로 그리면 같은 종류의
+ * 표시로 읽힌다.
+ */
+@Composable
+internal fun HostBadge(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .background(MoyeotaColor.SurfaceSoft, CircleShape)
+            .padding(horizontal = 8.dp, vertical = 2.dp),
+    ) {
+        Text(text = "방장", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MoyeotaColor.TextMute)
+    }
+}

@@ -64,16 +64,38 @@ private fun placeholderMembers(count: Int): List<User> = List(count.coerceAtLeas
  *
  * 별점([User.rating])과 인증 라벨([User.verifiedLabel])은 서버에 값이 없어 0.0 / "" 로 고정한다.
  * 여기서 그럴듯한 값을 지어내면 화면이 가짜 평판을 진짜처럼 보여 준다.
+ *
+ * ### 방장([User.isHost])이 서버 응답에 없을 때 ★
+ * 서버 `MemberInfo.host` 는 원시 `boolean` 이라 운영에서는 늘 실린다. 그래도 **누락**(옛 배포를
+ * 보고 있거나 서버가 필드를 빼는 경우)을 false 로 접지 않고 [User.isMe] 로 떨어뜨린다 —
+ * 즉 **나에 대해서만** 방장으로 본다. 틀렸을 때의 대가가 방향마다 다르기 때문이다:
+ *
+ * | 누락 시 선택 | 나에 대해 틀리면 | 남에 대해 틀리면 |
+ * |---|---|---|
+ * | false | 방장이 「합승 완료」를 **못 본다** → 방을 끝낼 길이 없어 30분 만료를 기다려야 한다(복구 불가) |  방장 표시가 빠진다(사소) |
+ * | true | 눌러도 서버가 403 `NOT_PARTY_HOST` 로 막고, 앱은 그걸 **이미 사유별 문구로** 안내한다(복구됨) | 모두가 방장으로 표시된다(오해를 부른다) |
+ *
+ * 그래서 나에 대해서는 true 쪽(= [User.isMe]), 남에 대해서는 false 쪽으로 기운다. 실질적으로
+ * 서버가 `host` 를 말하기 전의 동작(모두에게 버튼을 보여 주고 서버 403 에 맡김)을 **나에게만** 유지하는
+ * 것이고, 방장 판정의 최종 권한은 어느 쪽이든 서버다 — 앱은 입장 순서로 방장을 **셈하지 않는다**.
+ *
+ * 요약 없는 멤버(전 필드 null)에서는 publicId 가 null 이라 [User.isMe] 가 false 이므로 이 폴백도
+ * false 로 떨어진다 — 누군지 모르는 멤버를 방장으로 세우지 않는다.
  */
-private fun PartyDetailResponse.MemberInfo.toUser(currentUuid: String?): User = User(
-    id = publicId ?: "",
-    nickname = nickname ?: "탈퇴한 회원",
-    verifiedLabel = "",
-    rating = 0.0,
-    rideCount = rideCount,
-    imageUrl = imageUrl,
-    isMe = publicId != null && publicId == currentUuid,
-)
+private fun PartyDetailResponse.MemberInfo.toUser(currentUuid: String?): User {
+    val isMe = publicId != null && publicId == currentUuid
+    return User(
+        id = publicId ?: "",
+        nickname = nickname ?: "탈퇴한 회원",
+        verifiedLabel = "",
+        rating = 0.0,
+        rideCount = rideCount,
+        imageUrl = imageUrl,
+        isMe = isMe,
+        // null = 「서버가 말하지 않았다」. false 와 갈라 두는 이유는 위 표에 있다.
+        isHost = host ?: isMe,
+    )
+}
 
 fun PartyListResponse.PartyItem.toRide(): Ride = Ride(
     id = partyId.toString(),
@@ -102,7 +124,7 @@ fun PartyDetailResponse.toRide(currentUuid: String? = null): Ride {
         destination = destination,
         departureLabel = "",
         capacity = capacity,
-        // 멤버는 전부 동등하다 — 서버가 방장을 구분하지 않는다.
+        // 방장은 멤버마다 서버가 표시해 준다([User.isHost]) — 앱이 입장 순서로 셈하지 않는다.
         members = members.map { member -> member.toUser(currentUuid) },
         farePerPerson = farePerPerson(estimateFare, capacity),
         totalFare = estimateFare ?: 0,
@@ -143,7 +165,8 @@ fun PartyStatusResponse.toPartyStatus(): PartyStatus = PartyStatus(
  * [com.moyeota.domain.model.User.isMe] 를 판정한다. 이벤트가 올 때마다 읽으므로 재로그인도 바로 반영된다.
  *
  * `member-left` 의 publicId 는 빈 문자열까지 null 로 접는다 — 화면은 "누가 나갔는지 모름"을
- * 한 가지 모양(null)으로만 다뤄야 한다.
+ * 한 가지 모양(null)으로만 다뤄야 한다. [PartyEvent.MemberLeft.hostPublicId] 도 같은 이유로
+ * 같은 방식으로 접는다("새 방장을 모름" = null 하나).
  */
 fun PartySseEvent.toPartyEvent(currentUuid: String? = null): PartyEvent = when (this) {
     is PartySseEvent.Snapshot -> PartyEvent.Snapshot(detail.toRide(currentUuid))
@@ -154,6 +177,7 @@ fun PartySseEvent.toPartyEvent(currentUuid: String? = null): PartyEvent = when (
     is PartySseEvent.MemberLeft -> PartyEvent.MemberLeft(
         publicId = payload.publicId?.takeIf { it.isNotBlank() },
         status = partyStatusToRideStatus(payload.status),
+        hostPublicId = payload.hostPublicId?.takeIf { it.isNotBlank() },
     )
     PartySseEvent.Closed -> PartyEvent.Closed
     PartySseEvent.Disconnected -> PartyEvent.Disconnected

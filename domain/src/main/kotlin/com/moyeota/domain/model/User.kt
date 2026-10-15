@@ -33,6 +33,22 @@ data class User(
      * 누가 나인지 알 방법이 없다. 상세/합류 응답에서만 실제로 채워진다.
      */
     val isMe: Boolean = false,
+    /**
+     * 이 멤버가 방장인가. 서버 `PartyDetailResult.MemberInfo.host` 가 출처다(Backend #240).
+     *
+     * **앱이 추정하지 않는다.** 서버의 방장은 *저장값이 아니라 파생값*이다 — `Party.hostId()` =
+     * 현재 멤버 중 `min(joinedAt, memberId)`. 그래서 멤버 구성이 바뀔 때마다 달라지고, 판별의 단일
+     * 창구는 서버 `Party.isHost(memberId)` 뿐이다. 앱이 입장 순서나 목록 첫째 원소로 흉내 내면
+     * 서버가 거부하는 사람에게 방장 권한을 보여 준다(예전 `joinedAt` 추정이 지워진 이유다).
+     *
+     * 기본값이 false 인 건 **서버가 멤버를 설명해 주지도 않은 자리** 때문이다 — 목록·방 생성 응답의
+     * 자리 표시용 멤버가 그렇다. 그쪽은 식별자조차 없어 [isMe] 도 false 라 이 값을 읽는 쪽이 없다.
+     * 서버가 멤버는 설명했지만 `host` 만 빠뜨린 경우의 처리는 **다르다** —
+     * `PartyMappers` 의 `toUser` 에 근거와 함께 적어 두었다.
+     *
+     * 화면이 「내가 방장인가」를 물을 때는 이 필드를 직접 훑지 말고 [Ride.isHostedByMe] 를 쓴다.
+     */
+    val isHost: Boolean = false,
 )
 
 /**
