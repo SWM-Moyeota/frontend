@@ -23,8 +23,13 @@ data class Ride(
     val totalFare: Int,
     val status: RideStatus,
     // 아래는 서버 연동으로 채워지는 값. 더미/목록 응답에는 없어 기본값을 둔다.
-    // 방장(host) 필드는 없다 — 백엔드가 자동 기사 매칭으로 바뀌며 방장 개념 자체를 없앴다
-    // (PartyDetailResult 에 host 관련 필드 없음, 방 생성자도 토큰 주체로만 기록된다).
+    //
+    // 방의 **방장 id** 필드는 없다 — 방장은 [members] 안에 [User.isHost] 로 표시된다
+    // (서버 `MemberInfo.host`, Backend #240). 방 수준 필드로 올리지 않는 이유는 서버가 내부 PK 였던
+    // `PartyDetailResult.hostId` 를 **지웠기** 때문이다: 밖으로 나가는 식별자는 publicId 뿐이고,
+    // 그 publicId 는 이미 멤버 목록에 있다. 방 수준에 또 두면 「목록이 말하는 방장」과
+    // 「방이 말하는 방장」이 어긋날 수 있는 두 번째 진실이 생긴다 —
+    // 「내가 방장인가」는 [com.moyeota.domain.model.isHostedByMe] 하나로만 묻는다.
     val originLat: Double? = null,
     val originLng: Double? = null,
     val destinationLat: Double? = null,
@@ -39,6 +44,21 @@ data class Ride(
     /** 배정된 기사 id. 미배정이면 null. 서버 taxiDriverId. */
     val driverId: Long? = null,
 )
+
+/**
+ * 내가 이 방의 방장인가 — 화면이 방장 전용 동작(「합승 완료」)을 가릴 때 보는 **단일 창구**다.
+ *
+ * 멤버 목록에서 나를 찾아 그 한 명의 [User.isHost] 만 본다. 목록 첫째 원소나 입장 순서로 흉내 내지
+ * 말 것 — 서버의 방장은 현재 멤버 중 `min(joinedAt, memberId)` 라는 **파생값**이라([User.isHost])
+ * 앱이 같은 식을 다시 세우면 동시 입장의 tie-break·자동 승계에서 서버와 어긋난다.
+ *
+ * 내가 목록에 없으면(식별자 없는 목록·생성 응답, 요약 없는 멤버) false 다. **false 를 "방장이 따로
+ * 있다"로 읽지 말 것** — "내가 방장이라고 말해 주는 근거가 없다" 가 전부다. 그리고 true 라도 서버가
+ * 최종 판정이다: 눌렀을 때의 403 `NOT_PARTY_HOST` 는 이 값과 무관하게 **남는다**(방장은 멤버가 들고
+ * 날 때마다 바뀌는데 그 사이 앱 상태가 낡을 수 있다).
+ */
+val Ride.isHostedByMe: Boolean
+    get() = members.firstOrNull { it.isMe }?.isHost == true
 // 방의 **반경**(서버 `departureRadius`/`destinationRadius`) 필드는 없다 — 백엔드가 방 생성 요청에서
 // 반경을 빼고 서버 고정값(500m)으로 바꿨다(Backend `a668aee`). 응답에는 아직 실려 오지만
 // (`PartyDetailResponse`) 그건 **사용자가 정한 값이 아니고**, 서버의 어떤 조회·판정도 읽지 않는다 —

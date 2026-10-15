@@ -84,6 +84,63 @@ class PlaceMappersTest {
         assertEquals("판교역", decoded.list[0].toPlace().name)
     }
 
+    // --- roadName null 방어 ---
+    // 서버 Place 는 record 라 검증이 없어 카카오가 road_address_name 에 null 을 주면 그대로 내보낸다.
+    // 명시적 null 은 기본값으로 떨어지지 않으므로, nullable 로 받지 않으면 한 건 때문에 목록 전체가 날아간다.
+    // NetworkModule 과 같은 Json 설정([json])으로 디코딩해야 실제 경로를 검증하는 것이 된다.
+
+    @Test
+    fun `검색 결과에 roadName 이 null 인 장소가 섞여도 목록 전체가 살아남는다`() {
+        val body = """
+            {"list":[
+              {"name":"판교역","roadName":"경기 성남시 분당구 판교역로 160","latitude":37.3947,"longitude":127.1112},
+              {"name":"도로명없는가게","roadName":null,"latitude":37.5665,"longitude":126.9780}
+            ]}
+        """.trimIndent()
+
+        val places = json.decodeFromString<PlaceSearchListResponse>(body).list.map { it.toPlace() }
+
+        assertEquals(2, places.size)
+        // null 인 항목만 빈 도로명이 되고 나머지 필드는 보존된다.
+        assertEquals("도로명없는가게", places[1].name)
+        assertEquals("", places[1].roadName)
+        assertEquals(37.5665, places[1].latitude, 0.0001)
+        assertEquals(126.9780, places[1].longitude, 0.0001)
+        // 앞 항목은 영향을 받지 않는다 — 한 건의 null 이 목록을 오염시키지 않는지가 핵심이다.
+        assertEquals("판교역", places[0].name)
+        assertEquals("경기 성남시 분당구 판교역로 160", places[0].roadName)
+    }
+
+    @Test
+    fun `즐겨찾기 목록에 roadName 이 null 인 장소가 섞여도 목록 전체가 살아남는다`() {
+        val body = """
+            {"places":[
+              {"placeName":"집","roadName":"서울 강남구 테헤란로 123","latitude":37.5013,"longitude":127.0396,"placeSequence":1},
+              {"placeName":"도로명없는가게","roadName":null,"latitude":37.5665,"longitude":126.9780,"placeSequence":2}
+            ]}
+        """.trimIndent()
+
+        val favorites = json.decodeFromString<FavoritePlaceListResponse>(body)
+            .places.map { it.toFavoritePlace() }
+
+        assertEquals(2, favorites.size)
+        assertEquals("도로명없는가게", favorites[1].name)
+        assertEquals("", favorites[1].roadName)
+        assertEquals(2, favorites[1].sequence)
+        assertEquals("집", favorites[0].name)
+        assertEquals("서울 강남구 테헤란로 123", favorites[0].roadName)
+    }
+
+    // 키 자체가 없는 경우는 원래 기본값으로 떨어졌다 — nullable 로 바꾼 뒤에도 같은 결과여야 한다.
+    @Test
+    fun `roadName 키가 아예 없어도 빈 도로명으로 매핑된다`() {
+        val body = """{"list":[{"name":"판교역","latitude":37.3947,"longitude":127.1112}]}"""
+
+        val place = json.decodeFromString<PlaceSearchListResponse>(body).list.single().toPlace()
+
+        assertEquals("", place.roadName)
+    }
+
     // --- 역지오코딩 (GET /api/v1/places/reverse) ---
     // 아래 3개 응답 본문은 localhost:8080 실서버 curl 결과 그대로다.
 

@@ -11,9 +11,11 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.moyeota.domain.model.PartyEvent
+import com.moyeota.domain.model.PartyFinishException
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.model.User
+import com.moyeota.domain.model.isHostedByMe
 import com.moyeota.domain.repository.RideRepository
 import com.moyeota.presentation.core.BackStateScaffold
 import com.moyeota.presentation.core.ErrorBox
@@ -258,7 +260,10 @@ class MatchWaitingViewModel(
      * |---|---|
      * | [PartyEvent.Snapshot] | 들고 있던 방을 **통째로 교체**(가장 신뢰할 수 있는 값) · 폴백 끔 |
      * | [PartyEvent.MemberJoined] | 멤버 목록에 더하고(같은 publicId 는 교체) status 갱신 ([Ride.withMemberJoined]) |
-     * | [PartyEvent.MemberLeft] | publicId 로 제거 + status 갱신. **publicId 가 null 일 때만** 상세 1회 조회 |
+     * | [PartyEvent.MemberLeft] | publicId 로 제거 + status 갱신 + **방장 승계 반영** ([Ride.withHostSuccession]) |
+     *
+     * 상세 1회 조회가 붙는 경우는 둘이다 — **누가 나갔는지 모를 때**(publicId null)와, 서버가 지목한
+     * **방장이 내 목록에 없을 때**([RideDelta.needsDetail] — 서버 계약이 그렇게 하라고 적어 두었다).
      * | [PartyEvent.Closed] | 닫힘 신호만 세운다 → Route 가 홈으로 |
      * | [PartyEvent.Disconnected] | 폴백 폴링 켬. 상태는 **그대로 둔다** — 곧 올 스냅샷이 보정한다 |
      */
@@ -270,15 +275,20 @@ class MatchWaitingViewModel(
                 _uiState.value = UiState.Success(event.ride)
             }
             // member 의 isMe 는 상세와 같은 근거(publicId == 세션 uuid)로 이미 채워져 온다 — 다시 판정하지 않는다
-            is PartyEvent.MemberJoined -> applyDelta { it.withMemberJoined(event.member, event.status) }
+            // 합류는 방장을 바꿀 수 없어 승계 판정이 없다 — 변경분을 그대로 싣는다(needsDetail = false)
+            is PartyEvent.MemberJoined ->
+                applyDelta { RideDelta(it.withMemberJoined(event.member, event.status)) }
             is PartyEvent.MemberLeft -> {
                 val publicId = event.publicId
                 if (publicId == null) {
-                    // 누가 나갔는지 서버도 모른다 — 지울 멤버를 특정할 수 없는, 상세를 다시 읽는 **유일한** 경우
-                    applyStatus(event.status)
+                    // 누가 나갔는지 서버도 모른다 — 지울 멤버를 특정할 수 없으니 상세를 읽는다.
+                    // 그래도 **승계는 먼저 반영한다**: 상세 읽기가 실패하면 이 프레임이 유일한 승계 근거다
+                    // (서버는 member-left 를 다시 보내지 않는다). 이 경로는 아래 readDetail 이 **무조건**
+                    // 돌므로 승계 쪽 needsDetail 을 따로 볼 필요가 없다 — 서버 계약의 「다시 받는다」가 이미 지켜진다.
+                    applyStatus(event.status, event.hostPublicId)
                     readDetail()
                 } else {
-                    applyDelta { it.withMemberLeft(publicId, event.status) }
+                    applyDelta { it.withMemberLeft(publicId, event.status, event.hostPublicId) }
                 }
             }
             PartyEvent.Closed -> {
@@ -293,27 +303,37 @@ class MatchWaitingViewModel(
      * 변경분을 들고 있는 방에 적용한다. 바탕이 없으면(로딩·에러) 적용할 대상이 없어 상세를 1회 읽는다 —
      * 증분은 **바탕이 있을 때만** 쓸 수 있다.
      *
-     * 적용 결과가 [hasMemberDrift] 면(서버가 준 status 와 내 멤버 목록이 모순이면) 상세를 1회 읽어 맞춘다.
-     * 증분이 유실됐다는 뜻이고, 그때는 **목록이 아니라 서버를 믿는다**. 주기 호출이 아니라 모순을 본
-     * 그 순간 1회이며, 읽어 온 결과에는 이 검사를 다시 걸지 않으므로 되돌이가 되지 않는다.
+     * 적용 결과가 [needsDetailAfterDelta] 면 상세를 1회 읽어 서버 쪽으로 맞춘다 — 사유는 둘이고
+     * (방장 지목을 못 맞췄다 / 목록이 status 와 모순이다) 처방이 같다. 그때는 **목록이 아니라 서버를
+     * 믿는다**. 주기 호출이 아니라 그 순간 1회이며, 읽어 온 결과에는 이 검사를 다시 걸지 않으므로
+     * (읽기 결과는 [readDetail] 이 [UiState.Success] 로 직접 세운다) **되돌이가 되지 않는다** —
+     * 프레임 하나당 추가 조회는 최대 1건이다.
      */
-    private suspend fun applyDelta(transform: (Ride) -> Ride) {
+    private suspend fun applyDelta(transform: (Ride) -> RideDelta) {
         val held = (_uiState.value as? UiState.Success)?.ride
         if (held == null) {
             readDetail()
             return
         }
-        val next = transform(held)
+        val delta = transform(held)
         appliedEvents++
-        _uiState.value = UiState.Success(next)
-        if (hasMemberDrift(next)) readDetail()
+        _uiState.value = UiState.Success(delta.ride)
+        if (needsDetailAfterDelta(delta)) readDetail()
     }
 
-    /** 멤버 목록은 그대로 두고 서버가 준 status 만 반영한다 — 지울 멤버를 특정할 수 없을 때(publicId null). */
-    private fun applyStatus(status: RideStatus) {
+    /**
+     * 멤버 **목록**은 그대로 두고 서버가 준 status 와 방장 승계만 반영한다 — 지울 멤버를 특정할 수
+     * 없을 때(publicId null)의 경로다. 목록은 못 고쳐도 [Ride.withHostSuccession] 은 publicId 로
+     * 이름을 불린 한 명만 보므로 그대로 적용할 수 있다(그 사람이 목록에 없으면 표시를 손대지 않는다).
+     *
+     * [RideDelta.needsDetail] 을 **여기서 보지 않는다**: 이 경로의 호출부가 곧바로 [readDetail] 을
+     * 부르므로 서버 계약의 「목록에 없으면 방 상세를 다시 받는다」가 이미 지켜진다. 여기서 또 읽으면
+     * 같은 프레임에 상세가 2건 나간다.
+     */
+    private fun applyStatus(status: RideStatus, hostPublicId: String?) {
         val held = (_uiState.value as? UiState.Success)?.ride ?: return
         appliedEvents++
-        _uiState.value = UiState.Success(held.copy(status = status))
+        _uiState.value = UiState.Success(held.withHostSuccession(hostPublicId).ride.copy(status = status))
     }
 
     /**
@@ -397,16 +417,43 @@ class MatchWaitingViewModel(
     }
 
     /**
-     * 1차 배포 모드의 「합승 완료」 — 기사 없이 방을 닫는다. 참여자 누구든 한 명이 누르면 **모두의** 방이 끝난다.
-     * 정원이 안 찼거나(409 PARTY_NOT_COMPLETED) 기사가 붙었으면(409 DRIVER_ALREADY_ASSIGNED) 서버가 거절한다.
+     * 1차 배포 모드의 「합승 완료」 — 기사 없이 방을 닫는다. 한 명이 누르면 **모두의** 방이 끝난다.
+     *
+     * 실패 사유가 여럿이고 **각각 다음 행동이 다르다** — 그래서 [finishFailureMessage] 로 문구를 가른다.
+     * 예전에는 네트워크 끊김도, 403 도, 409 도 전부 「합승을 완료하지 못했어요」 하나였다.
+     *
+     * 특히 Backend #237 이후 이 API 는 **방장 전용**이라 비방장은 403 `NOT_PARTY_HOST` 를 받는다.
+     * 버튼은 이제 **방장에게만 보인다**([canFinishParty]) — 서버가 멤버마다 `host` 를 내려 주기
+     * 시작하면서(Backend #240 **반영 완료**) 노출 조건을 걸 근거가 생겼다. 예전 주석이 걸림돌로
+     * 적어 두었던 「`hostId` 가 내부 PK `Long` 이라 앱이 방장을 식별할 수 없다」는 **지난 이야기다**:
+     * 그 `hostId` 는 응답에서 제거됐고, 방장은 멤버 목록의 `publicId` 옆에 `host` 로 온다.
+     *
+     * 그래도 이 403 경로는 **남는다.** 방장은 멤버가 나갈 때마다 남은 멤버 중
+     * `min(joinedAt, memberId)` 로 자동 승계되는데(저장값이 아니라 파생값), 서버가 그걸 알려 주는
+     * 신호는 `member-left` 한 번뿐이다 — 반영은 [Ride.withHostSuccession] 이 맡지만, 그 신호를
+     * 놓치거나(SSE 는 at-most-once) **순서가 역전되면** 다음 스냅샷까지 내 목록이 낡은 채로 남는다
+     * (역전된 프레임은 상세 재조회로 메운다 — [RideDelta.needsDetail]). 즉 노출을 막아도
+     * **스냅샷이 낡은 틈**은 남아 있고, 그 틈에서 눌린 「합승 완료」를 받아 주는 자리가 이 403 문구다.
      */
-    fun finishParty() = runAction(failureMessage = "합승을 완료하지 못했어요") {
+    fun finishParty() = runAction(
+        failureMessage = FINISH_FAILED_MESSAGE,
+        messageOf = { (it as? PartyFinishException)?.let(::finishFailureMessage) },
+    ) {
         repository.finishParty(partyId)
         _actionState.update { it.copy(finished = true) }
     }
 
-    // 액션 공통: 중복 실행 차단 → 진행 표시 → 실패 시 한국어 메시지
-    private fun runAction(failureMessage: String, block: suspend () -> Unit) {
+    /**
+     * 액션 공통: 중복 실행 차단 → 진행 표시 → 실패 시 한국어 메시지.
+     *
+     * [messageOf] 가 실패를 **사유별 문구**로 옮긴다 — null 이면 [failureMessage] 로 떨어진다.
+     * 기본값이 "항상 null" 이라 사유를 가르지 않는 액션(나가기)은 예전과 똑같이 동작한다.
+     */
+    private fun runAction(
+        failureMessage: String,
+        messageOf: (Throwable) -> String? = { null },
+        block: suspend () -> Unit,
+    ) {
         if (_actionState.value.inProgress) return
         viewModelScope.launch {
             _actionState.update { it.copy(inProgress = true, errorMessage = null) }
@@ -414,7 +461,7 @@ class MatchWaitingViewModel(
                 block()
                 _actionState.update { it.copy(inProgress = false) }
             } catch (e: Exception) {
-                _actionState.update { it.copy(inProgress = false, errorMessage = failureMessage) }
+                _actionState.update { it.copy(inProgress = false, errorMessage = messageOf(e) ?: failureMessage) }
             }
         }
     }
@@ -539,9 +586,92 @@ internal fun Ride.withMemberJoined(member: User, status: RideStatus): Ride {
  * 모르는 publicId 면 목록은 그대로 두고 status 만 반영한다 — 그 사람의 입장 신호를 놓쳤다는 뜻이고,
  * 없는 사람을 지우려 상세를 또 읽지는 않는다(어긋남은 [hasMemberDrift] 나 다음 스냅샷이 잡는다).
  * 빈 publicId 로는 아무도 지우지 않는다 — 요약이 없는 멤버들을 한꺼번에 날리는 사고를 막는다.
+ *
+ * [hostPublicId] 는 서버가 실어 준 **승계 후 방장**이다 — [Ride.withHostSuccession] 으로 함께 옮긴다.
+ * 그래서 승계는 **나간 사람을 빼고 난 목록**에 적용된다(서버가 싣는 값도 「이 이벤트를 반영한 뒤의
+ * 방장」이다). 그 값이 null·빈 값이거나 남은 목록에 없으면 표시를 손대지 않고
+ * [RideDelta.needsDetail] 로 **「방 상세를 다시 받으라」**를 돌려준다 — 서버 계약이다.
  */
-internal fun Ride.withMemberLeft(publicId: String, status: RideStatus): Ride =
-    copy(members = members.filterNot { it.id.isNotBlank() && it.id == publicId }, status = status)
+internal fun Ride.withMemberLeft(
+    publicId: String,
+    status: RideStatus,
+    hostPublicId: String? = null,
+): RideDelta = copy(
+    members = members.filterNot { it.id.isNotBlank() && it.id == publicId },
+    status = status,
+).withHostSuccession(hostPublicId)
+
+/**
+ * 방장 승계 반영 — 서버가 `member-left` 에 실어 준 [hostPublicId] 를 멤버 목록의 [User.isHost] 로 옮긴다.
+ *
+ * **이게 빠지면 방장이 나가도 승계된 사람이 「합승 완료」를 못 본다.** 서버는 멤버가 나갈 때마다
+ * 남은 멤버 중 `min(joinedAt, memberId)` 를 방장으로 다시 정하는데(저장값이 아니라 파생값),
+ * 그 결과를 알려 주는 신호는 이 한 번뿐이다 — 다시 보내지 않으므로 여기서 버리면 다음 스냅샷
+ * (재연결)이나 폴백 상세 조회까지 승계된 사람의 화면이 낡은 채로 남는다.
+ *
+ * ### 서버 계약 원문 (백엔드 `matching/sse/PartySseController` 의 Swagger description) ★
+ * > `member-left`: { publicId, status, hostPublicId }. … hostPublicId 는 이 이벤트를 반영한 뒤의
+ * > 방장 — 받을 때마다 members 의 host 표시를 이 값으로 다시 지정한다. 단 **null 이거나 목록에 없는
+ * > publicId 면 host 표시를 바꾸지 말고 방 상세를 다시 받는다**(이벤트 순서 역전 대비)
+ *
+ * 그대로 두 갈래다:
+ *
+ * | 지목된 publicId | 하는 일 | 왜 |
+ * |---|---|---|
+ * | 목록에 **있다** | 표시를 **통째로 다시 칠한다** — 그 한 명만 true, 나머지는 전부 false | 서버 말이 곧 「방장은 한 명」이므로, 전에 방장이던 사람(또는 나)의 true 를 지우는 것까지가 이 함수의 일이다 |
+ * | null·빈 값·목록에 **없다** | 표시를 **그대로 두고** [RideDelta.needsDetail] 을 세운다 | 내 목록이 그 사람을 모르니 다시 칠할 근거가 없다 — 서버에 방 상세를 다시 묻는다 |
+ *
+ * ### 「목록에 없으면 전원 false」로 되돌리지 말 것 ★
+ * 그게 2026-10-15 까지의 동작이었고(근거는 「서버가 나 아닌 누군가를 방장이라 했으니 적어도 *내가
+ * 방장이다*는 거짓이다」였다), **서버 계약과 정반대다.** 깨지는 경로가 실제로 있다 — 두 멤버가
+ * 연달아 나가 프레임 순서가 역전되면(`u2` 이탈 프레임이 `u1` 이탈 프레임보다 먼저 도착) 뒤늦게 온
+ * 프레임이 **이미 나간 사람**을 방장으로 지목한다. 전원 false 로 밀면 그 순간 **진짜 방장의
+ * [User.isHost] 가 지워져 「합승 완료」 버튼을 영구히 잃는다**: [hasMemberDrift] 는 인원수만 보므로
+ * 못 잡고(목록 길이는 맞다), SSE 가 살아 있으면 폴백 폴링도 돌지 않아([shouldPollFallback]) 재연결
+ * 스냅샷이나 30분 만료 말고는 복구 수단이 없다.
+ *
+ * null·빈 값도 같은 자리로 떨어진다. 서버가 새 방장의 요약을 못 찾은 경우인데
+ * (`PartyService.leave` 의 `hostSummary == null`), 모른다고 전부 false 로 밀면 역시 **진짜 방장의
+ * 표시를 지운다.** 그래서 손대지 않고 상세로 확인한다.
+ *
+ * 내용이 같으면 [Ride] 가 data class 라 `copy` 결과가 원본과 `==` 이므로 재구성도 일어나지 않는다.
+ */
+internal fun Ride.withHostSuccession(hostPublicId: String?): RideDelta {
+    val host = hostPublicId?.takeIf { it.isNotBlank() } ?: return RideDelta(this, needsDetail = true)
+    // host 가 빈 값이 아니므로 `it.id == host` 는 id 가 빈 멤버(요약 없음)를 자동으로 비껀다 —
+    // 빈 문자열끼리 맞아떨어져 엉뚱한 사람이 방장이 되는 일이 없다.
+    if (members.none { it.id == host }) return RideDelta(this, needsDetail = true)
+    return RideDelta(copy(members = members.map { it.copy(isHost = it.id == host) }))
+}
+
+/**
+ * 변경분 하나를 적용한 결과 — 새 방과, **서버가 「방 상세를 다시 받으라」고 한 프레임인가.**
+ *
+ * [needsDetail] 이 서는 자리는 지금 하나다: `member-left` 가 지목한 방장을 내 목록에서 찾지 못한
+ * 경우([Ride.withHostSuccession]). 그때는 host 표시를 손대지 않고 서버에 다시 묻는다 — 서버 Swagger
+ * 가 그렇게 적어 두었고, 이유는 **이벤트 순서 역전**이다.
+ *
+ * 왜 [Ride] 안에 담지 않고 따로 내보내나: 이 값은 방의 성질이 아니라 **이 프레임의 처리 지시**다.
+ * [Ride] 에 실으면 스냅샷·상세 조회 결과에도 따라붙어 「읽어 온 결과를 보고 또 읽는」 되돌이가 생긴다.
+ */
+internal data class RideDelta(val ride: Ride, val needsDetail: Boolean = false)
+
+/**
+ * 변경분을 적용한 뒤 **방 상세를 1회 읽어야 하는가** — `MatchWaitingViewModel.applyDelta` 의 판정.
+ *
+ * 둘 중 하나라도 참이면 읽는다. 사유는 다르지만 처방이 같다(**목록이 아니라 서버를 믿는다**):
+ *
+ * | 사유 | 뜻 |
+ * |---|---|
+ * | [RideDelta.needsDetail] | 서버가 지목한 방장이 내 목록에 없다 — **host 표시를 믿을 수 없다** |
+ * | [hasMemberDrift] | 서버가 준 status 와 내 멤버 목록이 모순이다 — **목록이 낡았다** |
+ *
+ * 둘 다 참이어도 **상세는 한 번만** 읽는다. 그리고 읽어 온 결과에는 이 판정을 다시 걸지 않는다
+ * (`readDetail` 이 화면 상태를 직접 세운다) — 그래서 **되돌이가 생기지 않는다**: 이벤트 프레임
+ * 하나당 추가 조회는 최대 1건이고, 그 조회 결과가 또 조회를 부르는 길이 없다.
+ */
+internal fun needsDetailAfterDelta(delta: RideDelta): Boolean =
+    delta.needsDetail || hasMemberDrift(delta.ride)
 
 // 같은 사람인가 — 서버 식별자(publicId)가 **양쪽에 다 있을 때만** 같다고 본다.
 private fun User.isSameMemberAs(other: User): Boolean = id.isNotBlank() && id == other.id
@@ -581,14 +711,112 @@ internal fun canLeaveParty(status: RideStatus, taxiEnabled: Boolean): Boolean =
     status == RideStatus.RECRUITING || (!taxiEnabled && status == RideStatus.MATCHED)
 
 /**
- * 1차 배포 모드에서 「합승 완료」를 보여 줄 때 — 정원이 찼고(COMPLETED) 기사가 없을 때.
- * 기사 모드에선 절대 보이지 않는다(정원이 차면 곧바로 25 로 넘어간다).
+ * 1차 배포 모드에서 **방을 손으로 닫는 단계**인가 — 정원이 찼고(COMPLETED) 기사가 없을 때.
+ * 기사 모드에선 절대 참이 아니다(정원이 차면 곧바로 25 배차 현황으로 넘어간다).
+ *
+ * [canFinishParty] 와 **일부러 갈라 두었다**: 이쪽은 「방이 어떤 단계인가」, 저쪽은 「내가 누를 수
+ * 있는가」다. 헤드라인(「같이 탈 사람이 모였어요」)·나가기 문구(「방 나가기」)처럼 방장 여부와
+ * 상관없는 표시는 **이쪽**을 봐야 한다 — 저쪽을 보면 정원이 찬 방을 보고 있는 비방장에게
+ * 「같이 탈 사람 찾는 중」이라고 거짓말을 하게 된다.
  */
-internal fun canFinishParty(status: RideStatus, taxiEnabled: Boolean): Boolean =
+internal fun isFinishStage(status: RideStatus, taxiEnabled: Boolean): Boolean =
     !taxiEnabled && status == RideStatus.MATCHED
 
 /**
- * 21 매칭 대기 — SSE 변경분 구독(+끊김 폴백) · 나가기/합승 완료 진입점. partyId 없으면 기존 더미 화면 유지.
+ * 「합승 완료」 버튼을 **내게** 보여 줄 때 — 손으로 닫는 단계이고([isFinishStage]) 내가 방장일 때.
+ *
+ * 방장 조건은 2026-10-15 에 붙었다. 서버가 이 API 를 방장 전용으로 좁힌 뒤(Backend #237, 운영
+ * 배포 완료) 비방장이 누르면 확인 다이얼로그를 거친 끝에 403 `NOT_PARTY_HOST` 를 맞았다 —
+ * 전원에게 보여 주던 버튼이 **절반에게는 실패하는 버튼**이었다. 비활성으로 두지 않고 **숨긴다**:
+ * 누를 수 없는 버튼은 왜 못 누르는지 말해 주지 못하므로, 그 자리에는 누가 끝내는지를 말하는
+ * 안내문이 들어간다([finishHostNotice]).
+ *
+ * 판정은 [Ride.isHostedByMe] **하나로만** 한다(= 멤버 목록의 내 줄 [User.isHost]). 서버가 멤버마다
+ * `host` 를 내려 주므로 이건 **추정이 아니라 서버 값**이다 — 2026-08-30 에 걷어낸 `joinedAt`
+ * 최소값 추정과 다르다(`_workspace/33_api-integrator_no_host.md`). [Ride] 를 통째로 받는 것도
+ * 그래서다: status 와 방장 판정의 근거(members)가 **같은 스냅샷**이어야 하고, 호출부가 방장
+ * 여부를 따로 계산해 끼워 넣을 틈을 두지 않는다.
+ *
+ * true 라도 **서버가 최종 판정이다.** 방장은 멤버가 들고 날 때마다 바뀌어 내 스냅샷이 낡을 수
+ * 있으므로 403 경로([finishFailureMessage])는 노출을 막은 뒤에도 그대로 남는다.
+ */
+internal fun canFinishParty(ride: Ride, taxiEnabled: Boolean): Boolean =
+    isFinishStage(ride.status, taxiEnabled) && ride.isHostedByMe
+
+/**
+ * 비방장이 「합승 완료」가 있던 자리에서 읽는 안내문 — **버튼을 숨긴 자리를 비워 두지 않는다.**
+ *
+ * 숨기기만 하면 정원이 찬 뒤 할 일이 하나도 없는 화면이 된다. 사용자가 알아야 하는 건 둘이다:
+ * **누가 방을 끝내는가**, 그리고 **그게 방을 끝내는 행동이라는 것**. 그 둘만 한 줄로 적는다.
+ *
+ * [hostNickname] 이 있으면 **이름으로 부른다.** 서버가 멤버마다 `host` 를 내려 주므로 그 사람이
+ * 누군지 알 수 있다([hostDisplayNameOrNull]). 이름을 못 쓰는 경우는 셋이다 — 방장의 유저 요약이
+ * 없거나(식별자가 빈 값), 방장이 **탈퇴했거나**(soft delete: 식별자는 살아 있고 닉네임만 서버가
+ * 「탈퇴한 사용자」로 가린다), 아무도 방장으로 지목되지 않았거나. 그때는 지어내지 않고 **조건**을
+ * 말한다: 서버 `Party.hostId()` 가 현재 멤버 중 `min(joinedAt, memberId)` 라
+ * 「가장 먼저 참여한 분」은 사실이다([finishFailureMessage] 의 403 문구와 같은 근거·같은 표현).
+ *
+ * 탈퇴한 방장을 이름으로 부르면 **지킬 수 없는 약속**이 된다 — 그 사람은 「합승 완료」를 영원히
+ * 누를 수 없고(방은 30분 만료로만 닫힌다), 안내문이 가리킨 사람을 기다리게 만든다. 그래도
+ * **멤버 목록의 「방장」 배지는 그대로 붙는다**: 서버가 그를 방장이라고 말한 건 사실이고, 방이 왜
+ * 끝나지 않는지를 설명해 준다. 막는 것은 **이름으로 부르는 것** 하나뿐이다.
+ *
+ * 「잠시 후 다시 시도」류는 넣지 않는다 — 기다려서 풀리는 일이 아니다. 방장이 누르거나, 방장이
+ * 나가 내게 승계되어야 바뀐다.
+ */
+internal fun finishHostNotice(hostNickname: String?): String =
+    if (hostNickname.isNullOrBlank()) {
+        "다 타면 방장(가장 먼저 참여한 분)이 「합승 완료」를 눌러 방을 끝내요"
+    } else {
+        "다 타면 방장 ${hostNickname}님이 「합승 완료」를 눌러 방을 끝내요"
+    }
+
+/**
+ * 사유를 가릴 수 없는 「합승 완료」 실패의 일반 문구. 네트워크 실패와 **모르는 코드**가 여기로 떨어진다 —
+ * 서버가 `MatchingErrorCode` 를 늘려도 앱은 틀린 말을 하지 않는다(지어내는 것보다 모른다고 하는 게 낫다).
+ */
+private const val FINISH_FAILED_MESSAGE = "합승을 완료하지 못했어요"
+
+/**
+ * 「합승 완료」 실패를 사용자 문구로 옮긴다 — 실패마다 **다음 행동이 다르다**.
+ *
+ * | 사유 | 서버 코드(HTTP) | 사용자가 할 일 |
+ * |---|---|---|
+ * | 방장이 아니다 | `NOT_PARTY_HOST` (403) | 가장 먼저 참여한 사람에게 눌러 달라고 한다 |
+ * | 멤버가 아니다 | `NOT_PARTY_MEMBER` (403) | 홈에서 진행 중인 방을 확인한다 |
+ * | 정원 미달 | `PARTY_NOT_COMPLETED` (409) | 인원이 모두 모일 때까지 기다린다 |
+ * | 기사 배정됨 | `DRIVER_ALREADY_ASSIGNED` (409) | 직접 끝낼 방이 아니다 — 누를 일이 없다 |
+ * | 방 없음 | `PARTY_NOT_FOUND` (404) | 홈으로 돌아간다 |
+ * | 그 밖·네트워크 | 코드 없음 | [FINISH_FAILED_MESSAGE] |
+ *
+ * **403 과 409 가 각각 두 가지 뜻**이라 상태 코드로는 가를 수 없다(서버 `Party.finishWithoutDriver` 의
+ * 검사 순서가 위 표 순서다). 그래서 분기 근거는 서버 코드를 도메인이 한 번 걸러 준
+ * [PartyFinishException] 의 프로퍼티다 —
+ * 20 합류의 [joinFailureMessage][com.moyeota.presentation.feature.explore.joinFailureMessage] 와 같은 선례다.
+ *
+ * 방장 안내가 「가장 먼저 참여한 분」인 건 서버가 방장을 그렇게 정하기 때문이다 —
+ * `Party.hostId()` 는 **현재 멤버 중 `min(joinedAt, memberId)`** 이고, 저장되는 값이 아니다.
+ *
+ * **이름을 쓰지 않는 근거는 「앱이 방장을 모른다」가 아니다.** 앱은 평소엔 안다 — 서버가 멤버마다
+ * `host` 를 내려 주고([User.isHost]), 버튼을 못 보는 사람에게는 [finishHostNotice] 가 그 이름으로
+ * 안내한다. 모르는 것은 **이 403 이 온 그 순간**이다: 403 은 내 스냅샷이 가리킨 방장이 서버 기준으로
+ * 더 이상 방장이 아니라는 뜻이고(프레임 유실·순서 역전으로 승계가 반영되지 않았다), 그 스냅샷으로
+ * 새 방장을 지목하면 **틀린 사람에게 부탁하라고 말하게 된다.** 그래서 이 자리에서만 이름을 접고
+ * **조건**을 말한다 — 지어낸 이름을 띄우는 것보다 정확하다.
+ *
+ * 「잠시 후 다시 시도」류는 넣지 않는다. 다시 눌러도 같은 403·409 다 — 방 사정이 바뀌어야 풀린다.
+ */
+internal fun finishFailureMessage(e: PartyFinishException): String = when {
+    e.isNotHost -> "방장만 합승을 완료할 수 있어요. 가장 먼저 참여한 분에게 부탁해 주세요"
+    e.isNotMember -> "이 방의 참여자가 아니에요. 홈에서 진행 중인 방을 확인해 주세요"
+    e.isNotCompleted -> "아직 정원이 다 차지 않았어요. 인원이 모두 모이면 완료할 수 있어요"
+    e.isDriverAssigned -> "이미 기사가 배정된 방이라 직접 완료할 수 없어요"
+    e.isPartyNotFound -> "이미 사라진 방이에요. 홈으로 돌아가 주세요"
+    else -> FINISH_FAILED_MESSAGE
+}
+
+/**
+ * 21 매칭 대기 — SSE 변경분 구독(+끊김 폴백) · 나가기/합승 완료 진입점. partyId 없으면 오류 안내 후 되돌린다.
  *
  * 방 상태의 출처는 [MatchWaitingViewModel] 하나뿐이다 — 이 화면에서 SSE 를 두 번 수집하면 서버가 서로의
  * 연결을 끊어 무한 재연결이 되므로, 여기서 `LaunchedEffect` 로 구독을 추가하지 말 것. 아래
@@ -617,13 +845,24 @@ fun MatchWaitingRoute(
     /** 이 방의 채팅방을 여는 길. 채팅방이 아직 없으면 null — 화면이 버튼을 그리지 않는다 */
     onOpenChat: (() -> Unit)? = null,
 ) {
+    // 방 id 없이 닿을 길은 없다(16 생성 · 20 합류 · 홈 배너가 모두 id 를 넘긴다). 그래도 null 이면
+    // 예시 방을 그리는 대신 사실대로 말하고 되돌린다 — 20·22·23 과 같은 방식이다.
+    //
+    // 예전에는 여기서 [MatchWaitingScreen] 을 `ride` 없이 불러 **예시 방**을 그렸다. 구성 변경에 방
+    // id 가 날아가던 동안(이제 saveable 이다 — MainNavGraph) 진짜 방에 들어 있던 사용자에게 남의
+    // 가짜 방이 떴다. 그 길을 아예 막기 위해 화면 쪽 `ride` 기본값도 함께 걷어냈다.
+    //
+    // 되돌아갈 곳은 [onExitKeepingParty] — **방은 그대로 두고** 홈으로만 간다. 내가 어느 방에 있는지
+    // 모르는 상태에서 나가기·기억 지우기([onCancelSearch]·[onPartyClosed])를 걸면 아직 들어 있는
+    // 방을 끊어 버릴 수 있고, 홈 배너가 그 방으로 다시 들어갈 길이다.
     if (partyId == null) {
-        MatchWaitingScreen(
-            onCancelSearch = onCancelSearch,
-            onExitKeepingParty = onExitKeepingParty,
-            onCardClick = onCardClick,
-            onOpenChat = onOpenChat,
-        )
+        BackStateScaffold("매칭 대기", onExitKeepingParty) {
+            ErrorBox(
+                message = "어느 방을 기다리는지 알 수 없어요. 홈에서 진행 중인 방으로 다시 들어가 주세요",
+                onRetry = onExitKeepingParty,
+                actionLabel = "홈으로 가기",
+            )
+        }
         return
     }
 

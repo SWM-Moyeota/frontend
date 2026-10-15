@@ -27,18 +27,25 @@ _report_landing.md      구현 보고 — 명세와 다르게 간 곳, 검증 �
 
 ## 배포
 
-아직 **주소가 정해지지 않았다.** 2026-10-14 기준 `moyeota.p-e.kr` 은 DNS 가 없다.
-`index.html` 의 `canonical` 과 `og:url` 이 그 주소로 적혀 있으니 **배포 전에 둘을 같이 고칠 것.**
+**주소는 `https://www.moyeota.p-e.kr/` 다.** (2026-10-14 배포 완료)
 
-법적 사이트와 같은 방식(S3 + CloudFront)으로 올린다면 절차는 이렇다.
-버킷·배포 ID·인증서는 **새로 만들어야 한다** — 아래 값은 법적 사이트 것이고 재사용하면 안 된다.
+| | 값 |
+|---|---|
+| 버킷 | `moyeota-landing` (ap-northeast-2) |
+| 배포 ID | `E3JP82KLN42LB1` |
+| CloudFront 도메인 | `dtxu7w08jl4u4.cloudfront.net` |
+| DNS | `www` CNAME → 위 CloudFront 도메인 |
+
+apex 인 `moyeota.p-e.kr` 은 **DNS 를 두지 않는다.** apex 에 CNAME 을 걸면 그 아래
+`api`(백엔드)·`legal` 서브도메인 해석이 흔들리기 때문이다. 그래서 `index.html` 의
+`canonical` 과 `og:url` 도 `www` 를 가리킨다 — 고칠 일이 있으면 **둘을 같이** 고칠 것.
 
 ```bash
-aws s3 sync . s3://<새 버킷>/ --delete \
+aws s3 sync . s3://moyeota-landing/ --delete \
   --exclude "README.md" --exclude "_*" --exclude "*/_*" \
   --cache-control "public, max-age=300"
 
-aws cloudfront create-invalidation --distribution-id <새 배포 ID> --paths '/*'
+aws cloudfront create-invalidation --distribution-id E3JP82KLN42LB1 --paths '/*'
 ```
 
 - 인증서는 **us-east-1** 에 있어야 한다 (CloudFront 는 버지니아 인증서만 읽는다).

@@ -27,7 +27,10 @@ sealed interface PartySseEvent {
     /** `member-joined` — `{"member": {...}, "status": "..."}` */
     data class MemberJoined(val payload: MemberJoinedPayload) : PartySseEvent
 
-    /** `member-left` — `{"publicId": "..."|null, "status": "..."}` */
+    /**
+     * `member-left` — `{"publicId": "..."|null, "status": "...", "hostPublicId": "..."|null}`.
+     * `hostPublicId` 는 **승계 후의 방장**이다(Backend #240) — [MemberLeftPayload] 참고.
+     */
     data class MemberLeft(val payload: MemberLeftPayload) : PartySseEvent
 
     /** `closed` — data 는 partyId 숫자 문자열이라 실을 값이 없다 */

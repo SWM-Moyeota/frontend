@@ -40,8 +40,9 @@ private val CounterGray = Color(0xFF9AA1AC)
  *
  * 구성: 상단바 「프로필 수정」 → 닉네임 입력(글자수 · 중복 확인) → 「저장」
  *
- * 바꿀 수 있는 값이 닉네임 **하나뿐**인 이유: `PATCH /users/me` 가 받는 건 nickname 과 imageUrl 둘인데,
- * 프로필 사진은 업로드할 곳(스토리지 · 업로드 API)이 없어 보낼 값을 만들 수 없다. 실명 · 생년월일 ·
+ * 바꿀 수 있는 값이 닉네임 **하나뿐**인 이유: `PATCH /users/me` 가 받는 건 nickname 과 imageKey 둘인데,
+ * 이미지 선택 UI 를 아직 안 만들었다(2026-10-15 배포로 서버가 제공 이미지 16장을 고르게 해 줘서
+ * 이제 **만들 수는 있다** — 계획은 `_workspace/profile-image-plan.md`). 실명 · 생년월일 ·
  * 성별 · 휴대폰 · 이메일은 서버에 수정 경로가 아예 없다. 그래서 「수정 불가」 행을 늘어놓는 대신
  * 바꿀 수 있는 것만 둔다(`docs/BACKEND-GAP-CLEANUP.md` 의 원칙).
  *

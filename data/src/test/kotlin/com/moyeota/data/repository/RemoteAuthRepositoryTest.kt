@@ -405,9 +405,9 @@ class RemoteAuthRepositoryTest {
     fun `프로필 수정은 넘어온 값만 서버로 보낸다`() = runBlocking {
         val userApi = FakeUserApi()
 
-        repository(FakeAuthApi(), session(), userApi).updateProfile(nickname = " 새닉 ", imageUrl = null)
+        repository(FakeAuthApi(), session(), userApi).updateProfile(nickname = " 새닉 ", imageKey = null)
 
-        assertEquals(listOf(UpdateProfileRequest(nickname = "새닉", imageUrl = null)), userApi.profileUpdates)
+        assertEquals(listOf(UpdateProfileRequest(nickname = "새닉", imageKey = null)), userApi.profileUpdates)
     }
 
     @Test

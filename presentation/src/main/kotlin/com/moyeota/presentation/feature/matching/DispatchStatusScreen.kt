@@ -60,6 +60,13 @@ private val ChipBg = Color(0xFFF1F5FD)
 private val CardSoft = Color(0xFFF6F8FB)
 private val DividerGray = Color(0xFFE7EAF0)
 
+/**
+ * 아래 [DispatchStatusScreenPreview] **전용** 예시 방. 프로덕션 경로에서는 쓰이지 않는다.
+ *
+ * [com.moyeota.presentation.feature.matching.MatchWaitingScreen] 쪽 예시 방과 같은 이유로
+ * `ride` **기본 인자** 자리에서 걷어냈다 — 방을 모르는 호출부(구성 변경에 방 id 가 날아간 25)가
+ * `ride` 없이 부르면 남의 가짜 배차 현황이 떴다(출시 차단 결함, 2026-10-15).
+ */
 private val dispatchRideDummy = Ride(
     id = "ride-25",
     origin = "센텀시티역 3번 출구",
@@ -98,7 +105,8 @@ private val dispatchRideDummy = Ride(
  */
 @Composable
 fun DispatchStatusScreen(
-    ride: Ride = dispatchRideDummy,
+    /** 그릴 방. **기본값이 없다** — 예시 방이 프로덕션에 새는 길을 막는다([dispatchRideDummy]) */
+    ride: Ride,
     driver: AssignedDriver? = null,
     driverLocation: DriverLocation? = null,
     /** 내 실위치. 지도에 파란 점으로만 얹는다 — 없으면(권한 없음·fix 전) 점 없이 마커만 */
@@ -316,5 +324,5 @@ internal fun CarIcon(modifier: Modifier = Modifier, tint: Color = Color(0xFF5463
 @Preview(showBackground = true, widthDp = 393, heightDp = 852)
 @Composable
 private fun DispatchStatusScreenPreview() {
-    DispatchStatusScreen()
+    DispatchStatusScreen(ride = dispatchRideDummy)
 }

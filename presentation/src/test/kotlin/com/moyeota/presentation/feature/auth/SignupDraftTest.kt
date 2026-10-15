@@ -53,6 +53,38 @@ class SignupDraftTest {
         assertNull(SignupDraft().toNewUser())
     }
 
+    // ─────────────────────────────── 성별 ───────────────────────────────
+    //
+    // 「선택 안 함」(Gender.UNDISCLOSED)이 생기면서 **비슷해 보이지만 반대인 두 상태**가 생겼다:
+    //  · gender == null        → 아직 고르지 않았다 → 제출 불가
+    //  · gender == UNDISCLOSED → 밝히지 않기로 **골랐다** → 제출된다
+    // 둘을 한쪽으로 뭉개면 성별이 선택 사항이 되거나(서버 @NotNull 위반 → 400) 비공개를
+    // 고른 사람이 가입을 못 하게 된다. 그래서 양방향을 함께 못 박는다.
+
+    @Test
+    fun `성별을 선택 안 함으로 골라도 가입 요청이 만들어진다`() {
+        val newUser = filled.copy(gender = Gender.UNDISCLOSED).toNewUser()
+        assertNotNull(newUser)
+        // 값이 비거나 다른 성별로 바뀌어 실리지 않는다 — data 매퍼가 이 이름을 그대로 보낸다
+        assertEquals(Gender.UNDISCLOSED, newUser!!.gender)
+    }
+
+    @Test
+    fun `성별을 고르지 않으면 제출하지 않는다 - 선택 안 함과 미선택은 다르다`() {
+        assertNull(filled.copy(gender = null).toNewUser())
+    }
+
+    /**
+     * 성별 상수가 더 늘어도 **제출 가능 여부가 값에 따라 갈리지 않는다.** 특정 값만 통과시키는
+     * 분기가 생기면 "고를 수는 있는데 가입은 안 되는 선택지"가 만들어진다.
+     */
+    @Test
+    fun `모든 성별 값으로 가입 요청이 만들어진다`() {
+        for (gender in Gender.entries) {
+            assertNotNull(gender.name, filled.copy(gender = gender).toNewUser())
+        }
+    }
+
     // ─────────────────────────────── 에러 문구 표 ───────────────────────────────
 
     @Test

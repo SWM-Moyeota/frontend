@@ -222,7 +222,10 @@ fun DestinationScreen(
             if (selectedPlace != null) {
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    text = "선택: ${selectedPlace.name} · ${selectedPlace.roadName}",
+                    // 도로명이 빈 장소가 있다(지번만 있는 건물 등) — 그대로 이으면 「선택: 이름 · 」로
+                    // 구분자만 남는다. 없으면 이름만 보여 준다.
+                    text = "선택: ${selectedPlace.name}" +
+                        selectedPlace.roadName.takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty(),
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
                     color = MoyeotaColor.Primary600,

@@ -3,6 +3,7 @@ package com.moyeota.domain.repository
 import com.moyeota.domain.model.AssignedDriver
 import com.moyeota.domain.model.NewParty
 import com.moyeota.domain.model.PartyEvent
+import com.moyeota.domain.model.PartyFinishException
 import com.moyeota.domain.model.PartyJoinException
 import com.moyeota.domain.model.PartyStatus
 import com.moyeota.domain.model.Ride
@@ -12,7 +13,6 @@ import kotlinx.coroutines.flow.emptyFlow
 
 interface RideRepository {
     fun getNearbyParties(): List<Ride>
-    fun getMyRides(): List<Ride>
 
     // 조회 — GET /api/v1/matching/rooms, /rooms/{partyId}
     /** 목록 응답에는 좌표·요금·경로가 없다(partyId/출발/도착/인원/정원/상태만). 상세는 [getPartyDetail]. */
@@ -131,9 +131,23 @@ interface RideRepository {
     /**
      * POST /api/v1/matching/rooms/{partyId}/finish (204) — **기사 없이** 합승을 끝낸다.
      * 1차 배포 모드([AppConfig.taxiEnabled][com.moyeota.domain.model.AppConfig.taxiEnabled] = false)에서
-     * 정원이 찬(`COMPLETED`) 방을 참여자 **누구든 한 명**이 닫는다 — 모두의 방이 `FINISHED` 가 된다.
-     * 정원이 안 찼으면 409 PARTY_NOT_COMPLETED, 기사가 이미 배정됐으면 409 DRIVER_ALREADY_ASSIGNED,
-     * 참여자가 아니면 403 NOT_PARTY_MEMBER.
+     * 정원이 찬(`COMPLETED`) 방을 닫는다 — 한 명이 닫으면 **모두의** 방이 `FINISHED` 가 된다.
+     *
+     * **방장 전용이다**: Backend #237 이 이 API 를 방장에게만 허용했고, 2026-10-15 **운영에 배포됐다**.
+     * 방장은 저장되는 값이 아니라 **지금 멤버 중 가장 먼저 합류한 사람**이고(`Party.hostId()` =
+     * `min(joinedAt, memberId)`), 방장이 나가면 자동 승계된다.
+     *
+     * **앱은 방장을 식별할 수 있다** — 서버가 멤버마다 `members[].host` 를 내려 준다(Backend #240,
+     * 반영 완료). 내부 PK `hostId` 는 응답에서 제거됐다. 그래서 호출부는 **버튼 노출을 먼저 막고**
+     * (`canFinishParty` = 손으로 닫는 단계 && [Ride.isHostedByMe]), 실패 사유 안내는 그 뒤에 남는
+     * 틈을 받는다 — 승계 신호를 놓치거나 순서가 역전돼 **내 스냅샷이 낡았을** 때 403 이 온다.
+     * **「앱은 방장을 알 수 없다」로 되돌리지 말 것**: 그 서술은 `host` 가 붙기 전의 사실이고,
+     * 그대로 믿으면 방장 게이팅이 근거 없는 추정으로 읽혀 지워진다.
+     *
+     * 실패는 모두 [PartyFinishException] 으로 올라온다 — **403·409 가 각각 두 가지 뜻**이라
+     * (403 `NOT_PARTY_HOST`·`NOT_PARTY_MEMBER` / 409 `PARTY_NOT_COMPLETED`·`DRIVER_ALREADY_ASSIGNED`)
+     * 화면은 상태 코드가 아니라 그 예외의 프로퍼티로 분기한다. 모르는 코드·본문 없음은 code = null 이고
+     * 화면이 일반 문구로 떨어진다.
      */
     suspend fun finishParty(partyId: Long)
 

@@ -93,9 +93,26 @@ MOYEOTA_VERSION_CODE=$GITHUB_RUN_NUMBER MOYEOTA_VERSION_NAME=1.0.3 ./gradlew :ap
 
 스토어는 APK 가 아니라 **AAB** 를 받는다.
 
+**버전을 반드시 주입해서 빌드한다.**
+
 ```bash
+MOYEOTA_VERSION_CODE=$(TZ=Asia/Seoul date +%y%m%d)01 \
+MOYEOTA_VERSION_NAME=$(TZ=Asia/Seoul date +%Y.%m%d).1 \
 ./gradlew :app:bundleRelease
 # 결과물: app/build/outputs/bundle/release/app-release.aab
+```
+
+> **그냥 `./gradlew :app:bundleRelease` 만 치면 `versionCode=1` 이 박힌다.** 날짜 기반 번호는
+> CI 워크플로가 주입할 때만 생기는데, AAB 는 아직 로컬에서 만들기 때문이다(아래 4-2 참고).
+> `app/build.gradle.kts` 의 기본값이 `1` / `"1.0"` 이라 조용히 통과하고, 빌드도 서명도 성공한다.
+> **1 을 한 번 올려버리면 그 번호는 영영 재사용할 수 없고** CI 의 `2610xxxx` 체계와 번호가 엉킨다.
+> 끝의 `01` 은 그날의 순번이다 — 같은 날 두 번째로 올린다면 `02` 로 바꾼다.
+
+올라간 AAB 에 실제로 무엇이 박혔는지 확인하려면:
+
+```bash
+unzip -p app/build/outputs/bundle/release/app-release.aab base/manifest/AndroidManifest.xml \
+  | strings | grep -E '^[0-9]{8}$|^20[0-9]{2}\.'
 ```
 
 서명됐는지 확인:

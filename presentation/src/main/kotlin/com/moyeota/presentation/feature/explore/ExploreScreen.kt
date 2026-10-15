@@ -191,7 +191,11 @@ private val ExploreCameraStateSaver: Saver<ExploreCameraState, Any> =
         },
     )
 
-// 더미 파티 (19 와이어프레임 카드 그대로)
+// 아래 미리보기 **전용** 예시 파티 (19 와이어프레임 카드 그대로).
+//
+// [ExploreScreen] 의 `parties` **기본 인자** 자리에서 걷어냈다 — 목록을 넘기지 않은 호출부가
+// 생기면 서버에 없는 방 5개가 「합류」 버튼까지 달고 떴다. 21·25 가 예시 방을 그려 남의 가짜 방을
+// 보여 준 사고(2026-10-15)와 같은 트랩이라 같은 규칙을 적용한다: **목록은 호출부가 넘긴다.**
 private fun dummyUser(id: String, name: String) = User(id, name, "학교 인증", 4.9, 12)
 
 private val DefaultParties = listOf(
@@ -248,7 +252,8 @@ private val ListHeaderGap = 12.dp
  */
 @Composable
 fun ExploreScreen(
-    parties: List<Ride> = DefaultParties,
+    /** 지도에 보이는 범위의 방 목록. **기본값이 없다** — 예시 방이 프로덕션에 새는 길을 막는다 */
+    parties: List<Ride>,
     /** 지금 진행 중인 내 방. null 이면 상단 배너를 그리지 않는다 */
     activeRide: Ride? = null,
     locationGranted: Boolean = true,
@@ -949,17 +954,17 @@ private fun ChevronUpIcon(color: Color, modifier: Modifier = Modifier) {
 @Preview(showBackground = true, widthDp = 393, heightDp = 852)
 @Composable
 private fun ExploreScreenPeekPreview() {
-    ExploreScreen(initialSheetState = ExploreSheetState.PEEK)
+    ExploreScreen(parties = DefaultParties, initialSheetState = ExploreSheetState.PEEK)
 }
 
 @Preview(showBackground = true, widthDp = 393, heightDp = 852)
 @Composable
 private fun ExploreScreenHalfPreview() {
-    ExploreScreen(initialSheetState = ExploreSheetState.HALF)
+    ExploreScreen(parties = DefaultParties, initialSheetState = ExploreSheetState.HALF)
 }
 
 @Preview(showBackground = true, widthDp = 393, heightDp = 852)
 @Composable
 private fun ExploreScreenFullPreview() {
-    ExploreScreen(initialSheetState = ExploreSheetState.FULL)
+    ExploreScreen(parties = DefaultParties, initialSheetState = ExploreSheetState.FULL)
 }

@@ -24,7 +24,13 @@ data class UserProfileResponse(
 )
 
 /**
- * PATCH /api/v1/users/me 의 요청 본문 — 백엔드 `UpdateProfileRequest(String nickname, String imageUrl)`.
+ * PATCH /api/v1/users/me 의 요청 본문 — 백엔드 `UpdateProfileRequest(String nickname, String imageKey)`.
+ *
+ * **`imageUrl` 이 아니라 `imageKey` 다.** 2026-10-15 배포(Backend #235)부터 서버는 아무 URL 이나
+ * 받지 않고 자기가 제공하는 16장의 **S3 키**(`profile/presets/03.png`)만 받는다 — 목록은
+ * `GET /api/v1/users/profile-images` 가 `{key, url}` 로 준다. 목록에 없는 키는 400 `USER112`.
+ * 옛 이름 `imageUrl` 로 보내면 **에러가 아니라 조용히 무시된다**(Spring 이 모르는 필드를 버린다).
+ * 서버는 아무것도 바꾸지 않고 204 를 주므로, 틀린 이름을 쓰면 성공한 줄 알고 넘어가게 된다.
  *
  * **null 필드는 본문에서 아예 빠진다**(kotlinx 의 `encodeDefaults=false` 기본값 + 두 필드의 기본값이 null).
  * 서버가 "넘어온 것만 갱신"하는 계약이라 이게 정확히 맞는 동작이다 — null 을 실어 보내도 결과는 같지만,
@@ -35,7 +41,7 @@ data class UserProfileResponse(
 @Serializable
 data class UpdateProfileRequest(
     val nickname: String? = null,
-    val imageUrl: String? = null,
+    val imageKey: String? = null,
 )
 
 /**

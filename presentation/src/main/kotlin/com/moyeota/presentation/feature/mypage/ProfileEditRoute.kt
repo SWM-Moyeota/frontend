@@ -159,7 +159,7 @@ class ProfileEditViewModel(private val repository: AuthRepository) : ViewModel()
     }
 
     /**
-     * `PATCH /users/me` 로 닉네임만 보낸다(imageUrl 은 null = 보내지 않음 — 서버는 넘어온 필드만 갱신한다).
+     * `PATCH /users/me` 로 닉네임만 보낸다(imageKey 는 null = 보내지 않음 — 서버는 넘어온 필드만 갱신한다).
      *
      * 성공하면 [UiState.saved] 로 화면 이동을 알린다. 여기서 이름 캐시를 직접 고치지 않는다
      * — 표시 이름의 단일 출처는 `UserProfileViewModel` 이고, 그쪽을 다시 조회하는 일은 NavGraph 가 맡는다.
@@ -171,7 +171,7 @@ class ProfileEditViewModel(private val repository: AuthRepository) : ViewModel()
         viewModelScope.launch {
             _uiState.update { it.copy(saving = true, errorMessage = null) }
             try {
-                repository.updateProfile(nickname = nickname, imageUrl = null)
+                repository.updateProfile(nickname = nickname, imageKey = null)
                 _uiState.update { it.copy(saving = false, saved = true) }
             } catch (e: Exception) {
                 val duplicated = (e as? AuthException)?.error == AuthError.NICKNAME_DUPLICATED

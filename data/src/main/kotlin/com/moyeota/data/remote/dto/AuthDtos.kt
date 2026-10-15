@@ -7,7 +7,13 @@ import kotlinx.serialization.Serializable
  *
  * [birthDate] 는 서버가 `Instant` 로 받는다(예: "2000-01-01T00:00:00Z"). 날짜만 보내면
  * Jackson 이 역직렬화에 실패해 400 이 나므로 매퍼에서 UTC 자정으로 확장해 넣는다.
- * [gender] 는 서버 enum 이름 그대로 "MALE" / "FEMALE".
+ * [gender] 는 서버 enum 이름 그대로 "MALE" / "FEMALE" / "UNDISCLOSED"(선택 안 함)다.
+ * 서버 필드는 `@NotNull` 이라 **셋 중 하나가 반드시 실려야 한다** — 「선택 안 함」도 빈 문자열이나
+ * 필드 누락이 아니라 `"UNDISCLOSED"` 라는 이름을 보내는 것이다(그래서 이 필드는 nullable 이 아니다).
+ *
+ * `"UNDISCLOSED"` 는 백엔드 PR #235 가 2026-10-15 운영에 배포되면서 받아들여진다 — 운영 스펙
+ * (`/v3/api-docs`)의 이 필드가 `["MALE","FEMALE","UNDISCLOSED"]` 인 것을 확인하고 화면 노출을 켰다.
+ * 노출 스위치는 presentation 의 `ServerAcceptsUndisclosedGender` 한 곳이다(롤백 대비로 남겨 뒀다).
  *
  * [nickname] 은 나중에 추가된 **필수** 필드다(서버 record 필드 순서도 password 다음이다).
  * 빠뜨리면 400, 형식이 틀리면 400 `USER107`, 이미 쓰는 값이면 409 `USER108` 이다.
@@ -67,7 +73,12 @@ data class SmsVerifyResponse(
     val verificationToken: String = "",
 )
 
-/** 201 응답. 백엔드 `UserResponse(UUID uuid)`. 토큰은 주지 않는다 — 가입 후 로그인을 따로 해야 한다. */
+/**
+ * 201 응답. 토큰은 주지 않는다 — 가입 후 로그인을 따로 해야 한다.
+ *
+ * 서버 `UserResponse` 는 2026-10-15 배포(Backend #235)로 `imageUrl` 이 붙어 두 필드가 됐지만,
+ * 가입 직후 화면이 쓰는 값은 `uuid` 하나뿐이라 여기선 받지 않는다(디코더의 `ignoreUnknownKeys` 가 흘린다).
+ */
 @Serializable
 data class RegisterResponse(
     val uuid: String = "",
