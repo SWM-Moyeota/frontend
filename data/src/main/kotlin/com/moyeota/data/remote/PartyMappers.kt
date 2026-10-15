@@ -13,6 +13,7 @@ import com.moyeota.data.remote.matching.PartySseEvent
 import com.moyeota.domain.model.AssignedDriver
 import com.moyeota.domain.model.NewParty
 import com.moyeota.domain.model.PartyEvent
+import com.moyeota.domain.model.PartyFinishException
 import com.moyeota.domain.model.PartyJoinException
 import com.moyeota.domain.model.PartyStatus
 import com.moyeota.domain.model.Ride
@@ -269,4 +270,32 @@ internal fun partyJoinException(
     )
 
     else -> PartyJoinException(code = null, serverMessage = null, cause = failure)
+}
+
+/**
+ * 「합승 완료」 실패 → [PartyFinishException]. 합류([partyJoinException])와 같은 자리·같은 이유의 경계다
+ * — presentation 이 `HttpException` 을 보지 않게 하고, 화면 문구는 도메인 프로퍼티로만 갈린다.
+ *
+ * [error] 는 이미 읽어 둔 본문([readApiError])이다 — **본문은 한 번만 읽을 수 있으므로** 여기서 다시
+ * 읽지 않는다.
+ *
+ * 합류와 달리 `isNetwork` 를 두지 않는다: 이 액션은 응답을 못 받은 실패와 모르는 코드의 **대응이 같다**
+ * (일반 문구). 쓰지 않을 구분을 노출하면 나중에 네트워크 실패에 방장 안내가 붙는 식으로 어긋난다.
+ */
+internal fun partyFinishException(
+    failure: Throwable,
+    error: ApiErrorDto?,
+): PartyFinishException = when (failure) {
+    is PartyFinishException -> failure
+
+    is HttpException -> PartyFinishException(
+        code = error?.code,
+        serverMessage = error?.message,
+        httpStatus = failure.code(),
+        cause = failure,
+    )
+
+    // 응답 자체를 못 받았다(연결 거부·타임아웃·DNS) 또는 그 밖의 실패. 서버가 말해 준 사유가 없으므로
+    // code 는 null 이고, 화면은 일반 문구로 안내한다.
+    else -> PartyFinishException(code = null, serverMessage = null, cause = failure)
 }

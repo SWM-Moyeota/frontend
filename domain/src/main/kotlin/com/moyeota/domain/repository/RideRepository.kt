@@ -3,6 +3,7 @@ package com.moyeota.domain.repository
 import com.moyeota.domain.model.AssignedDriver
 import com.moyeota.domain.model.NewParty
 import com.moyeota.domain.model.PartyEvent
+import com.moyeota.domain.model.PartyFinishException
 import com.moyeota.domain.model.PartyJoinException
 import com.moyeota.domain.model.PartyStatus
 import com.moyeota.domain.model.Ride
@@ -131,9 +132,18 @@ interface RideRepository {
     /**
      * POST /api/v1/matching/rooms/{partyId}/finish (204) — **기사 없이** 합승을 끝낸다.
      * 1차 배포 모드([AppConfig.taxiEnabled][com.moyeota.domain.model.AppConfig.taxiEnabled] = false)에서
-     * 정원이 찬(`COMPLETED`) 방을 참여자 **누구든 한 명**이 닫는다 — 모두의 방이 `FINISHED` 가 된다.
-     * 정원이 안 찼으면 409 PARTY_NOT_COMPLETED, 기사가 이미 배정됐으면 409 DRIVER_ALREADY_ASSIGNED,
-     * 참여자가 아니면 403 NOT_PARTY_MEMBER.
+     * 정원이 찬(`COMPLETED`) 방을 닫는다 — 한 명이 닫으면 **모두의** 방이 `FINISHED` 가 된다.
+     *
+     * **누가 닫을 수 있는지가 서버에서 바뀌었다**: Backend #237(develop 머지, 2026-10 기준 운영 미배포)이
+     * 이 API 를 **방장 전용**으로 좁혔다. 방장은 저장되는 값이 아니라 **지금 멤버 중 가장 먼저 합류한
+     * 사람**이고(`Party.hostId()`), 방장이 나가면 자동 승계된다. 앱은 아직 방장을 식별할 수단이 없다 —
+     * 서버가 주는 `hostId` 는 내부 PK `Long` 인데 멤버 목록에는 `publicId` UUID 뿐이다(Backend #240 요청).
+     * 그래서 **버튼 노출로 막지 못하고, 실패 사유로 안내한다.**
+     *
+     * 실패는 모두 [PartyFinishException] 으로 올라온다 — **403·409 가 각각 두 가지 뜻**이라
+     * (403 `NOT_PARTY_HOST`·`NOT_PARTY_MEMBER` / 409 `PARTY_NOT_COMPLETED`·`DRIVER_ALREADY_ASSIGNED`)
+     * 화면은 상태 코드가 아니라 그 예외의 프로퍼티로 분기한다. 모르는 코드·본문 없음은 code = null 이고
+     * 화면이 일반 문구로 떨어진다.
      */
     suspend fun finishParty(partyId: Long)
 

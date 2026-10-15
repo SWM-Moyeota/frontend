@@ -11,6 +11,7 @@ import com.moyeota.data.remote.dto.RouteEstimateResponse
 import com.moyeota.data.remote.dto.RouteRequestDto
 import com.moyeota.domain.model.AuthState
 import com.moyeota.domain.model.NewParty
+import com.moyeota.domain.model.PartyFinishException
 import com.moyeota.domain.model.PartyJoinException
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.session.UserSession
@@ -262,16 +263,129 @@ class RemoteRideRepositoryTest {
         assertEquals(repository.getPartyDetail(partyId = 1), repository.getPartyDetail(partyId = 1))
     }
 
+    // ───────────── 「합승 완료」 실패 (403·409 가 각각 두 가지 뜻) ─────────────
+
+    /**
+     * 「합승 완료」는 **방장 전용**이 됐다(Backend #237). 비방장이 누르면 403 `NOT_PARTY_HOST` 다.
+     * 앱은 아직 방장을 식별할 수 없어(서버 `hostId` 는 내부 PK, 멤버 목록은 publicId UUID — Backend #240)
+     * 버튼 노출로 막지 못하므로, **이 실패가 사유를 들고 올라오는 것**이 유일한 안내 수단이다.
+     */
+    @Test
+    fun `합승 완료 403 은 방장 아님을 코드로 구분해 올린다`() = runBlocking {
+        val api = FakeMatchingApi(
+            finishFailure = httpError(403, "NOT_PARTY_HOST", "방장만 수행할 수 있습니다."),
+        )
+
+        val error = runCatching { RemoteRideRepository(api, session()).finishParty(partyId = 7) }
+            .exceptionOrNull() as PartyFinishException
+
+        assertEquals(7L, api.finishCall)
+        assertTrue(error.isNotHost)
+        // 같은 403 인 「멤버 아님」과 섞이면 방 멤버가 아닌 사람에게 방장을 찾으라고 말하게 된다.
+        assertFalse(error.isNotMember)
+        assertEquals(403, error.httpStatus)
+        // 서버 원문을 그대로 들고 온다 — 화면 문구는 화면이 정한다.
+        assertEquals("방장만 수행할 수 있습니다.", error.serverMessage)
+    }
+
+    /** 같은 403 이지만 뜻이 다르다 — 멤버가 아니면 방장을 찾는 게 할 일이 아니다. */
+    @Test
+    fun `합승 완료 403 중 멤버 아님은 방장 아님과 갈린다`() = runBlocking {
+        val api = FakeMatchingApi(
+            finishFailure = httpError(403, "NOT_PARTY_MEMBER", "해당 방에 참여하고 있지 않습니다."),
+        )
+
+        val error = runCatching { RemoteRideRepository(api, session()).finishParty(partyId = 7) }
+            .exceptionOrNull() as PartyFinishException
+
+        assertTrue(error.isNotMember)
+        assertFalse(error.isNotHost)
+    }
+
+    /** 409 도 두 가지다 — 정원 미달과 기사 배정은 사용자가 할 일이 정반대다(기다리기 / 기다릴 일 없음). */
+    @Test
+    fun `합승 완료 409 두 가지를 코드로 가른다`() = runBlocking {
+        val notCompleted = runCatching {
+            RemoteRideRepository(
+                FakeMatchingApi(finishFailure = conflict("PARTY_NOT_COMPLETED", "정원이 다 차지 않은 방입니다.")),
+                session(),
+            ).finishParty(partyId = 7)
+        }.exceptionOrNull() as PartyFinishException
+
+        val driverAssigned = runCatching {
+            RemoteRideRepository(
+                FakeMatchingApi(finishFailure = conflict("DRIVER_ALREADY_ASSIGNED", "이미 기사가 배정된 방입니다.")),
+                session(),
+            ).finishParty(partyId = 7)
+        }.exceptionOrNull() as PartyFinishException
+
+        assertTrue(notCompleted.isNotCompleted)
+        assertFalse(notCompleted.isDriverAssigned)
+        assertTrue(driverAssigned.isDriverAssigned)
+        assertFalse(driverAssigned.isNotCompleted)
+    }
+
+    /**
+     * **서버가 코드를 늘려도 앱이 틀린 말을 하면 안 된다.** 모르는 코드·빈 본문은 code = null 로 올라와
+     * 화면이 일반 문구로 떨어진다 — 403 이라고 「방장만」을, 409 라고 「정원 미달」을 **추측하지 않는다**.
+     */
+    @Test
+    fun `모르는 코드와 빈 본문은 code 가 null 이고 사유를 추측하지 않는다`() = runBlocking {
+        val unknownCode = runCatching {
+            RemoteRideRepository(
+                FakeMatchingApi(finishFailure = httpError(409, "PARTY_SOMETHING_NEW", "새 규칙입니다.")),
+                session(),
+            ).finishParty(partyId = 7)
+        }.exceptionOrNull() as PartyFinishException
+
+        val bodyless = runCatching {
+            RemoteRideRepository(FakeMatchingApi(finishFailure = bodylessError(403)), session())
+                .finishParty(partyId = 7)
+        }.exceptionOrNull() as PartyFinishException
+
+        // 모르는 코드는 그대로 들고 오지만 어느 사유도 아니다.
+        assertEquals("PARTY_SOMETHING_NEW", unknownCode.code)
+        assertFalse(unknownCode.isNotCompleted)
+        assertFalse(unknownCode.isDriverAssigned)
+
+        assertNull(bodyless.code)
+        assertFalse(bodyless.isNotHost)
+        assertFalse(bodyless.isNotMember)
+        assertEquals(403, bodyless.httpStatus)
+    }
+
+    /** 성공은 204 로 몸통이 없다 — partyId 만 보내고 아무것도 돌려주지 않는다(주체는 Bearer 토큰). */
+    @Test
+    fun `합승 완료 성공은 partyId 만 보낸다`() = runBlocking {
+        val api = FakeMatchingApi()
+
+        RemoteRideRepository(api, session()).finishParty(partyId = 7)
+
+        assertEquals(7L, api.finishCall)
+        assertEquals(0, api.detailCallCount)
+    }
+
     /** 서버 공통 에러 본문 그대로 — 저장소가 code 를 읽어 분기한다. */
-    private fun conflict(code: String, message: String) = HttpException(
+    private fun conflict(code: String, message: String) = httpError(409, code, message)
+
+    private fun httpError(status: Int, code: String, message: String) = HttpException(
         Response.error<Unit>(
-            409,
+            status,
             """{"code":"$code","message":"$message"}""".toResponseBody("application/json".toMediaType()),
         ),
     )
 
-    private class FakeMatchingApi(private val joinFailure: Throwable? = null) : MatchingApi {
+    /** 본문 없는 실패 — 게이트웨이·프록시가 가로챈 응답이 이렇게 온다(서버 코드가 없다). */
+    private fun bodylessError(status: Int) = HttpException(
+        Response.error<Unit>(status, "".toResponseBody("application/json".toMediaType())),
+    )
+
+    private class FakeMatchingApi(
+        private val joinFailure: Throwable? = null,
+        private val finishFailure: Throwable? = null,
+    ) : MatchingApi {
         var joinCall: Long? = null
+        var finishCall: Long? = null
         var leaveCall: Long? = null
         var openRequest: OpenPartyRequestDto? = null
         var detailCallCount = 0
@@ -331,7 +445,10 @@ class RemoteRideRepositoryTest {
             return PartyStatusResponse(status = "COMPLETED", currentMembers = 2)
         }
 
-        override suspend fun finishParty(partyId: Long) = error("쓰이지 않는다")
+        override suspend fun finishParty(partyId: Long) {
+            finishCall = partyId
+            finishFailure?.let { throw it }
+        }
 
         override suspend fun leaveParty(partyId: Long) {
             leaveCall = partyId

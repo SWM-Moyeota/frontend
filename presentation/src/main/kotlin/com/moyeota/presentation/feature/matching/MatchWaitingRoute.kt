@@ -11,6 +11,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.moyeota.domain.model.PartyEvent
+import com.moyeota.domain.model.PartyFinishException
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.model.User
@@ -397,16 +398,37 @@ class MatchWaitingViewModel(
     }
 
     /**
-     * 1차 배포 모드의 「합승 완료」 — 기사 없이 방을 닫는다. 참여자 누구든 한 명이 누르면 **모두의** 방이 끝난다.
-     * 정원이 안 찼거나(409 PARTY_NOT_COMPLETED) 기사가 붙었으면(409 DRIVER_ALREADY_ASSIGNED) 서버가 거절한다.
+     * 1차 배포 모드의 「합승 완료」 — 기사 없이 방을 닫는다. 한 명이 누르면 **모두의** 방이 끝난다.
+     *
+     * 실패 사유가 여럿이고 **각각 다음 행동이 다르다** — 그래서 [finishFailureMessage] 로 문구를 가른다.
+     * 예전에는 네트워크 끊김도, 403 도, 409 도 전부 「합승을 완료하지 못했어요」 하나였다.
+     *
+     * 특히 Backend #237 이후 이 API 는 **방장 전용**이라 비방장은 403 `NOT_PARTY_HOST` 를 받는다.
+     * 그걸 **버튼 노출로는 막을 수 없다**([canFinishParty] 를 고치지 못한 이유): 서버가 주는 `hostId` 는
+     * 내부 PK `Long` 인데 멤버 목록에는 `publicId` UUID 뿐이어서 앱이 방장을 식별할 수단이 없다
+     * (Backend #240 요청). 서버가 `isHost` 를 주어 노출 조건을 고친 뒤에도 이 403 은 **남는다** —
+     * 방장이 나가면 `joinedAt` 최소값으로 자동 승계되는데 그 사실이 SSE 변경분에 실리지 않아
+     * 앱 스냅샷이 낡을 수 있다.
      */
-    fun finishParty() = runAction(failureMessage = "합승을 완료하지 못했어요") {
+    fun finishParty() = runAction(
+        failureMessage = FINISH_FAILED_MESSAGE,
+        messageOf = { (it as? PartyFinishException)?.let(::finishFailureMessage) },
+    ) {
         repository.finishParty(partyId)
         _actionState.update { it.copy(finished = true) }
     }
 
-    // 액션 공통: 중복 실행 차단 → 진행 표시 → 실패 시 한국어 메시지
-    private fun runAction(failureMessage: String, block: suspend () -> Unit) {
+    /**
+     * 액션 공통: 중복 실행 차단 → 진행 표시 → 실패 시 한국어 메시지.
+     *
+     * [messageOf] 가 실패를 **사유별 문구**로 옮긴다 — null 이면 [failureMessage] 로 떨어진다.
+     * 기본값이 "항상 null" 이라 사유를 가르지 않는 액션(나가기)은 예전과 똑같이 동작한다.
+     */
+    private fun runAction(
+        failureMessage: String,
+        messageOf: (Throwable) -> String? = { null },
+        block: suspend () -> Unit,
+    ) {
         if (_actionState.value.inProgress) return
         viewModelScope.launch {
             _actionState.update { it.copy(inProgress = true, errorMessage = null) }
@@ -414,7 +436,7 @@ class MatchWaitingViewModel(
                 block()
                 _actionState.update { it.copy(inProgress = false) }
             } catch (e: Exception) {
-                _actionState.update { it.copy(inProgress = false, errorMessage = failureMessage) }
+                _actionState.update { it.copy(inProgress = false, errorMessage = messageOf(e) ?: failureMessage) }
             }
         }
     }
@@ -586,6 +608,45 @@ internal fun canLeaveParty(status: RideStatus, taxiEnabled: Boolean): Boolean =
  */
 internal fun canFinishParty(status: RideStatus, taxiEnabled: Boolean): Boolean =
     !taxiEnabled && status == RideStatus.MATCHED
+
+/**
+ * 사유를 가릴 수 없는 「합승 완료」 실패의 일반 문구. 네트워크 실패와 **모르는 코드**가 여기로 떨어진다 —
+ * 서버가 `MatchingErrorCode` 를 늘려도 앱은 틀린 말을 하지 않는다(지어내는 것보다 모른다고 하는 게 낫다).
+ */
+private const val FINISH_FAILED_MESSAGE = "합승을 완료하지 못했어요"
+
+/**
+ * 「합승 완료」 실패를 사용자 문구로 옮긴다 — 실패마다 **다음 행동이 다르다**.
+ *
+ * | 사유 | 서버 코드(HTTP) | 사용자가 할 일 |
+ * |---|---|---|
+ * | 방장이 아니다 | `NOT_PARTY_HOST` (403) | 가장 먼저 참여한 사람에게 눌러 달라고 한다 |
+ * | 멤버가 아니다 | `NOT_PARTY_MEMBER` (403) | 홈에서 진행 중인 방을 확인한다 |
+ * | 정원 미달 | `PARTY_NOT_COMPLETED` (409) | 인원이 모두 모일 때까지 기다린다 |
+ * | 기사 배정됨 | `DRIVER_ALREADY_ASSIGNED` (409) | 직접 끝낼 방이 아니다 — 누를 일이 없다 |
+ * | 방 없음 | `PARTY_NOT_FOUND` (404) | 홈으로 돌아간다 |
+ * | 그 밖·네트워크 | 코드 없음 | [FINISH_FAILED_MESSAGE] |
+ *
+ * **403 과 409 가 각각 두 가지 뜻**이라 상태 코드로는 가를 수 없다(서버 `Party.finishWithoutDriver` 의
+ * 검사 순서가 위 표 순서다). 그래서 분기 근거는 서버 코드를 도메인이 한 번 걸러 준
+ * [PartyFinishException] 의 프로퍼티다 —
+ * 20 합류의 [joinFailureMessage][com.moyeota.presentation.feature.explore.joinFailureMessage] 와 같은 선례다.
+ *
+ * 방장 안내가 「가장 먼저 참여한 분」인 건 서버가 방장을 그렇게 정하기 때문이다 —
+ * `Party.hostId()` 는 **현재 멤버 중 `joinedAt` 최소값**이고, 저장되는 값이 아니다.
+ * 앱은 그게 누구인지 모른다(멤버 목록에 합류 시각이 오지 않는다) — 그래서 이름을 말하지 않고
+ * **조건**을 말한다. 지어낸 이름을 띄우는 것보다 정확하다.
+ *
+ * 「잠시 후 다시 시도」류는 넣지 않는다. 다시 눌러도 같은 403·409 다 — 방 사정이 바뀌어야 풀린다.
+ */
+internal fun finishFailureMessage(e: PartyFinishException): String = when {
+    e.isNotHost -> "방장만 합승을 완료할 수 있어요. 가장 먼저 참여한 분에게 부탁해 주세요"
+    e.isNotMember -> "이 방의 참여자가 아니에요. 홈에서 진행 중인 방을 확인해 주세요"
+    e.isNotCompleted -> "아직 정원이 다 차지 않았어요. 인원이 모두 모이면 완료할 수 있어요"
+    e.isDriverAssigned -> "이미 기사가 배정된 방이라 직접 완료할 수 없어요"
+    e.isPartyNotFound -> "이미 사라진 방이에요. 홈으로 돌아가 주세요"
+    else -> FINISH_FAILED_MESSAGE
+}
 
 /**
  * 21 매칭 대기 — SSE 변경분 구독(+끊김 폴백) · 나가기/합승 완료 진입점. partyId 없으면 기존 더미 화면 유지.

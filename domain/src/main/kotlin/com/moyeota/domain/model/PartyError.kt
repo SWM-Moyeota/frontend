@@ -81,3 +81,67 @@ class PartyJoinException(
             code == ALREADY_JOINED_OTHER_PARTY || code == ALREADY_JOINED_PARTY
     }
 }
+
+/**
+ * 「합승 완료」 실패를 화면이 **사유별로 안내할 수 있는 형태**로 좁힌 예외
+ * ([RideRepository.finishParty][com.moyeota.domain.repository.RideRepository.finishParty] 전용).
+ *
+ * 따로 둔 이유는 이 액션의 실패가 **서로 다른 네 가지 뜻**을 갖는데 **HTTP 상태로는 갈리지 않기**
+ * 때문이다 — 403 이 둘(`NOT_PARTY_MEMBER`·`NOT_PARTY_HOST`), 409 가 둘(`PARTY_NOT_COMPLETED`·
+ * `DRIVER_ALREADY_ASSIGNED`)이다(서버 `Party.finishWithoutDriver` 의 검사 순서가 그대로
+ * 이 순서다). 예전에는 넷 다 「합승을 완료하지 못했어요」 하나로 떨어져서, **방장이 아니라서 막힌
+ * 사람이 다음에 뭘 해야 하는지 알 수 없었다** — 같은 버튼을 다시 눌러도 같은 403 이다.
+ *
+ * 그래서 **상태 코드로는 폴백하지 않는다.** 403 을 「방장만 할 수 있어요」로 뭉개면 방 멤버가 아닌
+ * 사람에게 방장을 찾으라고 말하게 되고, 409 를 「정원이 안 찼어요」로 뭉개면 기사가 배정된 방에
+ * 거짓을 말하게 된다. 코드를 모르면 [code] 는 null 이고 화면은 **일반 문구**로 떨어진다 —
+ * 서버가 코드를 늘려도 앱이 틀린 말을 하지 않는다.
+ *
+ * 분기 근거를 프로퍼티로 노출하는 건 [PartyJoinException] 과 같은 이유다 — 서버 코드 문자열 비교가
+ * 화면으로 새어 나가면 서버가 enum 이름을 바꿀 때 조용히 어긋난다.
+ */
+class PartyFinishException(
+    /** 서버 `MatchingErrorCode` 이름(`NOT_PARTY_HOST` 등). 본문이 없거나 파싱 실패면 null. */
+    val code: String?,
+    /** 서버가 준 한국어 원문 message. 없으면 null. */
+    val serverMessage: String?,
+    /** HTTP 상태 코드. 응답 자체가 없으면(네트워크 실패) null. 문구 분기에는 쓰지 않는다 — 위 KDoc 참고. */
+    val httpStatus: Int? = null,
+    cause: Throwable? = null,
+) : RuntimeException(serverMessage ?: code ?: "합승을 완료하지 못했습니다.", cause) {
+
+    /**
+     * 403 `NOT_PARTY_HOST` — **방장만** 완료할 수 있다(Backend #237).
+     *
+     * 방장은 서버가 저장하는 값이 아니라 **지금 멤버 중 가장 먼저 합류한 사람**이다
+     * (`Party.hostId()` = `min(joinedAt, memberId)`). 그래서 방장이 나가면 다음으로 이른 멤버에게
+     * 자동 승계되고, 그 승계는 SSE 변경분에 실리지 않는다 — 앱 스냅샷이 낡아 버튼을 보여 준 뒤에도
+     * 이 403 은 날 수 있다. 화면은 **누가 눌러야 하는지**를 말해 줘야 한다.
+     */
+    val isNotHost: Boolean get() = code == NOT_PARTY_HOST
+
+    /** 403 `NOT_PARTY_MEMBER` — 이 방의 멤버가 아니다. [isNotHost] 와 **같은 403 이지만 뜻이 다르다**. */
+    val isNotMember: Boolean get() = code == NOT_PARTY_MEMBER
+
+    /** 409 `PARTY_NOT_COMPLETED` — 정원이 아직 다 차지 않았다(서버는 COMPLETED 방만 닫아 준다). */
+    val isNotCompleted: Boolean get() = code == PARTY_NOT_COMPLETED
+
+    /** 409 `DRIVER_ALREADY_ASSIGNED` — 기사가 배정됐다. 이 방은 기사 없이 끝낼 방이 아니다. */
+    val isDriverAssigned: Boolean get() = code == DRIVER_ALREADY_ASSIGNED
+
+    /** 404 `PARTY_NOT_FOUND` — 방이 사라졌다. */
+    val isPartyNotFound: Boolean get() = code == PARTY_NOT_FOUND
+
+    /**
+     * 서버 `MatchingErrorCode` 중 **이 엔드포인트가 실제로 던지는** 코드만 둔다
+     * (`PartyService.finish` → `Party.finishWithoutDriver`). 문자열을 아는 곳을 여기 하나로 묶어
+     * 데이터 계층과 화면이 각자 들고 있지 않게 한다.
+     */
+    companion object {
+        const val NOT_PARTY_MEMBER = "NOT_PARTY_MEMBER"
+        const val NOT_PARTY_HOST = "NOT_PARTY_HOST"
+        const val PARTY_NOT_COMPLETED = "PARTY_NOT_COMPLETED"
+        const val DRIVER_ALREADY_ASSIGNED = "DRIVER_ALREADY_ASSIGNED"
+        const val PARTY_NOT_FOUND = "PARTY_NOT_FOUND"
+    }
+}
