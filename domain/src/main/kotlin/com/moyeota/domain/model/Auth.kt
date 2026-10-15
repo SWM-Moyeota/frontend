@@ -24,9 +24,9 @@ enum class Gender {
      * **선택**이다. 비워서 저장하면 둘이 한 칸에 섞여 들어가 그 구분이 영구히 사라진다 — 나중에
      * 되살릴 방법이 없으므로 처음부터 나눠 적는다.
      *
-     * **운영 서버는 2026-10-15 현재 이 값을 모른다**(Backend PR #235 미머지·미배포).
-     * 보내면 400 이므로 배포 전까지 화면에 노출하면 안 된다 — 자세한 사정은 data 쪽
-     * `RegisterRequestDto` KDoc 에 적었다(domain 은 data 를 모르므로 링크가 아니라 이름만 적는다).
+     * 운영 서버는 2026-10-15 배포(Backend PR #235)부터 이 값을 받는다. 그 전까지는 400 이었고,
+     * 되돌아갈 경우를 대비해 화면 노출 스위치를 presentation 에 한 줄로 남겨 뒀다 — 자세한 사정은
+     * data 쪽 `RegisterRequestDto` KDoc 에 적었다(domain 은 data 를 모르므로 이름만 적는다).
      */
     UNDISCLOSED,
 }

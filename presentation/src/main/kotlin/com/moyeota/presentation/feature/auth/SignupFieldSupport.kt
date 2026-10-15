@@ -157,22 +157,24 @@ internal data class GenderChoice(val gender: Gender, val label: String)
 /**
  * **운영 서버가 [Gender.UNDISCLOSED] 를 받는가.**
  *
- * 제품 토글이 아니라 **서버에 대한 사실**이다. 2026-10-15 현재 운영 스펙(`/v3/api-docs`)의
- * `gender` 는 여전히 `["MALE","FEMALE"]` 이고, 추가는 백엔드 PR #235 에 있으나 머지·배포되지
- * 않았다(근거는 `RegisterRequestDto` KDoc). 그래서 지금 `"UNDISCLOSED"` 를 보내면 가입이
- * 400 `INVALID_REQUEST` 다.
+ * 제품 토글이 아니라 **서버에 대한 사실**이다. 백엔드 PR #235 가 2026-10-15 운영에 배포되면서
+ * 운영 스펙(`/v3/api-docs`)의 `gender` 가 `["MALE","FEMALE","UNDISCLOSED"]` 가 된 것을
+ * 실측 확인하고 `true` 로 열었다.
  *
- * 노출을 미루는 이유는 400 자체가 아니라 **400 이 떨어지는 자리**다. 가입 제출은 10 이 아니라
+ * **상수를 남겨 두는 이유**는 서버가 값을 **되돌릴 수도** 있기 때문이다. 마이그레이션을 되감거나
+ * 운영을 옛 버전으로 롤백하면 `user_profile.gender` 의 CHECK 제약이 다시 이 값을 거부한다.
+ * 그때 선택지를 숨기는 길이 이 한 줄이면 되게 둔다.
+ *
+ * 켜고 끄는 판단이 왜 중요한지 — **400 이 떨어지는 자리** 때문이다. 가입 제출은 10 이 아니라
  * 12 매너 서약의 「동의하고 가입 완료」 한 곳이고, 그때 사용자는 이미 9개 필드를 다 채우고
  * 문자 인증까지 끝낸 상태다(인증 문자는 하루 [AuthPolicy.SMS_DAILY_LIMIT] 번이 한도다).
  * 돌아오는 문구는 [AuthError.INVALID_REQUEST] 의 "입력한 정보를 다시 확인해 주세요" 뿐이라
  * 성별이 원인이라는 단서가 없다 — 사용자는 고칠 곳을 못 찾고 재시도로 문자 한도를 태운다.
  * 고를 수 있게 해 놓고 고르면 가입이 안 되는 선택지는 없는 선택지보다 나쁘다.
  *
- * **서버가 배포되면 `true` 하나만 바꾸면 된다.** 화면·검증·초안은 이미 세 값을 전제로 돌아간다
- * (`SignupGenderChoicesTest` 가 이 상수와 목록이 어긋나지 않게 잡는다).
+ * `SignupGenderChoicesTest` 가 이 상수와 선택지 목록이 어긋나지 않게 잡는다.
  */
-internal const val ServerAcceptsUndisclosedGender = false
+internal const val ServerAcceptsUndisclosedGender = true
 
 /**
  * 「선택 안 함」 선택지. [ServerAcceptsUndisclosedGender] 가 `false` 인 동안에도 **라벨은 여기
