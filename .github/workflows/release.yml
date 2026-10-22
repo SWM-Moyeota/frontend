@@ -96,7 +96,7 @@ jobs:
           fi
 
       # MOYEOTA_BASE_URL 은 **일부러 주입하지 않는다.** 러너에는 local.properties 가 없으므로
-      # app/build.gradle.kts 의 기본값(https://api.moyeota.p-e.kr/ — 운영 서버)이 그대로 박힌다.
+      # app/build.gradle.kts 의 기본값(https://api.moyeota.co.kr/ — 운영 서버)이 그대로 박힌다.
       # 시크릿으로 열어 두면 누군가 스테이징 URL 을 넣는 순간 스토어 빌드가 조용히 그쪽을 보게 된다.
       # 값이 운영 서버인지는 다음 단계에서 다시 확인한다.
       - name: APK 빌드 (서명된 릴리스)

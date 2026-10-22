@@ -28,13 +28,21 @@ fun buildSetting(key: String, default: String): String = providers
 val naverMapsClientId: String = buildSetting("NAVER_MAPS_CLIENT_ID", default = "")
 
 /**
- * 백엔드 base URL. 기본값은 배포 서버(api.moyeota.p-e.kr, CloudFront/HTTPS).
+ * 백엔드 base URL. 기본값은 **운영 서버**(api.moyeota.co.kr, ALB/HTTPS).
+ *
+ * 2026-10-15 에 `api.moyeota.p-e.kr` 에서 옮겼다. 옛 주소도 당분간 살아 있다 — 이미 배포된
+ * 빌드가 그쪽을 보고 있어서, 테스터가 전부 새 버전으로 올라온 뒤에야 끊을 수 있다.
+ * (ALB 리스너에 두 인증서가 함께 붙어 있어 SNI 로 갈린다.)
+ *
+ * 법적 페이지·랜딩은 **옮기지 않았다** — `legal.moyeota.p-e.kr`, `www.moyeota.p-e.kr` 그대로다.
+ * API 와 정적 페이지는 인프라도 장애 범위도 달라 도메인을 나눠 둔다(API 가 죽어도 처리방침은
+ * 떠 있어야 한다). 앱의 그 링크들은 `presentation/core/SupportLinks.kt` 에 있다.
  * 로컬 백엔드로 붙일 때는 local.properties 나 환경변수에
  * MOYEOTA_BASE_URL=http://10.0.2.2:8080/ (에뮬레이터) 또는 http://<개발PC LAN IP>:8080/ (실기기) 을 지정해 오버라이드한다.
  * Retrofit baseUrl 규약상 반드시 '/' 로 끝나야 하므로 보정해 둔다.
  */
 val moyeotaBaseUrl: String =
-    buildSetting("MOYEOTA_BASE_URL", default = "https://api.moyeota.p-e.kr/")
+    buildSetting("MOYEOTA_BASE_URL", default = "https://api.moyeota.co.kr/")
         .let { if (it.endsWith("/")) it else "$it/" }
 
 /**
