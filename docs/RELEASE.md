@@ -65,7 +65,7 @@ MOYEOTA_KEY_PASSWORD=<키 비밀번호>
 
 `.jks` **파일 자체는 저장소에 두지 않는다**(`.gitignore` 가 `*.jks` 를 막는다). base64 로 시크릿에 넣고 워크플로가 시작할 때 러너의 `$RUNNER_TEMP` 에 풀어 쓰고, 끝나면 지운다.
 
-> `MOYEOTA_BASE_URL` 은 **일부러 시크릿으로 두지 않는다.** 등록해 두면 누군가 스테이징 주소를 넣는 순간 스토어 빌드가 조용히 그쪽을 보게 된다. 러너에 아무 값도 없으면 `app/build.gradle.kts` 의 기본값인 운영 서버(`https://api.moyeota.p-e.kr/`)가 그대로 박힌다.
+> `MOYEOTA_BASE_URL` 은 **일부러 시크릿으로 두지 않는다.** 등록해 두면 누군가 스테이징 주소를 넣는 순간 스토어 빌드가 조용히 그쪽을 보게 된다. 러너에 아무 값도 없으면 `app/build.gradle.kts` 의 기본값인 운영 서버(`https://api.moyeota.co.kr/`)가 그대로 박힌다.
 
 ---
 
@@ -128,7 +128,7 @@ jarsigner -verify -verbose -certs app/build/outputs/bundle/release/app-release.a
 >   verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk
 > ```
 
-빌드 전에 `local.properties` 의 `MOYEOTA_BASE_URL` 이 **운영 서버**를 가리키는지 확인한다. 로컬 테스트용으로 `10.0.2.2` 를 넣어 둔 채 빌드하면 아무 데도 못 붙는 앱이 올라간다(릴리스는 평문 통신이 막혀 있어 요청이 아예 나가지 않는다 — 7번 참고). 값을 지우거나 주석 처리하면 기본값(`https://api.moyeota.p-e.kr/`)이 쓰인다.
+빌드 전에 `local.properties` 의 `MOYEOTA_BASE_URL` 이 **운영 서버**를 가리키는지 확인한다. 로컬 테스트용으로 `10.0.2.2` 를 넣어 둔 채 빌드하면 아무 데도 못 붙는 앱이 올라간다(릴리스는 평문 통신이 막혀 있어 요청이 아예 나가지 않는다 — 7번 참고). 값을 지우거나 주석 처리하면 기본값(`https://api.moyeota.co.kr/`)이 쓰인다.
 
 ### 4-2. GitHub Actions 자동 릴리스 (서명된 APK)
 
