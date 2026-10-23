@@ -118,18 +118,51 @@ class MatchCandidateMapperTest {
     }
 
     /**
-     * **인원을 지어내지 않는다.** 서버 응답에 `currentMembers` 가 없는데 자리 표시용 멤버를 넣으면
-     * 화면이 「1명 참여 중」 같은 없는 사실을 말하게 된다. 인원은 합류 화면이 방 상세로 채운다.
+     * **인원을 머릿수만큼 채운다**(Backend #260). 17 탐색 목록이 같은 숫자를 같은 방식으로 쓰고 있어
+     * 카드 문구(「2/3명」)가 양쪽에서 일치한다. 요금은 여전히 응답에 없어 0 이다.
      */
     @Test
-    fun `멤버와 요금을 지어내지 않는다`() {
-        val candidate = parseOne("""{"summary":{"id":4,"capacity":3},"totalSeconds":120}""")
+    fun `currentMembers 만큼 멤버 자리를 채운다`() {
+        val candidate = parseOne("""{"summary":{"id":4,"capacity":3,"currentMembers":2},"totalSeconds":120}""")
 
-        assertTrue("없는 멤버를 만들었다", candidate.ride.members.isEmpty())
+        assertEquals(2, candidate.ride.members.size)
+        assertEquals(3, candidate.ride.capacity)
         assertEquals(0, candidate.ride.farePerPerson)
         assertEquals(0, candidate.ride.totalFare)
         // 서버 쿼리가 status='ACTIVE' 로 고정이라 후보는 늘 모집 중인 방이다.
         assertEquals(RideStatus.RECRUITING, candidate.ride.status)
+    }
+
+    /**
+     * **`currentMembers` 가 없으면 비워 둔다.** 옛 배포(#260 이전)를 보고 있다는 뜻이다.
+     * 0 으로 접어 멤버를 0명 만들면 화면이 「0/3명」이라는 없는 상태를 그린다 — 후보는 모집 중인
+     * 방만 오고 거기엔 최소 방장 1명이 있으므로 0 명인 방은 존재할 수 없다.
+     */
+    @Test
+    fun `currentMembers 가 없으면 인원을 지어내지 않는다`() {
+        val candidate = parseOne("""{"summary":{"id":4,"capacity":3},"totalSeconds":120}""")
+
+        assertTrue("없는 멤버를 만들었다", candidate.ride.members.isEmpty())
+    }
+
+    /** 서버가 명시적 null 을 보내도 같다 — kotlinx 는 명시적 null 에 기본값을 쓰지 않는다. */
+    @Test
+    fun `currentMembers 가 명시적 null 이어도 비워 둔다`() {
+        val candidate = parseOne("""{"summary":{"id":4,"capacity":3,"currentMembers":null},"totalSeconds":120}""")
+
+        assertTrue("null 을 0 이 아닌 멤버로 바꿨다", candidate.ride.members.isEmpty())
+    }
+
+    /**
+     * **멤버 이름을 믿으면 안 된다.** 서버는 개수만 주고 누가 들었는지는 안 준다. 자리표시자가
+     * 「멤버 1」 같은 가짜 닉네임을 들고 있으므로 추천 카드는 **개수만** 쓴다. 이 테스트는 그
+     * 전제를 못 박아 둔다 — 나중에 카드에 프로필을 붙이려 하면 여기서 걸린다.
+     */
+    @Test
+    fun `자리표시자 멤버는 실제 사용자가 아니다`() {
+        val candidate = parseOne("""{"summary":{"id":4,"capacity":3,"currentMembers":2},"totalSeconds":120}""")
+
+        assertTrue("실제 사용자처럼 보이는 값이 들어갔다", candidate.ride.members.all { it.rating == 0.0 && it.rideCount == 0 })
     }
 
     private fun parseOne(body: String) =

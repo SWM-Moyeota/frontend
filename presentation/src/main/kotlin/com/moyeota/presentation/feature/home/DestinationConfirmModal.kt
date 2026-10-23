@@ -578,12 +578,15 @@ private fun NearbyCandidateCard(candidate: MatchCandidate, onClick: () -> Unit) 
                 overflow = TextOverflow.Ellipsis,
             )
             Spacer(Modifier.height(4.dp))
-            Text(
-                text = "최대 ${candidate.ride.capacity}명",
-                fontSize = 12.sp,
-                color = GrayAsh,
-                maxLines = 1,
-            )
+            val headcount = headcountLabel(joined = candidate.ride.members.size, capacity = candidate.ride.capacity)
+            if (headcount.isNotEmpty()) {
+                Text(
+                    text = headcount,
+                    fontSize = 12.sp,
+                    color = GrayAsh,
+                    maxLines = 1,
+                )
+            }
         }
         Spacer(Modifier.width(12.dp))
         Text(
@@ -594,6 +597,26 @@ private fun NearbyCandidateCard(candidate: MatchCandidate, onClick: () -> Unit) 
             maxLines = 1,
         )
     }
+}
+
+/**
+ * 추천 카드의 인원 문구 — 17 탐색 카드와 같은 「2/3명」 모양으로 맞춘다.
+ *
+ * 이 숫자가 카드에서 가장 중요한 정보다. **2/3 방은 내가 들어가면 바로 출발하고 1/3 방은 한 명을
+ * 더 기다려야 한다** — 걸어서 3분이 1/3 이고 6분이 2/3 이면 6분 쪽을 골라야 하는 상황인데,
+ * 정원만 보여 주면 두 방이 똑같아 보인다.
+ *
+ * [joined] 는 [com.moyeota.domain.model.Ride.members] 의 크기이고 **0 은 「빈 방」이 아니라
+ * 「모른다」**는 뜻이다(서버가 `currentMembers` 를 안 주는 옛 배포). 후보는 모집 중인 방만 오고
+ * 거기엔 최소 방장 1명이 있으므로 0 은 나올 수 없는 값이다. 모를 때는 지어내지 않고 정원만 쓴다.
+ *
+ * [capacity] 까지 0 이면 **빈 문자열을 돌려주고 호출부가 줄 자체를 지운다** — 「최대 0명」은
+ * 사용자에게 아무 뜻도 없다.
+ */
+internal fun headcountLabel(joined: Int, capacity: Int): String = when {
+    capacity <= 0 -> ""
+    joined <= 0 -> "최대 ${capacity}명"
+    else -> "$joined/${capacity}명"
 }
 
 /**

@@ -2,6 +2,10 @@
 
 조사일 2026-10-23 · 조사 범위 backend `origin/develop` (= `origin/main`, 아래 참조) · 코드 변경 없음(조사만)
 
+> **2026-10-24 기준으로 아래 내용 중 한 가지가 바뀌었다.** 「`currentMembers` 가 없다」는 전제가
+> 깔린 대목(§4.4 표, §6 비교표, §0 보류 근거 ④, 구현 메모)은 **Backend #260 으로 해소됐다** —
+> §7-2 와 `07_realtime-matching-qa.md` 의 「후속」을 보라. 나머지 분석은 그대로 유효하다.
+
 ---
 
 ## 0. 결론 요약
@@ -425,12 +429,16 @@ suspend fun findRealtimeCandidates(
 
 1. **[차단] OSRM 이 prod 에 떠 있나? `/moyeota/prod/OSRM_BASE_URL` 값은?**
    저장소에는 ECR 이미지 빌드 워크플로만 있고 배포·실행 장치가 없다. `bootstrap.sh` 는 컨테이너 런타임을 설치하지 않는다. → **앱 연동 가능 시점이 이 답에 달려 있다.** 안 떠 있다면 지금 prod 에서 이 API 는 후보가 잡히는 순간 502 다.
-2. **[높음] `NearbyPartySummary` 에 `currentMembers` 추가**
-   「2/3명」이 추천 카드에서 가장 중요한 정보인데 없다. 앱이 메우려면 후보당 `getPartyDetail` = 최대 15 쿼리 + route 폴리라인이고, 상세 폴링이 이미 서버 요청의 45% 였다(#177). `findNearbyParties` 의 `select` 에 서브쿼리 한 줄이면 된다 — `findSummariesWithinBounds`(`PartyJpaRepository.java:41`)에 이미 같은 패턴이 있다.
+2. ~~**[높음] `NearbyPartySummary` 에 `currentMembers` 추가**~~ → **해결(Backend #260, 2026-10-24)**
+   「2/3명」이 추천 카드에서 가장 중요한 정보인데 없었다. 앱이 메우려면 후보당 `getPartyDetail` = 최대 15 쿼리 + route 폴리라인이고, 상세 폴링이 이미 서버 요청의 45% 였다(#177). `findNearbyParties` 의 `select` 에 서브쿼리 한 줄이면 된다고 적었고, 실제로 그렇게 들어왔다:
+   ```sql
+   CAST((SELECT COUNT(*) FROM user_match_room um WHERE um.match_id = m.id) AS integer) AS current_members
+   ```
+   record 가 `Integer currentMembers` 를 9번째 필드로 받는다. **앱은 `Int? = null` 로 받는다** — 0 은 모집 중인 방에서 나올 수 없는 값이라 「모른다」와 구별해야 하기 때문이다(`PartyDtos.kt`).
 3. **[높음] OSRM 장애 시 502 대신 degrade 를 고려해 달라**
    지금은 OSRM 이 죽으면 기능 전체가 502 다. 직선거리 순(이미 SQL 이 정렬해 둔 순서) 후보를 `totalSeconds: null` 로 돌려주면, 「걸어서 몇 분」만 빠진 **쓸 수 있는 목록**이 된다. 앱 쪽에서 가장 효과가 큰 변경이다.
-4. **[중간] 테스트 추가**
-   `realtimeMatch` 와 PostGIS 네이티브 쿼리(record 프로젝션 포함)를 지나는 테스트가 **하나도 없다**(§3.5). 특히 네이티브 쿼리 → record 매핑은 통합 테스트 없이는 런타임에 처음 터진다. `PartyLockQueryPostgresTest` 가 있으니 PostGIS 통합 테스트 자리는 이미 있다.
+4. **[중간] 테스트 추가** → **절반 해결(Backend #260)**
+   `realtimeMatch` 와 PostGIS 네이티브 쿼리(record 프로젝션 포함)를 지나는 테스트가 **하나도 없었다**(§3.5). #260 이 `NearbyPartyQueryPostgresTest` 를 붙여 **네이티브 쿼리 → record 매핑**은 덮였다(인원 포함 조회, 정원 찬 방 제외). **`realtimeMatch` 서비스 경로(OSRM 호출·정렬·LIMIT 5)는 여전히 테스트가 없다.**
 5. **[낮음] 요청 필드명 `destLat`/`destLng` → `destinationLat`/`destinationLng`**
    같은 컨트롤러의 `OpenPartyRequest` 와 응답 `NearbyPartySummary` 는 `destination*` 인데 요청만 `dest*` 다. 응답의 `id` 도 기존 목록은 `partyId` 다. **클라이언트가 조용히 틀리는 종류의 비대칭**이고, 틀리면 `0.0` 이 가서 400 으로 나타난다. 아직 붙은 클라이언트가 없는 지금이 바꿀 수 있는 유일한 시점.
 6. **[낮음] `realtimeMatch` 에 `@Transactional(readOnly = true)` 누락**
