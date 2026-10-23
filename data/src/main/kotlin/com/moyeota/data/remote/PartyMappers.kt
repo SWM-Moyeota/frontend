@@ -2,6 +2,7 @@ package com.moyeota.data.remote
 
 import com.moyeota.data.remote.dto.ApiErrorDto
 import com.moyeota.data.remote.dto.DriverSummaryResponse
+import com.moyeota.data.remote.dto.MatchCandidateResponse
 import com.moyeota.data.remote.dto.OpenPartyRequestDto
 import com.moyeota.data.remote.dto.OpenPartyResponse
 import com.moyeota.data.remote.dto.PartyDetailResponse
@@ -11,19 +12,21 @@ import com.moyeota.data.remote.dto.RouteEstimateResponse
 import com.moyeota.data.remote.dto.RouteRequestDto
 import com.moyeota.data.remote.matching.PartySseEvent
 import com.moyeota.domain.model.AssignedDriver
+import com.moyeota.domain.model.MatchCandidate
 import com.moyeota.domain.model.NewParty
 import com.moyeota.domain.model.PartyEvent
 import com.moyeota.domain.model.PartyFinishException
 import com.moyeota.domain.model.PartyJoinException
 import com.moyeota.domain.model.PartyStatus
 import com.moyeota.domain.model.Ride
+import com.moyeota.domain.model.RealtimeMatchException
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.model.RouteEstimate
 import com.moyeota.domain.model.User
 import com.moyeota.domain.model.WithdrawnMemberNames
+import java.io.IOException
 import kotlinx.serialization.json.Json
 import retrofit2.HttpException
-import java.io.IOException
 
 // 방 상세의 멤버는 이제 닉네임·프로필 이미지·탑승 횟수까지 서버가 준다(PartyDetailResult.MemberInfo).
 // 다만 별점과 인증 배지는 여전히 서버에 값이 없어 0.0 / "" 로 채운다 — 지어내지 않는다.
@@ -329,4 +332,59 @@ internal fun partyFinishException(
     // 응답 자체를 못 받았다(연결 거부·타임아웃·DNS) 또는 그 밖의 실패. 서버가 말해 준 사유가 없으므로
     // code 는 null 이고, 화면은 일반 문구로 안내한다.
     else -> PartyFinishException(code = null, serverMessage = null, cause = failure)
+}
+
+/** 실시간 매칭 후보 조회 실패 → [RealtimeMatchException]. [partyFinishException] 과 같은 경계다. */
+internal fun realtimeMatchException(
+    failure: Throwable,
+    error: ApiErrorDto?,
+): RealtimeMatchException = when (failure) {
+    is RealtimeMatchException -> failure
+
+    is HttpException -> RealtimeMatchException(
+        code = error?.code,
+        serverMessage = error?.message,
+        httpStatus = failure.code(),
+        cause = failure,
+    )
+
+    else -> RealtimeMatchException(code = null, serverMessage = null, cause = failure)
+}
+
+/**
+ * 실시간 매칭 후보 하나 → [MatchCandidate].
+ *
+ * **[Ride] 의 절반이 비어 있는 게 정상이다.** 서버 `NearbyPartySummary` 에는 인원·요금·경로·상태가
+ * 없다. 그래서 멤버는 빈 목록, 요금은 0, 상태는 [RideStatus.RECRUITING] 으로 둔다 — 상태를 고정값으로
+ * 두는 근거는 서버 쿼리가 `status = 'ACTIVE'` 로 못 박혀 있다는 것이다(모집 중인 방만 후보가 된다).
+ *
+ * **[placeholderMembers] 를 쓰지 않는다.** 저건 "인원 수는 아는데 누군지 모를 때" 자리를 채우는
+ * 장치인데, 여기서는 **인원 수 자체를 모른다**. 가짜 멤버를 넣으면 화면이 「1명 참여 중」 같은
+ * 없는 사실을 말하게 된다. 빈 목록이 정직하다 — 인원은 합류 화면(19)이 방 상세를 읽어 채운다.
+ *
+ * `summary` 가 통째로 null 인 프레임은 **버린다**(호출부가 mapNotNull). 방 id 가 없으면 탭해도
+ * 갈 곳이 없어 카드를 그릴 이유가 없다.
+ */
+fun MatchCandidateResponse.toMatchCandidate(): MatchCandidate? {
+    val summary = summary ?: return null
+    val id = summary.id.takeIf { it > 0 } ?: return null
+    return MatchCandidate(
+        ride = Ride(
+            id = id.toString(),
+            origin = summary.departure,
+            destination = summary.destination,
+            departureLabel = "",
+            capacity = summary.capacity,
+            members = emptyList(),
+            farePerPerson = 0,
+            totalFare = 0,
+            status = RideStatus.RECRUITING,
+            originLat = summary.departureLat,
+            originLng = summary.departureLng,
+            // 뷰포트 목록과 달리 **도착 좌표도 온다** — 지도에 경로를 그릴 수 있다.
+            destinationLat = summary.destinationLat,
+            destinationLng = summary.destinationLng,
+        ),
+        walkSeconds = totalSeconds,
+    )
 }

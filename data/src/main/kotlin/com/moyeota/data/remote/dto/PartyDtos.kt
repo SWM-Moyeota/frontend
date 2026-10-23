@@ -295,3 +295,55 @@ data class RouteEstimateResponse(
     /** Google Encoded Polyline. 서버 필드명이 path 다(방 상세의 route 와 같은 형식). */
     val path: String? = null,
 )
+
+// POST /api/v1/matching/rooms/realtime — 백엔드 RealTimeMatchingRequest / List<MatchCandidate>
+//
+// **요청과 응답의 좌표 필드명이 다르다.** 요청은 destLat/destLng, 응답은 destinationLat/destinationLng.
+// 서버 record 필드명을 그대로 쓴 결과이고, 여기서 RouteRequestDto 를 복사해 쓰면 destinationLat 이
+// 그대로 남아 서버에 0.0 이 가고 **400 OUT_OF_SERVICE_AREA** 가 떨어진다(전부 primitive double 이라
+// 누락이 0.0 이 되고, (0,0) 은 서비스 지역 밖이다). 그 400 을 받으면 사용자 위치 문제가 아니라
+// 이 DTO 의 필드명을 먼저 의심해야 한다.
+@Serializable
+data class RealTimeMatchingRequestDto(
+    val departureLat: Double,
+    val departureLng: Double,
+    /** 서버 record 필드명 그대로. **destinationLat 이 아니다.** */
+    val destLat: Double,
+    /** 서버 record 필드명 그대로. **destinationLng 이 아니다.** */
+    val destLng: Double,
+)
+
+/**
+ * 실시간 매칭 후보 하나. **응답 최상위가 이 타입의 배열**이라 `{"list":[...]}` 래퍼가 없다.
+ *
+ * 서버가 출발지·도착지 각각 300m 반경(AND)으로 거른 뒤 OSRM 도보 시간 합으로 정렬해 **0~5개**를 준다.
+ * 빈 배열은 **정상**이다 — 양쪽 300m 를 동시에 만족해야 해서 초기에는 그게 기본 상태다.
+ */
+@Serializable
+data class MatchCandidateResponse(
+    val summary: NearbyPartySummaryDto? = null,
+    /**
+     * 도보 시간 **합**(초) = 내 출발지→방 출발지 + 방 도착지→내 목적지.
+     * **차 타는 시간은 안 들어 있다** — 도메인에서 이름을 walkSeconds 로 바꿔 오독을 막는다.
+     */
+    val totalSeconds: Int = 0,
+) {
+    /**
+     * 서버 `NearbyPartySummary`. 전부 박스 타입이라 이론상 null 이 올 수 있어 기본값으로 방어한다.
+     *
+     * **`currentMembers` 가 없다.** 「2/3명」을 보여줄 수 없고, 메우려면 후보마다 방 상세를 또 읽어야
+     * 하는데 최대 5개 × 쿼리 3개다. 백엔드에 추가를 요청해 둔 상태이고 그때까지는 화면에서 생략한다.
+     */
+    @Serializable
+    data class NearbyPartySummaryDto(
+        /** 방 id. **기존 목록의 `partyId` 와 이름이 다르다.** */
+        val id: Long = 0,
+        val departureLat: Double? = null,
+        val departureLng: Double? = null,
+        val destinationLat: Double? = null,
+        val destinationLng: Double? = null,
+        val departure: String = "",
+        val destination: String = "",
+        val capacity: Int = 0,
+    )
+}

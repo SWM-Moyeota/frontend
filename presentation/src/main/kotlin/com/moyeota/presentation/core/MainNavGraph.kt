@@ -565,6 +565,14 @@ private fun MainNavHost(
                 origin = confirmedOrigin,
                 destination = confirmedDestination,
                 onDismiss = ::back,
+                // 추천 방을 고르면 19 합류 확인으로 — 모달은 닫고 뒤로 눌러 돌아오지 않게 한다.
+                // 방을 만들지 않았으므로 createdPartyId/activePartyId 는 건드리지 않는다.
+                onCandidateSelected = { ride ->
+                    selectedPartyId = ride.id.toLongOrNull()
+                    navController.navigate(Routes.JOIN_CONFIRM) {
+                        popUpTo(Routes.DESTINATION_CONFIRM) { inclusive = true }
+                    }
+                },
                 onPartyCreated = { ride ->
                     createdPartyId = ride.id.toLongOrNull()
                     activePartyId = createdPartyId

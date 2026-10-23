@@ -1,6 +1,7 @@
 package com.moyeota.domain.repository
 
 import com.moyeota.domain.model.AssignedDriver
+import com.moyeota.domain.model.MatchCandidate
 import com.moyeota.domain.model.NewParty
 import com.moyeota.domain.model.PartyDetail
 import com.moyeota.domain.model.PartyEvent
@@ -61,6 +62,28 @@ interface RideRepository {
      * 중간 프레임을 놓쳤을 때 이걸로 다시 읽고, 읽어 온 순번을 기준으로 삼는다.
      */
     suspend fun getPartyDetailWithVersion(partyId: Long): PartyDetail
+
+    /**
+     * 내 출발·도착 좌표로 **걸어서 가까운 방**을 추천받는다(`POST /matching/rooms/realtime`).
+     *
+     * [getPartiesWithin] 과 목적이 다르다 — 저쪽은 "지도에 보이는 방 전부"(뷰포트), 이쪽은
+     * "양쪽에서 걸어갈 만한 방 몇 개"다. 서버가 출발지·도착지 **각각** 300m 안에서 고른 뒤
+     * 도보 시간 합으로 정렬해 **0~5개**를 준다.
+     *
+     * - **빈 목록은 정상이다.** 양쪽 300m 를 동시에 만족해야 해서 초기에는 그게 기본 상태다.
+     *   에러로 다루지 말 것.
+     * - **재정렬하지 말 것.** 받은 순서가 서버의 도보 시간 순이다.
+     * - **주기 조회에 쓰지 말 것.** 후보마다 서버가 OSRM 을 2번 부른다. 좌표가 확정된 순간 1회다.
+     *
+     * 실패는 [com.moyeota.domain.model.RealtimeMatchException] 으로 좁혀 던진다 — 사유마다 화면이
+     * 달라야 하기 때문이다(엔진 장애는 방 만들기로 흘리고, 이미 방이 있으면 섹션 자체를 숨긴다).
+     */
+    suspend fun findRealtimeCandidates(
+        departureLat: Double,
+        departureLng: Double,
+        destinationLat: Double,
+        destinationLng: Double,
+    ): List<MatchCandidate>
 
     /**
      * 이 방의 **변경분(delta) 스트림**(SSE `GET /api/v1/matching/rooms/{partyId}/events`).

@@ -14,6 +14,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.moyeota.core.designsystem.component.latLngOrNull
+import com.moyeota.domain.model.MatchCandidate
 import com.moyeota.domain.model.NewParty
 import com.moyeota.domain.model.Place
 import com.moyeota.domain.model.Ride
@@ -152,6 +153,77 @@ class RoutePreviewViewModel(private val repository: RideRepository) : ViewModel(
 }
 
 /**
+ * 16 에서 보여 줄 **「걸어서 가까운 방」 추천**(`POST /matching/rooms/realtime`).
+ *
+ * [RoutePreviewViewModel] 과 같은 모양이고 같은 좌표로 **함께** 1회 부른다 — 둘 다 "출발·도착이
+ * 확정된 순간"에만 의미가 있고, 폴링할 값이 아니다(후보마다 서버가 도보 경로를 2번 계산한다).
+ *
+ * **[UiState.Hidden] 이 이 화면의 기본 상태다.** 서버가 출발지·도착지 **각각** 300m 안(AND)에서만
+ * 고르기 때문에 초기에는 거의 항상 후보가 없다. 그래서 "없음"을 강조하지 않고 섹션을 아예 그리지
+ * 않는다 — 빈 상태가 기본인데 실패처럼 보이면 안 된다.
+ */
+class NearbyCandidatesViewModel(private val repository: RideRepository) : ViewModel() {
+
+    sealed interface UiState {
+        /** 그릴 게 없다 — 좌표가 없거나, 후보가 없거나, 추천을 못 가져왔다. **셋 다 섹션을 숨긴다.** */
+        data object Hidden : UiState
+        data object Loading : UiState
+
+        /** 서버가 도보 시간 순으로 정렬한 1~5개. **재정렬하지 않는다.** */
+        data class Success(val candidates: List<MatchCandidate>) : UiState
+    }
+
+    private data class Query(
+        val departureLat: Double,
+        val departureLng: Double,
+        val destinationLat: Double,
+        val destinationLng: Double,
+    )
+
+    private val query = MutableStateFlow<Query?>(null)
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val uiState: StateFlow<UiState> = query
+        .flatMapLatest { q ->
+            if (q == null) {
+                flowOf(UiState.Hidden)
+            } else {
+                flow {
+                    emit(UiState.Loading)
+                    val candidates = repository.findRealtimeCandidates(
+                        departureLat = q.departureLat,
+                        departureLng = q.departureLng,
+                        destinationLat = q.destinationLat,
+                        destinationLng = q.destinationLng,
+                    )
+                    // 빈 목록은 성공이지만 그릴 것이 없다 — 「후보 0개」를 띄우지 않는다.
+                    emit(if (candidates.isEmpty()) UiState.Hidden else UiState.Success(candidates))
+                }.catch {
+                    // 추천은 **부가 기능**이다. 경로 엔진이 죽었든(502) 이미 방이 있든(409) 화면은
+                    // 똑같이 섹션을 숨기고 방 만들기로 흘린다 — 여기서 배너를 띄우면 방을 만들러 온
+                    // 사용자가 자기가 뭘 잘못했다고 읽는다. 사유별 분기는 RealtimeMatchException 에
+                    // 남겨 두었으니 필요해지면 그때 갈라 쓴다.
+                    emit(UiState.Hidden)
+                }
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState.Hidden)
+
+    /** 좌표 중 하나라도 없으면 추천을 비운다([RoutePreviewViewModel.preview] 와 같은 규칙). */
+    fun find(origin: LatLng?, destination: LatLng?) {
+        query.value =
+            if (origin == null || destination == null) null
+            else Query(origin.latitude, origin.longitude, destination.latitude, destination.longitude)
+    }
+
+    companion object {
+        fun factory(repository: RideRepository) = viewModelFactory {
+            initializer { NearbyCandidatesViewModel(repository) }
+        }
+    }
+}
+
+/**
  * 16 핀 좌표 → 주소 (GET /places/reverse). 출발지·도착지의 **표시 이름과 방 생성 요청에 실리는
  * 이름**을 실주소로 갈아 끼운다.
  *
@@ -235,6 +307,13 @@ fun DestinationConfirmRoute(
     destination: Place?,
     onDismiss: () -> Unit = {},
     onPartyCreated: (Ride) -> Unit = {},
+    /**
+     * 「걸어서 가까운 방」 추천을 골랐다 — 그 방의 합류 확인(19)으로 보낸다.
+     *
+     * [onPartyCreated] 와 갈라 둔 이유: 저쪽은 **방을 만든 뒤** 21 대기로 가고, 이쪽은 아무것도
+     * 만들지 않고 남의 방 합류 흐름을 탄다. 같은 콜백으로 묶으면 호출부가 둘을 구분할 수 없다.
+     */
+    onCandidateSelected: (Ride) -> Unit = {},
 ) {
     val viewModel: CreatePartyViewModel = viewModel(factory = CreatePartyViewModel.factory(repository))
     val state by viewModel.uiState.collectAsState()
@@ -261,6 +340,17 @@ fun DestinationConfirmRoute(
     LaunchedEffect(originPosition, destinationPosition) {
         routeViewModel.preview(originPosition, destinationPosition)
     }
+
+    // 「걸어서 가까운 방」 추천 — 경로 미리보기와 **같은 좌표로 같이** 1회. 폴링하지 않는다
+    // (후보마다 서버가 도보 경로를 2번 계산한다).
+    val candidatesViewModel: NearbyCandidatesViewModel =
+        viewModel(factory = NearbyCandidatesViewModel.factory(repository))
+    val candidatesState by candidatesViewModel.uiState.collectAsState()
+    LaunchedEffect(originPosition, destinationPosition) {
+        candidatesViewModel.find(originPosition, destinationPosition)
+    }
+    val nearbyCandidates =
+        (candidatesState as? NearbyCandidatesViewModel.UiState.Success)?.candidates.orEmpty()
 
     // 좌표 → 주소. 두 시점에만 부른다: (1) 조정 확정으로 좌표가 실제로 바뀐 필드, (2) 아래 GPS 출발지.
     val reverseViewModel: ReverseGeocodeViewModel =
@@ -328,6 +418,10 @@ fun DestinationConfirmRoute(
             adjustedOrigin = newOrigin
             adjustedDestination = newDestination
         },
+        nearbyCandidates = nearbyCandidates,
+        // 추천을 고르면 **방을 만들지 않고** 그 방의 합류 확인(19)으로 넘긴다 — 합류 흐름은
+        // 이미 있는 걸 그대로 쓴다. 인원·요금처럼 추천 응답에 없던 값은 거기서 방 상세로 채워진다.
+        onCandidateClick = { candidate -> onCandidateSelected(candidate.ride) },
         onFindCompanions = { conditions ->
             if (origin != null && destination != null) {
                 // 조정한 좌표와 **갱신된 이름**을 그대로 방 생성 요청에 태운다.

@@ -2,6 +2,7 @@ package com.moyeota.data.repository
 
 import com.moyeota.data.local.ActivePartyStorage
 import com.moyeota.data.local.RememberedParty
+import com.moyeota.domain.model.MatchCandidate
 import com.moyeota.domain.model.PartyDetail
 import com.moyeota.domain.model.AssignedDriver
 import com.moyeota.domain.model.AuthState
@@ -393,6 +394,14 @@ private class FakeRideRepository(
     // 이 테스트는 순번을 보지 않는다 — 상세 경로가 같다는 것만 유지하고 version 은 null 로 둔다.
     override suspend fun getPartyDetailWithVersion(partyId: Long): PartyDetail =
         PartyDetail(getPartyDetail(partyId), version = null)
+
+    // 이 테스트는 추천을 보지 않는다 — 빈 목록이 "후보 없음"이라 가장 정직한 기본값이다.
+    override suspend fun findRealtimeCandidates(
+        departureLat: Double,
+        departureLng: Double,
+        destinationLat: Double,
+        destinationLng: Double,
+    ): List<MatchCandidate> = emptyList()
 
     override fun getNearbyParties(): List<Ride> = emptyList()
     override suspend fun getParties(): List<Ride> = emptyList()
