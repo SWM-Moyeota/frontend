@@ -2,6 +2,7 @@ package com.moyeota.data.repository
 
 import com.moyeota.data.local.ActivePartyStorage
 import com.moyeota.data.local.RememberedParty
+import com.moyeota.domain.model.PartyDetail
 import com.moyeota.domain.model.AssignedDriver
 import com.moyeota.domain.model.AuthState
 import com.moyeota.domain.model.ChatMember
@@ -343,6 +344,10 @@ private class FakeRideRepository(
             Response.error<Unit>(404, "{}".toResponseBody("application/json".toMediaType())),
         )
     }
+
+    // 이 테스트는 순번을 보지 않는다 — 상세 경로가 같다는 것만 유지하고 version 은 null 로 둔다.
+    override suspend fun getPartyDetailWithVersion(partyId: Long): PartyDetail =
+        PartyDetail(getPartyDetail(partyId), version = null)
 
     override fun getNearbyParties(): List<Ride> = emptyList()
     override suspend fun getParties(): List<Ride> = emptyList()

@@ -69,6 +69,20 @@ data class PartyDetailResponse(
     /** Google Encoded Polyline. 서버가 방 생성 시 네이버 경로 API 로 산출해 저장해 둔 값. */
     val route: String? = null,
     val taxiDriverId: Long? = null,
+    /**
+     * 이 상세가 찍힌 시점의 방 순번(Backend V18, `Party.version`). 들고 남이 있을 때마다 1씩 오른다
+     * (서버에서 올리는 곳은 join·leave·finish·expire 네 군데뿐 — 배차·운행 전이는 올리지 않는다).
+     *
+     * **쓰는 이유는 하나다 — 프레임 순서가 뒤집히기 때문이다.** 서버는 구독을 레지스트리에 먼저
+     * 등록한 뒤 DB 를 읽어 `connected` 를 보내므로, 그 사이에 커밋된 변경분이 `connected` 보다
+     * **먼저** 도착할 수 있다(`PartySseController` 의 "연결 중에 방이 바뀌면 변경분이 connected 보다
+     * 먼저 올 수 있다"). 이 숫자가 없으면 낡은 `connected` 가 이미 반영한 변화를 되돌려 버린다.
+     *
+     * **null 은 「서버가 말하지 않았다」다**(version 을 모르는 옛 배포). `0`(갓 만든 방)과 반드시
+     * 구분해야 하므로 논-널 기본값 0 을 쓰면 안 된다 — 옛 서버를 보고 있을 때 0 으로 읽으면
+     * 뒤따르는 모든 변경분이 "틈"으로 보여 상세를 끝없이 다시 읽는다.
+     */
+    val version: Long? = null,
 ) {
     /**
      * 서버 `PartyDetailResult.MemberInfo(UUID publicId, String nickname, String imageUrl,
@@ -150,6 +164,13 @@ data class MemberJoinedPayload(
     val member: PartyDetailResponse.MemberInfo = PartyDetailResponse.MemberInfo(),
     /** 들어온 **뒤**의 방 상태(서버 `PartyStatus` enum 이름). 정원이 차면 여기서 전이가 보인다. */
     val status: String = "",
+    /**
+     * 이 변경분을 반영한 **뒤**의 방 순번. 들고 있는 값 +1 이면 그대로 얹고, 그보다 크면 중간 프레임을
+     * 놓친 것이므로 상세를 다시 읽는다. 같거나 작으면 이미 반영한 것이라 버린다.
+     * null 이면 옛 서버다 — 순서를 알 수 없으므로 예전 방식(publicId 중복 여부)으로 떨어진다.
+     * 자세한 규칙은 [PartyDetailResponse.version].
+     */
+    val version: Long? = null,
 )
 
 /**
@@ -175,6 +196,8 @@ data class MemberLeftPayload(
      * 방이 닫히는 이탈(마지막 멤버)에는 이 프레임 자체가 오지 않는다 — 서버가 `closed` 를 보낸다.
      */
     val hostPublicId: String? = null,
+    /** 이 변경분을 반영한 **뒤**의 방 순번. 규칙은 [MemberJoinedPayload.version] 과 같다. */
+    val version: Long? = null,
 )
 
 /**

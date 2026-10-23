@@ -3,6 +3,7 @@ package com.moyeota.data.repository
 import com.moyeota.domain.model.AssignedDriver
 import com.moyeota.domain.model.NewParty
 import com.moyeota.domain.model.PartyStatus
+import com.moyeota.domain.model.PartyDetail
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.model.RouteEstimate
@@ -66,6 +67,10 @@ class DummyRideRepository : RideRepository {
     }
 
     override suspend fun getPartyDetail(partyId: Long): Ride = getNearbyParties().first()
+
+    // 더미는 순번을 모른다 — null 이면 옛 서버와 같은 완화 규칙으로 떨어지므로 프리뷰가 멀쩡히 돈다.
+    override suspend fun getPartyDetailWithVersion(partyId: Long): PartyDetail =
+        PartyDetail(getPartyDetail(partyId), version = null)
 
     // 액션은 더미에서 성공한 척만 한다. 프리뷰/오프라인 확인용이다.
     override suspend fun createParty(request: NewParty): Ride = Ride(

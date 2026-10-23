@@ -174,15 +174,17 @@ fun PartyStatusResponse.toPartyStatus(): PartyStatus = PartyStatus(
  * 같은 방식으로 접는다("새 방장을 모름" = null 하나).
  */
 fun PartySseEvent.toPartyEvent(currentUuid: String? = null): PartyEvent = when (this) {
-    is PartySseEvent.Snapshot -> PartyEvent.Snapshot(detail.toRide(currentUuid))
+    is PartySseEvent.Snapshot -> PartyEvent.Snapshot(detail.toRide(currentUuid), detail.version)
     is PartySseEvent.MemberJoined -> PartyEvent.MemberJoined(
         member = payload.member.toUser(currentUuid),
         status = partyStatusToRideStatus(payload.status),
+        version = payload.version,
     )
     is PartySseEvent.MemberLeft -> PartyEvent.MemberLeft(
         publicId = payload.publicId?.takeIf { it.isNotBlank() },
         status = partyStatusToRideStatus(payload.status),
         hostPublicId = payload.hostPublicId?.takeIf { it.isNotBlank() },
+        version = payload.version,
     )
     PartySseEvent.Closed -> PartyEvent.Closed
     PartySseEvent.Disconnected -> PartyEvent.Disconnected

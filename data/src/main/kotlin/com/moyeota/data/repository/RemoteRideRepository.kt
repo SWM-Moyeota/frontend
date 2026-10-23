@@ -17,6 +17,7 @@ import com.moyeota.data.remote.toRide
 import com.moyeota.data.remote.toRouteEstimate
 import com.moyeota.domain.model.AssignedDriver
 import com.moyeota.domain.model.NewParty
+import com.moyeota.domain.model.PartyDetail
 import com.moyeota.domain.model.PartyEvent
 import com.moyeota.domain.model.PartyFinishException
 import com.moyeota.domain.model.PartyJoinException
@@ -75,6 +76,10 @@ class RemoteRideRepository(
     // currentUserUuid 는 호출 시점에 읽는다 — 재로그인으로 주체가 바뀌어도 다음 조회부터 바로 반영된다.
     override suspend fun getPartyDetail(partyId: Long): Ride =
         api.getPartyDetail(partyId).toRide(session.currentUserUuid)
+
+    // 같은 엔드포인트를 한 번만 때리고 순번까지 함께 넘긴다 — 두 번 읽지 않는다.
+    override suspend fun getPartyDetailWithVersion(partyId: Long): PartyDetail =
+        api.getPartyDetail(partyId).let { PartyDetail(it.toRide(session.currentUserUuid), it.version) }
 
     // 생성자는 서버가 토큰에서 정한다 — 요청 본문에도 응답에도 id 가 없다.
     override suspend fun createParty(request: NewParty): Ride =
