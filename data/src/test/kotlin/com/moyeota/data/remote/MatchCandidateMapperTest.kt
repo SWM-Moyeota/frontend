@@ -145,6 +145,18 @@ class MatchCandidateMapperTest {
         assertTrue("없는 멤버를 만들었다", candidate.ride.members.isEmpty())
     }
 
+    /**
+     * **0 도 「모른다」로 다룬다.** 서버 쿼리는 `COUNT(*) FROM user_match_room` 이고 모집 중인 방에는
+     * 최소 방장 1명의 행이 있으므로 0 은 서버가 만들 수 없는 값이다. 그래도 받으면 「0/3명」이라는
+     * 없는 상태를 그리는 대신 정원만 쓰는 쪽으로 떨어진다(`headcountLabel`).
+     */
+    @Test
+    fun `currentMembers 가 0 이면 모른다로 다룬다`() {
+        val candidate = parseOne("""{"summary":{"id":4,"capacity":3,"currentMembers":0},"totalSeconds":120}""")
+
+        assertTrue("0 을 0명인 방으로 그렸다", candidate.ride.members.isEmpty())
+    }
+
     /** 서버가 명시적 null 을 보내도 같다 — kotlinx 는 명시적 null 에 기본값을 쓰지 않는다. */
     @Test
     fun `currentMembers 가 명시적 null 이어도 비워 둔다`() {

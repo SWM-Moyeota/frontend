@@ -118,6 +118,24 @@ record 바인딩이 primitive 누락을 **0.0 으로 메우지 않고 역직렬�
 `Ride.members` 는 **머릿수만 맞춘 자리표시자**다(누가 들었는지는 서버가 안 준다). 개수는 믿어도
 되지만 닉네임·프로필을 그리면 가짜 평판이 보인다 — `MatchCandidateMapperTest` 가 그 전제를 못 박아 둔다.
 
+### 추천 카드와 합류 화면의 숫자가 같은가 — 확인했다
+
+같다. **두 숫자가 같은 행을 센다**(backend `main` 기준):
+
+| | 계산식 |
+|---|---|
+| 추천 카드 (`NearbyPartySummary`) | `COUNT(*) FROM user_match_room WHERE match_id = m.id` |
+| 합류 화면 (`PartyDetailResult.from`) | `party.getMembers().size()` |
+
+`PartyMemberEntity` 는 `@Table("user_match_room")` 이고 **소프트 삭제 컬럼이 없다.** `Party.leave` 가
+`members.remove(...)` 를 하고 `PartyEntity.members` 가 `orphanRemoval = true` + `syncMembers` 의
+`removeIf` 라 **나가면 행이 지워진다.** 그래서 상태 필터 없는 `COUNT(*)` 와 `members.size()` 가
+항상 일치한다 — 카드가 「2/3명」인 방에 들어가면 합류 화면도 「2명 참여」다.
+
+**탈퇴 사용자는 양쪽 모두 자리를 차지한 것으로 센다.** 탈퇴는 사용자 쪽 소프트 삭제라서
+`user_match_room` 행은 남고 닉네임만 서버가 가려 보낸다. 좌석이 실제로 묶여 있으니 세는 게 맞고,
+무엇보다 **두 화면이 같은 수를 보여 준다**.
+
 ## 남은 것
 
 - **운영 OSRM 미검증.** 사용자가 "prod·dev 가 한 서버를 공유한다" 고 확인해 줬지만 앱으로 실측하지는
