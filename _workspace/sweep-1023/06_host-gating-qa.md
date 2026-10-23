@@ -77,8 +77,18 @@ isFinishStage(status, taxiEnabled) = !taxiEnabled && status == MATCHED
 
 평소엔 앱에서 만들거나 합류하면서 기억이 생기니 드러나지 않는다. 드러나는 경우는
 **앱 재설치·데이터 삭제·기기 변경 뒤 진행 중인 방이 있을 때**고, 그때는 방으로 돌아갈 길이 없다
-(30분 만료를 기다려야 한다). 이번 변경과 무관한 기존 사안이라 여기 기록만 한다 —
-고치려면 백엔드에 `GET /chat-rooms/me` 응답의 `partyId` 추가를 요청해야 한다.
+(30분 만료를 기다려야 한다). **고쳤다**(커밋 `15b2ccd`). 백엔드 요청은 필요 없었다 — 채팅방 **상세**(`GET /chat-rooms/{id}`,
+`ChatRoomResult`)에는 partyId 가 있어서, 목록이 주지 않으면 후보마다 그걸 한 번 더 읽는다.
+
+같은 에뮬레이터에서 재현·확인했다. 방이 정원 충족된 상태로 `pm clear` 후 로그인:
+
+```
+GET /chat-rooms/me      목록 (partyId 없음)
+GET /chat-rooms/1       상세에서 partyId=1 건져냄     ← 새로 추가된 한 번
+GET /matching/rooms/1   방 확인 → 21 매칭 대기로 복귀
+```
+
+`GET /matching/rooms/0` 요청 **0건**. 고치기 전 같은 절차에서는 홈에 머물렀고 배너도 없었다.
 
 ## 재현 방법
 
