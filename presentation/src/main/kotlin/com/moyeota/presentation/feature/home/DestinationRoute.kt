@@ -178,7 +178,8 @@ class DestinationViewModel(
                 _uiState.update { it.copy(favoriteActionMessage = "${place.name}을(를) 자주 가는 곳에 담았어요") }
                 loadFavorites() // 등록 후 목록 재조회
             } catch (e: Exception) {
-                // 서버 400: 이름 중복 · 10개 초과
+                // 서버 409 CONFLICT: 이름 중복 · 10개 초과 (운영 OpenAPI 는 409 를 적어 두지 않았지만
+                // 실제 응답이 409 다 — 컨트롤러 @ApiResponses 누락. 어차피 사유를 가리지 않으므로 영향 없다)
                 _uiState.update { it.copy(favoriteActionMessage = "자주 가는 곳에 담지 못했어요 (중복이거나 10개를 넘었을 수 있어요)") }
             }
         }

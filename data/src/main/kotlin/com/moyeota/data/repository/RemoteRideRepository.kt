@@ -1,22 +1,27 @@
 package com.moyeota.data.repository
 
 import com.moyeota.data.remote.MatchingApi
-import com.moyeota.data.remote.matching.PartyEventSource
 import com.moyeota.data.remote.ReportApi
 import com.moyeota.data.remote.dto.CallResultRequestDto
+import com.moyeota.data.remote.dto.RealTimeMatchingRequestDto
 import com.moyeota.data.remote.dto.ReportRequestDto
+import com.moyeota.data.remote.matching.PartyEventSource
 import com.moyeota.data.remote.partyFinishException
+import com.moyeota.data.remote.realtimeMatchException
 import com.moyeota.data.remote.partyJoinException
 import com.moyeota.data.remote.readApiError
+import com.moyeota.data.remote.toMatchCandidate
 import com.moyeota.data.remote.routeRequestDto
 import com.moyeota.data.remote.toAssignedDriver
-import com.moyeota.data.remote.toRequestDto
 import com.moyeota.data.remote.toPartyEvent
 import com.moyeota.data.remote.toPartyStatus
+import com.moyeota.data.remote.toRequestDto
 import com.moyeota.data.remote.toRide
 import com.moyeota.data.remote.toRouteEstimate
 import com.moyeota.domain.model.AssignedDriver
+import com.moyeota.domain.model.MatchCandidate
 import com.moyeota.domain.model.NewParty
+import com.moyeota.domain.model.PartyDetail
 import com.moyeota.domain.model.PartyEvent
 import com.moyeota.domain.model.PartyFinishException
 import com.moyeota.domain.model.PartyJoinException
@@ -24,11 +29,11 @@ import com.moyeota.domain.model.PartyStatus
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RouteEstimate
 import com.moyeota.domain.repository.RideRepository
+import com.moyeota.domain.session.UserSession
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.map
-import com.moyeota.domain.session.UserSession
-import kotlin.coroutines.cancellation.CancellationException
 
 /**
  * 매칭·신고 도메인만 서버 연동 — 나머지는 더미로 위임한다.
@@ -75,6 +80,10 @@ class RemoteRideRepository(
     // currentUserUuid 는 호출 시점에 읽는다 — 재로그인으로 주체가 바뀌어도 다음 조회부터 바로 반영된다.
     override suspend fun getPartyDetail(partyId: Long): Ride =
         api.getPartyDetail(partyId).toRide(session.currentUserUuid)
+
+    // 같은 엔드포인트를 한 번만 때리고 순번까지 함께 넘긴다 — 두 번 읽지 않는다.
+    override suspend fun getPartyDetailWithVersion(partyId: Long): PartyDetail =
+        api.getPartyDetail(partyId).let { PartyDetail(it.toRide(session.currentUserUuid), it.version) }
 
     // 생성자는 서버가 토큰에서 정한다 — 요청 본문에도 응답에도 id 가 없다.
     override suspend fun createParty(request: NewParty): Ride =
@@ -138,6 +147,29 @@ class RemoteRideRepository(
         // runCatching 은 취소까지 삼키므로 되던져 화면 이탈이 에러로 보이지 않게 한다.
         if (failure is CancellationException) throw failure
         throw partyFinishException(failure, failure.readApiError())
+    }
+
+    // 빈 목록은 성공이다 — 양쪽 300m 를 동시에 만족하는 방이 없다는 사실일 뿐이라 예외로 올리지 않는다.
+    // summary 가 없는 항목만 버린다(방 id 가 없으면 탭해도 갈 곳이 없다).
+    override suspend fun findRealtimeCandidates(
+        departureLat: Double,
+        departureLng: Double,
+        destinationLat: Double,
+        destinationLng: Double,
+    ): List<MatchCandidate> {
+        val request = RealTimeMatchingRequestDto(
+            departureLat = departureLat,
+            departureLng = departureLng,
+            // 요청 쪽 필드명은 destLat/destLng 다 — 응답 쪽(destinationLat)과 다르다.
+            destLat = destinationLat,
+            destLng = destinationLng,
+        )
+        val result = runCatching { api.getRealtimeCandidates(request) }
+        result.exceptionOrNull()?.let { failure ->
+            if (failure is CancellationException) throw failure
+            throw realtimeMatchException(failure, failure.readApiError())
+        }
+        return result.getOrThrow().mapNotNull { it.toMatchCandidate() }
     }
 
     override suspend fun getAssignedDriver(partyId: Long): AssignedDriver =

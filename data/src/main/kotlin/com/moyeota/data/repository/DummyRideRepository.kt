@@ -1,7 +1,9 @@
 package com.moyeota.data.repository
 
 import com.moyeota.domain.model.AssignedDriver
+import com.moyeota.domain.model.MatchCandidate
 import com.moyeota.domain.model.NewParty
+import com.moyeota.domain.model.PartyDetail
 import com.moyeota.domain.model.PartyStatus
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
@@ -66,6 +68,19 @@ class DummyRideRepository : RideRepository {
     }
 
     override suspend fun getPartyDetail(partyId: Long): Ride = getNearbyParties().first()
+
+    // 더미는 순번을 모른다 — null 이면 옛 서버와 같은 완화 규칙으로 떨어지므로 프리뷰가 멀쩡히 돈다.
+    override suspend fun getPartyDetailWithVersion(partyId: Long): PartyDetail =
+        PartyDetail(getPartyDetail(partyId), version = null)
+
+    // 더미에는 도보 경로 엔진이 없다. **빈 목록이 정답이다** — 가짜 후보를 지어내면 프리뷰에서
+    // 「걸어서 N분」이 실제로는 아무 근거 없는 숫자가 된다(도메인 더미를 지운 이유와 같다).
+    override suspend fun findRealtimeCandidates(
+        departureLat: Double,
+        departureLng: Double,
+        destinationLat: Double,
+        destinationLng: Double,
+    ): List<MatchCandidate> = emptyList()
 
     // 액션은 더미에서 성공한 척만 한다. 프리뷰/오프라인 확인용이다.
     override suspend fun createParty(request: NewParty): Ride = Ride(

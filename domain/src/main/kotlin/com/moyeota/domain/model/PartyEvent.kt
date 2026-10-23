@@ -17,19 +17,39 @@ package com.moyeota.domain.model
  * 서버의 발행처가 `PartyService` 의 참여·퇴장·종료(join/leave/finish/expire)뿐이다. 그 단계를 보는
  * 화면(25 배차 현황·26 운행)은 폴링을 유지해야 한다.
  *
- * 순서가 뒤바뀌거나 신호가 유실될 수 있다(Redis Pub/Sub 은 at-most-once). 재연결이 곧 [Snapshot] 이므로
- * 어긋남은 다음 연결에서 바로잡힌다 — 다만 연결이 **살아 있는 동안** 어긋났다면 바로잡을 길이 없으니,
- * 화면은 느린 안전망 확인(`GET /rooms/{id}/status` 의 지문 비교)을 [Disconnected] 때만이 아니라
- * 아주 긴 주기로 남겨 두는 선택을 할 수 있다.
+ * **[Snapshot] 이 먼저 온다는 보장은 없다.** 서버는 구독을 레지스트리에 **먼저 등록한 뒤** DB 를 읽어
+ * `connected` 를 보내므로, 그 사이에 커밋된 변경분이 `connected` 보다 **먼저** 도착할 수 있다
+ * (`PartySseController`: "연결 중에 방이 바뀌면 변경분이 connected 보다 먼저 올 수 있다"). 틈은
+ * DB 조회 한 번 길이라 짧지 않고, 합류가 몰리는 방에서 실제로 벌어진다.
+ *
+ * 그래서 모든 프레임이 [version] 을 싣는다 — 이걸로 순서를 가린다:
+ *
+ * | 받은 version | 할 일 |
+ * |---|---|
+ * | 들고 있는 값 **+1** | 그대로 반영 |
+ * | 들고 있는 값 **이하** | **버린다**(이미 반영했다) |
+ * | 들고 있는 값 **+2 이상** | 중간을 놓쳤다 → 상세를 다시 읽는다(스트림은 유지) |
+ * | [Snapshot] 인데 들고 있는 값보다 **낮음** | **버린다**(늦게 온 낡은 스냅샷) |
+ * | [Snapshot] 을 받기 **전**에 온 변경분 | 틈으로 보고 상세를 다시 읽는다 |
+ *
+ * **null 이면 version 을 모르는 옛 서버다.** 그때는 예전 완화 규칙으로 떨어진다 — 이미 있는 publicId 의
+ * [MemberJoined], 없는 publicId 의 [MemberLeft] 는 목록을 그대로 두고 상태만 반영한다.
+ *
+ * version 을 버리면 어떻게 되는지가 중요하다: 늦게 온 낡은 [Snapshot] 이 이미 반영한 합류를 덮어
+ * 지우고, 그 합류가 **정원을 채운 사람**이었다면 서버는 배차를 시작했는데 화면은 모집 중에 멈춘다.
+ * 스트림이 살아 있으니 재연결 스냅샷도 없어 30분 만료까지 그대로다.
  */
 sealed interface PartyEvent {
     /**
      * 구독 직후 서버가 준 방 상세 전체(`connected` 이벤트의 data = `PartyDetailResult`).
      *
      * **재연결 때마다 다시 오므로 catch-up 조회가 필요 없다** — 끊긴 사이 들고 나간 사람, 그동안의
-     * 상태 전이가 모두 이 한 덩어리에 반영돼 있다. 화면은 이 [ride] 로 들고 있던 상태를 **덮으면** 된다.
+     * 상태 전이가 모두 이 한 덩어리에 반영돼 있다.
+     *
+     * 다만 **무조건 덮으면 안 된다.** 이 프레임은 늦게 도착할 수 있고(위 표), 그때 [ride] 는 이미
+     * 반영한 변경분보다 **과거**다. [version] 이 들고 있는 값보다 낮으면 버려야 한다.
      */
-    data class Snapshot(val ride: Ride) : PartyEvent
+    data class Snapshot(val ride: Ride, val version: Long? = null) : PartyEvent
 
     /**
      * 누가 들어왔다(`member-joined`). [member] 는 방 상세의 멤버와 **같은 모양**이라 그대로 목록에 덧붙일 수 있고,
@@ -38,7 +58,12 @@ sealed interface PartyEvent {
      * [status] 는 **들어온 뒤의 방 상태**다. 마지막 자리가 채워지면 서버가 그 자리에서 정원 충족 처리까지
      * 끝내고 그 결과를 싣기 때문에, 「정원이 찼다」는 전이도 이 신호 하나로 알 수 있다.
      */
-    data class MemberJoined(val member: User, val status: RideStatus) : PartyEvent
+    data class MemberJoined(
+        val member: User,
+        val status: RideStatus,
+        /** 반영 **뒤**의 방 순번. 순서 판정 규칙은 이 파일 맨 위 표. null 이면 옛 서버다. */
+        val version: Long? = null,
+    ) : PartyEvent
 
     /**
      * 누가 나갔다(`member-left`). [status] 는 나간 뒤의 방 상태다.
@@ -61,12 +86,19 @@ sealed interface PartyEvent {
         val publicId: String?,
         val status: RideStatus,
         val hostPublicId: String? = null,
+        /** 반영 **뒤**의 방 순번. 순서 판정 규칙은 이 파일 맨 위 표. null 이면 옛 서버다. */
+        val version: Long? = null,
     ) : PartyEvent
 
     /**
      * 방이 닫혔다(`closed` — 합승 완료·만료·마지막 멤버 이탈). 서버가 이 뒤에 그 방의 모든 구독을 끊는다.
      *
-     * 이 이벤트의 data 는 JSON 이 아니라 partyId 숫자 문자열이라 실을 값이 없다 — 종결 신호로만 쓴다.
+     * data 는 `{partyId, status, version}` JSON 이지만 앱은 읽지 않는다 — 종결 신호로만 쓴다.
+     * (옛 서버는 partyId 숫자 문자열을 보냈다. 어느 쪽이든 읽지 않으므로 상관없다.)
+     *
+     * **version 으로 거르지 않는다.** 배차 실패·운행 완료로 닫히는 경우 서버가 version 을 올리지 않아
+     * 직전과 같은 값이 실려 오기 때문이다(`PartySseController`: "closed 는 version 과 상관없이 종료로
+     * 처리한다"). 종료는 늦게 와도 종료다.
      */
     data object Closed : PartyEvent
 

@@ -1,6 +1,8 @@
 package com.moyeota.data.repository
 
 import com.moyeota.data.remote.MatchingApi
+import com.moyeota.data.remote.dto.RealTimeMatchingRequestDto
+import com.moyeota.data.remote.dto.MatchCandidateResponse
 import com.moyeota.data.remote.dto.DriverSummaryResponse
 import com.moyeota.data.remote.dto.OpenPartyRequestDto
 import com.moyeota.data.remote.dto.OpenPartyResponse
@@ -9,6 +11,7 @@ import com.moyeota.data.remote.dto.PartyListResponse
 import com.moyeota.data.remote.dto.PartyStatusResponse
 import com.moyeota.data.remote.dto.RouteEstimateResponse
 import com.moyeota.data.remote.dto.RouteRequestDto
+import com.moyeota.domain.model.RealtimeMatchException
 import com.moyeota.domain.model.AuthState
 import com.moyeota.domain.model.NewParty
 import com.moyeota.domain.model.PartyFinishException
@@ -375,6 +378,81 @@ class RemoteRideRepositoryTest {
         ),
     )
 
+    // ─── 걸어서 가까운 방 추천 ────────────────────────────────────────────
+
+    /**
+     * **요청 좌표가 제자리로 가는지.** 서버 record 필드명이 `destLat`/`destLng` 인데 응답 쪽만
+     * `destinationLat`/`destinationLng` 이다. 기존 DTO 를 복사해 쓰면 도착 좌표가 빠지고, 전부
+     * primitive double 이라 서버에서 `0.0` 이 되며, (0,0) 은 서비스 지역 밖이라 **400
+     * OUT_OF_SERVICE_AREA** 가 떨어진다. 즉 이 테스트가 깨지면 사용자에게는 "서비스 지역이
+     * 아니에요" 로 보인다.
+     */
+    @Test
+    fun `추천 요청은 네 좌표를 제자리에 싣는다`() = runBlocking {
+        val api = FakeMatchingApi()
+
+        RemoteRideRepository(api, session()).findRealtimeCandidates(
+            departureLat = 37.4979, departureLng = 127.0276,
+            destinationLat = 37.3948, destinationLng = 127.1112,
+        )
+
+        val sent = api.realtimeRequest!!
+        assertEquals(37.4979, sent.departureLat, 1e-9)
+        assertEquals(127.0276, sent.departureLng, 1e-9)
+        assertEquals("도착 위도가 빠졌다 — 서버에서 0.0 이 되어 400 이 된다", 37.3948, sent.destLat, 1e-9)
+        assertEquals("도착 경도가 빠졌다 — 서버에서 0.0 이 되어 400 이 된다", 127.1112, sent.destLng, 1e-9)
+    }
+
+    /** 후보가 없는 건 **정상**이다 — 빈 목록을 돌려주고 예외를 던지지 않는다. */
+    @Test
+    fun `후보가 없으면 빈 목록이다`() = runBlocking {
+        val repository = RemoteRideRepository(FakeMatchingApi(realtimeCandidates = emptyList()), session())
+
+        assertTrue(repository.findRealtimeCandidates(1.0, 2.0, 3.0, 4.0).isEmpty())
+    }
+
+    /** 502 는 도보 경로 엔진 장애다 — 화면이 "지금은 추천을 못 가져왔어요" 로 갈리게 좁혀 던진다. */
+    @Test
+    fun `경로 엔진 실패는 RealtimeMatchException 으로 좁힌다`() = runBlocking {
+        val api = FakeMatchingApi(realtimeFailure = error502())
+        val repository = RemoteRideRepository(api, session())
+
+        val error = runCatching { repository.findRealtimeCandidates(1.0, 2.0, 3.0, 4.0) }.exceptionOrNull()
+
+        val realtime = error as RealtimeMatchException
+        assertTrue(realtime.isRouteUnavailable)
+        assertFalse(realtime.isAlreadyInParty)
+    }
+
+    /** 409 면 이미 방에 들어가 있다 — 화면은 추천 섹션 자체를 숨겨야 하므로 사유가 갈려야 한다. */
+    @Test
+    fun `이미 방이 있으면 그 사유로 갈린다`() = runBlocking {
+        val api = FakeMatchingApi(realtimeFailure = error409AlreadyJoined())
+        val repository = RemoteRideRepository(api, session())
+
+        val error = runCatching { repository.findRealtimeCandidates(1.0, 2.0, 3.0, 4.0) }.exceptionOrNull()
+
+        val realtime = error as RealtimeMatchException
+        assertTrue(realtime.isAlreadyInParty)
+        assertFalse(realtime.isRouteUnavailable)
+    }
+
+    private fun error502() = HttpException(
+        Response.error<Unit>(
+            502,
+            """{"code":"ROUTE_SEARCH_FAILED","message":"경로 조회에 실패했습니다."}"""
+                .toResponseBody("application/json".toMediaType()),
+        ),
+    )
+
+    private fun error409AlreadyJoined() = HttpException(
+        Response.error<Unit>(
+            409,
+            """{"code":"ALREADY_JOINED_OTHER_PARTY","message":"이미 참여 중인 방이 있습니다."}"""
+                .toResponseBody("application/json".toMediaType()),
+        ),
+    )
+
     /** 본문 없는 실패 — 게이트웨이·프록시가 가로챈 응답이 이렇게 온다(서버 코드가 없다). */
     private fun bodylessError(status: Int) = HttpException(
         Response.error<Unit>(status, "".toResponseBody("application/json".toMediaType())),
@@ -383,7 +461,10 @@ class RemoteRideRepositoryTest {
     private class FakeMatchingApi(
         private val joinFailure: Throwable? = null,
         private val finishFailure: Throwable? = null,
+        private val realtimeCandidates: List<MatchCandidateResponse> = emptyList(),
+        private val realtimeFailure: Throwable? = null,
     ) : MatchingApi {
+        var realtimeRequest: RealTimeMatchingRequestDto? = null
         var joinCall: Long? = null
         var finishCall: Long? = null
         var leaveCall: Long? = null
@@ -416,6 +497,17 @@ class RemoteRideRepositoryTest {
                 ),
             )
         }
+
+        override suspend fun getRealtimeCandidates(
+
+            request: RealTimeMatchingRequestDto,
+
+        ): List<MatchCandidateResponse> {
+            realtimeRequest = request
+            realtimeFailure?.let { throw it }
+            return realtimeCandidates
+        }
+
 
         override suspend fun getPartyDetail(partyId: Long): PartyDetailResponse {
             detailCallCount++

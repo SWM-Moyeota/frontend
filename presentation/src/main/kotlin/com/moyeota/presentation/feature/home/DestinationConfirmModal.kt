@@ -43,6 +43,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.moyeota.domain.model.MatchCandidate
 import com.moyeota.core.designsystem.component.BackArrowIcon
 import com.moyeota.core.designsystem.component.MapPlaceholder
 import com.moyeota.core.designsystem.component.MapSheetScaffold
@@ -132,6 +133,15 @@ fun DestinationConfirmModal(
     // 핀 조정 확정 — (출발지, 도착지) 좌표. 조정하지 않은 쪽은 들어온 값 그대로 돌아온다
     onAdjustPositions: (LatLng?, LatLng?) -> Unit = { _, _ -> },
     onFindCompanions: (MatchConditions) -> Unit = {},
+    /**
+     * 「걸어서 가까운 방」 추천. **빈 목록이 기본값이자 기본 상태**다 — 서버가 출발지·도착지
+     * 각각 300m 안(AND)에서만 고르기 때문에 초기에는 거의 항상 비어 있다. 비면 섹션을 그리지 않는다.
+     *
+     * 서버가 도보 시간 순으로 정렬해 준 순서 그대로 받는다 — **여기서 다시 정렬하지 않는다.**
+     */
+    nearbyCandidates: List<MatchCandidate> = emptyList(),
+    /** 추천 카드를 누르면 그 방의 합류 확인(19)으로 간다 — 합류 흐름은 이미 있는 걸 그대로 쓴다. */
+    onCandidateClick: (MatchCandidate) -> Unit = {},
 ) {
     // 기본값: 3인 (디스크립션 유효값 규칙)
     var peopleCount by rememberSaveable { mutableIntStateOf(3) }
@@ -419,6 +429,17 @@ fun DestinationConfirmModal(
                             // 조건이 하나뿐이라는 사실을 그대로 보여 주는 모양이다.
                         }
 
+                        // 「걸어서 가까운 방」 — 후보가 있을 때만 그린다. 없는 게 기본 상태라
+                        // (서버가 출발지·도착지 **각각** 300m 안에서만 고른다) 「없음」을 강조하면
+                        // 방을 만들러 온 사람에게 실패처럼 읽힌다.
+                        if (nearbyCandidates.isNotEmpty()) {
+                            Spacer(Modifier.height(16.dp))
+                            NearbyCandidateSection(
+                                candidates = nearbyCandidates,
+                                onCandidateClick = onCandidateClick,
+                            )
+                        }
+
                         Spacer(Modifier.height(16.dp))
 
                     }
@@ -499,6 +520,93 @@ private fun AdjustLink(onClick: () -> Unit) {
             .clickable { onClick() }
             .padding(horizontal = 8.dp, vertical = 4.dp),
     )
+}
+
+/**
+ * 「걸어서 가까운 방」 추천 목록. **후보가 있을 때만** 불린다(빈 목록은 호출부가 거른다).
+ *
+ * 기존 17 탐색 카드보다 **정보가 적다** — 서버 응답에 인원·요금이 없어서다. 그래서 숫자를
+ * 지어내 채우지 않고, 가진 것(출발·도착·도보 시간·정원)만 보여 준다. 인원 현황은 탭해서 들어간
+ * 합류 확인(19)이 방 상세를 읽어 채운다.
+ */
+@Composable
+private fun NearbyCandidateSection(
+    candidates: List<MatchCandidate>,
+    onCandidateClick: (MatchCandidate) -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = "걸어서 가까운 방",
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Bold,
+            color = MoyeotaColor.InkPrimary,
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            // 「N분 소요」라고 쓰면 목적지까지 N분으로 읽힌다 — 걷는 시간이라는 걸 못 박는다.
+            text = "타러 가고, 내려서 걷는 시간을 더한 값이에요",
+            fontSize = 12.sp,
+            color = GrayAsh,
+        )
+        Spacer(Modifier.height(10.dp))
+        candidates.forEach { candidate ->
+            NearbyCandidateCard(candidate = candidate, onClick = { onCandidateClick(candidate) })
+            Spacer(Modifier.height(8.dp))
+        }
+    }
+}
+
+@Composable
+private fun NearbyCandidateCard(candidate: MatchCandidate, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .shadow(4.dp, RoundedCornerShape(14.dp), spotColor = Color(0x1A1B2A4A))
+            .clip(RoundedCornerShape(14.dp))
+            .background(MoyeotaColor.SurfaceCanvas)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "${candidate.ride.origin} → ${candidate.ride.destination}",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                color = MoyeotaColor.InkPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "최대 ${candidate.ride.capacity}명",
+                fontSize = 12.sp,
+                color = GrayAsh,
+                maxLines = 1,
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        Text(
+            text = walkMinutesLabel(candidate.walkSeconds),
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold,
+            color = MoyeotaColor.Primary500,
+            maxLines = 1,
+        )
+    }
+}
+
+/**
+ * 도보 시간(초) → 표시 문구. **「걸어서」를 반드시 붙인다** — 서버가 주는 값은 탑승지까지 걷는
+ * 시간과 내려서 걷는 시간의 **합**이고 차 타는 시간은 안 들어 있다. 「7분」만 쓰면 목적지까지
+ * 7분으로 읽힌다.
+ *
+ * 1분 미만도 「걸어서 1분」으로 올린다 — 「0분」은 걸을 필요가 없다는 뜻으로 읽히는데 그런 경우가
+ * 아니고(좌표가 다르니 거리는 있다), 반올림해 0 이 되는 값일 뿐이다.
+ */
+internal fun walkMinutesLabel(walkSeconds: Int): String {
+    val minutes = ((walkSeconds + 59) / 60).coerceAtLeast(1)
+    return "걸어서 ${minutes}분"
 }
 
 @Composable

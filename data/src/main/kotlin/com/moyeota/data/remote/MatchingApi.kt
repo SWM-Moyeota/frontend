@@ -1,11 +1,13 @@
 package com.moyeota.data.remote
 
 import com.moyeota.data.remote.dto.DriverSummaryResponse
+import com.moyeota.data.remote.dto.MatchCandidateResponse
 import com.moyeota.data.remote.dto.OpenPartyRequestDto
 import com.moyeota.data.remote.dto.OpenPartyResponse
 import com.moyeota.data.remote.dto.PartyDetailResponse
 import com.moyeota.data.remote.dto.PartyListResponse
 import com.moyeota.data.remote.dto.PartyStatusResponse
+import com.moyeota.data.remote.dto.RealTimeMatchingRequestDto
 import com.moyeota.data.remote.dto.RouteEstimateResponse
 import com.moyeota.data.remote.dto.RouteRequestDto
 import retrofit2.http.Body
@@ -128,6 +130,22 @@ interface MatchingApi {
      */
     @POST("api/v1/matching/routes")
     suspend fun previewRoute(@Body request: RouteRequestDto): RouteEstimateResponse
+
+    /**
+     * 내 출발·도착 좌표로 **걸어서 가까운 방**을 추천받는다(서버가 양쪽 300m 안에서 고르고 OSRM
+     * 도보 시간 합으로 정렬해 최대 5개).
+     *
+     * **조회인데 POST 다** — 좌표 4개를 바디로 받는 서버 설계라 캐시되지 않는다.
+     * 응답 **최상위가 배열**이고 빈 배열이 정상이다.
+     *
+     * 실패는 넷이다: 400 `OUT_OF_SERVICE_AREA`(좌표가 서비스 지역 밖 **또는 요청 필드명 오타**),
+     * 401, 409 `ALREADY_JOINED_OTHER_PARTY`(이미 방에 들어가 있으면 추천 자체가 막힌다),
+     * 502 `ROUTE_SEARCH_FAILED`(OSRM 실패).
+     */
+    @POST("api/v1/matching/rooms/realtime")
+    suspend fun getRealtimeCandidates(
+        @Body request: RealTimeMatchingRequestDto,
+    ): List<MatchCandidateResponse>
 
     // 삭제된 엔드포인트: matching/ready(POST·DELETE), matching/start(POST).
     // 정원이 차면 서버가 스스로 매칭을 시작하므로 앱이 트리거하지 않는다.

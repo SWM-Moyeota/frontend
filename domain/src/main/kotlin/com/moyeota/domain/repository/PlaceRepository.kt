@@ -25,11 +25,15 @@ interface PlaceRepository {
      * POST /api/v1/users/me/favorite-places. 응답 본문 없음(204).
      * 소유자는 로그인 토큰이 정한다(@CurrentUser) — userId 를 넘기지 않는다.
      *
-     * 실패: 401 `UNAUTHORIZED`(미로그인) / 같은 이름 중복 등록 / 10개 초과.
+     * 실패: 401 `UNAUTHORIZED`(미로그인) / 409 `CONFLICT`(같은 이름 중복 · 10개 초과).
      * 성공 후 [getFavoritePlaces] 재조회 필요.
      *
-     * ⚠ 실서버 현재 상태: 이 POST 는 서버 내부 오류로 **항상 500** 이다(백엔드 결함, 리포트 22 참조).
-     * 화면은 실패를 정상적으로 안내만 하면 되고 앱 쪽에 고칠 것은 없다.
+     * **예전에 적혀 있던 「항상 500」은 이제 틀린 말이다.** 서버가 `FavoritePlaceId` 무인자 생성자를
+     * 추가해 고쳤고(Backend #231), 뒤이어 그 복합키 클래스 자체를 지우고 단일키 `place_id` 로 바꿨다
+     * (`8f54ad4`). 원인 클래스가 없어 재발하지 않는다. 운영 반영도 끝났다(2026-10-23 `/v3/api-docs` 실측).
+     *
+     * 그래서 **성공 경로가 실기에서 한 번도 돈 적이 없다** — 등록이 늘 실패하던 동안 QA 가 그 실패를
+     * 정상으로 통과시켰기 때문이다. 다음 QA 에서 ★ 등록 → 목록 반영까지 반드시 한 번 밟아야 한다.
      */
     suspend fun addFavoritePlace(place: Place)
 
