@@ -201,33 +201,78 @@ class RemoteActivePartyRepositoryTest {
      * 그 0 을 그대로 조회하면 방마다 404 한 번씩이다 — 후보에서 아예 빼야 한다.
      */
     @Test
-    fun `partyId 가 0 인 채팅방은 조회 대상에서 건너뛴다`() = runBlocking {
+    fun `목록이 partyId 를 주면 채팅방 상세를 읽지 않는다`() = runBlocking {
+        val rides = FakeRideRepository(details = mapOf(8L to ride(id = 8, status = RideStatus.ONGOING)))
+        val chats = FakeChatRepository(rooms = listOf(myChatRoom(roomId = 1, partyId = 8)))
+
+        val resolved = repository(rides, chats, FakeActivePartyStorage(null)).resolve()
+
+        assertEquals("8", resolved?.id)
+        assertEquals(listOf(8L), rides.detailCalls)
+        assertTrue("필요 없는 채팅방 상세를 읽었다", chats.roomDetailCalls.isEmpty())
+    }
+
+    /**
+     * **이 테스트가 이 수정의 본체다.**
+     *
+     * 지금 서버의 목록 응답(`ChatRoomUserResult`)에는 partyId 가 없어 매퍼가 0 으로 채운다. 예전에는
+     * 그 0 을 후보에서 빼 버려 **폴백이 항상 빈손**이었다 — 앱을 지우고 다시 깔면 진행 중인 방으로
+     * 돌아갈 길이 없었다(30분 만료까지). 이제 채팅방 상세(`ChatRoomResult.partyId`)로 건져 온다.
+     */
+    @Test
+    fun `목록에 partyId 가 없으면 채팅방 상세로 건져 온다`() = runBlocking {
         val rides = FakeRideRepository(details = mapOf(8L to ride(id = 8, status = RideStatus.ONGOING)))
         val chats = FakeChatRepository(
-            rooms = listOf(
-                myChatRoom(roomId = 1, partyId = 8),
-                myChatRoom(roomId = 2, partyId = 0),
-                myChatRoom(roomId = 3, partyId = 0),
-            ),
+            rooms = listOf(myChatRoom(roomId = 2, partyId = 0)),
+            partyIdsByRoom = mapOf(2L to 8L),
         )
 
         val resolved = repository(rides, chats, FakeActivePartyStorage(null)).resolve()
 
         assertEquals("8", resolved?.id)
-        assertEquals("0 번 방을 읽었다", listOf(8L), rides.detailCalls)
+        assertEquals(listOf(2L), chats.roomDetailCalls)
+        assertEquals(listOf(8L), rides.detailCalls)
     }
 
-    /** 지금 서버는 목록 항목이 전부 partyId 0 이다 — 그러면 방 상세 요청이 **한 건도** 나가지 않아야 한다. */
+    /** 상세까지 읽었는데도 0 이면 더 볼 것이 없다 — **절대 `GET /matching/rooms/0` 을 쏘지 않는다**(QA 119 D-3). */
     @Test
-    fun `채팅방이 전부 partyId 0 이면 방 상세를 한 번도 읽지 않는다`() = runBlocking {
+    fun `상세에도 partyId 가 없으면 방 상세를 읽지 않는다`() = runBlocking {
         val rides = FakeRideRepository()
-        val chats = FakeChatRepository(rooms = (1L..3L).map { myChatRoom(roomId = it, partyId = 0) })
+        val chats = FakeChatRepository(
+            rooms = (1L..3L).map { myChatRoom(roomId = it, partyId = 0) },
+            partyIdsByRoom = emptyMap(),
+        )
 
         val resolved = repository(rides, chats, FakeActivePartyStorage(null)).resolve()
 
         assertNull(resolved)
-        assertEquals("조회 예산을 0 번 방에 썼다", 1, chats.myRoomsCalls)
         assertTrue("없는 방 번호로 상세를 읽었다: ${rides.detailCalls}", rides.detailCalls.isEmpty())
+    }
+
+    /** 채팅방 상세가 실패해도 다음 후보로 넘어간다 — 한 방의 네트워크 실패가 복구 경로 전체를 막으면 안 된다. */
+    @Test
+    fun `채팅방 상세가 실패해도 다른 후보를 계속 본다`() = runBlocking {
+        val rides = FakeRideRepository(details = mapOf(8L to ride(id = 8, status = RideStatus.ONGOING)))
+        val chats = FakeChatRepository(
+            rooms = listOf(myChatRoom(roomId = 2, partyId = 0), myChatRoom(roomId = 1, partyId = 0)),
+            partyIdsByRoom = mapOf(1L to 8L),
+            detailFailingRooms = setOf(2L),
+        )
+
+        val resolved = repository(rides, chats, FakeActivePartyStorage(null)).resolve()
+
+        assertEquals("8", resolved?.id)
+    }
+
+    /** 추가 요청이 무한정 늘지 않는다 — 채팅방 상세도 스캔 한도 안에서만 나간다. */
+    @Test
+    fun `채팅방 상세도 스캔 한도까지만 읽는다`() = runBlocking {
+        val rides = FakeRideRepository()
+        val chats = FakeChatRepository(rooms = (1L..8L).map { myChatRoom(roomId = it, partyId = 0) })
+
+        repository(rides, chats, FakeActivePartyStorage(null)).resolve()
+
+        assertTrue("상세를 ${chats.roomDetailCalls.size} 번 읽었다", chats.roomDetailCalls.size <= 5)
     }
 
     /** 쓰레기 id 는 저장도 하지 않는다 — 심어 두면 다음 resolve 가 404 한 번 맞고 지우는 것이 전부다. */
@@ -371,9 +416,16 @@ private class FakeRideRepository(
 private class FakeChatRepository(
     private val rooms: List<MyChatRoom> = emptyList(),
     private val failing: Boolean = false,
+    /** 채팅방 상세가 돌려줄 partyId. 목록에 없는 값을 여기서 건져 온다(서버 `ChatRoomResult.partyId`). */
+    private val partyIdsByRoom: Map<Long, Long> = emptyMap(),
+    /** 이 채팅방들의 상세 조회는 네트워크 실패로 떨어뜨린다. */
+    private val detailFailingRooms: Set<Long> = emptySet(),
 ) : ChatRepository {
     var myRoomsCalls = 0
         private set
+
+    /** 상세를 읽은 채팅방 id — 추가 요청이 예산 안에서만 나가는지 고정한다. */
+    val roomDetailCalls = mutableListOf<Long>()
 
     override suspend fun getMyChatRooms(): List<MyChatRoom> {
         myRoomsCalls++
@@ -382,7 +434,14 @@ private class FakeChatRepository(
     }
 
     override fun observeRoom(chatRoomId: Long): Flow<ChatRealtimeEvent> = emptyFlow()
-    override suspend fun getChatRoom(chatRoomId: Long): ChatRoom = error("쓰이지 않는다")
+
+    override suspend fun getChatRoom(chatRoomId: Long): ChatRoom {
+        roomDetailCalls += chatRoomId
+        if (chatRoomId in detailFailingRooms) throw IOException("offline")
+        val found = rooms.firstOrNull { it.room.id == chatRoomId }?.room
+            ?: error("없는 채팅방 $chatRoomId")
+        return found.copy(partyId = partyIdsByRoom[chatRoomId] ?: 0L)
+    }
     override suspend fun joinChatRoom(chatRoomId: Long) = error("쓰이지 않는다")
     override suspend fun leaveChatRoom(chatRoomId: Long) = error("쓰이지 않는다")
     override suspend fun setNotificationMuted(chatRoomId: Long, muted: Boolean) = error("쓰이지 않는다")
