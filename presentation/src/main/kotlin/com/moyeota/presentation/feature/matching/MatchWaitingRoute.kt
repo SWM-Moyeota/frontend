@@ -158,6 +158,19 @@ class MatchWaitingViewModel(
     @Volatile
     private var appliedEvents = 0
 
+    /**
+     * 화면이 반영한 가장 마지막 **방 순번**([com.moyeota.domain.model.PartyEvent] 의 표).
+     *
+     * [appliedEvents] 와 역할이 다르다 — 저건 "내가 몇 번 반영했나"(늦은 조회 결과를 버리는 표식)고,
+     * 이건 "서버 기준 어디까지 봤나"다. 프레임 순서가 뒤집혀 도착하는 걸 가려내는 유일한 근거다.
+     *
+     * **끊겨도 지우지 않는다.** 재연결 스냅샷이 들고 있던 것보다 낮을 때 버리려면 남아 있어야 한다.
+     * null 은 "아직 모른다"(첫 연결 전) 또는 "서버가 말하지 않는다"(옛 배포) 둘 다를 뜻하고,
+     * 어느 쪽이든 순서를 가릴 수 없으니 예전 완화 규칙으로 떨어진다.
+     */
+    @Volatile
+    private var heldVersion: Long? = null
+
     init {
         refresh()
         observeEvents()
@@ -225,9 +238,11 @@ class MatchWaitingViewModel(
      * `PartyEventSource` 의 `awaitClose { source.cancel() }` 까지 돌았다는 뜻이라, 어느 순간에도
      * **살아 있는 수집은 0개 또는 1개**다. 가시성이 빠르게 토글돼도 두 수집이 겹치지 않는다.
      *
-     * 받는 순서는 늘 [PartyEvent.Snapshot] → 변경분이고 **재연결 때도 스냅샷이 먼저** 온다. 그래서
-     * 끊긴 사이 놓친 변화를 메우는 catch-up 조회가 없다 — 스냅샷이 방을 통째로 덮는다.
-     * 가시성 때문에 끊었다 붙는 것도 서버 입장에선 똑같은 재연결이다.
+     * **스냅샷이 먼저 온다는 보장은 없다.** 서버는 구독을 레지스트리에 먼저 등록한 뒤 DB 를 읽어
+     * `connected` 를 보내므로, 그 사이에 커밋된 변경분이 스냅샷보다 **먼저** 도착할 수 있다
+     * (`PartySseController`: "연결 중에 방이 바뀌면 변경분이 connected 보다 먼저 올 수 있다").
+     * 그래서 프레임마다 실려 오는 순번으로 순서를 가린다 — [deltaVerdict]·[acceptsSnapshot].
+     * 가시성 때문에 끊었다 붙는 것도 서버 입장에선 똑같은 재연결이고, 그때도 같은 판정이 걸린다.
      *
      * 수집이 **스스로** 끝나는 건 종결뿐이다(방 닫힘·403 멤버 아님·404 방 없음). 그때는 다시 붙어도 같은
      * 답이라 복귀해도 붙지 않고([streamEnded]) 폴백이 갱신을 맡는다 — 내가 방을 나간 경우라면 Route 가
@@ -270,25 +285,35 @@ class MatchWaitingViewModel(
     private suspend fun applyEvent(event: PartyEvent) {
         when (event) {
             is PartyEvent.Snapshot -> {
+                // 버리는 경우에도 연결은 살아 있다 — realtimeAlive 는 세운다(폴백이 끼어들면 안 된다).
                 realtimeAlive = true
-                appliedEvents++
-                _uiState.value = UiState.Success(event.ride)
+                if (acceptsSnapshot(heldVersion, event.version)) {
+                    heldVersion = event.version ?: heldVersion
+                    appliedEvents++
+                    _uiState.value = UiState.Success(event.ride)
+                }
             }
             // member 의 isMe 는 상세와 같은 근거(publicId == 세션 uuid)로 이미 채워져 온다 — 다시 판정하지 않는다
             // 합류는 방장을 바꿀 수 없어 승계 판정이 없다 — 변경분을 그대로 싣는다(needsDetail = false)
-            is PartyEvent.MemberJoined ->
-                applyDelta { RideDelta(it.withMemberJoined(event.member, event.status)) }
-            is PartyEvent.MemberLeft -> {
-                val publicId = event.publicId
-                if (publicId == null) {
-                    // 누가 나갔는지 서버도 모른다 — 지울 멤버를 특정할 수 없으니 상세를 읽는다.
-                    // 그래도 **승계는 먼저 반영한다**: 상세 읽기가 실패하면 이 프레임이 유일한 승계 근거다
-                    // (서버는 member-left 를 다시 보내지 않는다). 이 경로는 아래 readDetail 이 **무조건**
-                    // 돌므로 승계 쪽 needsDetail 을 따로 볼 필요가 없다 — 서버 계약의 「다시 받는다」가 이미 지켜진다.
+            is PartyEvent.MemberJoined -> when (deltaVerdict(heldVersion, event.version)) {
+                FrameVerdict.Drop -> Unit
+                FrameVerdict.Resync -> readDetail()
+                FrameVerdict.Apply -> {
+                    heldVersion = event.version ?: heldVersion
+                    applyDelta { RideDelta(it.withMemberJoined(event.member, event.status)) }
+                }
+            }
+            is PartyEvent.MemberLeft -> when (deltaVerdict(heldVersion, event.version)) {
+                FrameVerdict.Drop -> Unit
+                // 틈이다 — 지울 사람을 특정해도 중간 프레임을 모르니 상세를 믿는다. 다만 승계는 먼저
+                // 반영한다(publicId null 경로와 같은 이유: 상세 읽기가 실패하면 이게 유일한 승계 근거다).
+                FrameVerdict.Resync -> {
                     applyStatus(event.status, event.hostPublicId)
                     readDetail()
-                } else {
-                    applyDelta { it.withMemberLeft(publicId, event.status, event.hostPublicId) }
+                }
+                FrameVerdict.Apply -> {
+                    heldVersion = event.version ?: heldVersion
+                    applyMemberLeft(event)
                 }
             }
             PartyEvent.Closed -> {
@@ -296,6 +321,21 @@ class MatchWaitingViewModel(
                 _partyClosed.value = true
             }
             PartyEvent.Disconnected -> realtimeAlive = false
+        }
+    }
+
+    /** [PartyEvent.MemberLeft] 를 순서 판정 **뒤에** 실제로 반영한다. */
+    private suspend fun applyMemberLeft(event: PartyEvent.MemberLeft) {
+        val publicId = event.publicId
+        if (publicId == null) {
+            // 누가 나갔는지 서버도 모른다 — 지울 멤버를 특정할 수 없으니 상세를 읽는다.
+            // 그래도 **승계는 먼저 반영한다**: 상세 읽기가 실패하면 이 프레임이 유일한 승계 근거다
+            // (서버는 member-left 를 다시 보내지 않는다). 이 경로는 아래 readDetail 이 **무조건**
+            // 돌므로 승계 쪽 needsDetail 을 따로 볼 필요가 없다 — 서버 계약의 「다시 받는다」가 이미 지켜진다.
+            applyStatus(event.status, event.hostPublicId)
+            readDetail()
+        } else {
+            applyDelta { it.withMemberLeft(publicId, event.status, event.hostPublicId) }
         }
     }
 
@@ -349,8 +389,13 @@ class MatchWaitingViewModel(
      */
     private suspend fun readDetail(): Boolean {
         val mark = appliedEvents
-        val ride = runCatching { repository.getPartyDetail(partyId) }.getOrNull() ?: return false
-        if (appliedEvents == mark) _uiState.value = UiState.Success(ride)
+        val detail = runCatching { repository.getPartyDetailWithVersion(partyId) }.getOrNull() ?: return false
+        // 가드가 둘인 이유가 다르다: appliedEvents 는 **내 반영**이 끼어들었는지(왕복 지연), acceptsSnapshot 은
+        // 읽어 온 상세가 **서버 기준으로** 과거인지(순서 역전). 둘 중 하나만으로는 각자의 경우를 못 막는다.
+        if (appliedEvents == mark && acceptsSnapshot(heldVersion, detail.version)) {
+            heldVersion = detail.version ?: heldVersion
+            _uiState.value = UiState.Success(detail.ride)
+        }
         return true
     }
 
@@ -574,6 +619,55 @@ internal fun fallbackPollStep(
  *
  * [member] 의 [User.isMe] 는 상세와 같은 근거(publicId == 세션 uuid)로 **이미 채워져 온다** — 다시 판정하지 않는다.
  */
+/** 변경분 프레임 하나를 어떻게 다룰지 — [deltaVerdict] 의 답. */
+internal enum class FrameVerdict {
+    /** 순서가 맞다(또는 가릴 수 없다). 들고 있는 방에 그대로 얹는다. */
+    Apply,
+
+    /** 이미 반영한 프레임이다. **버린다** — 다시 얹으면 과거로 되돌아간다. */
+    Drop,
+
+    /** 중간을 놓쳤거나 스냅샷보다 먼저 왔다. 상세를 1회 다시 읽어 맞춘다(스트림은 끊지 않는다). */
+    Resync,
+}
+
+/**
+ * 받은 변경분의 [incoming] 순번을 들고 있는 [held] 와 견줘 판정한다
+ * (서버 계약 원문은 [com.moyeota.domain.model.PartyEvent] 의 표).
+ *
+ * | [held] | [incoming] | 답 | 왜 |
+ * |---|---|---|---|
+ * | 무엇이든 | `null` | [Apply] | 순번을 모르는 **옛 서버**다. 가릴 근거가 없으니 예전처럼 그대로 얹는다 |
+ * | `null` | 숫자 | [Resync] | 스냅샷을 아직 못 받았다 = **틈**. 서버가 "상세를 다시 받으라"고 적어 둔 경우 |
+ * | N | ≤ N | [Drop] | 이미 반영했다 |
+ * | N | N+1 | [Apply] | 바로 다음 프레임 |
+ * | N | ≥ N+2 | [Resync] | 중간 프레임을 놓쳤다 |
+ *
+ * **[Drop] 이 이 함수의 존재 이유다.** 서버는 구독을 먼저 등록한 뒤 DB 를 읽어 스냅샷을 보내므로
+ * 그 사이 커밋된 변경분이 스냅샷보다 먼저 올 수 있고, 그때 순번 없이 받는 대로 얹으면 뒤늦게 온
+ * 낡은 스냅샷이 이미 반영한 합류를 지운다. 지워진 합류가 **정원을 채운 사람**이면 서버는 배차를
+ * 시작했는데 화면은 모집 중에 멈추고, 스트림이 살아 있어 재연결 스냅샷도 폴백 폴링도 오지 않는다.
+ */
+internal fun deltaVerdict(held: Long?, incoming: Long?): FrameVerdict = when {
+    incoming == null -> FrameVerdict.Apply
+    held == null -> FrameVerdict.Resync
+    incoming <= held -> FrameVerdict.Drop
+    incoming == held + 1 -> FrameVerdict.Apply
+    else -> FrameVerdict.Resync
+}
+
+/**
+ * 스냅샷(또는 다시 읽은 상세)으로 방을 **통째로 교체해도 되는가**.
+ *
+ * 변경분과 규칙이 다르다 — 스냅샷은 "+1" 을 요구하지 않는다. 한 덩어리로 완결돼 있어 중간을 건너뛰어도
+ * 되기 때문이다. 다만 **들고 있는 것보다 과거면 버려야 한다**: 늦게 도착한 스냅샷이 그 사이 반영한
+ * 변경분을 되돌리는 게 정확히 우리가 막으려는 것이다.
+ *
+ * [held] 나 [incoming] 이 null 이면 가릴 근거가 없으므로 받아들인다(옛 서버·첫 연결).
+ */
+internal fun acceptsSnapshot(held: Long?, incoming: Long?): Boolean =
+    held == null || incoming == null || incoming >= held
+
 internal fun Ride.withMemberJoined(member: User, status: RideStatus): Ride {
     val index = members.indexOfFirst { it.isSameMemberAs(member) }
     val merged = if (index < 0) members + member else members.toMutableList().also { it[index] = member }
@@ -610,7 +704,7 @@ internal fun Ride.withMemberLeft(
  * (재연결)이나 폴백 상세 조회까지 승계된 사람의 화면이 낡은 채로 남는다.
  *
  * ### 서버 계약 원문 (백엔드 `matching/sse/PartySseController` 의 Swagger description) ★
- * > `member-left`: { publicId, status, hostPublicId }. … hostPublicId 는 이 이벤트를 반영한 뒤의
+ * > `member-left`: { publicId, status, hostPublicId, version }. … hostPublicId 는 이 이벤트를 반영한 뒤의
  * > 방장 — 받을 때마다 members 의 host 표시를 이 값으로 다시 지정한다. 단 **null 이거나 목록에 없는
  * > publicId 면 host 표시를 바꾸지 말고 방 상세를 다시 받는다**(이벤트 순서 역전 대비)
  *

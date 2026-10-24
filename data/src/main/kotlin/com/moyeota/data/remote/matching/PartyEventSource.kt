@@ -25,9 +25,15 @@ private const val RECONNECT_DELAY_MS = 3_000L
  * **서버가 변경분(delta)을 싣는 방식으로 바뀌었다**(Backend #218). 예전 `changed`(= "뭔가 바뀜, 상세를
  * 다시 읽어라") 이벤트는 **사라졌고**, 이제 네 종류가 온다:
  * - `connected` — data 가 **방 상세 전체 JSON**(`PartyDetailResult`). 구독 직후 1회, **재연결 때마다 다시**.
- * - `member-joined` — `{"member": {publicId,nickname,imageUrl,badgeId,rideCount}, "status": "..."}`
- * - `member-left` — `{"publicId": "..."|null, "status": "..."}` (publicId 는 null 일 수 있다)
- * - `closed` — data 가 JSON 이 아니라 **partyId 숫자 문자열**이다. 파싱하지 않고 종결 신호로만 쓴다.
+ * - `member-joined` — `{"member": {publicId,nickname,imageUrl,badgeId,rideCount,host}, "status": "...", "version": N}`
+ * - `member-left` — `{"publicId": "..."|null, "status": "...", "hostPublicId": "..."|null, "version": N}`
+ * - `closed` — `{"partyId": N, "status": "...", "version": N}`. 파싱하지 않고 종결 신호로만 쓴다
+ *   (옛 서버는 partyId 숫자 문자열을 보냈다 — 어느 쪽이든 읽지 않으므로 상관없다).
+ *
+ * `closed` 를 뺀 셋은 **방 순번 `version`** 을 싣는다. 프레임이 순서대로 온다는 보장이 없어서
+ * (서버가 구독을 먼저 등록한 뒤 DB 를 읽어 `connected` 를 보낸다) 무엇이 더 최신인지 이 숫자로
+ * 가린다 — 규칙은 [com.moyeota.domain.model.PartyEvent]. 옛 배포는 이 필드를 보내지 않으므로
+ * **null 을 허용해야 한다**; 논-널로 받으면 그 서버에서 모든 프레임이 파싱 실패로 떨어진다.
  *
  * 그리고 **30초**마다 `:ping` 주석이 온다(Backend #218 에서 5초 → 30초).
  *

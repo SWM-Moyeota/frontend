@@ -1,7 +1,9 @@
 package com.moyeota.domain.repository
 
 import com.moyeota.domain.model.AssignedDriver
+import com.moyeota.domain.model.MatchCandidate
 import com.moyeota.domain.model.NewParty
+import com.moyeota.domain.model.PartyDetail
 import com.moyeota.domain.model.PartyEvent
 import com.moyeota.domain.model.PartyFinishException
 import com.moyeota.domain.model.PartyJoinException
@@ -47,6 +49,41 @@ interface RideRepository {
      * 화면 상태를 갱신하지 않아야 한다(불필요한 recomposition 방지).
      */
     suspend fun getPartyDetail(partyId: Long): Ride
+
+    /**
+     * [getPartyDetail] 과 **같은 요청**이되 방 순번([PartyDetail.version])까지 돌려준다.
+     *
+     * 왜 따로 두는가: 상세를 읽는 곳은 8군데인데 순번이 필요한 건 **SSE 변경분을 병합하는 21 대기
+     * 화면 하나**다. 반환 타입을 바꾸면 나머지 일곱 곳이 쓰지도 않을 `.ride` 를 붙여야 한다.
+     * 순번은 방의 성질이 아니라 **프레임의 순서 표식**이라 [Ride] 안에 넣을 수도 없다 — 넣으면
+     * 25·26 이 "바뀌었나"를 보는 `Ride` 끼리의 `==` 비교가 순번 때문에 매번 달라진다.
+     *
+     * 쓰는 곳은 [PartyEvent] 의 틈(gap) 메우기다. 변경분이 [PartyEvent.Snapshot] 보다 먼저 왔거나
+     * 중간 프레임을 놓쳤을 때 이걸로 다시 읽고, 읽어 온 순번을 기준으로 삼는다.
+     */
+    suspend fun getPartyDetailWithVersion(partyId: Long): PartyDetail
+
+    /**
+     * 내 출발·도착 좌표로 **걸어서 가까운 방**을 추천받는다(`POST /matching/rooms/realtime`).
+     *
+     * [getPartiesWithin] 과 목적이 다르다 — 저쪽은 "지도에 보이는 방 전부"(뷰포트), 이쪽은
+     * "양쪽에서 걸어갈 만한 방 몇 개"다. 서버가 출발지·도착지 **각각** 300m 안에서 고른 뒤
+     * 도보 시간 합으로 정렬해 **0~5개**를 준다.
+     *
+     * - **빈 목록은 정상이다.** 양쪽 300m 를 동시에 만족해야 해서 초기에는 그게 기본 상태다.
+     *   에러로 다루지 말 것.
+     * - **재정렬하지 말 것.** 받은 순서가 서버의 도보 시간 순이다.
+     * - **주기 조회에 쓰지 말 것.** 후보마다 서버가 OSRM 을 2번 부른다. 좌표가 확정된 순간 1회다.
+     *
+     * 실패는 [com.moyeota.domain.model.RealtimeMatchException] 으로 좁혀 던진다 — 사유마다 화면이
+     * 달라야 하기 때문이다(엔진 장애는 방 만들기로 흘리고, 이미 방이 있으면 섹션 자체를 숨긴다).
+     */
+    suspend fun findRealtimeCandidates(
+        departureLat: Double,
+        departureLng: Double,
+        destinationLat: Double,
+        destinationLng: Double,
+    ): List<MatchCandidate>
 
     /**
      * 이 방의 **변경분(delta) 스트림**(SSE `GET /api/v1/matching/rooms/{partyId}/events`).

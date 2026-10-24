@@ -21,12 +21,18 @@ import retrofit2.HttpException
  *    "내가 속한 채팅방의 partyId" 가 곧 "내가 속한 방"의 후보다. 앱을 지우고 다시 깔았거나
  *    다른 기기에서 합류한 경우를 여기서 건진다.
  *
- *    **다만 지금 서버에서는 이 폴백이 사실상 비어 돈다.** 목록 응답(백엔드 `ChatRoomUserResult`)에는
- *    partyId 필드가 **없고**, 2026-09-14 서버부터 방 정보(출발·도착·상태)가 목록에 함께 실려
- *    [com.moyeota.data.remote.toChatRoomOrNull] 이 방 상세를 읽지 않고 `partyId = 0` 으로 채운다.
- *    그래서 후보가 전부 0 이고, 예전에는 그 0 으로 `GET /matching/rooms/0` 404 를 냈다(QA 119 D-3).
- *    되살리려면 후보마다 `GET /chat-rooms/{id}`(이 응답에는 partyId 가 있다)를 한 번 더 읽어야 하는데,
- *    기억이 없는 드문 경우에 요청을 N 배로 늘리는 선택이라 이번 수정 범위에서는 하지 않았다.
+ *    목록 응답(백엔드 `ChatRoomUserResult`)에는 partyId 필드가 **없다** — 2026-09-14 서버부터 방 정보
+ *    (출발·도착·상태)가 목록에 함께 실리면서 [com.moyeota.data.remote.toChatRoomOrNull] 이 방 상세를
+ *    읽지 않고 `partyId = 0` 으로 채운다. 그래서 후보마다 **채팅방 상세**(`GET /chat-rooms/{id}` —
+ *    이쪽 `ChatRoomResult` 에는 partyId 가 있다)를 한 번 더 읽어 건져 온다([resolvePartyId]).
+ *
+ *    한동안은 그 0 을 **후보에서 빼** 버려서 이 폴백이 **항상 빈손**이었다. 그러면 앱을 지우고 다시
+ *    깐 사람은 방이 서버에 멀쩡히 살아 있는데도 돌아갈 길이 없어 30분 만료를 기다려야 했다(방장이면
+ *    방을 끝낼 사람이 사라진다). 추가 요청이 아까워 미뤄 둔 선택이었는데, 값은 기억이 없는 드문
+ *    경우에만 최대 [CHAT_ROOM_SCAN_LIMIT] 번이고 평상시에는 한 번도 나가지 않는다.
+ *
+ *    **0 을 그대로 조회하지는 않는다** — `GET /matching/rooms/0` 은 404 뿐이다(QA 119 D-3).
+ *    서버가 목록에 partyId 를 싣기 시작하면 추가 요청은 저절로 사라진다.
  *
  * **네트워크 실패와 "끝난 방"을 절대 같은 값으로 접지 않는다.** 둘을 뭉개면 지하철에서 앱을 켠 사용자의
  * 기억이 지워져, 신호가 돌아와도 매칭 화면으로 못 돌아간다. 그래서 검증 결과는 3값([Verdict])이며
@@ -92,13 +98,14 @@ class RemoteActivePartyRepository(
         }
 
         // 채팅방 id 는 단조 증가하는 서버 PK 다 — createdAt 문자열 파싱 없이 최신순을 얻는 가장 싼 방법.
-        // partyId 가 0 인 항목은 **조회 전에 버린다**: 목록 응답에 partyId 가 없어 매퍼가 채운 자리값일
-        // 뿐이어서(클래스 KDoc 2번) 읽어도 404 다. 걸러낸 항목은 요청 예산도 쓰지 않는다.
-        val candidates = rooms
-            .sortedByDescending { it.room.id }
-            .mapNotNull { it.room.partyId.takeIf { partyId -> partyId > 0 } }
-            .take(CHAT_ROOM_SCAN_LIMIT)
-        for (partyId in candidates) {
+        val candidates = rooms.sortedByDescending { it.room.id }.take(CHAT_ROOM_SCAN_LIMIT)
+        for (room in candidates) {
+            // 목록이 partyId 를 주면 그대로 쓴다. 지금 서버는 주지 않으므로(매퍼가 0 으로 채운다)
+            // 거의 늘 아래 채팅방 상세를 한 번 더 읽게 된다 — 서버가 목록에 partyId 를 싣기 시작하면
+            // 추가 요청은 저절로 사라진다.
+            val partyId = room.room.partyId.takeIf { it > 0 }
+                ?: resolvePartyId(room.room.id)
+                ?: continue
             val verdict = verify(partyId.toString())
             if (verdict is Verdict.Active) {
                 // 다음 호출부터는 상세 1회로 끝나도록 찾은 결과를 기억해 둔다.
@@ -107,6 +114,26 @@ class RemoteActivePartyRepository(
             }
         }
         return null
+    }
+
+    /**
+     * 채팅방 상세(`GET /chat-rooms/{id}`)에서 partyId 를 건져 온다 — **목록에는 없고 상세에는 있다**
+     * (백엔드 `ChatRoomUserResult` vs `ChatRoomResult`).
+     *
+     * 이 한 번이 「앱을 지우고 다시 깐 사람이 진행 중인 방으로 돌아갈 수 있는가」를 가른다. 예전에는
+     * 목록의 자리값 0 을 후보에서 빼 버려 폴백이 **항상 빈손**이었고, 그 사람은 방이 서버에 멀쩡히
+     * 살아 있는데도 30분 만료를 기다려야 했다(방장이면 방을 끝낼 사람이 사라진다).
+     *
+     * 비싸지 않다: 기억이 있는 평상시에는 이 경로를 아예 타지 않고, 탈 때도 [CHAT_ROOM_SCAN_LIMIT]
+     * 개까지다. 실패는 조용히 넘긴다 — 한 방의 네트워크 실패가 **다음 후보까지** 막으면 안 된다.
+     * 0 이나 음수는 존재할 수 없는 PK 라 없는 것과 같게 다룬다.
+     */
+    private suspend fun resolvePartyId(chatRoomId: Long): Long? = try {
+        chatRepository.getChatRoom(chatRoomId).partyId.takeIf { it > 0 }
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Throwable) {
+        null
     }
 
     /**

@@ -312,6 +312,81 @@ class PartySseEventTest {
         assertEquals(UUID_ME, left.hostPublicId)
     }
 
+    // ─── 방 순번(version) ───────────────────────────────────────────────────
+    //
+    // 프레임 순서가 뒤집혀 도착할 수 있어서(서버는 구독을 먼저 등록한 뒤 DB 를 읽어 connected 를
+    // 보낸다) 무엇이 더 최신인지 숫자로 가려야 한다. 그 숫자가 여기서 안 넘어오면 21 대기 화면의
+    // 순서 판정이 통째로 무력해지고, 낡은 스냅샷이 이미 반영한 합류를 지운다.
+
+    /** 네 가지 프레임 중 세 가지가 순번을 싣는다(closed 는 앱이 data 를 안 읽는다). */
+    @Test
+    fun `connected 는 방 순번을 싣는다`() {
+        val data = """{"id":7,"departure":"서울시청","status":"ACTIVE","version":42}"""
+
+        val snapshot = parse(EVENT_CONNECTED, data).toPartyEvent() as PartyEvent.Snapshot
+
+        assertEquals(42L, snapshot.version)
+    }
+
+    @Test
+    fun `member-joined 는 반영 뒤의 순번을 싣는다`() {
+        val data = """{"member":{"publicId":"$UUID_OTHER","nickname":"철수"},"status":"ACTIVE","version":43}"""
+
+        val joined = parse(EVENT_MEMBER_JOINED, data).toPartyEvent(currentUuid = UUID_ME) as PartyEvent.MemberJoined
+
+        assertEquals(43L, joined.version)
+    }
+
+    @Test
+    fun `member-left 는 반영 뒤의 순번을 싣는다`() {
+        val data = """{"publicId":"$UUID_OTHER","status":"ACTIVE","version":44}"""
+
+        val left = parse(EVENT_MEMBER_LEFT, data).toPartyEvent(currentUuid = UUID_ME) as PartyEvent.MemberLeft
+
+        assertEquals(44L, left.version)
+    }
+
+    /**
+     * **순번을 모르는 옛 서버에서도 파싱이 깨지면 안 된다.** 논-널로 선언하면 그 배포를 보는 순간
+     * 모든 프레임이 Skipped 로 떨어져 화면이 영영 안 갱신된다.
+     *
+     * 그리고 그때는 `null` 이어야 한다 — 기본값 `0` 으로 뭉개면 갓 만든 방(순번 0)과 구분이 안 되고,
+     * 뒤따르는 변경분이 전부 "틈"으로 보여 상세를 끝없이 다시 읽는다.
+     */
+    @Test
+    fun `순번 없는 프레임은 null 로 읽는다`() {
+        val snapshot = parse(EVENT_CONNECTED, """{"id":7,"departure":"서울시청","status":"ACTIVE"}""")
+            .toPartyEvent() as PartyEvent.Snapshot
+        assertNull(snapshot.version)
+
+        val joined = parse(EVENT_MEMBER_JOINED, """{"member":{"publicId":"$UUID_OTHER"},"status":"ACTIVE"}""")
+            .toPartyEvent() as PartyEvent.MemberJoined
+        assertNull(joined.version)
+
+        val left = parse(EVENT_MEMBER_LEFT, """{"publicId":"$UUID_OTHER","status":"ACTIVE"}""")
+            .toPartyEvent() as PartyEvent.MemberLeft
+        assertNull(left.version)
+    }
+
+    /** 갓 만든 방은 0 에서 시작한다 — 0 과 「없음」이 뭉개지지 않는지 고정한다. */
+    @Test
+    fun `순번 0 은 없음과 다르다`() {
+        val snapshot = parse(EVENT_CONNECTED, """{"id":7,"departure":"서울시청","status":"ACTIVE","version":0}""")
+            .toPartyEvent() as PartyEvent.Snapshot
+
+        assertEquals(0L, snapshot.version)
+    }
+
+    /**
+     * `closed` 는 이제 `{partyId, status, version}` JSON 으로 온다(옛 서버는 partyId 숫자 문자열).
+     * 앱은 둘 다 **읽지 않고** 종결 신호로만 쓰므로, 어느 모양이 와도 Closed 로 떨어져야 한다.
+     */
+    @Test
+    fun `closed 는 본문 모양과 상관없이 종결 신호다`() {
+        assertEquals(PartyEvent.Closed, parse(EVENT_CLOSED, """{"partyId":7,"status":"CANCELED","version":9}""").toPartyEvent())
+        assertEquals(PartyEvent.Closed, parse(EVENT_CLOSED, "7").toPartyEvent())
+    }
+
     private fun parse(type: String, data: String): PartySseEvent =
         (parsePartySseFrame(type, data) as PartySseFrame.Received).event
 

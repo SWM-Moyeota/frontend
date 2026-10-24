@@ -69,6 +69,20 @@ data class PartyDetailResponse(
     /** Google Encoded Polyline. 서버가 방 생성 시 네이버 경로 API 로 산출해 저장해 둔 값. */
     val route: String? = null,
     val taxiDriverId: Long? = null,
+    /**
+     * 이 상세가 찍힌 시점의 방 순번(Backend V18, `Party.version`). 들고 남이 있을 때마다 1씩 오른다
+     * (서버에서 올리는 곳은 join·leave·finish·expire 네 군데뿐 — 배차·운행 전이는 올리지 않는다).
+     *
+     * **쓰는 이유는 하나다 — 프레임 순서가 뒤집히기 때문이다.** 서버는 구독을 레지스트리에 먼저
+     * 등록한 뒤 DB 를 읽어 `connected` 를 보내므로, 그 사이에 커밋된 변경분이 `connected` 보다
+     * **먼저** 도착할 수 있다(`PartySseController` 의 "연결 중에 방이 바뀌면 변경분이 connected 보다
+     * 먼저 올 수 있다"). 이 숫자가 없으면 낡은 `connected` 가 이미 반영한 변화를 되돌려 버린다.
+     *
+     * **null 은 「서버가 말하지 않았다」다**(version 을 모르는 옛 배포). `0`(갓 만든 방)과 반드시
+     * 구분해야 하므로 논-널 기본값 0 을 쓰면 안 된다 — 옛 서버를 보고 있을 때 0 으로 읽으면
+     * 뒤따르는 모든 변경분이 "틈"으로 보여 상세를 끝없이 다시 읽는다.
+     */
+    val version: Long? = null,
 ) {
     /**
      * 서버 `PartyDetailResult.MemberInfo(UUID publicId, String nickname, String imageUrl,
@@ -150,6 +164,13 @@ data class MemberJoinedPayload(
     val member: PartyDetailResponse.MemberInfo = PartyDetailResponse.MemberInfo(),
     /** 들어온 **뒤**의 방 상태(서버 `PartyStatus` enum 이름). 정원이 차면 여기서 전이가 보인다. */
     val status: String = "",
+    /**
+     * 이 변경분을 반영한 **뒤**의 방 순번. 들고 있는 값 +1 이면 그대로 얹고, 그보다 크면 중간 프레임을
+     * 놓친 것이므로 상세를 다시 읽는다. 같거나 작으면 이미 반영한 것이라 버린다.
+     * null 이면 옛 서버다 — 순서를 알 수 없으므로 예전 방식(publicId 중복 여부)으로 떨어진다.
+     * 자세한 규칙은 [PartyDetailResponse.version].
+     */
+    val version: Long? = null,
 )
 
 /**
@@ -175,6 +196,8 @@ data class MemberLeftPayload(
      * 방이 닫히는 이탈(마지막 멤버)에는 이 프레임 자체가 오지 않는다 — 서버가 `closed` 를 보낸다.
      */
     val hostPublicId: String? = null,
+    /** 이 변경분을 반영한 **뒤**의 방 순번. 규칙은 [MemberJoinedPayload.version] 과 같다. */
+    val version: Long? = null,
 )
 
 /**
@@ -272,3 +295,63 @@ data class RouteEstimateResponse(
     /** Google Encoded Polyline. 서버 필드명이 path 다(방 상세의 route 와 같은 형식). */
     val path: String? = null,
 )
+
+// POST /api/v1/matching/rooms/realtime — 백엔드 RealTimeMatchingRequest / List<MatchCandidate>
+//
+// **요청과 응답의 좌표 필드명이 다르다.** 요청은 destLat/destLng, 응답은 destinationLat/destinationLng.
+// 서버 record 필드명을 그대로 쓴 결과이고, 여기서 RouteRequestDto 를 복사해 쓰면 destinationLat 이
+// 그대로 남아 서버에 0.0 이 가고 **400 OUT_OF_SERVICE_AREA** 가 떨어진다(전부 primitive double 이라
+// 누락이 0.0 이 되고, (0,0) 은 서비스 지역 밖이다). 그 400 을 받으면 사용자 위치 문제가 아니라
+// 이 DTO 의 필드명을 먼저 의심해야 한다.
+@Serializable
+data class RealTimeMatchingRequestDto(
+    val departureLat: Double,
+    val departureLng: Double,
+    /** 서버 record 필드명 그대로. **destinationLat 이 아니다.** */
+    val destLat: Double,
+    /** 서버 record 필드명 그대로. **destinationLng 이 아니다.** */
+    val destLng: Double,
+)
+
+/**
+ * 실시간 매칭 후보 하나. **응답 최상위가 이 타입의 배열**이라 `{"list":[...]}` 래퍼가 없다.
+ *
+ * 서버가 출발지·도착지 각각 300m 반경(AND)으로 거른 뒤 OSRM 도보 시간 합으로 정렬해 **0~5개**를 준다.
+ * 빈 배열은 **정상**이다 — 양쪽 300m 를 동시에 만족해야 해서 초기에는 그게 기본 상태다.
+ */
+@Serializable
+data class MatchCandidateResponse(
+    val summary: NearbyPartySummaryDto? = null,
+    /**
+     * 도보 시간 **합**(초) = 내 출발지→방 출발지 + 방 도착지→내 목적지.
+     * **차 타는 시간은 안 들어 있다** — 도메인에서 이름을 walkSeconds 로 바꿔 오독을 막는다.
+     */
+    val totalSeconds: Int = 0,
+) {
+    /**
+     * 서버 `NearbyPartySummary`. 전부 박스 타입이라 이론상 null 이 올 수 있어 기본값으로 방어한다.
+     *
+     * **요금·경로는 여전히 없다.** 요금은 합류 화면(19)이 방 상세를 읽어 채운다. 상태는 서버 쿼리가
+     * `status = 'ACTIVE'` 로 못 박혀 있어 모집 중으로 단정할 수 있다.
+     */
+    @Serializable
+    data class NearbyPartySummaryDto(
+        /** 방 id. **기존 목록의 `partyId` 와 이름이 다르다.** */
+        val id: Long = 0,
+        val departureLat: Double? = null,
+        val departureLng: Double? = null,
+        val destinationLat: Double? = null,
+        val destinationLng: Double? = null,
+        val departure: String = "",
+        val destination: String = "",
+        val capacity: Int = 0,
+        /**
+         * 지금 합류한 인원(Backend #260). **옛 배포에는 이 필드가 없어 null 이 온다.**
+         *
+         * `Int = 0` 으로 두면 안 된다. 후보는 `status = 'ACTIVE'` 인 방만 오고 그런 방에는 최소
+         * 방장 1명이 있으므로 **0 은 나올 수 없는 값**이다. 0 으로 접으면 화면이 「0/3명」이라는
+         * 없는 상태를 그리게 되므로, 모른다는 뜻의 null 과 구별해 둔다.
+         */
+        val currentMembers: Int? = null,
+    )
+}

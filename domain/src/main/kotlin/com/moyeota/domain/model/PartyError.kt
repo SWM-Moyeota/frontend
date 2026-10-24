@@ -150,3 +150,47 @@ class PartyFinishException(
         const val PARTY_NOT_FOUND = "PARTY_NOT_FOUND"
     }
 }
+
+/**
+ * 「걸어서 가까운 방」 추천 조회가 실패했다(`POST /matching/rooms/realtime`).
+ *
+ * **빈 목록은 여기로 오지 않는다** — 후보가 없는 건 정상이고 성공이다. 이 예외는 조회 자체가
+ * 안 된 경우뿐이다.
+ */
+class RealtimeMatchException(
+    /** 서버 `MatchingErrorCode` 이름. 본문이 없거나 파싱 실패면 null. */
+    val code: String?,
+    /** 서버가 준 한국어 원문 message. 없으면 null. */
+    val serverMessage: String?,
+    /** HTTP 상태 코드. 응답 자체가 없으면(네트워크 실패) null. */
+    val httpStatus: Int? = null,
+    cause: Throwable? = null,
+) : RuntimeException(serverMessage ?: code ?: "추천을 가져오지 못했습니다.", cause) {
+
+    /**
+     * 502 `ROUTE_SEARCH_FAILED` — 서버가 도보 경로 엔진(OSRM)에 닿지 못했다.
+     *
+     * **이게 평소에는 숨는다.** 300m 안에 후보가 한 건도 없으면 서버가 OSRM 을 아예 호출하지 않고
+     * 빈 배열을 돌려주기 때문이다. 즉 엔진이 죽어 있어도 눌러 보면 정상으로 보이다가, **후보가
+     * 처음 잡히는 순간** — 기능이 처음 쓸모 있어지는 그때 — 502 가 터진다. 화면은 이걸 사용자
+     * 잘못처럼 말하지 말고 방 만들기로 흘려야 한다.
+     */
+    val isRouteUnavailable: Boolean get() = code == "ROUTE_SEARCH_FAILED" || httpStatus == 502
+
+    /**
+     * 409 `ALREADY_JOINED_OTHER_PARTY` — 이미 진행 중인 방이 있다.
+     *
+     * 그 사람은 새 방을 만들 수도, 다른 방에 합류할 수도 없다. 추천을 보여 줄 이유가 없으므로
+     * 화면은 **섹션 자체를 숨긴다**(에러 문구를 띄우지 않는다).
+     */
+    val isAlreadyInParty: Boolean get() = code == PartyJoinException.ALREADY_JOINED_OTHER_PARTY
+
+    /**
+     * 400 `OUT_OF_SERVICE_AREA` — 좌표가 서비스 지역(위 33~39 / 경 124~132) 밖이다.
+     *
+     * **요청 필드명을 먼저 의심할 것.** 서버 요청 record 가 전부 primitive double 이라 필드가
+     * 빠지면 0.0 이 들어가고, (0,0) 은 서비스 지역 밖이라 같은 400 으로 떨어진다. 요청 쪽 이름은
+     * `destLat`/`destLng` 이고 응답 쪽만 `destinationLat`/`destinationLng` 이다.
+     */
+    val isOutOfServiceArea: Boolean get() = code == "OUT_OF_SERVICE_AREA"
+}
