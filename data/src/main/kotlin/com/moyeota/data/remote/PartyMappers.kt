@@ -354,13 +354,15 @@ internal fun realtimeMatchException(
 /**
  * 실시간 매칭 후보 하나 → [MatchCandidate].
  *
- * **[Ride] 의 절반이 비어 있는 게 정상이다.** 서버 `NearbyPartySummary` 에는 인원·요금·경로·상태가
- * 없다. 그래서 멤버는 빈 목록, 요금은 0, 상태는 [RideStatus.RECRUITING] 으로 둔다 — 상태를 고정값으로
- * 두는 근거는 서버 쿼리가 `status = 'ACTIVE'` 로 못 박혀 있다는 것이다(모집 중인 방만 후보가 된다).
+ * **[Ride] 의 일부가 비어 있는 게 정상이다.** 서버 `NearbyPartySummary` 에는 요금·경로가 없다.
+ * 그래서 요금은 0, 상태는 [RideStatus.RECRUITING] 으로 둔다 — 상태를 고정값으로 두는 근거는 서버
+ * 쿼리가 `status = 'ACTIVE'` 로 못 박혀 있다는 것이다(모집 중인 방만 후보가 된다).
  *
- * **[placeholderMembers] 를 쓰지 않는다.** 저건 "인원 수는 아는데 누군지 모를 때" 자리를 채우는
- * 장치인데, 여기서는 **인원 수 자체를 모른다**. 가짜 멤버를 넣으면 화면이 「1명 참여 중」 같은
- * 없는 사실을 말하게 된다. 빈 목록이 정직하다 — 인원은 합류 화면(19)이 방 상세를 읽어 채운다.
+ * **인원은 [placeholderMembers] 로 채운다**(Backend #260 이 `currentMembers` 를 실어 주기 시작했다).
+ * 17 탐색 목록이 같은 숫자를 같은 방식으로 쓰고 있어 카드 문구(「2/3명」)가 양쪽에서 일치한다.
+ * 다만 **`currentMembers` 가 null 이면 빈 목록으로 남긴다** — 옛 배포를 보고 있다는 뜻이고, 그때
+ * 가짜 멤버를 넣으면 화면이 「0/3명」이라는 없는 상태를 그린다. [Ride.members] 가 비어 있다 =
+ * 인원을 모른다로 읽어야 한다.
  *
  * `summary` 가 통째로 null 인 프레임은 **버린다**(호출부가 mapNotNull). 방 id 가 없으면 탭해도
  * 갈 곳이 없어 카드를 그릴 이유가 없다.
@@ -375,7 +377,7 @@ fun MatchCandidateResponse.toMatchCandidate(): MatchCandidate? {
             destination = summary.destination,
             departureLabel = "",
             capacity = summary.capacity,
-            members = emptyList(),
+            members = summary.currentMembers?.let(::placeholderMembers) ?: emptyList(),
             farePerPerson = 0,
             totalFare = 0,
             status = RideStatus.RECRUITING,

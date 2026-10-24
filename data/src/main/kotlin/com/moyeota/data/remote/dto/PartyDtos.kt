@@ -331,8 +331,8 @@ data class MatchCandidateResponse(
     /**
      * 서버 `NearbyPartySummary`. 전부 박스 타입이라 이론상 null 이 올 수 있어 기본값으로 방어한다.
      *
-     * **`currentMembers` 가 없다.** 「2/3명」을 보여줄 수 없고, 메우려면 후보마다 방 상세를 또 읽어야
-     * 하는데 최대 5개 × 쿼리 3개다. 백엔드에 추가를 요청해 둔 상태이고 그때까지는 화면에서 생략한다.
+     * **요금·경로는 여전히 없다.** 요금은 합류 화면(19)이 방 상세를 읽어 채운다. 상태는 서버 쿼리가
+     * `status = 'ACTIVE'` 로 못 박혀 있어 모집 중으로 단정할 수 있다.
      */
     @Serializable
     data class NearbyPartySummaryDto(
@@ -345,5 +345,13 @@ data class MatchCandidateResponse(
         val departure: String = "",
         val destination: String = "",
         val capacity: Int = 0,
+        /**
+         * 지금 합류한 인원(Backend #260). **옛 배포에는 이 필드가 없어 null 이 온다.**
+         *
+         * `Int = 0` 으로 두면 안 된다. 후보는 `status = 'ACTIVE'` 인 방만 오고 그런 방에는 최소
+         * 방장 1명이 있으므로 **0 은 나올 수 없는 값**이다. 0 으로 접으면 화면이 「0/3명」이라는
+         * 없는 상태를 그리게 되므로, 모른다는 뜻의 null 과 구별해 둔다.
+         */
+        val currentMembers: Int? = null,
     )
 }
