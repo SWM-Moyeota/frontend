@@ -117,6 +117,11 @@ interface RideRepository {
      * 그 단계의 화면(25·26)은 폴링을 유지하며, 읽는 대상은 [getPartyDetail] 이다 — 그 화면들이 쓰던
      * 가벼운 상태 조회가 없어졌기 때문이다(Backend `04f6be7`).
      *
+     * **흐름은 SSE 403 `NOT_PARTY_MEMBER` 에서 [PartyMembershipLostException] 으로 예외 종료한다.**
+     * 「스트림이 끝났다」와 반드시 구분해야 한다 — 전자는 호출부가 **화면을 떠나야** 하고, 후자는
+     * 폴백 폴링으로 넘어가면 된다. 둘을 뭉개면 내가 멤버가 아닌 방을 「같이 탈 사람을 찾고 있어요」로
+     * 영원히 그린다(상세 조회에는 참여자 검사가 없어 계속 성공한다).
+     *
      * 기본 구현은 아무것도 내지 않는다(더미·테스트 저장소).
      */
     fun observePartyEvents(partyId: Long): Flow<PartyEvent> = emptyFlow()
@@ -130,6 +135,12 @@ interface RideRepository {
      * 실제 멤버 식별자가 필요하면 [getPartyDetail] 로 다시 읽는다.
      *
      * 앱이 정하는 조건은 **좌표·라벨·정원뿐**이다([NewParty]) — 반경은 서버가 고정값으로 정한다.
+     *
+     * 실패는 모두 [PartyOpenException] 으로 올라온다(409 `ALREADY_JOINED_OTHER_PARTY` /
+     * 400 `SAME_DEPARTURE_DESTINATION`·`OUT_OF_SERVICE_AREA`·`INVALID_CAPACITY`·`INVALID_ROUTE_ESTIMATE` /
+     * 502 `ROUTE_SEARCH_FAILED` / 네트워크). 화면은 그 프로퍼티로 분기한다 — **한 문구로 뭉개면 안 된다.**
+     * 409 는 「잠시 후 다시 시도」가 **영구히 거짓**이고(아무도 합류하지 않은 ACTIVE 방은 서버 스윕
+     * 대상이 아니라 계정이 계속 막힌다), 400 좌표·정원은 사용자가 **고쳐야** 하는 값이다.
      */
     suspend fun createParty(request: NewParty): Ride
 
@@ -161,7 +172,15 @@ interface RideRepository {
      * 나가기. DELETE /api/v1/matching/leave/{partyId}. 나가는 주체는 토큰이 정한다.
      * 성공 시 Explore 목록 재조회 필요.
      *
-     * 그 방의 멤버가 아니면 403 `NOT_PARTY_MEMBER`. 마지막 멤버가 나가면 방은 CANCELED 로 닫힌다(실측).
+     * 마지막 멤버가 나가면 방은 CANCELED 로 닫힌다(실측).
+     *
+     * 그 방의 멤버가 아니면 서버는 403 `NOT_PARTY_MEMBER` 를 주는데, **그 403 은 실패로 올라오지
+     * 않는다** — 데이터 계층이 성공으로 되돌린다. 「이미 나갔다」와 「나가기 성공」은 사용자가 할 일이
+     * 같기 때문이다(204 응답이 터널에서 유실되고 재시도하면 바로 이 경우가 된다). [joinParty] 의
+     * [PartyJoinException.isAlreadyInThisParty] 복구와 대칭이다.
+     *
+     * 나머지 실패는 [PartyLeaveException] 이다(409 `PARTY_NOT_RECRUITING` — 매칭이 시작돼 나갈 수 없다 /
+     * 404 `PARTY_NOT_FOUND` / 네트워크).
      */
     suspend fun leaveParty(partyId: Long)
 

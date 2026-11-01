@@ -15,6 +15,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -449,6 +450,27 @@ class AuthMappersTest {
         ).toAuthException()
 
         assertEquals(AuthError.INVALID_NICKNAME, exception.error)
+    }
+
+    /**
+     * `USER112` 는 **서버가 제공하지 않는 이미지 키**를 보냈을 때다. 기본 이미지 키
+     * (`profile/presets/default.png`)를 「되돌리기」 삼아 보내는 게 전형적인 경우다 —
+     * 그 키는 프리셋 16장 밖이라 거절되고, 되돌리기는 `DELETE /api/v1/users/me/profile-image` 뿐이다.
+     *
+     * 400 폴백([AuthError.INVALID_REQUEST])에 맡기면 「입력한 정보를 다시 확인해 주세요」가 떠서,
+     * 고칠 입력이 없는 사용자가 닉네임만 고치며 맴돈다. 서버가 imageKey 를 닉네임 중복보다 **먼저**
+     * 검사하므로 이 코드가 오면 닉네임도 함께 안 바뀐 상태다 — 화면은 목록을 다시 불러오게 안내해야 한다.
+     *
+     * 기준: 백엔드 `user/common/exception/UserErrorCode.java` 의 `INVALID_PROFILE_IMAGE`.
+     */
+    @Test
+    fun `400 USER112 는 일반 검증 실패가 아니라 프로필 이미지 오류다`() {
+        val exception = httpException(400, """{"code":"USER112","message":"제공하지 않는 프로필 이미지입니다."}""")
+            .toAuthException()
+
+        assertEquals(AuthError.INVALID_PROFILE_IMAGE, exception.error)
+        assertNotEquals(AuthError.INVALID_REQUEST, exception.error)
+        assertEquals("제공하지 않는 프로필 이미지입니다.", exception.serverMessage)
     }
 
     /** USER106(빈 FCM 토큰)은 사용자가 고칠 입력이 아니다 — 일반 검증 실패로 둔다. */

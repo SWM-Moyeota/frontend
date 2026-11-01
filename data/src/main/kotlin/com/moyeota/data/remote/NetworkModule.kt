@@ -87,9 +87,22 @@ object NetworkModule {
             .pingInterval(20, java.util.concurrent.TimeUnit.SECONDS)
             .build()
 
+        // 프로필 사진 전용. baseClient 를 파생하지 않고 **새로 만든다** — 두 가지 이유다.
+        // (1) baseClient 에는 디버그 빌드에서 HttpLoggingInterceptor(BODY) 가 붙어 있다. PNG 본문은
+        //     "(binary ... body omitted)" 로 생략되지만 아바타 한 장마다 요청/응답 헤더가 logcat 에 쌓인다.
+        // (2) 커넥션 풀을 공유할 이득이 없다. 이미지는 cdn.moyeota.co.kr 에서 오고 API 는 다른 호스트라
+        //     어차피 커넥션이 재사용되지 않는다.
+        // 타임아웃은 짧게 잡는다 — 아바타는 실패해도 이니셜 원으로 떨어지면 되는 장식이라
+        // 오래 붙들고 있을 이유가 없다.
+        val imageClient = OkHttpClient.Builder()
+            .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+
         return Apis(
             socketClient = socketClient,
             streamClient = streamClient,
+            imageClient = imageClient,
             auth = authApi,
             config = configApi,
             matching = retrofit.create(MatchingApi::class.java),
@@ -114,6 +127,29 @@ object NetworkModule {
         val socketClient: OkHttpClient,
         /** SSE 수신이 쓰는 OkHttp. 인증은 붙어 있고 readTimeout 만 [SSE_READ_TIMEOUT_SECONDS] 로 늘렸다 */
         val streamClient: OkHttpClient,
+        /**
+         * 프로필 사진(Coil)이 쓰는 OkHttp. 인증 인터셉터가 붙지 않은 순정 클라이언트다.
+         *
+         * ### [apiClient]/[streamClient] 를 쓰면 안 되는 이유
+         * 프로필 이미지 URL 은 모여타 API 가 아니라 **서버가 내려주는 제3자 전체 주소**다
+         * (`https://cdn.moyeota.co.kr/profile/presets/03.png` — S3 + CloudFront). 거기에 Bearer 를
+         * 실으면 액세스 토큰이 남의 호스트로 나가 CloudFront·S3 액세스 로그에 남는다. 30분 수명이지만
+         * 그 안에 전 API 를 호출할 수 있는 자격증명이다.
+         *
+         * (실측 보강: 이 CDN 은 `Authorization` 을 **무시하고 200** 을 주므로 "CDN 의 401 이 토큰
+         * 재발급을 깨운다"는 경로는 실재하지 않는다 — `Authenticator` 는 규약상 401 에서만 깨어나고
+         * 없는 키는 403 이다. 즉 이 분리는 기능 문제가 아니라 **토큰을 새게 하지 않기 위한 것**이다.)
+         *
+         * ### [socketClient] 를 재사용하면 안 되는 이유
+         * 인증이 안 붙은 건 같지만 `readTimeout(0)`, 즉 **무제한**이다. 멈춘 이미지 다운로드가 영영
+         * 실패하지 않아 자리표시가 그대로 남고 에러도 재시도도 없이 커넥션을 붙든다 — 같은 파일이
+         * SSE 에 대해 이미 적어 둔 논증과 같다. `pingInterval` 도 WebSocket 프레임이라 HTTP 에는 듣지 않는다.
+         *
+         * ### baseClient 파생도 아니다
+         * 디버그 본문 로깅을 이미지에 끌어들이지 않기 위해 새로 만든다. 커넥션 풀을 공유하지 않는 건
+         * 손실이 아니다 — 이미지는 API 와 **다른 호스트**라 어차피 커넥션이 재사용되지 않는다.
+         */
+        val imageClient: OkHttpClient,
         val auth: AuthApi,
         /** 서버 운영 설정(택시 모드 등). 토큰 없는 클라이언트 */
         val config: ConfigApi,

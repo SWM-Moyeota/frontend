@@ -18,7 +18,8 @@ data class User(
     val rating: Double,
     val rideCount: Int,
     /**
-     * 프로필 이미지 URL(전체 주소). 화면은 아직 이것을 그리지 않는다 — `MemberAvatar` 참고.
+     * 프로필 이미지 URL(전체 주소). `MemberAvatar` 가 이것을 그리고, 못 그리면 닉네임 첫 글자 원으로
+     * 되돌아간다.
      *
      * **null 을 "이미지 없음"으로 읽지 말 것.** 2026-10-15 배포(Backend #235)부터 서버는 고른 적
      * 없는 사용자에게도 **기본 이미지의 전체 URL** 을 준다. 여기가 null 인 경우는 사실상 하나뿐인데,
@@ -90,9 +91,22 @@ object WithdrawnMemberNames {
  * **화면은 null 을 반드시 처리해야 한다** — "이름 없음" 폴백 문구든, 이름 영역 숨김이든.
  *
  * [uuid] 는 [AuthState.Authenticated.userUuid] 와 같은 값이다(액세스 토큰 `sub`). 즉 uuid 만 필요하면
- * 이 호출은 필요 없다 — 이 엔드포인트를 부르는 이유는 오직 [name] 이다.
+ * 이 호출은 필요 없다 — 이 엔드포인트를 부르는 이유는 [name] 과 [imageUrl] 이다.
  */
 data class UserProfileInfo(
     val uuid: String,
     val name: String?,
+    /**
+     * 내 프로필 이미지 URL(전체 주소). **서버는 이 값을 비워 보내지 않는다** —
+     * 한 번도 고른 적 없는 사용자에게는 기본 이미지의 전체 주소를 준다
+     * (서버 `ProfileImages.toUrl` 이 key 가 null 이면 `default-key` 를 붙인다).
+     *
+     * 그래서 여기가 null 이면 "이미지가 없다"가 아니라 **응답을 못 받았거나 서버가 구버전**이라는 뜻이다.
+     * 화면은 그때 기존 이니셜/회색 원으로 떨어뜨린다.
+     *
+     * **끝이 `default.png` 인지로 「아직 안 고름」을 구분할 수 있다** — 기본 키는
+     * `GET /api/v1/users/profile-images` 목록(16장)에 들어 있지 않기 때문이다
+     * ([ProfileImage] KDoc). 「기본 이미지로 되돌리기」를 켤지 끌지가 이 구분에 달려 있다.
+     */
+    val imageUrl: String? = null,
 )

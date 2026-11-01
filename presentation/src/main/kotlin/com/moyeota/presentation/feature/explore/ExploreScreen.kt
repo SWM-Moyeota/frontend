@@ -77,6 +77,7 @@ import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.model.User
 import com.moyeota.presentation.core.ActiveRideBanner
+import com.moyeota.presentation.feature.home.headcountLabel
 import com.naver.maps.geometry.LatLng
 import com.naver.maps.geometry.LatLngBounds
 import com.naver.maps.map.NaverMap
@@ -247,15 +248,39 @@ private val ListHeaderGap = 12.dp
  * - 지도는 네이버 실지도. 내 위치는 기기 GPS([myLocation]) — 못 받으면 기본 카메라([MoyeotaDefaultCamera]) 범위를 보여준다
  * - 위치 권한 없으면 지도 대신 권한 요청 안내 + 「위치 권한 허용」 버튼 (locationGranted)
  * - 후보 0건이면 peek 문구 자리에 빈 상태 + 지도를 움직여 보라는 안내
+ *   (**내 방을 걸러내 0건이 된 경우**는 다른 문구다 — [myPartyHidden])
+ * - 내가 이미 참여 중인 방은 목록·마커에 **없다**(`ExploreRoute` 의 `exploreList`) — 돌아가는 길은
+ *   맨 위 진행 중 방 배너 한 번이고, 목록 카드는 20 을 거치는 더 긴 우회로였다
  * - 진행 중 탑승 없으면 상단 배너 숨김 ([activeRide] 가 null). 배너가 있으면 지도 줌 컨트롤이 그 아래로 내려간다
  * - 정원 찬 방(3/3)은 「합류」 비활성 + 「마감」 표기
  */
 @Composable
 fun ExploreScreen(
-    /** 지도에 보이는 범위의 방 목록. **기본값이 없다** — 예시 방이 프로덕션에 새는 길을 막는다 */
+    /**
+     * 지도에 보이는 범위의 방 목록. **기본값이 없다** — 예시 방이 프로덕션에 새는 길을 막는다.
+     *
+     * **내가 참여 중인 방은 이미 빠져 있다**(`ExploreRoute` 의 `exploreList`) — 마커·카드·헤더의
+     * N 이 모두 이 한 목록에서 나오므로 세 자리가 함께 빠진다.
+     */
     parties: List<Ride>,
     /** 지금 진행 중인 내 방. null 이면 상단 배너를 그리지 않는다 */
     activeRide: Ride? = null,
+    /**
+     * [parties] 에서 **내 방을 실제로 빼냈는가**(`ExploreRoute` 의 `ExploreList.myPartyHidden`).
+     *
+     * 빈 목록 문구만 이 값으로 갈린다 — 주변에 방이 내 방뿐이면 걸러낸 뒤 목록이 0건이 되는데,
+     * 그때 「이 근처엔 동승이 없어요」는 **거짓말**이다(방은 있고, 그게 내 방이다).
+     * 목록이 비지 않았을 때는 아무것도 바꾸지 않는다: 「내 방 1개는 뺐어요」는 돌아갈 길이 이미
+     * 배너로 있는 상황에서 더해지는 소음이다.
+     */
+    myPartyHidden: Boolean = false,
+    /**
+     * 주기 갱신이 **연속으로** 실패해 목록이 낡았는가([ExploreViewModel.UiState.Success.stale]).
+     *
+     * true 라도 보던 목록·마커는 그대로 둔다 — 지도를 에러 화면으로 바꾸지 않는다는 기존 판단을
+     * 지키고, 대신 타이틀 줄에 **비차단 표시**만 올린다. 기본값 false 는 「문제 없음」이다.
+     */
+    stale: Boolean = false,
     locationGranted: Boolean = true,
     // 기기 실위치. null = 권한 없음 · 아직 fix 없음 → 지도는 기본 카메라 위치에서 시작한다
     myLocation: MyLocationFix? = null,
@@ -287,6 +312,12 @@ fun ExploreScreen(
                 fontWeight = FontWeight.Bold,
                 color = MoyeotaColor.InkPrimary,
             )
+            // 낡은 목록 표시는 **고정 높이인 이 줄**에 둔다 — 지도 위에 띄우면 시트를 끝까지 올린
+            // 상태(FULL, 지도가 통째로 가려짐)에서 보이지 않고, 시트 안에 두면 접힘(PEEK) 높이가
+            // 흔들린다. 이 자리면 세 단계 모두에서 같은 자리에 보이고 레이아웃도 밀리지 않는다.
+            if (stale) {
+                StaleListNotice(modifier = Modifier.align(Alignment.CenterEnd))
+            }
         }
 
         BoxWithConstraints(modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -389,7 +420,11 @@ fun ExploreScreen(
                         SheetHandle()
                     }
                     if (sheetState == ExploreSheetState.PEEK) {
-                        PeekSummaryRow(count = parties.size, onRaise = { sheetState = ExploreSheetState.HALF })
+                        PeekSummaryRow(
+                            count = parties.size,
+                            myPartyHidden = myPartyHidden,
+                            onRaise = { sheetState = ExploreSheetState.HALF },
+                        )
                     } else {
                         ListHeaderRow(
                             count = parties.size,
@@ -409,6 +444,7 @@ fun ExploreScreen(
                     }
                     PartyList(
                         parties = parties,
+                        myPartyHidden = myPartyHidden,
                         onJoinParty = onJoinParty,
                         showEndOfList = sheetState == ExploreSheetState.FULL,
                         modifier = Modifier.weight(1f),
@@ -445,10 +481,26 @@ private fun settleTarget(
     }
 }
 
+/**
+ * 목록이 0건일 때의 두 줄 — 접힘 요약(17)과 리스트 빈 상태(18·19)가 **같은 말**을 쓴다.
+ *
+ * 걸러내기 전의 목록에 내 방이 있었는가([myPartyHidden])로 갈린다. 「이 근처엔 동승이 없어요」는
+ * 주변에 내 방뿐일 때 **거짓말**이다 — 방은 있고 그게 내 방이며, 그래서 목록이 빈 것이다.
+ * 그 경우 사실만 말한다: 이 범위에 남의 방이 없다.
+ *
+ * 내 방으로 **돌아가는 길을 문구로 가리키지 않는다**(「위 배너를 누르세요」를 쓰지 않았다) —
+ * 시트를 끝까지 올린 상태(FULL)에서는 그 배너가 시트에 가려 보이지 않아 위치를 말하는 문장이
+ * 그 순간 틀린 말이 된다. 배너는 PEEK·HALF 에서 바로 보이고, 두 줄의 역할은 「왜 비었는지」까지다.
+ */
+private fun emptyListCopy(myPartyHidden: Boolean): Pair<String, String> =
+    if (myPartyHidden) "지금은 내 방뿐이에요" to "지도를 움직여 다른 방을 찾아보세요"
+    else "이 근처엔 동승이 없어요" to "지도를 움직여 보세요"
+
 /** 17 접힘 요약 — 「주변 합승 N개」. N 은 헤더·마커와 같은 목록(지도 범위)의 방 수다 */
 @Composable
-private fun PeekSummaryRow(count: Int, onRaise: () -> Unit) {
+private fun PeekSummaryRow(count: Int, myPartyHidden: Boolean, onRaise: () -> Unit) {
     val isEmpty = count == 0
+    val (emptyTitle, emptySubtitle) = emptyListCopy(myPartyHidden)
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -459,7 +511,7 @@ private fun PeekSummaryRow(count: Int, onRaise: () -> Unit) {
         }
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = if (isEmpty) "이 근처엔 동승이 없어요" else "주변 동승 ${count}개 모집 중",
+                text = if (isEmpty) emptyTitle else "주변 동승 ${count}개 모집 중",
                 fontSize = 19.sp,
                 fontWeight = FontWeight.Bold,
                 color = MoyeotaColor.InkPrimary,
@@ -468,7 +520,7 @@ private fun PeekSummaryRow(count: Int, onRaise: () -> Unit) {
                 // 「목적지 정하면 바로 자동 매칭」은 지웠다 — 목적지를 정하면 **새 방이 만들어지고**
                 // (16 「같이 탈 사람 찾기」 → `POST /matching/rooms`) 사람이 합류하기를 기다린다.
                 // 목적지로 기존 방에 자동으로 넣어 주는 기능은 없다(2026-10-13).
-                text = if (isEmpty) "지도를 움직여 보세요" else "위로 올리면 리스트, 목적지를 정하면 새 방을 만들어요",
+                text = if (isEmpty) emptySubtitle else "위로 올리면 리스트, 목적지를 정하면 새 방을 만들어요",
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Medium,
                 color = GrayMute,
@@ -510,6 +562,7 @@ private fun ListHeaderRow(count: Int, mapShown: Boolean, onToggleMap: () -> Unit
 @Composable
 private fun PartyList(
     parties: List<Ride>,
+    myPartyHidden: Boolean,
     onJoinParty: (Ride) -> Unit,
     showEndOfList: Boolean,
     modifier: Modifier = Modifier,
@@ -522,7 +575,7 @@ private fun PartyList(
             PartyCard(ride = parties[index], onJoin = onJoinParty)
         }
         if (parties.isEmpty()) {
-            item { EmptyListNotice() }
+            item { EmptyListNotice(myPartyHidden = myPartyHidden) }
         } else if (showEndOfList) {
             // 스펙 19: 마지막 페이지면 목록의 끝을 알린다 (범위 기준)
             item {
@@ -545,7 +598,10 @@ private fun PartyCard(
     onJoin: (Ride) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val full = ride.members.size >= ride.capacity
+    // 정원을 모르면(0) 「마감」이라고 단정하지 않는다 — `0 >= 0` 이 참이라 전에는 인원·정원을 둘 다
+    // 모르는 방이 **마감으로 보였다.** 인원 문구를 지우면서 버튼만 마감으로 남기면 같은 카드가 두
+    // 가지 말을 한다. 실제로 찼는지는 탭해서 들어간 20 이 방 상세로 다시 판정한다([joinGate]).
+    val full = ride.capacity > 0 && ride.members.size >= ride.capacity
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -566,8 +622,14 @@ private fun PartyCard(
                 fontWeight = FontWeight.Medium,
                 color = GrayMute,
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                CapacityBadge(text = "${ride.members.size}/${ride.capacity}명")
+            // 인원 문구는 16 추천 카드와 **같은 함수**를 쓴다([headcountLabel]) — 리터럴로 쓰던 동안
+            // 인원을 모르는 방을 「0/3명」, 정원을 모르는 방을 「2/0명」으로 그렸다(없는 상태다).
+            // 빈 문자열이면 배지째 지운다(그 판단은 [headcountLabel] KDoc 에 있다).
+            val headcount = headcountLabel(joined = ride.members.size, capacity = ride.capacity)
+            if (headcount.isNotEmpty()) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    CapacityBadge(text = headcount)
+                }
             }
         }
         Spacer(Modifier.width(8.dp))
@@ -598,9 +660,17 @@ private fun PlaceLine(label: String, place: String) {
     }
 }
 
+/**
+ * 참여 인원만큼(최대 3개) 아바타를 겹쳐 그린다.
+ *
+ * **[count] 가 0 이면 아무것도 그리지 않는다.** 0 은 「빈 방」이 아니라 「인원을 모른다」는 뜻이고
+ * ([headcountLabel]), 예전처럼 `coerceAtLeast(1)` 로 한 개를 그리면 「최대 3명」이라고 쓰면서
+ * 사람 1명을 그려 **숫자와 그림이 서로 다른 말**을 한다.
+ */
 @Composable
 private fun AvatarStack(count: Int) {
-    val shown = count.coerceAtLeast(1).coerceAtMost(3)
+    val shown = count.coerceIn(0, 3)
+    if (shown == 0) return
     Box(modifier = Modifier.width(30.dp + 18.dp * (shown - 1)).height(30.dp)) {
         repeat(shown) { i ->
             AvatarCircle(size = 30.dp, modifier = Modifier.offset(x = 18.dp * i))
@@ -713,21 +783,51 @@ private fun LocationPermissionNotice(
     }
 }
 
+/**
+ * 「최신 정보를 받지 못했어요」 — 목록을 **덮지 않는** 표시.
+ *
+ * 띄우는 조건은 [staleAfterPollFailures] 가 정한다(연속 실패 3회 = 12초). 여기서 하는 일은 그
+ * 사실을 조용히 알리는 것뿐이고, 재시도 버튼을 달지 않는다 — 폴링이 4초마다 알아서 다시 읽고
+ * 한 번 성공하면 이 표시가 사라진다. 사용자가 할 일이 없는 상태에 누를 것을 주면 더 헷갈린다.
+ */
 @Composable
-private fun EmptyListNotice() {
+private fun StaleListNotice(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .height(26.dp)
+            .clip(CircleShape)
+            .background(MoyeotaColor.Danger50)
+            .padding(horizontal = 10.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = "최신 정보를 받지 못했어요",
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            color = MoyeotaColor.Danger600,
+            maxLines = 1,
+            softWrap = false,
+        )
+    }
+}
+
+@Composable
+private fun EmptyListNotice(myPartyHidden: Boolean) {
+    // 접힘 요약(17)과 **같은 두 줄**이다 — 같은 상황을 두 자리가 다르게 말하지 않게 한 곳에서 뽑는다
+    val (title, subtitle) = emptyListCopy(myPartyHidden)
     Column(
         modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Text(
-            text = "이 근처엔 동승이 없어요",
+            text = title,
             fontSize = 15.sp,
             fontWeight = FontWeight.Bold,
             color = MoyeotaColor.InkPrimary,
         )
         Text(
-            text = "지도를 움직여 보세요",
+            text = subtitle,
             fontSize = 13.sp,
             fontWeight = FontWeight.Medium,
             color = GrayMute,
@@ -845,7 +945,10 @@ private fun ExploreMap(
                 map = map,
                 position = latLngOrNull(ride.originLat, ride.originLng),
                 tint = MoyeotaColor.Primary500.toArgb(),
-                caption = "${ride.members.size}명",
+                // 캡션도 카드 배지와 **같은 함수**다([headcountLabel]) — 리터럴로 쓰던 동안 인원을
+                // 모르는 방의 마커가 「0명」이라고 적혀 있었고, 같은 방의 카드는 「최대 3명」이었다.
+                // 둘 다 모르면 빈 문자열이 오고, 그때는 캡션을 아예 달지 않는다([ExploreMarker]).
+                caption = headcountLabel(joined = ride.members.size, capacity = ride.capacity),
                 onClick = { onMarkerClick(ride) }, // 마커 탭 → 20 합류 확인
             )
         }
@@ -908,7 +1011,14 @@ private fun LatLngBounds.toMapBoundsOrNull(): MapBounds? {
     )
 }
 
-/** 지도 마커 하나. 오버레이는 `map` 프로퍼티로 붙고 떨어지므로 값이 바뀌면 떼었다 다시 붙인다 */
+/**
+ * 지도 마커 하나. 오버레이는 `map` 프로퍼티로 붙고 떨어지므로 값이 바뀌면 떼었다 다시 붙인다.
+ *
+ * @param caption 마커 아래 글자. **빈 문자열이면 캡션을 달지 않는다** — `captionText` 의 SDK 기본값이
+ *   ""(캡션 없음)이므로 아예 세우지 않는 것과 같고, 빈 글자를 넣어 마커 아래에 빈 자리가 생기거나
+ *   SDK 버전에 따라 빈 라벨이 그려지는 일을 피한다. 호출부는 「인원·정원을 둘 다 모른다」를 이 빈
+ *   문자열로 넘긴다([headcountLabel]) — 「0명」처럼 없는 사실을 지도에 박지 않기 위해서다.
+ */
 @Composable
 private fun ExploreMarker(
     map: NaverMap?,
@@ -925,7 +1035,7 @@ private fun ExploreMarker(
                 this.position = position
                 icon = MarkerIcons.BLACK
                 iconTintColor = tint
-                captionText = caption
+                if (caption.isNotEmpty()) captionText = caption
                 setOnClickListener {
                     val handler = currentOnClick
                     handler?.invoke()

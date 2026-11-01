@@ -96,8 +96,12 @@ class ProductClaimsTest {
     /**
      * **동승 모드는 26 운행 중에 닿지 않아 27 긴급 신고로 들어갈 길이 없다**(`docs/MODE-ROUTES.md`).
      * 서버도 `POST /reports` 를 `isRidingMember` 가 아니면 403 `REPORT_NOT_ALLOWED` 로 막는다
-     * (`ReportService.report`). 신고 UI 가 없는 것은 그 밖의 신고도 마찬가지다 — 앱은 백엔드의
-     * 채팅 신고 API(`ChatReportController`)를 호출하지 않는다.
+     * (`ReportService.report`).
+     *
+     * **메시지 신고는 2026-11-01 에 생겼다**(24 채팅방 롱프레스 →
+     * `POST /api/v1/chat-rooms/{id}/reports`, `ChatRepository.reportMessage`). 그래서 매너 서약은
+     * 「신고할 수 있어요」를 말해도 된다 — 여기서 계속 막는 것은 **112 로 이어지는 긴급 신고**와
+     * 「신고가 바로 ~된다」는 **즉시성 주장**뿐이다. 둘은 여전히 가입 전 화면에서 닿을 수 없다.
      */
     @Test
     fun `가입 전 문구는 긴급 신고를 약속하지 않는다`() {
@@ -109,8 +113,11 @@ class ProductClaimsTest {
     // ─────────────────────────── 지킬 수 없는 약속 ───────────────────────────
 
     /**
-     * 운영이 **몇 시간 안에 무엇을 하겠다**고 약속하지 않는다. 신고를 받을 창구가 문의 메일뿐인데
-     * `SupportLinks.CONTACT_EMAIL` 이 null 이라 그 행조차 보이지 않는다 — 지킬 수단이 없다.
+     * 운영이 **몇 시간 안에 무엇을 하겠다**고 약속하지 않는다.
+     *
+     * 창구가 없어서가 아니다 — `SupportLinks.CONTACT_EMAIL` 은 채워져 있어 35 「안내」 카드에
+     * 「문의하기」 행이 보이고, 채팅 메시지 신고도 붙었다. 없는 것은 **시한을 지킬 사람**이다.
+     * 받을 곳이 생겼다고 「몇 시간 안에」를 쓰면 그때부터 어기는 약속이 된다.
      *
      * 기술적으로 즉시인 것(SSE 반영 등)은 이 금지의 대상이 아니다. 여기서 보는 문구에는 그런 말이 없다.
      */
@@ -179,14 +186,47 @@ class ProductClaimsTest {
     }
 
     /**
-     * 「불쾌한 말과 행동을 하지 않을게요」에는 설명을 달지 않는다. 신고를 받을 창구가 앱에 없는
-     * 동안에는 「신고가 들어오면 …」으로 줄여 적어도 없는 창구를 있다고 말하는 셈이 된다.
+     * **창구는 생겼지만 처리는 여전히 약속하지 못한다.**
+     *
+     * 2026-11-01 에 24 채팅방 메시지 신고가 붙어(`ChatRepository.reportMessage` →
+     * `POST /api/v1/chat-rooms/{id}/reports`, 실측 201) 「불쾌한 말과 행동을 하지 않을게요」에
+     * 설명이 돌아왔다 — 그래서 이 테스트는 **설명이 없어야 한다**를 더 이상 요구하지 않는다.
+     *
+     * 계속 막는 것은 **신고 뒤에 일어나는 일**이다. 코드가 보장하는 것은 거기서 끝난다:
+     * 서버가 `chat_report` 에 한 줄 저장하고 피신고자 인덱스를 걸어 둔다. 그 뒤에 사람이 언제
+     * 무엇을 하는지(확인·경고·정지)는 어느 코드도 정하지 않는다 — 백엔드에 제재 수단 자체가
+     * 없다(`docs/BACKEND-GAP-CLEANUP.md` §1). 2026-10-13 에 지운 「신고가 들어오면 24시간 안에
+     * 확인해요」가 **모양만 바꿔 돌아오는 것**을 막는 것이 이 테스트의 일이다.
      */
     @Test
-    fun `매너 서약은 신고 처리를 약속하지 않는다`() {
+    fun `매너 서약은 신고 뒤 운영 대응을 약속하지 않는다`() {
         val all = mannerPledgeItems.joinToString(" ") { it.title + " " + (it.description ?: "") }
 
-        assertFalse(all, all.contains("신고가 들어오면"))
+        // 시한 — 지킬 수단이 없다
         assertFalse(all, all.contains("24시간"))
+        assertFalse(all, all.contains("시간 안에"))
+        // 「신고가 들어오면 (운영이) …」 꼴 — 주체가 운영으로 넘어가는 순간 약속이 된다
+        assertFalse(all, all.contains("신고가 들어오면"))
+        assertFalse(all, all.contains("접수되면"))
+        // 제재 — 서버에 수단이 없다
+        assertFalse(all, all.contains("경고"))
+        assertFalse(all, all.contains("정지"))
+    }
+
+    /**
+     * 반대 방향도 못 박는다 — **창구가 있다는 사실은 남아 있어야 한다.**
+     *
+     * 2026-10-13 에 이 줄은 「기능이 없으니 문구도 지운다」로 비워졌다. 기능이 생긴 지금 비어
+     * 있으면 같은 어긋남이 뒤집힌 꼴이다: 전부 동의해야 가입되는 화면에서 「불쾌한 말과 행동을
+     * 하지 않을게요」만 홀로 설명이 없으면, 어겼을 때 무엇을 할 수 있는지 **알려 줄 자리가
+     * 있는데 비워 둔** 상태가 된다. 그리고 이 줄이 가리키는 길(24 채팅방 롱프레스)은 실제로
+     * 있다 — `ChatUiMessage.canReport` · `ChatRepository.reportMessage`.
+     */
+    @Test
+    fun `매너 서약은 신고 창구가 생긴 것을 말한다`() {
+        val pledge = mannerPledgeItems.single { it.title.contains("불쾌한 말과 행동") }
+
+        assertTrue("신고 창구가 생겼는데 설명이 비어 있다", !pledge.description.isNullOrBlank())
+        assertTrue(pledge.description.orEmpty(), pledge.description.orEmpty().contains("신고"))
     }
 }

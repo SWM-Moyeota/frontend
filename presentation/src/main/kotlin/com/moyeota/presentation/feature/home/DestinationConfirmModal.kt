@@ -104,9 +104,11 @@ data class MatchConditions(
  *   선택한 매칭 조건(인원)을 그대로 넘긴다.
  *
  * 선택 규칙(디스크립션):
- * - 인원 1인/2인/3인 → 예상 1인 요금 재계산 ([RoutePreviewUi.estimatedFare] ÷ 인원, 10원 단위 반올림)
- *   기본값 3인. **고를 수 있는 조건은 이것뿐이다** — 반경 칩과 「매칭 방식」 행은 지웠다
+ * - 인원(나 포함) 1~3명 → 예상 1인 요금 재계산 ([RoutePreviewUi.estimatedFare] ÷ 인원, [farePerPersonWon])
+ *   기본값 3명. **고를 수 있는 조건은 이것뿐이다** — 반경 칩과 「매칭 방식」 행은 지웠다
  *   ([MatchConditions] KDoc: 서버가 반경을 고정값으로 정하고, 승차지점 개념 자체가 없다)
+ * - **1명을 고르면** 칩 행 아래에 「혼자 출발한다」 안내가 붙는다([soloCapacityNotice]) —
+ *   정원 1 은 만든 즉시 꽉 찬 방이라 아무도 합류할 수 없다. 선택지와 전송 값은 그대로다
  *
  * 레이아웃(디스크립션):
  * - 지도가 헤더 아래를 전부 채우고, 그 위에 **드래그로 접었다 펴는 시트**가 얹힌다
@@ -142,6 +144,16 @@ fun DestinationConfirmModal(
     nearbyCandidates: List<MatchCandidate> = emptyList(),
     /** 추천 카드를 누르면 그 방의 합류 확인(19)으로 간다 — 합류 흐름은 이미 있는 걸 그대로 쓴다. */
     onCandidateClick: (MatchCandidate) -> Unit = {},
+    /**
+     * 추천 **조회가 실패**했다 — 「주변에 방이 없다」와 구별해야 하는 상태다.
+     *
+     * 둘을 합치면 다음 행동이 정반대인 두 상황이 같게 보인다: 후보 0건이면 방을 만드는 게 맞지만,
+     * 조회 실패(OSRM 장애·배포 중 503)면 **300m 안에 방이 있어도** 섹션이 사라져 사용자가 모르고
+     * 새 방을 만든다. 합승 매칭이 조용히 꺼지는 자리라 작은 재시도 줄을 둔다 — 차단형 배너가
+     * 아닌 이유는 추천이 부가 기능이라는 기존 판단을 유지하기 때문이다.
+     */
+    nearbyLoadFailed: Boolean = false,
+    onRetryNearby: () -> Unit = {},
 ) {
     // 기본값: 3인 (디스크립션 유효값 규칙)
     var peopleCount by rememberSaveable { mutableIntStateOf(3) }
@@ -149,11 +161,10 @@ fun DestinationConfirmModal(
     var adjustTarget by remember { mutableStateOf<PinTarget?>(null) }
     val canAdjust = destinationPosition != null || originPosition != null
 
-    // 1인 요금 = 미터기 추정 총액 ÷ 인원, 10원 단위 반올림 (25 요금 화면과 같은 컨벤션).
-    // 추정이 아직 없거나 실패했으면 null — 문구를 감추되 CTA 는 살려둔다.
+    // 1인 요금 = 미터기 추정 총액 ÷ 인원, 10원 단위 반올림 ([farePerPersonWon] — 19·22·25 가 쓰는
+    // 서버 값 계산식과 **같은 규칙**이다). 추정이 아직 없거나 실패했으면 null — 문구를 감추되 CTA 는 살려둔다.
     val farePerPersonText = routePreview.estimatedFare?.let { total ->
-        val perPerson = ((total.toDouble() / peopleCount) / 10.0).roundToInt() * 10
-        "%,d".format(perPerson)
+        "%,d".format(farePerPersonWon(total, peopleCount))
     }
     // 요약 칩 — 거리는 서버 응답에 없어 시간·총요금으로 대체한다(와이어프레임의 2값 구조 유지)
     val routeSummaryLabel = when {
@@ -408,14 +419,48 @@ fun DestinationConfirmModal(
                                 .background(MoyeotaColor.SurfaceCanvas)
                                 .padding(horizontal = 20.dp),
                         ) {
-                            ConditionRow(label = "인원") {
+                            // 라벨에 「나 포함」을 박았다 — 서버 정원(`Capacity`)은 **방장을 포함한 총
+                            // 인원**이라(`Party.open` 이 생성자를 멤버로 넣고 `members.size == capacity`
+                            // 면 꽉 찬 것으로 본다) 「3인」만 쓰면 「나 외 3명」으로 읽힌다. 「나 포함 N명」을
+                            // 칩마다 쓰지 않고 라벨로 올린 건 레이아웃 때문이다 — 칩 3개가 좁은 폰(360dp)에서
+                            // 카드 밖으로 밀려 잘린 전례가 있다([ConditionRow] 주석).
+                            ConditionRow(label = "인원(나 포함)") {
                                 listOf(1, 2, 3).forEach { count ->
                                     ConditionChip(
-                                        text = "${count}인",
+                                        text = "${count}명",
                                         selected = peopleCount == count,
                                         onClick = { peopleCount = count },
                                     )
                                 }
+                            }
+                            // 「1명」을 고른 사람에게만 **고르는 자리에서** 결과를 말해 준다
+                            // ([soloCapacityNotice]). 1 은 지우지 않았다 — 혼자 타기를 상품으로
+                            // 인정한 결정이다. 다만 그 선택의 결과(정원 1 = 만든 즉시 꽉 찬 방 =
+                            // 아무도 합류 못 함)는 서버 규약을 아는 사람만 읽어 낼 수 있어서,
+                            // 안내가 없으면 「1명」은 그냥 「나 외 1명」처럼 보인다.
+                            //
+                            // 자리를 늘 비워 두지 **않고** 1명일 때만 줄을 넣은 근거:
+                            // 이 카드는 [MapSheetScaffold] 의 sheetDetail 안에 있고 그 영역은
+                            // **앵커가 정한 고정 높이 + 세로 스크롤**이다(콘텐츠가 높이를 정하지
+                            // 않는다). 그래서 이 줄이 생겨도 시트 높이·지도 노출·CTA 위치는 **한
+                            // 픽셀도 움직이지 않고**, 아래의 「걸어서 가까운 방」 섹션만 그만큼
+                            // 밀린다 — 손가락이 닿아 있는 칩 행은 안내보다 **위**라 제자리다.
+                            // 상시 빈 자리를 두면 2·3명(기본값 3)에서 늘 비어 있는 ~30dp 가
+                            // 좁은 폰의 스크롤 영역에서 추천 카드 한 줄만큼을 먹는다.
+                            //
+                            // 색·크기는 이 파일의 보조 문구 관습(13sp Medium + [GrayMute])이다.
+                            // 빨강·경고 아이콘을 쓰지 않는다 — 정상 선택이고, 오류로 읽히면
+                            // 사용자는 고를 수 있는 값을 「막힌 값」으로 본다.
+                            // 줄바꿈을 막지 않는다(maxLines 없음) — 큰 글꼴 설정에서 잘린 안내보다
+                            // 두 줄이 낫고, 스크롤 영역 안이라 잘릴 일도 없다.
+                            soloCapacityNotice(peopleCount)?.let { notice ->
+                                Text(
+                                    text = notice,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = GrayMute,
+                                    modifier = Modifier.padding(bottom = 11.dp),
+                                )
                             }
                             // 「출발지 반경」·「도착지 반경」 행은 지웠다(2026-10-14) — 서버가 방 생성
                             // 요청에서 반경을 빼고 고정값(500m)을 쓴다(Backend `a668aee`). 고른 값이
@@ -438,6 +483,25 @@ fun DestinationConfirmModal(
                                 candidates = nearbyCandidates,
                                 onCandidateClick = onCandidateClick,
                             )
+                        } else if (nearbyLoadFailed) {
+                            // 후보 0건과 달리 **못 물어봤다**는 뜻이라 사실을 말하고 길을 준다.
+                            Spacer(Modifier.height(16.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "가까운 방을 불러오지 못했어요",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = GrayAsh,
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    text = "다시 시도",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MoyeotaColor.Primary600,
+                                    modifier = Modifier.clickable { onRetryNearby() },
+                                )
+                            }
                         }
 
                         Spacer(Modifier.height(16.dp))
@@ -600,15 +664,22 @@ private fun NearbyCandidateCard(candidate: MatchCandidate, onClick: () -> Unit) 
 }
 
 /**
- * 추천 카드의 인원 문구 — 17 탐색 카드와 같은 「2/3명」 모양으로 맞춘다.
+ * 방 카드의 인원 문구 — **16 추천 카드와 17 탐색 카드(목록 배지·지도 마커 캡션)가 같이 쓰는 한 곳**이다.
+ *
+ * 「같은 모양이다」를 주석으로만 약속해 두면 지켜지지 않는다: 예전에는 17 쪽이 문자열 리터럴
+ * (`"${members.size}/${capacity}명"`)이라, 인원을 모르는 방을 16 은 「최대 3명」으로 17 은 「0/3명」으로
+ * 썼고 정원을 모르는 방은 17 만 「2/0명」을 그렸다. 그래서 **호출부를 이 함수 하나로 모았다** —
+ * `feature/home` 에 있지만 `internal` 이라 presentation 모듈 안에서는 어디서나 부른다(공용 자리인
+ * `presentation/core` 로 옮기는 게 더 깔끔하지만, 이 함수의 근거·테스트가 16 과 함께 있어 여기 둔다).
  *
  * 이 숫자가 카드에서 가장 중요한 정보다. **2/3 방은 내가 들어가면 바로 출발하고 1/3 방은 한 명을
  * 더 기다려야 한다** — 걸어서 3분이 1/3 이고 6분이 2/3 이면 6분 쪽을 골라야 하는 상황인데,
  * 정원만 보여 주면 두 방이 똑같아 보인다.
  *
  * [joined] 는 [com.moyeota.domain.model.Ride.members] 의 크기이고 **0 은 「빈 방」이 아니라
- * 「모른다」**는 뜻이다(서버가 `currentMembers` 를 안 주는 옛 배포). 후보는 모집 중인 방만 오고
- * 거기엔 최소 방장 1명이 있으므로 0 은 나올 수 없는 값이다. 모를 때는 지어내지 않고 정원만 쓴다.
+ * 「모른다」**는 뜻이다(서버가 `currentMembers` 를 안 주는 옛 배포 — 그때 매퍼가 멤버를 지어내지 않고
+ * 빈 목록으로 남긴다). 16 추천과 17 탐색 모두 `status = ACTIVE` 인 방만 받고 그런 방에는 최소 방장
+ * 1명이 있으므로 0 은 나올 수 없는 값이다. 모를 때는 지어내지 않고 정원만 쓴다.
  *
  * [capacity] 까지 0 이면 **빈 문자열을 돌려주고 호출부가 줄 자체를 지운다** — 「최대 0명」은
  * 사용자에게 아무 뜻도 없다.
@@ -618,6 +689,46 @@ internal fun headcountLabel(joined: Int, capacity: Int): String = when {
     joined <= 0 -> "최대 ${capacity}명"
     else -> "$joined/${capacity}명"
 }
+
+/**
+ * 예상 총 요금 ÷ 인원 = 1인 요금(원), **10원 단위 반올림**.
+ *
+ * **이 규칙은 data 쪽 `farePerPerson` 과 한 글자도 다르면 안 된다.** 16 모달은 방을 만들기 **전**의
+ * 추정치(`POST /matching/routes`)를 인원으로 나누고, 19 합류·22 상세·25 배차는 서버가 방에 박아 둔
+ * 요금을 정원으로 나눈 값(`Ride.farePerPerson`)을 쓴다 — 나누는 수가 같은 값(정원)이므로 **반올림
+ * 규칙만 어긋나도 같은 방이 화면마다 다른 금액**을 보여 준다(실제로 7,900원·3인 방이 16 에서
+ * 2,630원, 25 에서 2,633원이었다). 모듈 경계(presentation ↔ data) 때문에 함수를 공유할 수 없어
+ * 규칙을 양쪽에 적고, 「두 값이 같다」는 `FarePerPersonRuleTest`(여기)와 `PartyMappersTest`(data)가
+ * **같은 표**로 못 박는다.
+ *
+ * 10원 단위인 근거는 택시 요금 표기 관례다 — 1원 단위 금액은 실제로 낼 수 없다.
+ * [people] 이 0 이하면 0 을 돌려준다(data 쪽의 `capacity <= 0` 가드와 같은 자리). 화면에서는 칩이
+ * 1~3 뿐이라 닿지 않는 길이지만, 두 규칙을 같은 모양으로 유지해 비교 테스트가 성립하게 둔다.
+ */
+internal fun farePerPersonWon(totalFare: Int, people: Int): Int =
+    if (people <= 0) 0 else ((totalFare.toDouble() / people) / 10.0).roundToInt() * 10
+
+/**
+ * 「인원(나 포함)」에서 **1명**을 고른 상태의 안내 문구. 1 이 아니면 null — 줄을 그리지 않는다.
+ *
+ * 왜 필요한가: 서버 `Capacity` 는 **방장을 포함한 총 인원**이고 `Party.open` 이 생성자를 멤버로
+ * 넣는다([MatchConditions]). 그래서 1 로 방을 만들면 `members.size == capacity` 가 **만든 즉시**
+ * 참이 되어 아무도 합류할 수 없고, 사용자는 「같이 탈 사람 찾기」를 눌렀는데 혼자 출발한다.
+ * 선택지에서 1 을 지우지 않기로 한 결정(혼자 타기를 상품으로 인정)이 성립하려면, 그 결과를
+ * **고르는 자리에서** 말해 주는 것이 조건이다.
+ *
+ * 문구 규칙:
+ * - 「1/1 로 꽉 찬 방」·「정원」 같은 내부 용어를 쓰지 않는다. 사용자가 겪는 일은 두 가지뿐이다 —
+ *   **동승자를 받지 않고, 혼자 출발한다.** 둘 다 적는다(하나만 적으면 나머지를 추측하게 된다).
+ * - 「같이 탈 사람」은 이 화면 CTA 와 **같은 말**이다. 「동승자」·「합승 인원」으로 바꾸지 말 것 —
+ *   CTA 가 「같이 탈 사람 찾기」인데 안내가 다른 단어를 쓰면 같은 대상인지 한 번 더 생각해야 한다.
+ * - 요금과 모순되지 않는다: 1명이면 [farePerPersonWon] 이 총액을 1 로 나눠 **1인 요금 = 총 요금**이
+ *   되고(「예상 N분 · 총 7,900원」 칩과 「예상 요금 1인 7,900원」이 같은 수가 된다) 그건 혼자
+ *   출발하는 방의 **사실**이다. 그래서 요금 문구는 손대지 않았다 — 여기서 「요금을 전부 부담한다」를
+ *   한 번 더 말하면 같은 사실을 두 자리에서 말하게 되고, 한 줄 안내가 두 줄로 늘어난다.
+ */
+internal fun soloCapacityNotice(capacity: Int): String? =
+    if (capacity == 1) "같이 탈 사람을 받지 않고 혼자 출발해요" else null
 
 /**
  * 도보 시간(초) → 표시 문구. **「걸어서」를 반드시 붙인다** — 서버가 주는 값은 탑승지까지 걷는

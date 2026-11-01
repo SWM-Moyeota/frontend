@@ -118,6 +118,17 @@ internal fun authErrorMessage(error: AuthError, serverMessage: String? = null): 
         "탈퇴한 번호는 ${AuthPolicy.REJOIN_RESTRICTED_DAYS}일 동안 다시 가입할 수 없어요. 기간이 지난 뒤에 가입하거나 다른 번호를 써 주세요"
     AuthError.NICKNAME_DUPLICATED -> "이미 사용 중인 닉네임이에요"
     AuthError.INVALID_NICKNAME -> "닉네임은 한글·영문·숫자 2~10자로 입력해 주세요"
+    // 사용자가 고칠 입력이 아니라 앱이 목록 밖의 키를 보낸 것이다 — **같은 키로 재시도를 권하지 않는다**
+    // (같은 키를 다시 눌러도 같은 400 이다).
+    //
+    // 「목록을 다시 불러와 주세요」라고 하지 않는 이유: 목록 재조회는 앱이 스스로 한다
+    // (`ProfileEditViewModel.save()` 의 catch 가 `loadImages()` 를 부르고 고른 값을 비운다).
+    // 36 에는 사용자가 누를 「다시 불러오기」 자리가 없으므로, 그 문구는 할 수 없는 일을 시킨다.
+    // 사용자에게 남은 할 일은 새로 받은 격자에서 다시 고르는 것 하나뿐이다.
+    //
+    // 이 코드(400 `USER112`)가 뜨는 창구는 `PATCH /users/me` 뿐이다 — 가입 요청에는 imageKey 가
+    // 없어서(`UpdateProfileRequest` 에만 있다) 이 문구를 보는 화면은 36 하나다.
+    AuthError.INVALID_PROFILE_IMAGE -> "지금은 고를 수 없는 이미지예요. 다시 골라 주세요"
     // 닉네임 형식 오류는 두 코드로 온다 — 서버 VO 가 먼저 걸리면 USER107, Bean Validation 이
     // 먼저 걸리면 INVALID_REQUEST(message = "nickname: …") 다. 사용자에겐 같은 사실이므로 한 문구로 모은다.
     AuthError.INVALID_REQUEST -> when {

@@ -16,7 +16,9 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.moyeota.core.designsystem.component.latLngOrNull
 import com.moyeota.domain.model.MatchCandidate
 import com.moyeota.domain.model.NewParty
+import com.moyeota.domain.model.PartyOpenException
 import com.moyeota.domain.model.Place
+import com.moyeota.domain.model.RealtimeMatchException
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RouteEstimate
 import com.moyeota.domain.repository.PlaceRepository
@@ -30,6 +32,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
@@ -38,6 +41,55 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.util.Calendar
 
+/**
+ * 사유를 가릴 수 없는 방 생성 실패의 일반 문구 — 네트워크 실패와 **모르는 코드**가 여기로 떨어진다.
+ * 서버가 `MatchingErrorCode` 를 늘려도 앱이 틀린 말을 하지 않는다(21 의 `FINISH_FAILED_MESSAGE` 와
+ * 같은 규칙: 지어내는 것보다 모른다고 하는 게 낫다). 문구는 예전 단일 문구를 그대로 쓴다.
+ */
+private const val OPEN_FAILED_MESSAGE = "동승 방을 만들지 못했어요. 잠시 후 다시 시도해 주세요"
+
+/**
+ * 「이미 참여 중인 방이 있다」 — **세 자리가 같은 말을 해야 한다.**
+ *
+ * 서버가 같은 사유(`ALREADY_JOINED_OTHER_PARTY`)로 막는 곳이 셋이다: 방 생성(`PartyService.open`),
+ * 추천 조회(`findRealtimeCandidates`), 합류(`join`). 앞의 둘이 이 상수를 함께 쓰고, 합류는 문구 끝이
+ * 다르다(「그 방에서 나온 뒤 합류해 주세요」 — 그쪽은 돌아갈 곳이 목록이라 할 일이 다르다).
+ *
+ * 돌아갈 곳을 **홈**으로 적는 이유: 진행 중인 방으로 들어가는 길은 홈 배너뿐이다(21 의
+ * `finishFailureMessage` 가 멤버 아님에 쓰는 「홈에서 진행 중인 방을 확인해 주세요」와 같은 근거).
+ */
+internal const val ALREADY_IN_PARTY_MESSAGE = "이미 참여 중인 방이 있어요. 홈에서 진행 중인 방을 확인해 주세요"
+
+/**
+ * 방 생성 실패를 사용자 문구로 옮긴다 — 실패마다 **다음 행동이 다르다**
+ * (20 합류의 `joinFailureMessage`·21 완료의 `finishFailureMessage` 와 같은 자리·같은 이유).
+ *
+ * | 사유 | 서버 코드(HTTP) | 사용자가 할 일 |
+ * |---|---|---|
+ * | 이미 참여 중인 방 | `ALREADY_JOINED_OTHER_PARTY` (409) | 홈 배너로 그 방에 들어가 정리한다 |
+ * | 출발지 = 도착지 | `SAME_DEPARTURE_DESTINATION` (400) | **핀을 옮긴다** |
+ * | 서비스 지역 밖 | `OUT_OF_SERVICE_AREA` (400) | 다른 장소를 고른다 |
+ * | 정원이 1~3 아님 | `INVALID_CAPACITY` (400) | 인원을 다시 고른다(사실상 앱 버그다) |
+ * | 경로를 못 받음 | `ROUTE_SEARCH_FAILED` (502) · `INVALID_ROUTE_ESTIMATE`·`ROUTE_NOT_FOUND` (400) | 잠시 뒤 다시, 또는 핀을 조금 옮긴다 |
+ * | 그 밖·네트워크 | 코드 없음 | [OPEN_FAILED_MESSAGE] |
+ *
+ * **상태 코드로 폴백하지 않는다** — 400 이 네 가지라 「400 이니 핀을 옮겨 주세요」가 거짓이 될 수 있다.
+ * 코드를 모르면 [PartyOpenException.code] 가 null 이고 일반 문구로 떨어진다(서버가 503 HTML 을
+ * 돌려주는 경우도 여기다 — `readApiError()` 가 null 을 돌려준다).
+ *
+ * 「출발지와 도착지가 같다」에 **「잠시 후 다시」를 붙이지 않는 것**이 이 분기의 핵심이다. 15 의 50m
+ * 검사를 통과한 뒤에도 16 의 핀 조정은 그 검사를 **다시 거치지 않아서**, 두 핀을 겹쳐 놓으면 실제로
+ * 이 400 이 떨어진다 — 기다려서 풀리지 않는다.
+ */
+internal fun openFailureMessage(e: PartyOpenException): String = when {
+    e.isAlreadyInAnotherParty -> ALREADY_IN_PARTY_MESSAGE
+    e.isSameDepartureDestination -> "출발지와 도착지가 같아요. 핀을 옮겨 조금 떨어뜨려 주세요"
+    e.isOutOfServiceArea -> "서비스 지역을 벗어난 위치예요. 출발지와 도착지를 다시 골라 주세요"
+    e.isInvalidCapacity -> "인원은 1~3명까지만 정할 수 있어요"
+    e.isRouteUnavailable -> "경로를 찾지 못했어요. 잠시 후 다시 시도하거나 출발·도착지를 조금 옮겨 주세요"
+    else -> OPEN_FAILED_MESSAGE
+}
+
 // 방 생성자는 서버가 Bearer 토큰 주체로 정한다 — 요청 본문에 사용자 id 를 싣지 않는다.
 class CreatePartyViewModel(private val repository: RideRepository) : ViewModel() {
 
@@ -45,11 +97,33 @@ class CreatePartyViewModel(private val repository: RideRepository) : ViewModel()
         val creating: Boolean = false,
         val errorMessage: String? = null,
         val createdParty: Ride? = null,
+        /**
+         * **진행 중인 방 기억을 되살려야 한다** — 생성이 409 `ALREADY_JOINED_OTHER_PARTY` 로 막혔다.
+         *
+         * 문구만으로는 탈출구가 되지 않는다. 그 사람의 유일한 복구 경로는 **홈 배너 → 21 → 「그만
+         * 찾기」**인데, 그 배너는 `ActivePartyRepository.resolve()` 가 방을 찾아야 뜬다 — 앱을 다시
+         * 깔았거나 기억이 지워진 상태라면 조회를 한 번 더 돌려야 그 방이 보인다. 그래서 「문구」와
+         * 「탈출구」를 따로 둔다.
+         *
+         * Route 가 이 값을 콜백으로 바꿔 올리고(`onActivePartyRefresh`), 호출부(`MainNavGraph`)가
+         * `ActivePartyViewModel.refresh()` 에 꽂는다 — 이 ViewModel 은 그 홀더에 닿을 수 없다
+         * (계층이 다르고, 모달은 `ActivePartyViewModel` 을 인자로 받지 않는다).
+         */
+        val needsActivePartyRefresh: Boolean = false,
     )
 
     private val _uiState = MutableStateFlow(UiState())
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
 
+    /**
+     * 방 생성 제출. 실패는 [PartyOpenException] 으로 좁혀 올라오고 [openFailureMessage] 가 사유별
+     * 문구로 가른다 — 예전에는 **모든 사유가 「잠시 후 다시 시도해 주세요」 하나**였다.
+     *
+     * 그게 특히 나쁜 자리였던 까닭은 이 엔드포인트의 실패가 **기다려서 풀리는 것과 사용자가 고쳐야
+     * 하는 것으로 갈리기** 때문이다: 409 「이미 참여 중인 방」은 그 방을 정리해야 풀리고(그 방이 아무도
+     * 합류하지 않은 ACTIVE 방이면 서버 30분 스윕에도 남아 **영구 교착**이다), 400 「출발지와 도착지가
+     * 같다」는 핀을 옮겨야 풀린다. 둘 다 「잠시 후 다시」로 안내하면 영원히 같은 실패를 맞는다.
+     */
     fun createParty(origin: Place, destination: Place, conditions: MatchConditions) {
         if (_uiState.value.creating) return // 중복 제출 차단
         viewModelScope.launch {
@@ -63,22 +137,39 @@ class CreatePartyViewModel(private val repository: RideRepository) : ViewModel()
                         destinationLng = destination.longitude,
                         departure = origin.name,
                         destination = destination.name,
-                        // 서버 상한 3 — 초과하면 메시지 없는 500 이 떨어져 원인 파악이 어렵다.
-                        // 16 모달 칩이 1~3 뿐이지만 계약을 여기서 한 번 더 못박는다.
+                        // 서버 상한 3. 16 모달 칩이 1~3 뿐이지만 계약을 여기서 한 번 더 못박는다 —
+                        // 벗어나면 400 `INVALID_CAPACITY` 이고([openFailureMessage]), 값이 **빠지면**
+                        // 서버가 primitive 로 풀다 500 을 낸다(사유 없는 실패 = 일반 문구).
                         capacity = conditions.capacity.coerceIn(1, MAX_PARTY_CAPACITY),
                         // 반경은 싣지 않는다 — 서버가 요청에서 빼고 고정값(500m)을 쓴다
                         // (Backend `a668aee`). 16 의 반경 칩도 함께 내렸다([MatchConditions]).
                     ),
                 )
                 _uiState.update { it.copy(creating = false, createdParty = party) }
+            } catch (e: CancellationException) {
+                // 모달을 닫으며 취소된 것 — 실패 문구를 띄우지 않는다(20 합류와 같은 처리)
+                throw e
+            } catch (e: PartyOpenException) {
+                _uiState.update {
+                    it.copy(
+                        creating = false,
+                        errorMessage = openFailureMessage(e),
+                        // 409 는 문구만으로 풀리지 않는다 — 홈 배너가 뜨도록 진행 중 방 조회를 되살린다.
+                        needsActivePartyRefresh = it.needsActivePartyRefresh || e.isAlreadyInAnotherParty,
+                    )
+                }
             } catch (e: Exception) {
-                _uiState.update { it.copy(creating = false, errorMessage = "동승 방을 만들지 못했어요. 잠시 후 다시 시도해 주세요") }
+                // 데이터 계층이 좁히지 못한 실패(직렬화 등). 사유를 모르므로 일반 문구다.
+                _uiState.update { it.copy(creating = false, errorMessage = OPEN_FAILED_MESSAGE) }
             }
         }
     }
 
     companion object {
-        // 백엔드 OpenPartyRequest 검증 상한. 초과 시 400 이 아니라 500 이 온다(에러 바디 없음).
+        // 백엔드 검증 상한(서버 `Capacity` record = 1~3). 넘기면 400 `INVALID_CAPACITY` 가 오고
+        // 화면은 사유별 문구로 안내한다([openFailureMessage]) — 예전에는 모든 실패가 한 문구라
+        // 「에러 바디 없는 500」과 구별되지 않았다. 그래도 coerceIn 은 남긴다: 서버가 막아 주는 것과
+        // 앱이 보내지 않는 것은 다른 보호막이다.
         const val MAX_PARTY_CAPACITY = 3
 
         fun factory(repository: RideRepository) = viewModelFactory {
@@ -165,12 +256,42 @@ class RoutePreviewViewModel(private val repository: RideRepository) : ViewModel(
 class NearbyCandidatesViewModel(private val repository: RideRepository) : ViewModel() {
 
     sealed interface UiState {
-        /** 그릴 게 없다 — 좌표가 없거나, 후보가 없거나, 추천을 못 가져왔다. **셋 다 섹션을 숨긴다.** */
+        /**
+         * 그릴 게 없다 — 좌표가 없거나, 후보가 없다. **둘 다 섹션을 숨긴다.**
+         *
+         * 예전에는 **조회 실패까지** 여기로 접었다. 그게 결함이었다: 「후보 0개」와 「못 가져왔다」는
+         * 사용자에게 구별되지 않는데 **올바른 다음 행동이 정반대**다(방 만들기 / 다시 시도). OSRM 이
+         * 죽거나 503 이면 300m 안에 방이 있어도 섹션이 그냥 사라지고, 사용자는 **합승이 가능한데도**
+         * 새 방을 만든다 — 합승 매칭이라는 제품의 핵심이 조용히 꺼지는 자리다.
+         *
+         * 그래서 실패를 [Failed]·[AlreadyInParty] 로 갈라 냈고, **이 상태의 뜻은 좁혔다.**
+         * 다만 화면이 아직 새 상태를 모르면 섹션을 안 그리는 것은 같다(호출부는 `Success` 만 본다).
+         */
         data object Hidden : UiState
         data object Loading : UiState
 
         /** 서버가 도보 시간 순으로 정렬한 1~5개. **재정렬하지 않는다.** */
         data class Success(val candidates: List<MatchCandidate>) : UiState
+
+        /**
+         * **조회 자체가 실패했다**(502 경로 엔진·503·네트워크·모르는 코드). 후보가 없는 것과 다르다.
+         *
+         * 화면은 이걸 **차단형 배너로 띄우지 않는다** — 방을 만들러 온 사용자가 자기가 뭘 잘못했다고
+         * 읽는다. 작은 인라인 「다시 시도」 줄 하나면 된다([retry]). 그 줄이 있어야 OSRM 장애가
+         * 「주변에 방이 없다」로 위장되지 않는다.
+         */
+        data object Failed : UiState
+
+        /**
+         * 409 `ALREADY_JOINED_OTHER_PARTY` — **이미 진행 중인 방이 있다.** 서버
+         * `PartyService.findRealtimeCandidates` 도 `validateNotInOngoingParty` 를 먼저 탄다.
+         *
+         * 추천을 보여 줄 이유가 없다는 점은 예전과 같지만, **이 신호를 지우면 안 된다**: 바로 뒤에
+         * 사용자가 누를 「방 만들기」도 **같은 409 로 막힌다**(그쪽은 영구 교착이다 —
+         * [openFailureMessage] 의 409 분기 참고). 즉 이건 그 교착의 **예고 신호**이고, 화면은 같은
+         * 사유를 같은 말로 안내하며([ALREADY_IN_PARTY_MESSAGE]) 진행 중 방 조회를 되살려야 한다.
+         */
+        data object AlreadyInParty : UiState
     }
 
     private data class Query(
@@ -182,8 +303,17 @@ class NearbyCandidatesViewModel(private val repository: RideRepository) : ViewMo
 
     private val query = MutableStateFlow<Query?>(null)
 
+    /**
+     * 「다시 시도」가 올리는 번호 — **같은 좌표로 다시 조회할 유일한 수단**이다.
+     *
+     * [query] 는 [MutableStateFlow] 라 같은 값을 넣으면 흘리지 않는다(그게 리컴포지션 중복 호출을
+     * 막는 장치다). 재시도는 좌표가 **그대로인 채** 다시 부르는 일이라 그 중복 방지와 정면으로
+     * 부딪히므로, 입력을 하나 더 두어 가른다.
+     */
+    private val attempt = MutableStateFlow(0)
+
     @OptIn(ExperimentalCoroutinesApi::class)
-    val uiState: StateFlow<UiState> = query
+    val uiState: StateFlow<UiState> = combine(query, attempt) { q, _ -> q }
         .flatMapLatest { q ->
             if (q == null) {
                 flowOf(UiState.Hidden)
@@ -198,12 +328,12 @@ class NearbyCandidatesViewModel(private val repository: RideRepository) : ViewMo
                     )
                     // 빈 목록은 성공이지만 그릴 것이 없다 — 「후보 0개」를 띄우지 않는다.
                     emit(if (candidates.isEmpty()) UiState.Hidden else UiState.Success(candidates))
-                }.catch {
-                    // 추천은 **부가 기능**이다. 경로 엔진이 죽었든(502) 이미 방이 있든(409) 화면은
-                    // 똑같이 섹션을 숨기고 방 만들기로 흘린다 — 여기서 배너를 띄우면 방을 만들러 온
-                    // 사용자가 자기가 뭘 잘못했다고 읽는다. 사유별 분기는 RealtimeMatchException 에
-                    // 남겨 두었으니 필요해지면 그때 갈라 쓴다.
-                    emit(UiState.Hidden)
+                }.catch { cause ->
+                    // 추천은 **부가 기능**이지만, 실패를 「후보 0개」와 똑같이 다루면 안 된다 —
+                    // 둘의 올바른 다음 행동이 정반대다(다시 시도 / 방 만들기). 차단형 배너는
+                    // 여전히 띄우지 않는다: 가르는 건 **상태**이고, 그 상태를 어떻게 보여 줄지는
+                    // 화면이 정한다(UiState.Failed KDoc).
+                    emit(candidatesFailure(cause))
                 }
             }
         }
@@ -216,12 +346,43 @@ class NearbyCandidatesViewModel(private val repository: RideRepository) : ViewMo
             else Query(origin.latitude, origin.longitude, destination.latitude, destination.longitude)
     }
 
+    /**
+     * 「다시 시도」 — **같은 좌표로** 추천을 한 번 더 조회한다([UiState.Failed] 의 인라인 줄이 부른다).
+     *
+     * 폴링이 아니라 사용자가 누를 때만이다: 후보마다 서버가 도보 경로를 2번 계산하므로 자동 재시도를
+     * 걸면 장애 중인 경로 엔진을 앱이 대신 두드린다.
+     */
+    fun retry() {
+        attempt.update { it + 1 }
+    }
+
     companion object {
         fun factory(repository: RideRepository) = viewModelFactory {
             initializer { NearbyCandidatesViewModel(repository) }
         }
     }
 }
+
+/**
+ * 추천 조회 실패를 화면 상태로 옮긴다 — **「후보 0개」와 섞지 않는 게 요점**이다.
+ *
+ * | 사유 | 상태 | 왜 갈라야 하나 |
+ * |---|---|---|
+ * | 409 `ALREADY_JOINED_OTHER_PARTY` | [NearbyCandidatesViewModel.UiState.AlreadyInParty] | 추천도, **방 만들기도** 막힌 상태다 — 바로 뒤의 409 교착을 예고하는 신호라 지우면 안 된다 |
+ * | 그 밖(502·503·네트워크·모르는 코드) | [NearbyCandidatesViewModel.UiState.Failed] | 「주변에 방이 없다」가 아니라 **못 물어봤다**는 뜻이고, 할 일은 재시도다 |
+ *
+ * 빈 목록은 여기 오지 않는다 — 후보가 없는 건 성공이고, 데이터 계층이 예외로 올리지 않는다.
+ *
+ * [RealtimeMatchException] 이 아닌 실패(직렬화 등)도 [NearbyCandidatesViewModel.UiState.Failed] 다 —
+ * 사유를 모를 때 「진행 중인 방이 있어요」라고 **추측하지 않는다**(그 말은 거짓일 때 사용자를
+ * 없는 방으로 찾아 보내게 한다).
+ */
+internal fun candidatesFailure(cause: Throwable): NearbyCandidatesViewModel.UiState =
+    if ((cause as? RealtimeMatchException)?.isAlreadyInParty == true) {
+        NearbyCandidatesViewModel.UiState.AlreadyInParty
+    } else {
+        NearbyCandidatesViewModel.UiState.Failed
+    }
 
 /**
  * 16 핀 좌표 → 주소 (GET /places/reverse). 출발지·도착지의 **표시 이름과 방 생성 요청에 실리는
@@ -314,6 +475,19 @@ fun DestinationConfirmRoute(
      * 만들지 않고 남의 방 합류 흐름을 탄다. 같은 콜백으로 묶으면 호출부가 둘을 구분할 수 없다.
      */
     onCandidateSelected: (Ride) -> Unit = {},
+    /**
+     * **진행 중인 방 조회를 다시 돌려라** — 서버가 「이미 참여 중인 방이 있다」(409)고 답했다.
+     *
+     * 호출부는 `ActivePartyViewModel.refresh()` 를 꽂아야 한다. 문구만으로는 탈출구가 되지 않기
+     * 때문이다: 그 사람의 유일한 복구 경로가 **홈 배너 → 21 → 「그만 찾기」**인데, 배너는
+     * `ActivePartyRepository.resolve()` 가 그 방을 찾아야 뜬다
+     * ([CreatePartyViewModel.UiState.needsActivePartyRefresh] KDoc).
+     *
+     * 기본값이 「아무것도 안 함」인 이유: 배선이 있는 곳은 `MainNavGraph` 이고 그 파일은 지금 다른
+     * 작업이 쥐고 있다. 배선이 빠져도 **문구는 그대로 뜬다** — 최악이 「탈출구가 한 겹 적은 예전
+     * 상태」이고, 기본값을 필수 인자로 두면 머지 순서에 따라 빌드가 깨진다.
+     */
+    onActivePartyRefresh: () -> Unit = {},
 ) {
     val viewModel: CreatePartyViewModel = viewModel(factory = CreatePartyViewModel.factory(repository))
     val state by viewModel.uiState.collectAsState()
@@ -351,6 +525,15 @@ fun DestinationConfirmRoute(
     }
     val nearbyCandidates =
         (candidatesState as? NearbyCandidatesViewModel.UiState.Success)?.candidates.orEmpty()
+
+    // 「이미 참여 중인 방이 있다」를 **두 창구 중 어느 쪽에서든** 들었다 — 생성 409(눌러 본 뒤)와
+    // 추천 409(누르기 전)다. 둘 다 같은 사실이고 탈출구도 같으므로 함께 올린다. 추천 쪽이 먼저
+    // 뜨므로, 사용자가 「방 만들기」를 눌러 교착을 한 번 더 확인하기 전에 홈 배너가 준비된다.
+    val alreadyInParty = candidatesState is NearbyCandidatesViewModel.UiState.AlreadyInParty
+    val needsActivePartyRefresh = state.needsActivePartyRefresh || alreadyInParty
+    LaunchedEffect(needsActivePartyRefresh) {
+        if (needsActivePartyRefresh) onActivePartyRefresh()
+    }
 
     // 좌표 → 주소. 두 시점에만 부른다: (1) 조정 확정으로 좌표가 실제로 바뀐 필드, (2) 아래 GPS 출발지.
     val reverseViewModel: ReverseGeocodeViewModel =
@@ -402,7 +585,14 @@ fun DestinationConfirmRoute(
         destinationPosition = destinationPosition,
         originPosition = originPosition,
         creating = state.creating,
+        // 추천 409 를 **누르기 전에** 알려 준다 — 그 상태에서는 「방 만들기」도 같은 409 로 막히므로
+        // (서버가 두 경로 모두 validateNotInOngoingParty 를 먼저 탄다) 미리 말하는 쪽이 정확하다.
+        // 눌러 본 뒤의 실패 문구(state.errorMessage)가 있으면 그게 먼저다 — 더 최근의 사실이다.
+        // 추천의 **단순 실패**(UiState.Failed)는 여기 넣지 않는다: 차단형 배너로 띄우면 방을 만들러
+        // 온 사용자가 자기가 뭘 잘못했다고 읽는다 — 그 자리는 인라인 재시도 줄이고, 모달 쪽 배선이
+        // 필요하다(보고서 참고).
         errorMessage = state.errorMessage
+            ?: ALREADY_IN_PARTY_MESSAGE.takeIf { alreadyInParty }
             ?: "도착지 좌표가 없어요. 15 목적지 화면에서 장소를 다시 선택해 주세요".takeIf { destination == null }
             ?: "출발지가 없어요. 15 목적지 화면에서 출발지를 검색해 주세요".takeIf { origin == null },
         onDismiss = onDismiss,
@@ -419,6 +609,11 @@ fun DestinationConfirmRoute(
             adjustedDestination = newDestination
         },
         nearbyCandidates = nearbyCandidates,
+        // 「후보 0건」과 「못 물어봤다」를 모달이 구별해 그릴 수 있게 실패를 따로 넘긴다.
+        // 409(이미 참여 중)는 여기가 아니라 errorMessage 슬롯으로 간다 — 그 상태에서는
+        // 「방 만들기」도 같은 409 로 막히므로 재시도가 아니라 안내가 맞다.
+        nearbyLoadFailed = candidatesState is NearbyCandidatesViewModel.UiState.Failed,
+        onRetryNearby = candidatesViewModel::retry,
         // 추천을 고르면 **방을 만들지 않고** 그 방의 합류 확인(19)으로 넘긴다 — 합류 흐름은
         // 이미 있는 걸 그대로 쓴다. 인원·요금처럼 추천 응답에 없던 값은 거기서 방 상세로 채워진다.
         onCandidateClick = { candidate -> onCandidateSelected(candidate.ride) },

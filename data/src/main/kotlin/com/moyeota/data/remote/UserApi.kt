@@ -2,6 +2,9 @@ package com.moyeota.data.remote
 
 import com.moyeota.data.remote.dto.AccountDeletionRequest
 import com.moyeota.data.remote.dto.FcmTokenRequest
+import com.moyeota.data.remote.dto.ProfileImageResponse
+import com.moyeota.data.remote.dto.RIDE_RECORD_PAGE_SIZE
+import com.moyeota.data.remote.dto.RideRecordPageResponse
 import com.moyeota.data.remote.dto.UpdateProfileRequest
 import com.moyeota.data.remote.dto.UserProfileResponse
 import retrofit2.http.Body
@@ -10,6 +13,7 @@ import retrofit2.http.GET
 import retrofit2.http.HTTP
 import retrofit2.http.PATCH
 import retrofit2.http.PUT
+import retrofit2.http.Query
 
 /**
  * 경로 기준: user/interfaces/LocalUserController.java (`@RequestMapping("/api/v1/local")`).
@@ -47,6 +51,49 @@ interface UserApi {
      */
     @PATCH("api/v1/users/me")
     suspend fun updateProfile(@Body request: UpdateProfileRequest)
+
+    /**
+     * 고를 수 있는 프로필 이미지 목록. 200, 본문은 **엔벨로프 없는 벗은 배열**이다.
+     * 기준: `user/users/presentation/UserController.java` (`@RequestMapping("/api/v1/users")`).
+     *
+     * **경로에 `/me` 가 없고 복수형이다** — 되돌리기([resetProfileImage])는 반대로 `/me` 가 있고 단수다.
+     * 둘을 바꿔 쓰면 404 가 아니라 **401** 로 떨어져 세션 만료로 오인한다(위 [getMyProfile] KDoc 과 같은 함정).
+     * 값은 [com.moyeota.data.remote.AuthenticatedPathContractTest] 가 못 박는다.
+     *
+     * 사용자와 무관한 정적 목록인데도 **토큰이 필요하다**(`@CurrentUser` 가 없는데도 보호 구간이다).
+     * 즉 로그인 전 화면에서는 부를 수 없다.
+     *
+     * 실측(2026-11-01, 로컬 `:8080`):
+     * - 무토큰 → `401 {"code":"USER005","message":"로그인이 필요합니다."}` (404 가 아니다)
+     * - 토큰 있음 → 200, 엔벨로프 없는 배열 **16개**:
+     *   `[{"key":"profile/presets/01.png","url":"https://cdn.moyeota.co.kr/profile/presets/01.png"}, … 16.png]`
+     *   서버 설정 순서가 그대로 응답 순서다. 기본 키(`profile/presets/default.png`)는 **이 목록에 없다**.
+     */
+    @GET("api/v1/users/profile-images")
+    suspend fun getProfileImages(): List<ProfileImageResponse>
+
+    /**
+     * 프로필 이미지를 기본값으로 되돌린다. 204 No Content, **멱등**(이미 기본이어도 204).
+     * 기준: `user/users/presentation/UserController.java`.
+     *
+     * [deleteAccount] 의 `@HTTP(hasBody = true)` 패턴을 복사하지 마라 — 그건 본문에 비밀번호를
+     * 실어야 해서 쓴 우회이고, 되돌리기는 본문이 없어 평범한 [DELETE] 가 맞다.
+     *
+     * **같은 `/users/me` 계열이지만 탈퇴와 완전히 다른 경로다**: 탈퇴는 `DELETE /users/me`,
+     * 이건 `DELETE /users/me/profile-image`. 뒤에 한 조각을 빠뜨리면 **계정이 지워진다.**
+     *
+     * [updateProfile] 에 `imageKey = null` 을 보내는 것으로는 이 동작을 표현할 수 없다 —
+     * 서버는 넘어온 필드만 갱신하므로 null 은 "건드리지 마라"는 뜻이다.
+     *
+     * 실측(2026-11-01, 로컬 `:8080`, `moyeota1`):
+     * - `PATCH {"imageKey":"profile/presets/07.png"}` → 204, 직후 조회의 `imageUrl` 이 `…/07.png`
+     * - `DELETE` → 204, 조회가 `…/default.png` 로 돌아옴
+     * - `DELETE` **한 번 더** → 204, 값 그대로 (멱등 확인)
+     * - `PATCH {"imageKey":"profile/presets/default.png"}` → **400 `USER112`** — 기본 키는
+     *   프리셋 목록 밖이라 **직접 고를 수 없다.** 되돌리기 경로가 이 DELETE 뿐인 이유다.
+     */
+    @DELETE("api/v1/users/me/profile-image")
+    suspend fun resetProfileImage()
 
     /**
      * 푸시 토큰 등록. 204 No Content, 멱등(같은 토큰을 다시 보내도 덮어쓰기만 한다).
@@ -103,4 +150,41 @@ interface UserApi {
      */
     @HTTP(method = "DELETE", path = "api/v1/users/me", hasBody = true)
     suspend fun deleteAccount(@Body request: AccountDeletionRequest)
+
+    /**
+     * 내 탑승 기록 한 페이지. 200. 기준: `matching/record/RideRecordController.java`
+     * (`@RequestMapping("/api/v1")` + `@GetMapping("/users/me/parties")`).
+     *
+     * **경로 이름에 속지 마라 — 「내가 참여 중인 방 목록」이 아니다.** 하차까지 끝난 탑승만 온다.
+     * 진행 중인 방은 들어오지 않으므로 [com.moyeota.domain.repository.ActivePartyRepository] 의
+     * 로컬 기억을 이것으로 대체할 수 없다(실측 근거는 [RideRecordPageResponse] KDoc).
+     *
+     * **`status` 쿼리 파라미터는 없다.** `docs/BACKEND-GAP-CLEANUP.md` §4 가 적어 둔
+     * `?status=FINISHED` 는 구현되지 않은 추측이었다 — 붙여도 서버가 **조용히 무시**하고 200 이다
+     * (실측: `?status=ACTIVE` → 200, 결과가 파라미터 없을 때와 같다). 필터가 필요 없다:
+     * 서버가 이미 완료분만 준다.
+     *
+     * [cursor] 는 이전 응답의 `nextCursor` 를 그대로 보낸다. null 이면 첫 페이지이고, Retrofit 이
+     * 그 쿼리를 **아예 싣지 않는다**([UserApiRideRecordQueryTest] 가 나간 URL 로 못 박는다).
+     * [size] 범위는 **1~50**, 서버 기본 20([RIDE_RECORD_PAGE_SIZE]).
+     *
+     * 경로를 틀리면 404 가 아니라 **401** 로 떨어져 세션 만료로 오인한다(이 파일의 다른 KDoc 과
+     * 같은 함정 — Security 가 미매핑 경로도 보호한다). 값은
+     * [com.moyeota.data.remote.AuthenticatedPathContractTest] 가 못 박는다.
+     *
+     * 실측(2026-11-01, 로컬 `:8080`):
+     * - 기록 없음(`moyeota2`) → 200 `{"rides":[],"nextCursor":null,"hasNext":false}`
+     * - 기록 2건 → 200, `dropoffTime` 내림차순(partyId 69 → 67)
+     * - `size=1` 로 쪼갬 → 1페이지 `nextCursor=69, hasNext=true`,
+     *   `cursor=69` 2페이지 `nextCursor=null, hasNext=false`
+     * - `size=0`·`size=51` → 400 `INVALID_PAGE_SIZE`(`"조회 개수는 1~50 이어야 합니다."`)
+     * - `cursor=abc` → 400 `INVALID_REQUEST`(`"cursor: 형식이 올바르지 않습니다."`)
+     * - `cursor=999999`(없는 기록) · `cursor=<아직 하차 전인 방 id>` → 400 `INVALID_CURSOR`
+     * - 무토큰 → 401 `{"code":"USER005","message":"로그인이 필요합니다."}`
+     */
+    @GET("api/v1/users/me/parties")
+    suspend fun getMyRideRecords(
+        @Query("cursor") cursor: Long? = null,
+        @Query("size") size: Int = RIDE_RECORD_PAGE_SIZE,
+    ): RideRecordPageResponse
 }

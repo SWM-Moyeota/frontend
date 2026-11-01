@@ -81,7 +81,9 @@ private val CardShadow = Color(0x1A1B2A4A)
  * 26 · 운행 중 — 안심 공유 [S15]
  *
  * 이동(디스크립션):
- * - 뒤로 → 25 배차 상태 (onBack)
+ * - 뒤로 → **14 홈** (onBack). 25 가 아니다 — 25→26 전이가 스택을 `popUpTo(HOME)` 으로 걷어내
+ *   배차 화면이 남지 않는다. 되돌릴 화면이 없는 자리라 홈으로 보낸다(시스템 뒤로가기도 `BackHandler`
+ *   로 같은 곳에 모은다, `MainNavGraph`).
  * - 「채팅 열기」 → 24 채팅 (onOpenChat)
  * - 「신고」 / 「문제가 생기면 아래에서 바로 신고할 수 있어요」 → 27 긴급 신고 (onReport)
  *

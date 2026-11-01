@@ -117,17 +117,83 @@ interface AuthRepository {
     suspend fun isNicknameTaken(nickname: String): Boolean
 
     /**
+     * 전화번호 가입 여부. POST /api/v1/auth/phone/check (200, **토큰 불필요**).
+     *
+     * [isNicknameTaken] 과 쓰임이 같다 — 입력이 멈춘 뒤(디바운스) 번호당 한 번만 묻는다.
+     *
+     * ### true 만 믿을 수 있다
+     * false 는 「가입할 수 있다」가 아니라 「지금 그 번호를 쓰는 **활성** 계정이 없다」는 뜻뿐이다.
+     * 서버가 보는 건 활성 프로필 한 테이블이고 탈퇴 기록은 보지 않는다 — **탈퇴한 번호도 false 로
+     * 온다**(실측 2026-11-01, 로컬 :8080 — `010-7777-0101` → `{"exists":false}` 200인데 같은 번호의
+     * [sendPhoneVerificationCode] 는 409 `USER109`
+     * = [com.moyeota.domain.model.AuthError.REJOIN_RESTRICTED]).
+     * 그래서 이 값으로 **무엇을 열어 주면 안 되고, 막는 데만 써야 한다.** false 를 보고 「쓸 수 있는
+     * 번호」라고 안심시키면, 사용자는 그 뒤에 「30일 동안 가입 불가」를 듣는다 — 선확인을 붙인 탓에
+     * 지금보다 나빠지는 유일한 경로다.
+     *
+     * 최종 판정은 어차피 [sendPhoneVerificationCode] 의 409 `USER104` 다 — 그쪽은 문자도 보내지
+     * 않고 쿨다운도 걸지 않으므로(실측: 같은 번호로 연속 발송해도 전부 즉시 409, 429 가 나지 않는다)
+     * 이 선확인을 건너뛰어도 사용자가 잃는 것은 버튼 한 번이다.
+     *
+     * @param phoneNumber 하이픈 유무 무관(서버가 "-" 를 제거하고 앞뒤 공백을 strip 한다)
+     * @return true 면 이미 가입된 번호
+     * @throws com.moyeota.domain.model.AuthException
+     *   [com.moyeota.domain.model.AuthError.INVALID_PHONE_NUMBER] (400 `USER105`, 형식 위반 —
+     *     발송 쪽은 같은 상황에서 `INVALID_REQUEST` 라 **코드가 다르다**) /
+     *   [com.moyeota.domain.model.AuthError.INVALID_REQUEST] (400, 빈 값·필드 누락) /
+     *   [com.moyeota.domain.model.AuthError.NETWORK]
+     */
+    suspend fun isPhoneRegistered(phoneNumber: String): Boolean
+
+    /**
      * 내 프로필 수정. PATCH /api/v1/users/me (204, **토큰 필수**).
      *
      * **null 인 값은 보내지 않는다** — 서버는 넘어온 필드만 갱신하므로, null 로 "지우기"를 표현할 수 없다.
-     * 둘 다 null 이면 서버는 아무것도 하지 않고 204 를 준다.
+     * 둘 다 null 이면 서버는 아무것도 하지 않고 204 를 준다. 이미지를 **지우는** 건 이 메서드로 표현할 수
+     * 없고 [resetProfileImage] 가 따로 있다.
      *
+     * @param imageKey [getProfileImages] 가 준 [com.moyeota.domain.model.ProfileImage.key] 그대로.
+     *   URL 을 넣으면 400 `USER112` 다.
      * @throws com.moyeota.domain.model.AuthException
      *   [com.moyeota.domain.model.AuthError.INVALID_NICKNAME] (400 `USER107`) /
      *   [com.moyeota.domain.model.AuthError.NICKNAME_DUPLICATED] (409 `USER108`) /
+     *   [com.moyeota.domain.model.AuthError.INVALID_PROFILE_IMAGE] (400 `USER112`,
+     *     목록 밖의 키 — **닉네임 중복보다 먼저 검사되고, 거절되면 닉네임도 함께 안 바뀐다**) /
      *   [com.moyeota.domain.model.AuthError.SESSION_EXPIRED] (401)
      */
     suspend fun updateProfile(nickname: String?, imageKey: String?)
+
+    /**
+     * 고를 수 있는 프로필 이미지 목록. GET /api/v1/users/profile-images (200, **토큰 필수**).
+     *
+     * 사용자와 무관한 정적 목록인데도 보호 구간이다(`/api/v1/users` 하위 전체가 permitAll 이 아니다) —
+     * 즉 **로그인 전에는 받을 수 없다**. 서버 순서가 곧 표시 순서다. 지금은 16장이지만 수를 가정하지 마라.
+     *
+     * 반환되는 key 만 [updateProfile] 의 `imageKey` 로 보낼 수 있다. 기본 이미지는 이 목록에 없다
+     * ([com.moyeota.domain.model.ProfileImage] KDoc).
+     *
+     * @throws com.moyeota.domain.model.AuthException
+     *   [com.moyeota.domain.model.AuthError.SESSION_EXPIRED] (401) /
+     *   [com.moyeota.domain.model.AuthError.NETWORK] (연결 실패)
+     */
+    suspend fun getProfileImages(): List<com.moyeota.domain.model.ProfileImage>
+
+    /**
+     * 프로필 이미지를 기본값으로 되돌린다. DELETE /api/v1/users/me/profile-image (204, **토큰 필수**).
+     *
+     * **멱등하다** — 이미 기본 상태여도 그냥 204 다. 그래서 "지금 기본인가"를 몰라도 부를 수 있다.
+     *
+     * [updateProfile] 에 `imageKey = null` 을 보내는 것과 **다르다**: 그쪽 null 은 "건드리지 마라"는
+     * 뜻이라 아무 일도 일어나지 않는다. 되돌리기는 반드시 이 요청이어야 한다.
+     *
+     * 경로를 [updateProfile] 과 헷갈리지 말 것 — 되돌리기는 `/users/me/profile-image`(단수),
+     * 목록은 `/users/profile-images`(복수, `/me` 없음), 그리고 `/users/me` 의 DELETE 는 **회원 탈퇴**다.
+     *
+     * @throws com.moyeota.domain.model.AuthException
+     *   [com.moyeota.domain.model.AuthError.SESSION_EXPIRED] (401) /
+     *   [com.moyeota.domain.model.AuthError.NETWORK] (연결 실패)
+     */
+    suspend fun resetProfileImage()
 
     /**
      * 로그인. POST /api/v1/auth/login.
@@ -202,8 +268,12 @@ interface AuthRepository {
     /**
      * 로그인한 본인의 정보 조회. GET /api/v1/local/users/info (200, **토큰 필수**).
      *
-     * [authState] 가 이미 uuid 를 들고 있으므로 이 호출의 목적은 사실상 **이름 하나**다
-     * — 서버가 uuid 외에 주는 건 [UserProfileInfo.name] 뿐이고, 그마저 null 일 수 있다.
+     * [authState] 가 이미 uuid 를 들고 있으므로 이 호출의 목적은 [UserProfileInfo.name] 과
+     * [UserProfileInfo.imageUrl] 이다 — 둘 다 null 일 수 있고, 그 조건은 그쪽 KDoc 에 있다.
+     *
+     * **결과를 받을 때 `.name` 만 바로 꺼내지 마라.** 2026-11-01 에 `imageUrl` 이 붙기 전까지
+     * 이 KDoc 이 「주는 건 이름 하나뿐」이라고 적고 있었고, 그 말을 믿은 호출부가 `getMyProfile().name`
+     * 으로 써서 사진을 영영 못 가져왔다. 응답 객체째로 받아 두 필드를 함께 쓸 것.
      *
      * 로그인 상태에서만 부를 것. 미로그인으로 부르면 401 이 나고 [AuthError.SESSION_EXPIRED] 로 올라온다
      * — 재발급으로 풀리지 않는 401 이라(재시도할 토큰 자체가 없다) 화면 에러가 된다.

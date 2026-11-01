@@ -111,8 +111,20 @@ android {
     buildTypes {
         release {
             optimization {
+                // **R8 을 끈 상태로 둔다.** 켜는 순간 리플렉션 경로(Retrofit 서비스 인터페이스 ·
+                // kotlinx.serialization 의 serializer)가 조용히 깨질 수 있고, 그 실패는 컴파일이 아니라
+                // **릴리스 런타임에만** 보인다 — 켜려면 릴리스 빌드로 실기 QA 를 한 바퀴 돌려야 한다.
+                // 즉 지금 릴리스가 안전한 근거는 「규칙이 잘 쓰여 있어서」가 아니라 「축소를 안 해서」다.
+                // 그래서 규칙 파일을 미리 붙여 둔다(아래 proguardFiles) — AGP 9 가 R8 설정을 이
+                // optimization 블록으로 옮긴 뒤라, 템플릿 갱신·AGP 업그레이드로 이 한 줄이 바뀌어도
+                // 「규칙이 없어서」 터지는 일은 없게 한다. 자세한 근거는 app/proguard-rules.pro 머리말.
                 enable = false
             }
+            // 축소가 꺼져 있어 지금은 적용되지 않는다 — 켜질 때 함께 서는 자리다.
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
             // 키가 없으면 null 로 남긴다 — 서명 없는 릴리스가 나오고, 그건 올릴 수도 설치할 수도 없다.
             signingConfig = signingConfigs.findByName("release")
         }
@@ -146,6 +158,16 @@ dependencies {
     // MoyeotaApplication 이 FCM 토큰 서버 등록을 앱 수명 스코프에서 fire-and-forget 으로 띄운다.
     // data 가 코루틴을 implementation 으로 쓰고 있어 여기까지 전이되지 않으므로 직접 건다.
     implementation(libs.kotlinx.coroutines.android)
+    // 프로필 사진 로더. **구성이 여기 있으므로 app 에도 직접 걸어야 한다** —
+    // presentation/designsystem 의 implementation 은 app 으로 전이되지 않아 coil3.* 가 안 보인다.
+    // coil-network-okhttp 는 OkHttp 주입(MoyeotaApplication.newImageLoader)에 필요하고,
+    // 이 모듈에서만 okhttp 5.1.0(data 의 것)과 같은 클래스패스에 올라온다.
+    implementation(libs.coil.compose)
+    implementation(libs.coil.network.okhttp)
+    // 이미지 로더에 넘길 OkHttpClient 의 타입이 여기서 보여야 한다(AppContainer.imageClient).
+    // 버전을 명시해 **컴파일 헤더와 런타임 구현을 5.1.0 으로 일치**시킨다 — 빼면 coil 이 끌고 온
+    // 4.12.0 헤더로 컴파일된다.
+    implementation(libs.okhttp)
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.messaging)
     testImplementation(libs.junit)

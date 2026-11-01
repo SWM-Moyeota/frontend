@@ -16,6 +16,12 @@ interface TokenHolder {
     /** 재발급 성공 — 회전된 리프레시까지 함께 갱신한다. */
     fun onTokensRefreshed(accessToken: String, refreshToken: String)
 
-    /** 재발급 실패 — 세션을 비우고 로그아웃 상태로 전환한다. */
+    /**
+     * 재발급 **거절**(서버가 "이 리프레시는 못 쓴다"고 답했다) 또는 리프레시 부재 —
+     * 세션을 비우고 로그아웃 상태로 전환한다.
+     *
+     * **네트워크·타임아웃·5xx 로 답을 못 받은 경우는 여기 오지 않는다.** 그건 세션을 비울 근거가
+     * 못 되기 때문이다([com.moyeota.data.remote.auth.RefreshResult] KDoc 에 사정을 적었다).
+     */
     fun onSessionExpired()
 }

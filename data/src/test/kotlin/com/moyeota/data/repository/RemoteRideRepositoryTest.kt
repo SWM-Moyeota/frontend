@@ -14,8 +14,11 @@ import com.moyeota.data.remote.dto.RouteRequestDto
 import com.moyeota.domain.model.RealtimeMatchException
 import com.moyeota.domain.model.AuthState
 import com.moyeota.domain.model.NewParty
+import com.moyeota.data.remote.matching.reconnectDelayMs
 import com.moyeota.domain.model.PartyFinishException
 import com.moyeota.domain.model.PartyJoinException
+import com.moyeota.domain.model.PartyLeaveException
+import com.moyeota.domain.model.PartyOpenException
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.session.UserSession
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -368,6 +371,215 @@ class RemoteRideRepositoryTest {
         assertEquals(0, api.detailCallCount)
     }
 
+    // ───────────── 방 생성 실패 (409 는 영구 교착, 400 은 사용자가 고쳐야 한다) ─────────────
+
+    /**
+     * **생성 409 가 이 묶음의 이유다.** 서버 `PartyService.open` 첫 줄이 `validateNotInOngoingParty` 이고,
+     * 거기서 보는 「진행 중」은 `!(CANCELED || FINISHED)` 다. 그런데 30분 스윕(`CompletedPartySweeper`)은
+     * **COMPLETED 만** 쓸어내므로 **아무도 합류하지 않은 ACTIVE 방은 영구히 남아** 그 계정의 생성·합류를
+     * 계속 막는다. 사유가 code 로 올라오지 않으면 화면은 「잠시 후 다시 시도해 주세요」만 말할 수 있고,
+     * 그건 영원히 틀린 안내다(기다려서 풀리지 않는다).
+     */
+    @Test
+    fun `생성 409 는 이미 참여 중인 방으로 좁혀진다`() = runBlocking {
+        val api = FakeMatchingApi(
+            openFailure = conflict("ALREADY_JOINED_OTHER_PARTY", "이미 참여 중인 방이 있습니다."),
+        )
+
+        val error = runCatching { RemoteRideRepository(api, session()).createParty(newParty()) }
+            .exceptionOrNull() as PartyOpenException
+
+        assertTrue(error.isAlreadyInAnotherParty)
+        // 합류와 달리 **상세를 읽지 않는다** — 만들려던 방은 아직 없으니 확인할 멤버십이 없다.
+        assertEquals(0, api.detailCallCount)
+        assertEquals(409, error.httpStatus)
+        assertEquals("이미 참여 중인 방이 있습니다.", error.serverMessage)
+    }
+
+    /**
+     * 400 이 네 가지다 — **상태 코드로는 가를 수 없다.** 섞이면 「핀을 옮겨 주세요」를 서비스 지역 밖
+     * 좌표에게, 「인원을 다시」를 좌표 문제에게 말하게 된다.
+     */
+    @Test
+    fun `생성 400 은 각 code 로 갈린다`() = runBlocking {
+        val same = openError(httpError(400, "SAME_DEPARTURE_DESTINATION", "출발지와 도착지가 같습니다."))
+        val area = openError(httpError(400, "OUT_OF_SERVICE_AREA", "서비스 지역을 벗어난 좌표입니다."))
+        val capacity = openError(httpError(400, "INVALID_CAPACITY", "방 정원은 1~3명이어야 합니다."))
+        val estimate = openError(httpError(400, "INVALID_ROUTE_ESTIMATE", "경로 정보가 올바르지 않습니다."))
+
+        assertTrue(same.isSameDepartureDestination)
+        assertFalse(same.isOutOfServiceArea)
+        assertTrue(area.isOutOfServiceArea)
+        assertFalse(area.isSameDepartureDestination)
+        assertTrue(capacity.isInvalidCapacity)
+        assertFalse(capacity.isRouteUnavailable)
+        // 경로 관련 400 은 502 와 **같은 갈래**다 — 사용자가 할 수 있는 일이 같다(위 KDoc).
+        assertTrue(estimate.isRouteUnavailable)
+        assertFalse(estimate.isInvalidCapacity)
+    }
+
+    /** 502 는 경로 엔진 장애다. 본문이 없어도 상태 코드로 같은 갈래로 떨어뜨린다(게이트웨이 응답 대비). */
+    @Test
+    fun `생성 502 는 본문이 없어도 경로 실패로 다룬다`() = runBlocking {
+        assertTrue(openError(httpError(502, "ROUTE_SEARCH_FAILED", "경로 조회에 실패했습니다.")).isRouteUnavailable)
+        assertTrue(openError(bodylessError(502)).isRouteUnavailable)
+    }
+
+    /**
+     * **에러 본문이 JSON 이 아닐 수 있다** — 게이트웨이·프록시가 가로챈 503 은 HTML 을 돌려준다.
+     * 그때 `readApiError()` 는 null 이고, 사유를 **추측하지 않고** 일반 문구로 떨어져야 한다.
+     */
+    @Test
+    fun `생성 실패 본문이 HTML 이면 code 없는 예외가 된다`() = runBlocking {
+        val error = openError(htmlError(503))
+
+        assertNull(error.code)
+        assertNull(error.serverMessage)
+        assertEquals(503, error.httpStatus)
+        assertFalse(error.isAlreadyInAnotherParty)
+        assertFalse(error.isSameDepartureDestination)
+        assertFalse(error.isOutOfServiceArea)
+        assertFalse(error.isInvalidCapacity)
+        // 503 을 502 처럼 「경로 실패」로 지어내지 않는다.
+        assertFalse(error.isRouteUnavailable)
+    }
+
+    /** 응답을 아예 못 받은 실패(네트워크)도 code 없는 [PartyOpenException] 이다 — 화면은 일반 문구다. */
+    @Test
+    fun `생성 네트워크 실패도 같은 예외로 좁힌다`() = runBlocking {
+        val error = openError(java.io.IOException("connection reset"))
+
+        assertNull(error.code)
+        assertNull(error.httpStatus)
+        assertFalse(error.isAlreadyInAnotherParty)
+    }
+
+    // ───────────── 나가기 실패 (403 은 "이미 됨") ─────────────
+
+    /**
+     * **403 `NOT_PARTY_MEMBER` 는 성공이다** — 나가기의 목표가 정확히 「이 방에 내가 없다」이기 때문이다.
+     *
+     * 되돌리지 않으면 204 응답이 유실된 사용자가(터널·타임아웃) 「나가지 못했어요」를 보고 다시 눌러
+     * **같은 문구의 403** 을 맞는다. 로컬 기억과 홈 배너는 그 방을 계속 들고 있으니 화면상 나는 아직
+     * 그 방에 있고, 벗어날 길이 없다. 합류가 409 를 성공으로 되돌리는 것과 대칭인 처방이다.
+     */
+    @Test
+    fun `나가기 403 은 성공으로 다룬다`() = runBlocking {
+        val api = FakeMatchingApi(
+            leaveFailure = httpError(403, "NOT_PARTY_MEMBER", "해당 방에 참여하고 있지 않습니다."),
+        )
+
+        // 예외가 나오면 이 줄에서 실패한다 — "성공으로 다룬다"가 곧 "던지지 않는다"다.
+        RemoteRideRepository(api, session()).leaveParty(partyId = 7)
+
+        assertEquals(7L, api.leaveCall)
+        // 합류의 복구와 달리 **상세로 확인하지 않는다** — 이 403 자체가 "이 방에 내가 없다"다.
+        assertEquals(0, api.detailCallCount)
+    }
+
+    /** 409 는 **다른 뜻**이다 — 매칭이 시작돼 나갈 수 없다. 재시도 안내로 뭉개면 영원히 같은 409 다. */
+    @Test
+    fun `나가기 409 는 모집 중이 아님으로 좁혀진다`() = runBlocking {
+        val api = FakeMatchingApi(leaveFailure = conflict("PARTY_NOT_RECRUITING", "모집 중인 방이 아닙니다."))
+
+        val error = runCatching { RemoteRideRepository(api, session()).leaveParty(partyId = 7) }
+            .exceptionOrNull() as PartyLeaveException
+
+        assertTrue(error.isNotRecruiting)
+        assertFalse(error.isPartyNotFound)
+        assertEquals(409, error.httpStatus)
+    }
+
+    /** 404 는 방이 사라진 것 — 나갈 방이 없으므로 홈으로 보내면 된다. 코드 없는 404 도 같게 다룬다. */
+    @Test
+    fun `나가기 404 는 방 없음으로 좁혀진다`() = runBlocking {
+        assertTrue(leaveError(httpError(404, "PARTY_NOT_FOUND", "존재하지 않는 방입니다.")).isPartyNotFound)
+        assertTrue(leaveError(bodylessError(404)).isPartyNotFound)
+    }
+
+    /** 모르는 코드는 그대로 들고 오지만 어느 사유도 아니다 — 서버가 코드를 늘려도 틀린 말을 하지 않는다. */
+    @Test
+    fun `나가기 모르는 코드는 사유를 추측하지 않는다`() = runBlocking {
+        val error = leaveError(httpError(409, "PARTY_SOMETHING_NEW", "새 규칙입니다."))
+
+        assertEquals("PARTY_SOMETHING_NEW", error.code)
+        assertFalse(error.isNotRecruiting)
+        assertFalse(error.isPartyNotFound)
+    }
+
+    // ───────────── SSE 재연결 백오프 ─────────────
+    //
+    // 이 두 테스트가 **여기 있는 건 파일 소유 때문**이다(제자리는 `remote/matching/PartySseEventTest`
+    // 다). 옮길 때 함께 옮길 것 — 보는 대상은 `PartyEventSource` 의 순수 함수다.
+
+    /**
+     * 재연결 간격이 **고정 3초였다.** 실패를 세지 않아 서버가 502/503 을 내거나 Redis 가 죽은 동안에도
+     * 간격이 그대로였고, 그때 이 루프는 재기동 중인 서버를 때리는 하드 루프가 된다 — 대기 화면에
+     * 12명이 있으면 분당 240회다. 그래서 횟수에 따라 늘리고 상한을 둔다.
+     */
+    @Test
+    fun `재연결 간격은 실패 횟수만큼 늘고 30초에서 멈춘다`() {
+        // 지터 0 = 표의 값 그대로. 지터는 아래 테스트가 따로 본다.
+        assertEquals(3_000L, reconnectDelayMs(failures = 1, jitter = 0.0))
+        assertEquals(6_000L, reconnectDelayMs(failures = 2, jitter = 0.0))
+        assertEquals(12_000L, reconnectDelayMs(failures = 3, jitter = 0.0))
+        assertEquals(30_000L, reconnectDelayMs(failures = 4, jitter = 0.0))
+        // 상한 뒤로는 머문다 — 재시도를 멈추지는 않는다(폴백 폴링이 더 비싸다).
+        assertEquals(30_000L, reconnectDelayMs(failures = 50, jitter = 0.0))
+        // 세는 쪽이 틀려도 0ms 하드 루프가 되지 않게 — 0·음수는 첫 간격이다.
+        assertEquals(3_000L, reconnectDelayMs(failures = 0, jitter = 0.0))
+        assertEquals(3_000L, reconnectDelayMs(failures = -3, jitter = 0.0))
+    }
+
+    /**
+     * 지터는 **더하기만** 한다 — 상한(30초)과 하한(3초)이 둘 다 지키려는 값이다. 12명이 같은 장애로
+     * 동시에 끊겼을 때 같은 초에 다시 몰리는 것을 푸는 게 목적이다.
+     */
+    @Test
+    fun `재연결 간격에 지터를 더한다 - 기준값 아래로는 내려가지 않는다`() {
+        assertEquals(3_600L, reconnectDelayMs(failures = 1, jitter = 1.0)) // 3s + 20%
+        assertEquals(36_000L, reconnectDelayMs(failures = 9, jitter = 1.0)) // 30s + 20%
+        for (failures in 1..6) {
+            for (jitter in listOf(0.0, 0.3, 0.5, 1.0)) {
+                val wait = reconnectDelayMs(failures, jitter)
+                assertTrue("간격이 첫 값보다 짧다 (failures=$failures, jitter=$jitter)", wait >= 3_000L)
+                assertTrue("상한+지터를 넘었다 (failures=$failures, jitter=$jitter)", wait <= 36_000L)
+            }
+        }
+    }
+
+    // 생성 실패만 바꿔 끼우는 호출 — 네 좌표·라벨·정원은 어느 테스트에서도 같다.
+    private fun openError(failure: Throwable): PartyOpenException = runBlocking {
+        runCatching {
+            RemoteRideRepository(FakeMatchingApi(openFailure = failure), session()).createParty(newParty())
+        }.exceptionOrNull() as PartyOpenException
+    }
+
+    private fun leaveError(failure: Throwable): PartyLeaveException = runBlocking {
+        runCatching {
+            RemoteRideRepository(FakeMatchingApi(leaveFailure = failure), session()).leaveParty(partyId = 7)
+        }.exceptionOrNull() as PartyLeaveException
+    }
+
+    private fun newParty() = NewParty(
+        departureLat = 37.5665,
+        departureLng = 126.9780,
+        destinationLat = 37.4979,
+        destinationLng = 127.0276,
+        departure = "서울시청",
+        destination = "강남역",
+        capacity = 3,
+    )
+
+    /** 게이트웨이가 가로챈 응답 — 본문이 JSON 이 아니라 HTML 이다. `readApiError()` 가 null 을 돌려준다. */
+    private fun htmlError(status: Int) = HttpException(
+        Response.error<Unit>(
+            status,
+            "<html><body><h1>503 Service Temporarily Unavailable</h1></body></html>"
+                .toResponseBody("text/html".toMediaType()),
+        ),
+    )
+
     /** 서버 공통 에러 본문 그대로 — 저장소가 code 를 읽어 분기한다. */
     private fun conflict(code: String, message: String) = httpError(409, code, message)
 
@@ -463,6 +675,8 @@ class RemoteRideRepositoryTest {
         private val finishFailure: Throwable? = null,
         private val realtimeCandidates: List<MatchCandidateResponse> = emptyList(),
         private val realtimeFailure: Throwable? = null,
+        private val openFailure: Throwable? = null,
+        private val leaveFailure: Throwable? = null,
     ) : MatchingApi {
         var realtimeRequest: RealTimeMatchingRequestDto? = null
         var joinCall: Long? = null
@@ -516,6 +730,7 @@ class RemoteRideRepositoryTest {
 
         override suspend fun openParty(request: OpenPartyRequestDto): OpenPartyResponse {
             openRequest = request
+            openFailure?.let { throw it }
             return OpenPartyResponse(
                 id = 12,
                 departure = request.departure,
@@ -544,6 +759,7 @@ class RemoteRideRepositoryTest {
 
         override suspend fun leaveParty(partyId: Long) {
             leaveCall = partyId
+            leaveFailure?.let { throw it }
         }
 
         override suspend fun getAssignedDriver(partyId: Long) =

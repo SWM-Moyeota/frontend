@@ -25,6 +25,7 @@ import com.moyeota.domain.model.RouteEstimate
 import com.moyeota.domain.model.User
 import com.moyeota.domain.model.WithdrawnMemberNames
 import java.io.IOException
+import kotlin.math.roundToInt
 import kotlinx.serialization.json.Json
 import retrofit2.HttpException
 
@@ -45,11 +46,22 @@ fun partyStatusToRideStatus(status: String): RideStatus = when (status) {
 }
 
 /**
- * 정원으로 나눈 1인당 요금. [estimateFare] 는 경로 전체의 택시 요금이다.
+ * 정원으로 나눈 1인당 요금, **10원 단위 반올림**. [estimateFare] 는 경로 전체의 택시 요금이다.
  * 정원이 0 이하이거나 요금이 없으면 0 을 돌려준다(화면이 "-" 로 처리).
+ *
+ * **왜 10원 단위인가.** 정수 나눗셈(절삭)으로 두면 7,900원 ÷ 3인 = 2,633원처럼 **실제로 낼 수 없는
+ * 금액을 1원 단위까지 약속**한다. 택시 요금 표기는 10원 단위라 사용자가 기대하는 모양도 그쪽이다.
+ *
+ * **같은 규칙이 16 도착지 확인(모달)에도 적혀 있다**(presentation 의 `farePerPersonWon`;
+ * data 는 presentation 을 의존하지 않아 KDoc 링크로 걸 수 없다). 모듈 경계(data ↔ presentation)를 넘어
+ * 이 함수를 부를 수 없어 규칙을 양쪽에 **같은 식으로** 적어 두었다 — 예전에는 모달만 10원 단위로
+ * 반올림하고 이 함수는 절삭이라, 같은 방(7,900원·3인)을 16 은 2,630원, 19·22·25 는 2,633원으로
+ * 보여 줬다. 두 값이 같아야 한다는 것은 `PartyMappersTest`(data)와 `FarePerPersonRuleTest`
+ * (presentation)가 **같은 표**로 못 박는다 — 한쪽만 고치면 다른 쪽 테스트가 깨진다.
  */
 internal fun farePerPerson(estimateFare: Int?, capacity: Int): Int =
-    if (estimateFare == null || capacity <= 0) 0 else estimateFare / capacity
+    if (estimateFare == null || capacity <= 0) 0
+    else ((estimateFare.toDouble() / capacity) / 10.0).roundToInt() * 10
 
 /** 멤버 식별자가 없는 응답(목록·생성)에서 인원 수만큼 자리 표시용 멤버를 만든다. */
 private fun placeholderMembers(count: Int): List<User> = List(count.coerceAtLeast(0)) { index ->
@@ -112,7 +124,11 @@ fun PartyListResponse.PartyItem.toRide(): Ride = Ride(
     departureLabel = "",
     capacity = capacity,
     // 목록 응답에는 멤버 식별자가 없고 인원 수만 온다 — 자리 표시용 멤버를 만든다.
-    members = placeholderMembers(currentMembers),
+    // **인원을 모르면(null) 빈 목록으로 남긴다** — 0 으로 접으면 카드가 「0/3명」이라는 없는 상태를
+    // 그린다(이 목록은 `status = 'ACTIVE'` 인 방만 오고 그런 방에는 최소 방장 1명이 있다).
+    // [Ride.members] 가 비어 있다 = 인원을 모른다는 규약은 [MatchCandidate] KDoc 에 적혀 있고,
+    // 화면 문구는 `headcountLabel` 이 그 규약대로 「최대 N명」으로 떨어뜨린다.
+    members = currentMembers?.let(::placeholderMembers) ?: emptyList(),
     farePerPerson = 0,
     totalFare = 0,
     status = partyStatusToRideStatus(status),
@@ -156,10 +172,15 @@ fun PartyDetailResponse.toRide(currentUuid: String? = null): Ride {
  *
  * 옮기는 건 두 값뿐이다. 지문은 서버가 지웠고([PartyStatusResponse] KDoc), 25·26 이 「바뀌었나」를
  * 판정하는 자리는 이제 도메인 [Ride] 끼리의 `==` 다 — 매퍼가 할 일이 없다.
+ *
+ * **인원이 null(모른다)이면 0 으로 떨어진다.** 다른 매퍼들처럼 「모른다」를 살려 두지 못하는 건
+ * 도메인 [PartyStatus.currentMembers] 가 non-null `Int` 라서다. 지금은 **이 값을 읽는 화면이 없어**
+ * (21 매칭 대기는 합류 응답의 인원을 받지 않고 SSE 첫 스냅샷을 믿는다) 해가 없지만, 읽기 시작하면
+ * 「0명」과 「모른다」가 섞인다 — 그때는 도메인 필드를 `Int?` 로 내려야 한다.
  */
 fun PartyStatusResponse.toPartyStatus(): PartyStatus = PartyStatus(
     status = partyStatusToRideStatus(status),
-    currentMembers = currentMembers,
+    currentMembers = currentMembers ?: 0,
 )
 
 /**
@@ -193,15 +214,16 @@ fun PartySseEvent.toPartyEvent(currentUuid: String? = null): PartyEvent = when (
     PartySseEvent.Disconnected -> PartyEvent.Disconnected
 }
 
-// 생성 응답에는 members 목록이 없고 currentMembers 개수만 있다(생성 직후엔 보통 1 = 생성자).
-// 목록 응답과 같은 방식으로 자리 표시용 멤버를 만든다 — 식별자는 상세 조회에서 채워진다.
+// 생성 응답에는 members 목록이 없고 currentMembers 개수만 있다(생성 직후엔 늘 1 = 생성자).
+// 목록 응답과 같은 방식으로 자리 표시용 멤버를 만들고, **인원을 모르면(null) 빈 목록으로 남긴다**
+// — 방을 막 만든 사람이 「0/3명」을 보면 자기가 방에 없는 것으로 읽는다.
 fun OpenPartyResponse.toRide(): Ride = Ride(
     id = id.toString(),
     origin = departure,
     destination = destination,
     departureLabel = "",
     capacity = capacity,
-    members = placeholderMembers(currentMembers),
+    members = currentMembers?.let(::placeholderMembers) ?: emptyList(),
     farePerPerson = farePerPerson(estimateFare, capacity),
     totalFare = estimateFare ?: 0,
     status = partyStatusToRideStatus(status),

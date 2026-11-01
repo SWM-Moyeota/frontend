@@ -68,6 +68,16 @@ object Routes {
     const val PROFILE_EDIT = "mypage/profile-edit"           // 36 신규 (닉네임 수정)
 
     /**
+     * 34 지난 탑승 기록 (2026-11-01 재도입) — `GET /api/v1/users/me/parties`.
+     *
+     * 예전의 34 「내 탑승」과 **보여 주는 것이 다르다.** 그쪽은 「진행 중 · 예정」 탭이었고
+     * 서버에 완료 방 목록도 예약 개념도 없어 삭제됐다(`docs/BACKEND-GAP-CLEANUP.md` §1).
+     * 지금 이 화면은 **하차까지 끝난 탑승만** 그린다 — 서버가 그것만 주기 때문이다.
+     * 진행 중인 방은 홈·탐색 배너가 맡으므로 35 와의 순환 링크도 되살리지 않았다.
+     */
+    const val RIDE_HISTORY = "mypage/ride-history"           // 34 재도입 (지난 탑승 기록)
+
+    /**
      * 37 회원 탈퇴 (신규, 2026-10) — `DELETE /api/v1/users/me`. Google Play 계정 삭제 요건.
      *
      * 다이얼로그가 아니라 **별 화면**인 이유는 [com.moyeota.presentation.feature.mypage.AccountDeleteScreen]

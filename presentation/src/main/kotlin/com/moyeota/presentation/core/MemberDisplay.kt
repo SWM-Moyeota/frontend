@@ -8,12 +8,19 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil3.compose.AsyncImage
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.domain.model.User
 import com.moyeota.domain.model.WithdrawnMemberNames
@@ -80,14 +87,51 @@ internal val User.verifiedLabelOrNone: String
     get() = if (verifiedLabel.isBlank()) "인증 정보 없음" else verifiedLabel
 
 /**
- * 아바타 이니셜 원.
+ * 멤버 아바타. 서버 프로필 사진을 그리고, **그릴 수 없을 때는 닉네임 첫 글자 이니셜 원**으로 떨어진다.
  *
- * [User.imageUrl] 이 있어도 **지금은 쓰지 않는다** — 앱에 이미지 로더(Coil 등) 의존성이 없다.
- * 네트워크 이미지를 직접 내려받아 그리는 코드를 화면에 심느니, 로더가 붙을 때까지 모든 멤버를
- * 같은 이니셜 원으로 통일한다(일부만 사진이 보이는 상태가 더 어색하다).
+ * 서버는 2026-10-15 배포(Backend #235)부터 제공 이미지 16장을 고르게 하고 `imageUrl` 로 전체 주소를
+ * 내려준다. 그 값은 `PartyMappers.toUser` 를 타고 [User.imageUrl] 까지 이미 들어와 있었고, 이 함수만
+ * 그것을 버리고 있었다 — 그래서 고치는 자리는 여기 한 곳이고 호출부 네 곳(21 매칭 대기 36dp ·
+ * 22 탑승 상세 40dp · 23 동승자 프로필 80dp · 20 합류 확인 40dp)은 수정 없이 따라온다.
  *
- * 서버는 2026-10-15 부터 제공 이미지 16장을 고르게 하고 `imageUrl` 로 전체 주소를 내려준다.
- * 그리기로 할 때의 선택지와 비용은 `_workspace/profile-image-plan.md` 에 정리해 뒀다.
+ * ### 네 경우에 무엇이 보이는가
+ *
+ * | 경우 | 보이는 것 |
+ * |---|---|
+ * | [User.imageUrl] 이 null/빈 값 | 이니셜 원 — **요청 자체를 만들지 않는다** |
+ * | 로딩 중 | 이니셜 원 |
+ * | 성공 | 사진(이니셜 원을 덮는다) |
+ * | 실패(403·타임아웃·디코드 실패) | 이니셜 원 |
+ *
+ * 「성공했을 때만 가린다」는 **로더의 crossfade 가 꺼져 있어야 성립한다.** Coil 은 `onSuccess` 를
+ * CrossfadePainter 를 설치한 **뒤에** 부르므로, 켜져 있으면 이니셜을 지운 뒤 100ms 동안 빈 원만
+ * 남는다. 그래서 `MoyeotaApplication.newImageLoader` 가 crossfade 를 켜지 않는다(근거는 그쪽 주석).
+ *
+ * null 을 그대로 `AsyncImage` 에 넘겨 `fallback` 으로 처리하지 않는 이유: 이 앱에서 사진 없음은
+ * **정상 경우**다(유저 요약이 없는 멤버는 publicId·nickname·imageUrl 이 **함께** null 로 온다).
+ * 넘기면 요청을 만들고 `NullRequestDataException` 경로를 타는데, 분기로 거르는 쪽이 「여기선 원래
+ * 사진이 없다」를 정확히 말한다.
+ *
+ * `error`/`fallback` 에 `Painter` 를 넘기지 않는 이유도 같다 — 대체 표시가 **멤버마다 다른 글자와
+ * 색**이라([User.isMe] 로 Primary 와 회색이 갈리고 글자 크기가 [size] 에 비례한다) Painter 로 옮기려면
+ * `DrawScope` + `TextMeasurer` 로 이니셜 원을 다시 쓰는 일이 된다. 대신 **아래에 깔고 성공했을 때만
+ * 가린다.** 덤으로 `@Preview` 가 공짜로 안전해진다: 프리뷰 샌드박스에는 네트워크가 없어 항상
+ * 실패하고, 그러면 예전과 똑같은 이니셜 원이 보인다.
+ *
+ * ### `remember` 키가 [User.imageUrl] 인 이유
+ * 호출부 넷 중 셋은 멤버 줄이고(20 합류 확인 · 21 매칭 대기 · 22 탑승 상세) 하나는 목록이 아닌
+ * 단독 80dp 아바타다(23 동승자 프로필). **`LazyColumn` 은 한 곳도 없다** — 전부 `verticalScroll` +
+ * `forEach` 이고 `key()` 를 쓰지 않는다.
+ *
+ * 그래도 **위치 기반 슬롯 재사용은 일어난다.** 멤버가 합류·이탈해 `ride.members` 의 길이나 순서가
+ * 바뀌면 키 없는 `forEach` 의 i 번째 컴포지션이 **다른 [User]** 를 받는다. 키 없이
+ * `mutableStateOf(false)` 를 기억하면 그때 A 에서 `true` 가 된 상태가 B 에게 물려 내려와 **B 의
+ * 이니셜이 안 보이고 A 의 사진이 남는다.** `onLoading`/`onError` 에서 다시 false 로 되돌리는 것도
+ * 같은 이유다 — 한 번 true 가 된 슬롯은 스스로 돌아오지 않는다.
+ *
+ * `core:designsystem` 의 `AvatarCircle` 과 **합치지 않는다.** 하는 일은 같아 보이지만 이쪽은
+ * [User.isMe] 로 배경·글자색이 갈리고 글자 크기가 [size] 에 비례하는데, 저쪽은 고정 `CaptionMd` 다 —
+ * 합치면 둘 중 하나가 거짓이 된다.
  */
 @Composable
 internal fun MemberAvatar(user: User, size: Dp = 40.dp, modifier: Modifier = Modifier) {
@@ -96,6 +140,8 @@ internal fun MemberAvatar(user: User, size: Dp = 40.dp, modifier: Modifier = Mod
     } else {
         user.nickname.take(1)
     }
+    val imageUrl = user.imageUrl
+    var imageDrawn by remember(imageUrl) { mutableStateOf(false) }
     Box(
         modifier = modifier
             .size(size)
@@ -103,12 +149,34 @@ internal fun MemberAvatar(user: User, size: Dp = 40.dp, modifier: Modifier = Mod
             .border(1.dp, MoyeotaColor.Hairline, CircleShape),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            text = initial,
-            fontSize = (size.value * 0.4f).sp,
-            fontWeight = FontWeight.Bold,
-            color = if (user.isMe) MoyeotaColor.Primary600 else MoyeotaColor.TextMute,
-        )
+        if (!imageDrawn) {
+            Text(
+                text = initial,
+                fontSize = (size.value * 0.4f).sp,
+                fontWeight = FontWeight.Bold,
+                color = if (user.isMe) MoyeotaColor.Primary600 else MoyeotaColor.TextMute,
+            )
+        }
+        if (!imageUrl.isNullOrBlank()) {
+            AsyncImage(
+                model = imageUrl,
+                // 바로 옆에서 닉네임을 읽어 주는 자리들이라 사진은 장식이다 — 중복 낭독을 막는다.
+                contentDescription = null,
+                modifier = Modifier
+                    // size(size) 를 다시 쓰지 않는다. AsyncImage 는 intrinsic size 가 없어 크기를
+                    // 받지 못하면 0x0 으로 측정되고 **이미지는 멀쩡히 로드되는데 화면에는 안 보인다.**
+                    .matchParentSize()
+                    // padding 이 clip **앞**이어야 한다 — 꽉 찬 원형 이미지는 부모의 1dp 헤어라인을
+                    // 덮는다(부모 modifier → 자식 순으로 그려진다).
+                    .padding(1.dp)
+                    .clip(CircleShape),
+                // 기본값이 Fit 이라 그대로 두면 비정사각 이미지가 원 안에서 레터박스가 된다.
+                contentScale = ContentScale.Crop,
+                onLoading = { imageDrawn = false },
+                onSuccess = { imageDrawn = true },
+                onError = { imageDrawn = false },
+            )
+        }
     }
 }
 

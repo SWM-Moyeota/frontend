@@ -95,6 +95,15 @@ internal const val NO_DEADLINE = 0L
 private const val TICK_INTERVAL_MS = 500L
 
 /**
+ * 번호 입력이 멈췄다고 보는 시간. 닉네임 쪽(`ProfileSetupRoute` 의 `NICKNAME_DEBOUNCE_MS`)과 같은 값이다.
+ *
+ * 선확인 경로(POST /api/v1/auth/phone/check)는 무인증·무쿨다운·무레이트리밋이라(실측: 30연타 전부
+ * 200, 2~3ms) 번호 존재 여부를 밀리초에 답해 주는 오라클이다. 타자마다 부르면 앱이 그 오라클을
+ * 대신 두드리는 셈이 되므로, 디바운스 + 직전 요청 취소 + 11자리 완성 조건 셋으로 **번호당 1회**로 묶는다.
+ */
+private const val PHONE_PRECHECK_DEBOUNCE_MS = 500L
+
+/**
  * 문자 인증 블록의 전체 상태. **불변 데이터 + 순수 전이 함수**로만 바뀐다 —
  * 전이 규칙(어떤 에러가 입력칸을 닫는지, 번호가 바뀌면 무엇이 무효인지)이 화면 코드에 흩어지면
  * 단위 테스트가 불가능해지고, 이 블록의 실패는 "가입이 400 으로 안 된다"로만 드러나서 늦게 발견된다.
@@ -109,8 +118,10 @@ private const val TICK_INTERVAL_MS = 500L
  * @property resendAllowedAt 재전송이 가능해지는 시각(epoch millis).
  * @property phoneMessage 번호 입력란 아래에 띄울 문구. 발송 단계의 실패(중복·형식·한도·장애)가 여기 간다.
  * @property codeMessage 인증번호 입력칸 아래에 띄울 문구. 확인 단계의 실패가 여기 간다.
- * @property alreadyRegistered 발송이 409 `PHONE_NUMBER_DUPLICATED` 로 끊긴 상태. 인증번호 입력칸을
- *   열지 않고 로그인으로 가는 길을 보여준다 — 번호를 고치면 풀린다.
+ * @property alreadyRegistered 그 번호로 이미 가입된 계정이 있다. 인증번호 입력칸을 열지 않고
+ *   로그인으로 가는 길을 보여준다 — 번호를 고치면 풀린다. **켜지는 경로가 둘이다**: 발송이
+ *   409 `PHONE_NUMBER_DUPLICATED` 로 끊긴 경우([onRequestFailure])와, 누르기 전에 선확인이
+ *   가입된 번호라고 답한 경우([onPhonePrecheckTaken]). 결과가 같으므로 플래그를 나누지 않았다.
  * @property dailyLimitReached 하루 발송 한도(5회)를 넘겼다. 재시도를 권하지 않고 버튼을 잠근다.
  * @property rejoinRestricted 발송이 409 `USER109`([AuthError.REJOIN_RESTRICTED])로 끊긴 상태 —
  *   그 번호로 탈퇴한 계정이 있고 재가입 제한 기간이 아직 안 지났다. [alreadyRegistered] 와 같은 409,
@@ -316,6 +327,32 @@ internal fun PhoneVerifyState.onRequestFailure(
     else -> copy(requesting = false, phoneMessage = message)
 }
 
+/**
+ * 발송을 누르기 **전에** 선확인(POST /api/v1/auth/phone/check)이 「이미 가입된 번호」라고 답했다.
+ *
+ * [onRequestFailure] 의 [AuthError.PHONE_NUMBER_DUPLICATED] 분기와 결과가 같다 — 안내 문구를
+ * 번호 입력란 아래에 남기고 [alreadyRegistered] 를 켜서 버튼을 잠그고 「로그인하러 가기」를 띄운다.
+ * 즉 이 전이가 더하는 건 **같은 안내를 버튼을 누르기 전에 보여 주는 것**뿐이고, 새 상태도 새 문구도
+ * 없다. 발송이 끊기는 경로(실측: 문자도 안 가고 쿨다운도 안 걸리고 즉시 409 `USER104`)는 그대로 둔다.
+ *
+ * **[boundPhone] 을 건드리지 않는다.** 발송을 시도한 적이 없으므로 묶인 번호가 없고, 여기서 번호를
+ * 묶으면 [onPhoneDigitsChanged] 가 「같은 번호」로 보아 상태를 비우지 않게 된다 — 사용자가 번호를
+ * 고쳤다 되돌릴 때 문구와 잠긴 버튼이 영영 풀리지 않는다.
+ *
+ * **`exists=false` 에는 대응하는 전이가 없다.** 서버가 탈퇴 기록을 보지 않으므로 false 는
+ * 「가입할 수 있다」를 뜻하지 않는다(실측 2026-11-01, 로컬 :8080 — 탈퇴한 번호도 `exists=false` 200인데
+ * 발송은 409 `USER109`). 그래서 선확인은 **막기만 하고 아무것도 열어 주지 않는다** —
+ * 재가입 제한은 지금처럼 발송 응답([AuthError.REJOIN_RESTRICTED])으로만 드러난다.
+ */
+internal fun PhoneVerifyState.onPhonePrecheckTaken(message: String): PhoneVerifyState =
+    if (stage != PhoneVerifyStage.Idle || requesting) {
+        // 그 사이 사용자가 발송을 눌렀다(또는 이미 인증을 끝냈다) — 늦게 온 선확인이 진행 중인
+        // 인증을 덮어 「이미 가입된 번호」를 띄우면, onRequestStart 가 켠 진행 표시가 되돌려진다.
+        this
+    } else {
+        copy(phoneMessage = message, alreadyRegistered = true)
+    }
+
 /** 인증번호 입력. 숫자 6자리만 받고, 고치는 순간 직전 오류 문구를 지운다. */
 internal fun PhoneVerifyState.onCodeChanged(raw: String): PhoneVerifyState {
     if (stage != PhoneVerifyStage.CodeSent) return this
@@ -423,9 +460,47 @@ internal class PhoneVerifyViewModel(private val repository: AuthRepository) : Vi
     /** 마지막으로 처리한 재인증 신호 번호. 같은 신호를 두 번 적용하지 않기 위한 기억이다. */
     private var handledReverifyRequest = 0
 
-    /** 번호 입력란이 바뀔 때마다. 다른 번호면 인증이 무효가 된다. */
+    // 진행 중인 선확인 조회. 다음 타자가 들어오면 취소한다 — 늦게 도착한 옛 응답이 최신 입력을
+    // 덮어쓰는 사고를 구조적으로 막는다(닉네임 쪽 NicknameCheckViewModel 과 같은 장치다).
+    private var precheckJob: Job? = null
+
+    /** 마지막으로 들어온 입력값. 취소를 놓친 응답이 자기 번호에만 쓰도록 거르는 기준이다. */
+    private var lastPhoneDigits: String = ""
+
+    /**
+     * 번호 입력란이 바뀔 때마다. 다른 번호면 인증이 무효가 되고, 11자리가 되면 입력이 멈춘 뒤
+     * 가입 여부를 **한 번** 묻는다 — 버튼을 누르기 전에 「이미 가입된 번호예요」를 말해 주기 위한 것이다.
+     *
+     * 트리거를 [isCompletePhoneDigits] 로 두는 건 의도다. 도메인 규칙(`AuthPolicy.isValidPhoneNumber`)은
+     * 011·016~019 와 10자리도 통과시키지만 이 화면은 010 + 11자리만 받으므로(기존 안내 문구도 그 기준),
+     * 발송 버튼과 **같은 함수**를 써야 「선확인은 물어보는데 다음은 막는」 어긋남이 생기지 않는다.
+     *
+     * 확인 실패(네트워크·서버 오류)는 **사용자에게 알리지 않는다.** 사용자가 고칠 수 있는 게 아니고,
+     * 알려서 「다음」을 막으면 이득보다 해가 크다 — 닉네임 쪽 [NicknameCheckState.Unknown] 과 같은
+     * 판단이다. 최종 판정은 어차피 발송의 409 다.
+     */
     fun onPhoneDigitsChanged(phoneDigits: String) {
+        precheckJob?.cancel()
+        lastPhoneDigits = phoneDigits
         _state.update { it.onPhoneDigitsChanged(phoneDigits) }
+        if (!isCompletePhoneDigits(phoneDigits)) return
+        val phone = AuthPolicy.normalizePhoneNumber(phoneDigits)
+        precheckJob = viewModelScope.launch {
+            delay(PHONE_PRECHECK_DEBOUNCE_MS)
+            val registered = try {
+                repository.isPhoneRegistered(phone)
+            } catch (_: Exception) {
+                // 상태를 건드리지 않고 조용히 끝낸다 — 취소(다음 타자)로 들어온 경우에도 안전하다.
+                return@launch
+            }
+            // **false 는 아무것도 보장하지 않는다.** 서버가 탈퇴 기록을 보지 않으므로 재가입 제한
+            // 기간인 번호도 false 로 온다(실측 2026-11-01, 로컬 :8080) — 열어 주면 「쓸 수 있는
+            // 번호」라고 안심시킨 뒤 발송에서 409 USER109 를 듣게 된다. 막는 데만 쓴다.
+            if (!registered) return@launch
+            // 취소를 놓친 응답이 남의 번호에 문구를 띄우지 않게 한다.
+            if (lastPhoneDigits != phoneDigits) return@launch
+            _state.update { it.onPhonePrecheckTaken(authErrorMessage(AuthError.PHONE_NUMBER_DUPLICATED)) }
+        }
     }
 
     /** 인증 완료 후 「번호 변경」 — 사용자가 스스로 무효화를 택한 경로라 안내 문구를 남기지 않는다. */

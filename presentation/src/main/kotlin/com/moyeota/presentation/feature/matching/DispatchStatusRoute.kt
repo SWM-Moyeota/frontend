@@ -9,6 +9,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
@@ -30,6 +31,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -77,8 +79,61 @@ class DispatchStatusViewModel(
     private val _rideStarted = MutableStateFlow(false)
     val rideStarted: StateFlow<Boolean> = _rideStarted.asStateFlow()
 
+    /**
+     * 화면이 지금 **보이는가** — 배차 폴링의 스위치다([shouldPollDispatch]).
+     *
+     * **컴포지션만으로는 부족하다.** 이 루프는 Route 의 `LaunchedEffect` 스코프에서 도는데,
+     * `LaunchedEffect` 는 **컴포지션 이탈**에만 취소되고 **앱 백그라운드**에는 반응하지 않는다 —
+     * NavHost 컴포지션은 앱을 내려놓아도 살아 있다([com.moyeota.presentation.core.ActivePartyViewModel]
+     * 의 `hostVisible` KDoc 이 같은 사실을 적어 두었다). 그래서 주머니 속에서도 7초마다 **호출 2건**
+     * (`GET /matching/rooms/{id}` + `GET /dispatch/rides/{id}`) = 분당 약 17건이 나갔다.
+     *
+     * 21 대기(`MatchWaitingViewModel.visible`)·17 탐색·24 채팅방이 모두 같은 게이트를 쓰고 **25 만
+     * 빠져 있었다** — QA 123 D-3 으로 21 을 고칠 때 같이 고쳐지지 않은 자리다.
+     *
+     * ### 끊어도 안전한 근거
+     * 이 화면의 갱신 수단은 **폴링 하나**고 상태를 쌓지 않는다 — 매 주기 방 상세를 **통째로** 받아
+     * 교체하므로(그래서 멱등하다) 가려진 동안 건너뛴 주기를 따라잡을 필요가 없다. 복귀하면 그 패스가
+     * **곧바로 한 번 읽는다**(`delay` 가 루프 끝에 있다) — 그래서 탑승 시작(IN_RIDE) 전이를 놓치지
+     * 않는다. 가려진 동안의 전이는 어차피 알려 봐야 띄울 화면이 없다.
+     *
+     * ### 기본값이 true 인 이유
+     * 이 값을 내려 주는 배선([onScreenStart]·[onScreenStop])은 Route 에 있다. 기본값을 false 로 두면
+     * 배선이 빠진 채 머지됐을 때 **배차가 영영 갱신되지 않는** 기능 손실이 된다 — true 면 최악이
+     * 「고쳐지지 않은 상태 유지」다(21·`ActivePartyViewModel` 이 같은 이유로 true 다).
+     */
+    private val visible = MutableStateFlow(true)
+
+    /**
+     * 폴링이 **제 할 일을 끝냈다** — 탑승 시작을 잡아 26 운행 중으로 넘긴다.
+     *
+     * 가시성은 「멈췄다 다시 켜는」 스위치지만 이 값은 「끝났다」는 사실이라 복귀로 되돌아가지 않는다
+     * (21 의 `fallbackDone` 과 같은 자리·같은 이유). 게이트를 넣었다고 끝난 루프가 되살아나면 회귀다.
+     */
+    @Volatile
+    private var pollDone = false
+
     init {
         refresh()
+    }
+
+    /**
+     * 화면이 보이기 시작했다 — 폴링을 재개하고 **즉시 한 주기**를 돈다(`delay` 가 루프 끝에 있다).
+     *
+     * 이 길로 오는 것: 첫 진입, 앱 복귀, 위에 올라와 있던 화면(24 채팅방)의 pop.
+     */
+    fun onScreenStart() {
+        visible.value = true
+    }
+
+    /**
+     * 화면이 가려졌다 — 폴링을 멈춘다. 들고 있던 배차 상태는 **건드리지 않는다**: 돌아올 때 보던
+     * 화면을 먼저 보여주고 다음 주기로 덮는 것이 맞고, 로딩으로 깜빡이게 할 이유가 없다.
+     *
+     * 이 길로 오는 것: 앱 백그라운드(호스트 ON_STOP), 위에 다른 화면이 올라옴(엔트리가 CREATED 로 내려간다).
+     */
+    fun onScreenStop() {
+        visible.value = false
     }
 
     fun refresh() {
@@ -97,7 +152,16 @@ class DispatchStatusViewModel(
 
     /**
      * 방 상세·기사 정보·기사 위치 폴링. **호출자(Route)의 코루틴 스코프에서 돌린다** —
-     * LaunchedEffect 가 화면 이탈 시 이 함수를 취소해 폴링이 함께 멈춘다.
+     * LaunchedEffect 가 **컴포지션 이탈** 시 이 함수를 취소해 폴링이 함께 멈춘다.
+     *
+     * **그 이탈만으로는 부족하다.** `LaunchedEffect` 는 앱이 백그라운드로 가도 취소되지 않는다
+     * (NavHost 컴포지션이 그대로 살아 있다) — 그래서 주머니 속에서도 7초마다 호출 2건, 분당 약 17건이
+     * 나갔다. 그래서 [visible] 로 한 번 더 막는다: `collectLatest` 가 가려지는 순간 **진행 중인 조회와
+     * `delay` 를 함께 취소**하고, 다시 보이면 같은 패스를 새로 시작한다(21 대기의
+     * `observeFallbackPolling`·17 탐색 `ExploreViewModel.observeRequests` 와 같은 모양).
+     *
+     * 복귀 첫 주기는 **즉시** 돈다 — `delay` 가 루프 **끝**에 있어, 패스가 다시 시작되면 방 상세를
+     * 그 자리에서 읽는다. 그래서 가려진 동안 일어난 탑승 시작(IN_RIDE)도 복귀와 거의 동시에 잡힌다.
      *
      * **동승 모드에서는 이 루프가 한 번도 돌지 않는다** — 서버가 `DISPATCHING` 을 내지 않아 25 에
      * 닿을 길이 없다(`docs/MODE-ROUTES.md`). 택시 모드 전용이다.
@@ -123,31 +187,38 @@ class DispatchStatusViewModel(
      * 기다린다 — 한 번의 실패로 화면이 깜빡이거나 에러로 덮이면 안 된다.
      */
     suspend fun pollDriver() {
-        Log.d(TAG, "배차 폴링 시작 partyId=$partyId")
-        try {
-            while (currentCoroutineContext().isActive) {
-                val held = (_uiState.value as? UiState.Success)?.ride
-                // 실패하면(null) 들고 있던 값으로 이 주기를 넘긴다 — 깜빡임도 에러 화면도 없다.
-                val fetched = runCatching { rideRepository.getPartyDetail(partyId) }.getOrNull()
-                if (fetched != null && shouldPublishDetail(held, fetched)) {
-                    _uiState.value = UiState.Success(fetched)
+        visible.collectLatest { shown ->
+            if (!shouldPollDispatch(visible = shown, pollDone = pollDone)) return@collectLatest
+            Log.d(TAG, "배차 폴링 시작 partyId=$partyId")
+            try {
+                while (currentCoroutineContext().isActive) {
+                    val held = (_uiState.value as? UiState.Success)?.ride
+                    // 실패하면(null) 들고 있던 값으로 이 주기를 넘긴다 — 깜빡임도 에러 화면도 없다.
+                    val fetched = runCatching { rideRepository.getPartyDetail(partyId) }.getOrNull()
+                    if (fetched != null && shouldPublishDetail(held, fetched)) {
+                        _uiState.value = UiState.Success(fetched)
+                    }
+                    // 전이 판정은 **이번 주기에 받은 값**으로만 한다 — 실패한 주기(null)는 "아직 아니다"다.
+                    // 끝난 루프는 복귀로 되살아나지 않는다(pollDone) — 가시성은 스위치, 이건 종결이다.
+                    if (markStartedIfInRide(fetched)) {
+                        pollDone = true
+                        return@collectLatest
+                    }
+                    // 기사 조회 게이트는 반대로 **마지막으로 아는 값**을 쓴다 — 한 주기 실패했다고 마커
+                    // 갱신을 멈추면 택시가 오는 동안 지도가 굳는다.
+                    val ride = fetched ?: held
+                    loadDriverIfAssigned(ride)
+                    // 기사 위치는 배정된 뒤에만 묻는다 — 배정 전 호출은 서버가 DRIVER_NOT_ASSIGNED 로 거절하며
+                    // 폴링 주기마다 서버 WARN 로그만 쌓는다. 조회 주체는 Bearer 토큰이 정한다(22 보고서 §2).
+                    if (shouldFetchDriverLocation(ride)) {
+                        runCatching { dispatchRepository.getDriverLocation(partyId) }
+                            .onSuccess { _driverLocation.value = it }
+                    }
+                    delay(DRIVER_POLL_INTERVAL_MS)
                 }
-                // 전이 판정은 **이번 주기에 받은 값**으로만 한다 — 실패한 주기(null)는 "아직 아니다"다.
-                if (markStartedIfInRide(fetched)) return
-                // 기사 조회 게이트는 반대로 **마지막으로 아는 값**을 쓴다 — 한 주기 실패했다고 마커
-                // 갱신을 멈추면 택시가 오는 동안 지도가 굳는다.
-                val ride = fetched ?: held
-                loadDriverIfAssigned(ride)
-                // 기사 위치는 배정된 뒤에만 묻는다 — 배정 전 호출은 서버가 DRIVER_NOT_ASSIGNED 로 거절하며
-                // 폴링 주기마다 서버 WARN 로그만 쌓는다. 조회 주체는 Bearer 토큰이 정한다(22 보고서 §2).
-                if (shouldFetchDriverLocation(ride)) {
-                    runCatching { dispatchRepository.getDriverLocation(partyId) }
-                        .onSuccess { _driverLocation.value = it }
-                }
-                delay(DRIVER_POLL_INTERVAL_MS)
+            } finally {
+                Log.d(TAG, "배차 폴링 중단 partyId=$partyId")
             }
-        } finally {
-            Log.d(TAG, "배차 폴링 중단 partyId=$partyId")
         }
     }
 
@@ -256,7 +327,19 @@ fun DispatchStatusRoute(
     val driverLocation by viewModel.driverLocation.collectAsState()
     val rideStarted by viewModel.rideStarted.collectAsState()
 
-    // 화면이 살아있는 동안만 폴링한다 — 이탈하면 LaunchedEffect 가 취소돼 함께 멈춘다
+    // 화면이 **보이는 동안만** 폴링한다. 두 겹이다:
+    // ① LaunchedEffect — 컴포지션에서 빠지면(다른 화면으로 이동) 루프가 취소된다.
+    // ② LifecycleStartEffect — **앱 백그라운드**(ON_STOP)와 「위에 24 채팅방이 올라옴」을 잡는다.
+    //    ①만으로는 부족하다: NavHost 컴포지션은 앱을 내려놓아도 살아 있어, 주머니 속에서 7초마다
+    //    호출 2건(방 상세 + 기사 위치) = 분당 약 17건이 계속 나갔다. 21 대기·17 탐색·24 채팅방은
+    //    이미 이 게이트를 쓰고 있었고 25 만 빠져 있었다(QA 123 D-3 을 고칠 때 놓친 자리).
+    //
+    // RESUMED 가 아니라 STARTED 인 이유는 21 과 같다 — NavHost 는 전환 애니메이션이 끝난 뒤에야
+    // RESUMED 로 올리므로, RESUMED 로 묶으면 복귀 첫 조회가 그만큼 늦는다.
+    LifecycleStartEffect(viewModel) {
+        viewModel.onScreenStart()
+        onStopOrDispose { viewModel.onScreenStop() }
+    }
     LaunchedEffect(viewModel) {
         viewModel.pollDriver()
     }
@@ -325,6 +408,26 @@ fun DispatchStatusRoute(
  * 오류로 화면을 넘기지 않는다.
  */
 internal fun isRideStarted(ride: Ride?): Boolean = ride?.status == RideStatus.ONGOING
+
+/**
+ * 배차 폴링을 지금 돌려야 하는가 — **가시성 게이트의 판정**(`DispatchStatusViewModel.pollDriver`).
+ *
+ * | 판정 | 조건 | 왜 |
+ * |---|---|---|
+ * | 돌리지 않는다 | [visible] 이 false | **이 함수의 존재 이유.** `LaunchedEffect` 는 컴포지션 이탈에만 취소되고 앱 백그라운드에는 반응하지 않는다 — 주머니 속에서 7초마다 호출 2건(분당 약 17건)이 나갔다 |
+ * | 돌리지 않는다 | [pollDone] 이 true | 탑승 시작을 잡아 루프가 **끝났다**(26 으로 넘어간다). 복귀로 되살아나면 회귀다 |
+ * | 돌린다 | 그 밖 | 보이고, 아직 전이를 못 잡았다 |
+ *
+ * 가시성이 **앞**인 게 요점이다(21 의 `fallbackPollStep` 과 같은 순서) — 보이지 않는 동안에는
+ * 나머지 조건을 보지 않는다. 반대로 [pollDone] 은 「끝났다」는 사실이라 복귀해도 되돌아가지 않는다.
+ *
+ * 끊어도 안전한 근거: 이 화면은 상태를 쌓지 않고 **매 주기 방 상세를 통째로 교체**하므로 건너뛴
+ * 주기를 따라잡을 필요가 없고, 복귀하면 그 패스가 곧바로 한 번 읽는다(`delay` 가 루프 끝이다).
+ *
+ * @param visible 화면이 사용자에게 보이는가(`LifecycleStartEffect` 로 받는다)
+ * @param pollDone 탑승 시작([isRideStarted])을 잡아 루프가 끝났는가
+ */
+internal fun shouldPollDispatch(visible: Boolean, pollDone: Boolean): Boolean = visible && !pollDone
 
 /**
  * 기사 **정보**(`GET /matching/rooms/{id}/driver`)를 물어도 되는가.

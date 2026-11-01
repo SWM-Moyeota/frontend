@@ -87,10 +87,21 @@ data class ChatIdentity(
 
 // publicId 가 빈 문자열인 참여자는 서버 응답이 깨진 경우다 — isMe 를 참으로 만들지 않는다
 // (myUuid 도 null 이면 "빈 값끼리 같다"로 남의 메시지가 내 것이 될 수 있다).
+//
+// nickname 이 null 로 오는 경우(서버 `users.nickname` 에 NOT NULL 이 없다 —
+// [ChatMemberResponse.nickname] KDoc)는 **빈 문자열**로 떨어뜨린다. 필드가 아예 없던 구버전 응답과
+// 같은 자리이고, 읽는 쪽이 이미 "빈 닉네임 = 이름을 모른다"로 다룬다 —
+// 목록·헤더 제목은 「동승자」로 떨어지고(`ChatRoute.chatRoomPeerTitle`), 말풍선 이름도 같다
+// ([toChatMessage] 의 `isNotBlank` 검사).
+//
+// `WithdrawnMemberNames` 를 쓰지 않는다: 저쪽은 **유저 요약 자체가 없거나 탈퇴한** 멤버의 자리값인데
+// (`PartyMappers.toUser` 가 그 경우에 NO_SUMMARY 를 채운다) 여기서 null 로 오는 건 publicId 가 멀쩡한
+// **「닉네임 미설정」**이다. 요약 없는 멤버는 채팅 응답까지 오지 않는다(서버가 걸러낸다).
+// 멀쩡히 참여 중인 사람을 「탈퇴한 회원」으로 부르면 그게 더 틀린 말이다.
 fun ChatMemberResponse.toChatMember(myUuid: String?): ChatMember = ChatMember(
     userId = userId,
     publicId = publicId,
-    nickname = nickname,
+    nickname = nickname.orEmpty(),
     imageUrl = imageUrl,
     active = active,
     isMe = publicId.isNotBlank() && publicId == myUuid,
@@ -181,19 +192,34 @@ internal suspend fun <T> chatCall(block: suspend () -> T): T =
     }
 
 /**
+ * 목록 응답으로 만든 방의 [ChatRoom.partyId] 자리값 — **「모른다」는 뜻이다.**
+ *
+ * `GET /chat-rooms/me` 는 partyId 를 주지 않는데 [ChatRoom.partyId] 는 non-null `Long` 이라 무언가는
+ * 채워야 한다. 그래서 「없음」을 0 으로 적는다.
+ *
+ * **이 값으로 아무것도 비교하지 말 것.** 0 인지 보는 것(= 모르는지 보는 것) 말고는 쓸 데가 없다.
+ * 예전에 「지금 진행 중인 방인가」를 `partyId.toString() == activePartyId` 로 가리던 코드가 있었는데,
+ * 목록에서 연 방은 여기서 0 을 받으므로 그 판정이 **언제나 거짓**이었다 — 진행 중인 방인데도 「매칭
+ * 화면으로 →」가 안 뜨고 되돌릴 수 없는 「나가기」가 노출됐다(실기 QA). 지금은 믿을 수 있는 값인
+ * **채팅방 id** 로 가린다(`ChatRoute.isActiveParty`).
+ *
+ * partyId 가 실제로 필요한 경로([ActivePartyRepository])는 여전히 **방 상세**에서 받은 값만 쓴다.
+ */
+internal const val UNKNOWN_PARTY_ID = 0L
+
+/**
  * 목록 항목에 방 정보가 함께 왔으면 [ChatRoom] 으로 옮긴다. 안 왔으면(구버전 서버) null —
  * 호출부가 방 상세를 한 번 더 읽는다.
  *
- * 목록 응답에는 `partyId` 가 없다. 진행 중인 방을 partyId 로 찾는 쪽([ActivePartyRepository])이 그 값을
- * 쓰므로 **0 으로 채우지 않고** 방 상세에서 받은 값만 신뢰해야 한다 — 그래서 partyId 가 필요한 경로는
- * 여전히 상세 조회를 쓴다. 여기서는 목록 표시에 필요한 것만 채운다.
+ * 목록 응답에는 `partyId` 가 없어 [UNKNOWN_PARTY_ID] 를 채운다 — 「모른다」는 표시이고
+ * **비교에 쓰면 안 되는 값**이다(그 KDoc). 여기서는 목록 표시에 필요한 것만 채운다.
  */
 fun ChatRoomUserResponse.toChatRoomOrNull(): ChatRoom? {
     val departure = departure ?: return null
     val destination = destination ?: return null
     return ChatRoom(
         id = chatRoomId,
-        partyId = 0L,
+        partyId = UNKNOWN_PARTY_ID,
         departure = departure,
         destination = destination,
         createdAt = joinedAt.orEmpty(),

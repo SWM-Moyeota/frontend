@@ -150,7 +150,9 @@ private fun ChatRoomRow(item: ChatRoomListItem, onClick: () -> Unit) {
             .padding(horizontal = 18.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        AvatarCircle(size = 40.dp)
+        // 제목이 부르는 사람의 얼굴([ChatRoomListItem.peerImageUrl]) — 제목과 **같은 멤버 목록**에서
+        // 뽑아 Route 가 실어 보낸다. 참여자를 못 받은 방은 제목이 경로로 떨어지고 여기도 회색 원이다.
+        AvatarCircle(size = 40.dp, imageUrl = item.peerImageUrl)
         Spacer(Modifier.size(10.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
