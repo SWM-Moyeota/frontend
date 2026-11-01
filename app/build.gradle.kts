@@ -2,6 +2,9 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.google.services)
+    // google-services **뒤에** 와야 한다 — Crashlytics 플러그인이 google-services 가 만든
+    // google_app_id 를 읽어 매핑 업로드 태스크를 구성한다.
+    alias(libs.plugins.firebase.crashlytics)
 }
 
 /**
@@ -170,6 +173,7 @@ dependencies {
     implementation(libs.okhttp)
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.messaging)
+    implementation(libs.firebase.crashlytics)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.junit)

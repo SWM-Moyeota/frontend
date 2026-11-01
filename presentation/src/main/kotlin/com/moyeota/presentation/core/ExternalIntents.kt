@@ -88,6 +88,24 @@ fun Context.openWebPage(url: String) {
 }
 
 /**
+ * 스토어의 이 앱 페이지를 연다. 강제 업데이트 화면의 「업데이트하러 가기」가 쓴다.
+ *
+ * `market://` 을 먼저 쓰는 이유: Play 스토어 앱이 **바로** 열려 설치 버튼까지 한 번에 간다.
+ * 브라우저를 거치면 로그인·리다이렉트가 끼어들 수 있다. 다만 Play 스토어가 없는 기기
+ * (중국향 단말·커스텀 ROM)에서는 `market://` 을 받을 앱이 없어 `ActivityNotFoundException` 이
+ * 나므로, **반드시** https 로 폴백해야 한다 — 폴백이 없으면 그 사용자는 잠긴 화면에서
+ * 나갈 길이 영영 없다.
+ */
+fun Context.openPlayStoreListing() {
+    val marketIntent = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$packageName"))
+    try {
+        startActivity(marketIntent)
+    } catch (e: ActivityNotFoundException) {
+        openWebPage("https://play.google.com/store/apps/details?id=$packageName")
+    }
+}
+
+/**
  * 문의 메일 본문 — 사용자가 적을 자리를 위에 비워 두고, 아래에 환경 정보를 미리 채운다.
  *
  * 환경 정보를 넣는 이유: 없으면 문의 한 건마다 "앱 버전·기종이 무엇인가요"를 되묻는 왕복이

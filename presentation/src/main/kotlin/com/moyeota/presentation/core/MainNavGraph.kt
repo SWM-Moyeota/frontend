@@ -206,6 +206,21 @@ private fun MainNavHost(
         onPauseOrDispose { }
     }
 
+    // ── 강제 업데이트 게이트 ──
+    // 서버가 「이 버전은 더 못 쓴다」고 답하면 **NavHost 를 세우지 않는다**. 그래프가 없으면
+    // 뒤로가기로 갈 수 있는 앱 화면 자체가 없어서, 오버레이+BackHandler 처럼 컴포지션 순서에
+    // 기대지 않아도 된다.
+    //
+    // 설정은 비동기로 오므로 이 판정은 **앱 시작 몇 초 뒤에 바뀔 수 있다.** 그때 NavHost 가
+    // 헐리는 것은 의도한 동작이다 — 서버가 못 쓴다고 한 버전으로 합승을 계속 진행시키는 쪽이
+    // 더 나쁘다. 설정을 못 받았거나(기본값 null) 서버가 필드를 안 주면 여기는 통과한다.
+    val gateContext = LocalContext.current
+    val installedVersionCode = remember(gateContext) { gateContext.appVersionCode() }
+    if (updateRequirement(appConfig, installedVersionCode) == UpdateRequirement.BLOCKED) {
+        UpdateRequiredScreen()
+        return
+    }
+
     // ── 화면 사이에 넘겨야 하는 값 ──
     // 10 프로필 만들기가 채우는 가입 정보 — 12 매너 서약에서 제출한다.
     //

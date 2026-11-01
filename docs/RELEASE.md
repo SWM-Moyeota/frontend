@@ -244,8 +244,13 @@ done
 [ ] local.properties 에 서명 4개 값
 [ ] GitHub Secrets 5개 등록 (2-2 표) — 안 하면 main 푸시마다 릴리스 워크플로 실패
 [ ] MOYEOTA_BASE_URL 이 운영 서버인지 확인 (또는 비워 두기)
-[ ] versionCode 올림
+[ ] 묵은 산출물 삭제: rm -rf app/build/outputs/bundle  ← 빌드가 실패해도 **옛 AAB 는 남는다**
+[ ] MOYEOTA_VERSION_CODE/NAME 주입 확인 — **안 넣으면 1 / "1.0" 이 박힌다**
 [ ] ./gradlew :app:bundleRelease → jarsigner 로 AAB 서명 확인
+[ ] 만든 AAB 가 방금 것인지 확인:
+      unzip -p app/build/outputs/bundle/release/app-release.aab \
+        base/root/META-INF/version-control-info.textproto | strings | grep revision
+      → 지금 HEAD 와 같아야 한다
 [ ] (CI 산출 APK 를 돌려볼 때) apksigner verify 로 서명 확인
 [x] 개인정보 처리방침 URL 준비 → SupportLinks 채우기   (2026-10-14)
 [x] 계정 삭제 안내 URL 준비                            (2026-10-14)
@@ -254,4 +259,16 @@ done
 [ ] 첫 업로드 후 앱 서명 키 SHA-256 → 서명 키 등록
 [ ] 앱 서명 키 SHA-1 → Firebase 콘솔 등록 (푸시)
 [ ] 내부 테스트 트랙으로 먼저 올려 실기 확인
+
+--- 게시 전에 반드시 (코드 바깥) ---
+[ ] 앱이 보내는 것과 처리방침이 **일치**하는지 확인 → 어긋나면 _workspace/legal-site/ 를 먼저 고친다
+[ ] 법적 고지 사이트 배포: python3 _workspace/legal-site/_check.py _workspace/legal-site
+      → aws s3 sync (README 의 명령) → CloudFront 무효화 → 라이브와 원본 diff
+[ ] Play Console 「데이터 안전」 양식 갱신 — 답은 _workspace/play-data-safety.md 표 1
+[ ] Play Console 「앱 액세스 권한」에 심사용 테스트 계정 등록
+      ← 전 기능이 로그인 뒤에 있고 가입이 한국 SMS 인증을 요구한다. 안 넣으면 심사자가 한 화면도 못 본다
+[ ] 단계적 출시로 시작 (100% 즉시 게시 금지 — 코드에 되돌릴 장치가 없다)
 ```
+
+> **AAB 만 먼저 올리고 법적 고지 배포를 잊는 것**이 이 절차에서 가장 비싼 실수다.
+> 처리방침은 Play 콘솔에 **주소로** 등록돼 있어서, 앱만 바뀌면 등록된 페이지가 조용히 거짓이 된다.
