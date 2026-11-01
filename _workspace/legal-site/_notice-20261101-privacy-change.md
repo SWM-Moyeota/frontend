@@ -104,7 +104,7 @@ git merge-base --is-ancestor b1e3921 v2026.1024.1   # 오류 진단 → 없음
 
 ■ 전문과 문의
 
-처리방침 전문: https://moyeota.co.kr/privacy/
+처리방침 전문: https://legal.moyeota.p-e.kr/privacy/
 이번에 바뀐 부분: 제1조(수집 항목), 제6조(보관 기간), 제7조(제3자 제공),
                  제8조(국외 이전), 제9조(오류 진단), 제11조(이용자의 권리)
 개정 이력은 같은 페이지 맨 아래에 있습니다.
@@ -132,7 +132,7 @@ Google Firebase Crashlytics, 국외 전송).
 드립니다. 원하지 않으시면 업데이트를 받지 않으시거나 마이페이지에서 탈퇴하실
 수 있습니다. 끄는 설정이 필요하면 말씀해 주세요.
 
-전문 https://moyeota.co.kr/privacy/
+전문 https://legal.moyeota.p-e.kr/privacy/
 문의 codingforest17@gmail.com
 ```
 
