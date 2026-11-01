@@ -30,5 +30,8 @@ dependencies {
     // 네이버 지도: NaverMapView 가 공용 컴포넌트라 소비 모듈(presentation)에도 타입 노출 필요
     api(libs.naver.map.sdk)
     implementation(libs.androidx.lifecycle.runtime.compose)
+    // 아바타가 서버 프로필 사진을 그린다(AvatarCircle). 로더 **구성**은 여기가 아니라 app 모듈에 있다
+    // — 이 모듈은 AsyncImage 만 쓰고 OkHttp 타입은 건드리지 않는다.
+    implementation(libs.coil.compose)
     debugImplementation(libs.androidx.compose.ui.tooling)
 }

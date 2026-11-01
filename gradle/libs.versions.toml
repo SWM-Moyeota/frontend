@@ -9,6 +9,13 @@ navigationCompose = "2.9.8"
 lifecycle = "2.11.0"
 retrofit = "3.0.0"
 okhttp = "5.1.0"
+# 3.3.0 고정. 상향 금지 — 3.6.3 은 kotlin-stdlib 2.4.10 을 끌어와 메타데이터 2.4.0 이 되고,
+# 컴파일러 2.2.10 이 읽을 수 있는 상한(2.3.0)을 넘겨 `:presentation:compileDebugKotlin` 이
+# "Module was compiled with an incompatible version of Kotlin" 으로 **실패한다**(실측).
+# 덤으로 3.6.3 은 androidx.compose foundation/ui/runtime 을 1.12.0 으로 밀어올려 Compose BOM 이
+# 버전 통제를 잃는다(material3 만 BOM 의 1.4.0 에 남는다). 3.3.0 은 Compose 드리프트가 0 이다.
+# Kotlin 을 올리는 날 이 핀도 같이 재검토할 것.
+coil = "3.3.0"
 kotlinxSerialization = "1.9.0"
 kotlinxCoroutines = "1.10.2"
 datastore = "1.1.7"
@@ -40,6 +47,12 @@ naver-map-sdk = { group = "com.naver.maps", name = "map-sdk", version.ref = "nav
 play-services-location = { group = "com.google.android.gms", name = "play-services-location", version.ref = "playServicesLocation" }
 retrofit = { group = "com.squareup.retrofit2", name = "retrofit", version.ref = "retrofit" }
 retrofit-converter-kotlinx-serialization = { group = "com.squareup.retrofit2", name = "converter-kotlinx-serialization", version.ref = "retrofit" }
+coil-compose = { group = "io.coil-kt.coil3", name = "coil-compose", version.ref = "coil" }
+coil-network-okhttp = { group = "io.coil-kt.coil3", name = "coil-network-okhttp", version.ref = "coil" }
+# app 이 이미지 로더에 OkHttpClient 를 넘기므로 app 의 **컴파일** 클래스패스에도 필요하다.
+# data 는 okhttp 를 implementation 으로 쓰고 coil-network-okhttp 는 4.12.0 을 끌고 오므로,
+# 명시하지 않으면 app 이 4.12.0 헤더로 컴파일되고 런타임만 5.1.0 이 되는 어긋남이 생긴다.
+okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 okhttp-logging-interceptor = { group = "com.squareup.okhttp3", name = "logging-interceptor", version.ref = "okhttp" }
 okhttp-sse = { group = "com.squareup.okhttp3", name = "okhttp-sse", version.ref = "okhttp" }
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
