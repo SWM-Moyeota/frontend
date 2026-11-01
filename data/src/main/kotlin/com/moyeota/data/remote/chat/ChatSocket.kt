@@ -3,6 +3,8 @@ package com.moyeota.data.remote.chat
 import android.util.Log
 import com.moyeota.data.remote.dto.ChatMessageResponse
 import com.moyeota.data.session.TokenHolder
+import com.moyeota.domain.diagnostics.Diagnostics
+import com.moyeota.domain.diagnostics.FailureSite
 import kotlin.random.Random
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -58,6 +60,30 @@ private const val RECONNECT_JITTER_RATIO = 0.2
  * **구독까지 성공하면 호출부가 횟수를 0 으로 되돌린다**([ChatSocket.room]) — 그러지 않으면 몇 시간
  * 붙어 있던 연결이 한 번 끊겼을 때 30초를 기다린다.
  */
+/**
+ * 소켓이 **붙지 못하고 있다**는 것을 딱 한 번 보고한다.
+ *
+ * 한 번의 끊김은 버그가 아니다 — 지하철에서는 늘 일어난다. 그래서 [RECONNECT_DELAYS_MS] 표를
+ * 한 바퀴 다 쓴 [RECONNECT_REPORT_AT] 회째에 **정확히 한 번만** 올린다. `==` 비교인 것이
+ * 중요하다 — `>=` 로 쓰면 못 붙는 동안 30초마다 같은 보고가 쌓여 대시보드를 덮는다.
+ *
+ * **IOException 필터를 일부러 비껴간다.** 소켓 실패는 거의 다 IOException 이라 원본을 넘기면
+ * [Diagnostics] 가 걸러 버린다. 여기서 신호는 예외의 종류가 아니라 **「연속 N회」라는 사실**
+ * 이므로, 종류 이름만 문자열로 옮겨 담은 새 예외로 올린다. 값은 들어가지 않는다.
+ */
+private fun reportIfStuck(failures: Int, lastErrorType: String?) {
+    if (failures != RECONNECT_REPORT_AT) return
+    Diagnostics.report(
+        site = FailureSite.CHAT_SOCKET_RECONNECT,
+        throwable = IllegalStateException(
+            "$RECONNECT_REPORT_AT consecutive failures; last=${lastErrorType ?: "no-exception"}",
+        ),
+    )
+}
+
+/** 백오프 표를 한 바퀴 다 쓴 시점. 표가 4칸이므로 4회째다. */
+private val RECONNECT_REPORT_AT = RECONNECT_DELAYS_MS.size
+
 internal fun reconnectDelayMs(failures: Int, jitter: Double = Random.nextDouble()): Long {
     val index = (failures.coerceAtLeast(1) - 1).coerceAtMost(RECONNECT_DELAYS_MS.lastIndex)
     val base = RECONNECT_DELAYS_MS[index]
@@ -131,12 +157,18 @@ class ChatSocket(
     fun room(chatRoomId: Long): Flow<RoomSignal> = flow {
         // 연속 실패 횟수 — 붙는 데 성공하면(Connected) 0 으로 되돌린다
         var failures = 0
+        // 마지막 실패의 **종류만** 기억한다. 예외 객체나 메시지를 들고 있지 않는 이유는
+        // 보고에 서버 응답 조각 같은 값이 섞여 나가지 않게 하기 위해서다.
+        var lastErrorType: String? = null
         while (true) {
             try {
                 collectRoom(chatRoomId) { signal ->
                     // 구독까지 성공했으면 백오프를 처음으로 되돌린다. 긴 연결이 끊긴 것과
                     // 「붙지도 못하는 상태」를 같게 다루면 멀쩡한 서버에도 30초를 기다린다.
-                    if (signal is RoomSignal.Connected) failures = 0
+                    if (signal is RoomSignal.Connected) {
+                        failures = 0
+                        lastErrorType = null
+                    }
                     emit(signal)
                 }
                 // 예외 없이 돌아오는 경우(미로그인·구독 종료)도 **실패로 센다** — 조건이 그대로면
@@ -146,8 +178,10 @@ class ChatSocket(
                 throw e
             } catch (e: Exception) {
                 failures++
+                lastErrorType = e.javaClass.name
                 Log.d(TAG, "연결 끊김 roomId=$chatRoomId — ${failures}회째 실패: ${e.message}")
             }
+            reportIfStuck(failures, lastErrorType)
             emit(RoomSignal.Disconnected)
             val wait = reconnectDelayMs(failures)
             Log.d(TAG, "재연결 대기 roomId=$chatRoomId — ${wait}ms (${failures}회째)")

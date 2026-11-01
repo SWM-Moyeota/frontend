@@ -14,6 +14,7 @@ import coil3.disk.directory
 import coil3.memory.MemoryCache
 import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import coil3.util.DebugLogger
+import com.google.firebase.crashlytics.FirebaseCrashlytics
 import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -40,9 +41,45 @@ class MoyeotaApplication : Application(), SingletonImageLoader.Factory {
 
     override fun onCreate() {
         super.onCreate()
+        // 컨테이너보다 **먼저** 켠다. 컨테이너 조립이 터지면 그 크래시도 받아야 하는데,
+        // 수집 스위치가 뒤에 있으면 바로 그 사고만 영영 못 본다.
+        configureCrashReporting()
         appContainer = AppContainer(context = this, debugLogging = isDebuggableBuild())
         createNotificationChannel()
         fetchFcmToken()
+    }
+
+    /**
+     * 크래시 수집 스위치.
+     *
+     * **디버그 빌드에서는 끈다.** 개발 중 일부러 낸 크래시가 운영 대시보드에 섞이면
+     * 「크래시 없는 사용자 %」가 무의미해지고, 진짜 사고가 개발 소음에 묻힌다.
+     * 판정은 이미지 로거와 **같은 근거**([isDebuggableBuild], `FLAG_DEBUGGABLE`)를 쓴다 —
+     * `BuildConfig.DEBUG` 를 쓰면 모듈마다 다른 BuildConfig 를 보게 되는 함정이 있다.
+     *
+     * ### setUserId 를 부르지 않는다
+     * `publicId`(uuid)를 넣으면 「누가 겪은 크래시인가」를 알 수 있어 편하지만, 그 값은 서버에서
+     * 실명·휴대폰번호로 되짚히는 **계정 식별자**다. 보내는 순간 크래시 보고가 「이용자와 연결된
+     * 데이터」가 되어 처리방침에 계정 식별자의 국외 이전을 따로 적어야 하고, 삭제 요구가 오면
+     * Google 쪽 기록까지 지워야 한다. 얻는 것보다 비용이 크다.
+     *
+     * ### 보고에 넣으면 안 되는 것
+     * `log()`·커스텀 키·예외 메시지 어디에도 **로그인 토큰·휴대폰번호·이메일·실명·좌표·채팅 본문**을
+     * 넣지 않는다. 특히 서버 응답에서 온 예외를 그대로 넘기면 안 된다 — kotlinx.serialization 의
+     * 파싱 실패 메시지는 **응답 본문 조각을 그대로 담는다.** 그래서 [CrashlyticsErrorReporter] 가
+     * 원본 예외를 넘기지 않고 종류와 지점만 남긴 예외를 새로 만들어 보낸다.
+     */
+    private fun configureCrashReporting() {
+        runCatching {
+            FirebaseCrashlytics.getInstance()
+                .setCrashlyticsCollectionEnabled(!isDebuggableBuild())
+            // 삼켜진 실패를 non-fatal 로 받는 통로. 꽂기 전의 보고는 조용히 버려지므로
+            // 수집 스위치 바로 뒤, 컨테이너 조립보다 먼저 꽂는다.
+            CrashlyticsErrorReporter.install()
+        }.onFailure {
+            // 수집 스위치를 못 켠 것이 앱 시작을 막으면 안 된다. 최악은 크래시를 못 보는 것뿐이다.
+            Log.w(TAG, "Crashlytics 설정 실패", it)
+        }
     }
 
     /**

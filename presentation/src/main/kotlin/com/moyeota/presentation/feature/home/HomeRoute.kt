@@ -10,6 +10,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.moyeota.core.designsystem.component.MoyeotaTab
+import com.moyeota.domain.diagnostics.Diagnostics
+import com.moyeota.domain.diagnostics.FailureSite
 import com.moyeota.domain.model.FavoritePlace
 import com.moyeota.domain.model.FavoritePlaceException
 import com.moyeota.domain.model.Ride
@@ -72,6 +74,9 @@ class HomeViewModel(
         // 실패했으면 **이미 보여 주던 목록을 비우지 않는다** — 지하철에서 한 번 끊겼다고 화면이
         // 「등록한 곳이 없어요」로 바뀌면 사용자는 자기 즐겨찾기가 사라진 줄 안다.
         result.getOrNull()?.let { _favorites.value = it }
+        // 화면은 그대로 두고 **보고만** 한다. 지하철 끊김은 [Diagnostics] 가 걸러 내고,
+        // 파싱 실패나 5xx 처럼 우리가 고쳐야 하는 것만 올라간다.
+        result.exceptionOrNull()?.let { Diagnostics.report(FailureSite.FAVORITE_PLACES, it) }
         _editState.update {
             it.copy(loaded = it.loaded || result.isSuccess, loadFailed = result.isFailure)
         }

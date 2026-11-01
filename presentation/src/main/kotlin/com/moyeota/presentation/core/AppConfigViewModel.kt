@@ -53,7 +53,10 @@ class AppConfigViewModel(
 
     /** 화면이 따를 설정 — 강제값이 있으면 강제값, 없으면 서버 값. */
     val config: StateFlow<AppConfig> = combine(_serverConfig, _override) { server, override ->
-        AppConfig(taxiEnabled = effectiveTaxiEnabled(server.taxiEnabled, override))
+        // **copy 여야 한다.** `AppConfig(taxiEnabled = ...)` 로 새로 만들면 서버가 준 나머지 필드
+        // (minVersionCode·recommendedVersionCode)가 조용히 기본값으로 되돌아가 게이트가 영영 안 걸린다.
+        // 디버그 강제값은 택시 모드 하나만 뒤집는다.
+        server.copy(taxiEnabled = effectiveTaxiEnabled(server.taxiEnabled, override))
     }.stateIn(viewModelScope, SharingStarted.Eagerly, AppConfig.Default)
 
     private var loading: Job? = null

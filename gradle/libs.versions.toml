@@ -21,6 +21,9 @@ kotlinxCoroutines = "1.10.2"
 datastore = "1.1.7"
 desugarJdkLibs = "2.1.5"
 googleServices = "4.5.0"
+# Crashlytics Gradle 플러그인. 라이브러리와 달리 **BOM 이 관리하지 않아** 버전을 직접 적는다.
+# 3.0.8 은 2026-11-01 Google Maven(dl.google.com/dl/android/maven2) maven-metadata.xml 의 latest 실측값이다.
+crashlyticsPlugin = "3.0.8"
 naverMapSdk = "3.23.3"
 playServicesLocation = "21.4.0"
 firebaseBom = "34.17.0"
@@ -63,6 +66,8 @@ androidx-datastore-preferences = { group = "androidx.datastore", name = "datasto
 desugar-jdk-libs = { group = "com.android.tools", name = "desugar_jdk_libs", version.ref = "desugarJdkLibs" }
 firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebaseBom" }
 firebase-messaging = { group = "com.google.firebase", name = "firebase-messaging" }
+# 버전을 적지 않는다 — BOM 34.17.0 이 firebase-crashlytics 20.1.0 으로 고정한다(BOM pom 실측).
+firebase-crashlytics = { group = "com.google.firebase", name = "firebase-crashlytics" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
 androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
@@ -73,3 +78,4 @@ android-library = { id = "com.android.library", version.ref = "agp" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 google-services = { id = "com.google.gms.google-services", version.ref = "googleServices" }
+firebase-crashlytics = { id = "com.google.firebase.crashlytics", version.ref = "crashlyticsPlugin" }

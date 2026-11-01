@@ -13,4 +13,11 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class AppConfigResponse(
     val taxiEnabled: Boolean = false,
+    /**
+     * 강제 업데이트 기준. **지금 서버는 주지 않는다**(2026-11-01 실측 — 응답은 `taxiEnabled` 하나).
+     * 기본값이 null 이라 안 와도 역직렬화가 깨지지 않고, 서버가 나중에 추가하면 그날부터 걸린다.
+     */
+    val minVersionCode: Int? = null,
+    /** 권장 업데이트 기준. 막지 않고 한 번 알리기만 한다. 위와 같은 이유로 null 기본값이다. */
+    val recommendedVersionCode: Int? = null,
 )

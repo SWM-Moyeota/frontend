@@ -8,6 +8,8 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import com.moyeota.domain.diagnostics.Diagnostics
+import com.moyeota.domain.diagnostics.FailureSite
 import com.moyeota.domain.model.RideRecord
 import com.moyeota.domain.repository.RideRecordRepository
 import kotlinx.coroutines.Job
@@ -73,7 +75,8 @@ class RideHistoryViewModel(private val repository: RideRecordRepository) : ViewM
                         )
                     }
                 }
-                .onFailure {
+                .onFailure { failure ->
+                    Diagnostics.report(FailureSite.RIDE_HISTORY, failure)
                     // 실패해도 이전 목록은 남긴다 — 2페이지를 보던 사용자의 화면이 비지 않게.
                     _uiState.update { state -> state.copy(loading = false, failed = true) }
                 }
@@ -111,7 +114,8 @@ class RideHistoryViewModel(private val repository: RideRecordRepository) : ViewM
                         )
                     }
                 }
-                .onFailure {
+                .onFailure { failure ->
+                    Diagnostics.report(FailureSite.RIDE_HISTORY, failure)
                     _uiState.update { it.copy(loadingMore = false, failed = true) }
                 }
         }

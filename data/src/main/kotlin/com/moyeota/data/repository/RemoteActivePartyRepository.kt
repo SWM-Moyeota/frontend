@@ -2,6 +2,8 @@ package com.moyeota.data.repository
 
 import com.moyeota.data.local.ActivePartyStorage
 import com.moyeota.data.local.RememberedParty
+import com.moyeota.domain.diagnostics.Diagnostics
+import com.moyeota.domain.diagnostics.FailureSite
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.repository.ActivePartyRepository
@@ -162,7 +164,17 @@ class RemoteActivePartyRepository(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
-            return if (e.isDefiniteNo()) Verdict.Inactive else Verdict.Unknown
+            val definiteNo = e.isDefiniteNo()
+            // 404·403 은 「그 방 아니다」라는 **정상 답**이라 보고하지 않는다. 나머지만 올린다 —
+            // 그중 타임아웃·5xx 가름은 [Diagnostics] 가 한다.
+            if (!definiteNo) {
+                Diagnostics.report(
+                    site = FailureSite.ACTIVE_PARTY_RESTORE,
+                    throwable = e,
+                    httpStatus = (e as? HttpException)?.code(),
+                )
+            }
+            return if (definiteNo) Verdict.Inactive else Verdict.Unknown
         }
         return if (ride.isActiveForMe()) Verdict.Active(ride) else Verdict.Inactive
     }
