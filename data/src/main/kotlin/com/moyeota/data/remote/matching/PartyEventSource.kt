@@ -1,6 +1,8 @@
 package com.moyeota.data.remote.matching
 
 import android.util.Log
+import com.moyeota.domain.model.PartyMembershipLostException
+import kotlin.random.Random
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
@@ -16,8 +18,46 @@ import okhttp3.sse.EventSources
 
 private const val TAG = "PartyEvents"
 
-/** 끊긴 뒤 다시 붙기까지. 재시작 중인 서버를 연달아 두드리지 않을 만큼만 */
-private const val RECONNECT_DELAY_MS = 3_000L
+/**
+ * 끊긴 뒤 다시 붙기까지 — **연속 실패 횟수만큼 늘어난다**([reconnectDelayMs]).
+ *
+ * 예전에는 고정 3초였다. 실패를 세지 않아 서버가 502/503 을 내거나 Redis 가 죽은 동안에도 간격이
+ * 그대로였고, 그때 이 루프는 **재기동 중인 서버를 때리는 하드 루프**가 된다 — 대기 화면에 12명이
+ * 있으면 분당 240회다(한 사람이 분당 20회). 상한·백오프가 없다는 건 서버가 느려질수록 앱이 더
+ * 세게 두드린다는 뜻이고, 그게 장애를 길게 만든다.
+ *
+ * 그래서 같은 레포의 운영 설정 재시도(`AppConfigViewModel.RETRY_DELAYS_MS` = 2s·5s·15s)와 같은
+ * 모양으로 **표**를 쓴다. 지수식(`base shl n`)이 아니라 표인 이유도 같다 — 간격이 눈에 보이고,
+ * 상한이 계산 결과가 아니라 적어 둔 값이다.
+ *
+ * 횟수를 **넘어가면 마지막 값(30초)에 머문다.** 재시도를 멈추지는 않는다: 이 스트림이 끊긴 동안
+ * 대기 화면은 6초 폴백 폴링으로 버티지만(`MatchWaitingViewModel`), 폴백은 들고 나는 사람이 보이기까지
+ * 그만큼 느리고 서버 쿼리도 3배다 — 결국 다시 붙는 쪽이 싸다.
+ */
+private val RECONNECT_DELAYS_MS = longArrayOf(3_000L, 6_000L, 12_000L, 30_000L)
+
+/**
+ * 대기 시간에 더하는 **지터** 비율(0~20%). 12명이 같은 장애로 동시에 끊기면 같은 초에 다시 몰려
+ * 서버가 또 넘어진다 — 표만으로는 그 동기화를 풀 수 없다. 음수 쪽으로 흔들지 않는 건 상한(30초)과
+ * 하한(3초)이 둘 다 **지키려는 값**이기 때문이다.
+ */
+private const val RECONNECT_JITTER_RATIO = 0.2
+
+/**
+ * 연속 실패 [failures] 회째의 재연결 대기(ms) — **네트워크 없이 테스트할 수 있는 순수 함수다.**
+ *
+ * [RECONNECT_DELAYS_MS] 표를 1회째부터 차례로 읽고, 표를 다 쓰면 마지막 값에 머문다. 거기에
+ * [RECONNECT_JITTER_RATIO] 만큼의 지터를 **더한다**(0 ≤ [jitter] ≤ 1 이 그 안에서의 위치다).
+ *
+ * [failures] 가 0 이하여도 첫 간격으로 떨어진다 — 세는 쪽이 틀려도 0ms 하드 루프가 되지 않게.
+ * **성공(`onOpen`)하면 호출부가 횟수를 0 으로 되돌린다**([PartyEventSource.events]) — 그러지 않으면
+ * 몇 시간 붙어 있던 연결이 한 번 끊겼을 때 30초를 기다린다.
+ */
+internal fun reconnectDelayMs(failures: Int, jitter: Double = Random.nextDouble()): Long {
+    val index = (failures.coerceAtLeast(1) - 1).coerceAtMost(RECONNECT_DELAYS_MS.lastIndex)
+    val base = RECONNECT_DELAYS_MS[index]
+    return base + (base * RECONNECT_JITTER_RATIO * jitter.coerceIn(0.0, 1.0)).toLong()
+}
 
 /**
  * 매칭방 변화 신호 — SSE(`GET /matching/rooms/{id}/events`, `text/event-stream`).
@@ -50,20 +90,25 @@ private const val RECONNECT_DELAY_MS = 3_000L
  * 다음 재연결의 `connected` 스냅샷으로 보정되는 쪽이 낫다.
  *
  * **내가 방을 나가면 서버가 이벤트 없이 스트림을 끝낸다**(`PartySseRegistry.closeMember`, 다른 기기의
- * 연결 정리용). 그때 이 흐름은 [PartySseEvent.Disconnected] → [RECONNECT_DELAY_MS] 뒤 재연결 →
- * 멤버가 아니라 403 → 종료, 로 한 번 더 두드리고 멈춘다. 보통은 「그만 찾기」가 화면을 떠나며 수집을
- * 먼저 취소하므로 그 재연결조차 일어나지 않는다.
+ * 연결 정리용). 그때 이 흐름은 [PartySseEvent.Disconnected] → [reconnectDelayMs] 뒤 재연결 →
+ * 멤버가 아니라 403 → [PartyMembershipLostException], 으로 한 번 더 두드리고 멈춘다. 보통은
+ * 「그만 찾기」가 화면을 떠나며 수집을 먼저 취소하므로 그 재연결조차 일어나지 않는다.
  *
  * 인증은 보통 API 와 같은 Bearer 헤더다 — [okHttpClient] 는 인증 인터셉터·401 재발급이 붙은 클라이언트에
  * readTimeout 만 늘린 것이어야 한다(`NetworkModule.streamClient`).
  *
- * 멤버가 아니거나(403) 방이 없으면(404) 다시 붙지 않는다 — 붙어 봐야 같은 답이다. 그 외 끊김은
- * [RECONNECT_DELAY_MS] 뒤 재시도하며, 그때마다 서버가 `connected` 스냅샷을 다시 주므로
+ * 멤버가 아니거나(403) 방이 없으면(404) 다시 붙지 않는다 — 붙어 봐야 같은 답이다. **다만 그 둘을
+ * 같은 값으로 끝내지 않는다**: 403 은 「내가 이 방 사람이 아니다」라 호출부가 **화면을 떠나야** 하는
+ * 사실이고, 그래서 흐름의 정상 종료가 아니라 [PartyMembershipLostException] 으로 올린다
+ * (그 예외 KDoc 에 왜 갈라야 하는지 적어 두었다). 404 는 예전처럼 조용히 끝낸다.
+ *
+ * 그 외 끊김은 [reconnectDelayMs] 뒤 재시도하며, 그때마다 서버가 `connected` 스냅샷을 다시 주므로
  * **호출부는 놓친 변화를 메우기 위한 catch-up 조회를 할 필요가 없다.**
  *
  * **같은 partyId 로 두 번 수집하지 말 것.** 서버 `PartySseRegistry.subscribe` 가 **같은 사용자의 기존
  * 연결을 먼저 끊는다**(`closeMember`) — 한 화면이 두 번 구독하면 두 연결이 서로를 끊고, 끊긴 쪽이
- * 3초 뒤 다시 붙으며 또 상대를 끊는 **무한 재연결**이 된다. 수집 지점은 화면당 하나여야 한다.
+ * 잠시 뒤 다시 붙으며 또 상대를 끊는 **무한 재연결**이 된다. 백오프가 그 루프를 느리게 할 뿐
+ * 멈추지는 못한다(붙을 때마다 실패 횟수가 0 으로 되돌아간다) — 수집 지점은 화면당 하나여야 한다.
  */
 class PartyEventSource(
     private val baseUrl: String,
@@ -72,31 +117,56 @@ class PartyEventSource(
     private val factory = EventSources.createFactory(okHttpClient)
 
     fun events(partyId: Long): Flow<PartySseEvent> = flow {
+        // 연속 실패 횟수 — 재연결 간격의 유일한 입력이다([reconnectDelayMs]). 붙으면 0 으로 되돌린다.
+        var failures = 0
         while (true) {
             var terminal = false
+            var forbidden = false
             try {
                 connect(partyId).collect { signal ->
                     when (signal) {
+                        // 붙었다 = 지금까지의 실패는 지나간 일이다. 다음 끊김은 다시 첫 간격부터 센다.
+                        Signal.Open -> failures = 0
                         is Signal.Event -> emit(signal.event)
                         Signal.Terminal -> terminal = true
+                        Signal.Forbidden -> forbidden = true
                     }
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                Log.d(TAG, "연결 끊김 partyId=$partyId — ${RECONNECT_DELAY_MS}ms 뒤 재시도: ${e.message}")
+                Log.d(TAG, "연결 끊김 partyId=$partyId — 재시도 예정: ${e.message}")
             }
+            // 403 은 **끊김이 아니다** — 내가 이 방 사람이 아니라는 사실이고, 호출부가 할 일은
+            // 재시도가 아니라 화면을 떠나는 것이다. 그래서 정상 종료(아래 terminal)와 갈라
+            // 예외로 올린다([PartyMembershipLostException] KDoc).
+            if (forbidden) throw PartyMembershipLostException(partyId)
             if (terminal) return@flow
             emit(PartySseEvent.Disconnected)
-            delay(RECONNECT_DELAY_MS)
+            failures++
+            val wait = reconnectDelayMs(failures)
+            Log.d(TAG, "재연결 대기 partyId=$partyId — ${wait}ms (연속 실패 ${failures}회)")
+            delay(wait)
         }
     }
 
     private sealed interface Signal {
+        /**
+         * 연결이 섰다. **이벤트로 올리지 않는다** — 바깥 루프의 실패 횟수를 0 으로 되돌리는 데만 쓴다.
+         *
+         * 아래 [EventSourceListener.onOpen] 주석의 「여기서는 아무것도 내지 않는다」는 **호출부로**
+         * 내지 않는다는 뜻이고 그대로다: 이 신호는 [PartyEventSource] 안에서 끝나므로 호출부가
+         * 스냅샷보다 먼저 무언가를 보는 일이 없다.
+         */
+        data object Open : Signal
+
         data class Event(val event: PartySseEvent) : Signal
 
-        /** 다시 붙지 않는다 — 방이 닫혔거나(closed) 내가 볼 자격이 없다(403/404) */
+        /** 다시 붙지 않는다 — 방이 닫혔거나(closed) 방이 없다(404) */
         data object Terminal : Signal
+
+        /** 403 — **내가 이 방 멤버가 아니다.** [Terminal] 과 갈라 둔 이유는 `events` 안에 있다 */
+        data object Forbidden : Signal
     }
 
     // 연결 하나의 수명. 콜백 → 채널. 서버가 닫거나(closed) 오류가 나면 채널을 닫아 바깥 루프가 이어받는다.
@@ -109,10 +179,12 @@ class PartyEventSource(
         val source = factory.newEventSource(
             request,
             object : EventSourceListener() {
-                // 여기서는 아무것도 내지 않는다 — 상태를 싣고 오는 건 바로 뒤에 올 `connected` 프레임이다.
-                // 예전처럼 onOpen 에서 신호를 내면 스냅샷이 오기 전에 호출부가 상세를 한 번 더 읽는다.
+                // 호출부에는 아무것도 내지 않는다 — 상태를 싣고 오는 건 바로 뒤에 올 `connected` 프레임이다.
+                // 예전처럼 onOpen 에서 **이벤트**를 내면 스냅샷이 오기 전에 호출부가 상세를 한 번 더 읽는다.
+                // [Signal.Open] 은 바깥 루프의 실패 횟수를 되돌리는 내부 신호라 호출부까지 가지 않는다.
                 override fun onOpen(eventSource: EventSource, response: Response) {
                     Log.d(TAG, "연결됨 partyId=$partyId")
+                    trySend(Signal.Open)
                 }
 
                 override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
@@ -134,14 +206,23 @@ class PartyEventSource(
                     close()
                 }
 
+                // 403 과 404 를 **갈라서** 올린다. 둘 다 "다시 붙지 않는다"지만 호출부가 할 일이 다르다:
+                // 404 는 방이 없어진 것(폴백 조회가 닫힘을 확인한다), 403 은 **내가 이 방 사람이 아닌 것**
+                // (화면에 있을 이유가 없다). 예전엔 둘이 같은 Terminal 이라 403 이 「스트림이 끝났다」로
+                // 뭉개졌고, 그 결과 내가 들어 있지 않은 방을 6초마다 영원히 폴링했다.
                 override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
-                    val code = response?.code
-                    if (code == 403 || code == 404) {
-                        Log.d(TAG, "구독 거부 partyId=$partyId code=$code — 다시 붙지 않는다")
-                        trySend(Signal.Terminal)
-                        close()
-                    } else {
-                        close(t ?: IllegalStateException("SSE 실패 code=$code"))
+                    when (response?.code) {
+                        403 -> {
+                            Log.d(TAG, "구독 거부 partyId=$partyId code=403 — 이 방의 멤버가 아니다")
+                            trySend(Signal.Forbidden)
+                            close()
+                        }
+                        404 -> {
+                            Log.d(TAG, "구독 거부 partyId=$partyId code=404 — 방이 없다. 다시 붙지 않는다")
+                            trySend(Signal.Terminal)
+                            close()
+                        }
+                        else -> close(t ?: IllegalStateException("SSE 실패 code=${response?.code}"))
                     }
                 }
             },

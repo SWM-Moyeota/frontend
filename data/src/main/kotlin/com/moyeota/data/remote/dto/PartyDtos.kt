@@ -5,6 +5,9 @@ import kotlinx.serialization.Serializable
 // 백엔드 matching 도메인 응답 record 와 필드 1:1 대응
 // (feature/driver-report: matching/application/dto/*.java, matching/domain/RouteEstimate.java)
 // 서버 record 필드가 전부 박싱 타입(Long/Integer/Double)이라 null 이 올 수 있는 자리는 기본값으로 방어한다.
+// 다만 **「모른다」와 「0」이 다른 뜻인 자리는 기본값 대신 nullable 로 받는다** — 인원(currentMembers)이
+// 그렇다. kotlinx 는 키 누락만 기본값으로 떨어뜨리고 명시적 null 에는 예외를 던지므로, non-null 기본값은
+// 「조용히 0으로 접기」와 「응답 전체 파싱 실패」 두 실패 모드를 동시에 들여온다.
 @Serializable
 data class PartyListResponse(
     val list: List<PartyItem> = emptyList(),
@@ -18,7 +21,23 @@ data class PartyListResponse(
         val partyId: Long,
         val departure: String = "",
         val destination: String = "",
-        val currentMembers: Int = 0,
+        /**
+         * 지금 합류한 인원. **`Int = 0` 으로 두면 안 된다.**
+         *
+         * 이 목록은 서버가 `status = ACTIVE` 로만 거른 방들이고(`findSummariesWithinBounds`),
+         * 그런 방에는 최소 방장 1명의 멤버 행이 있다 — 즉 **0 은 서버가 만들 수 없는 값**이다.
+         * 그런데 non-null 로 받으면 두 가지가 전부 0 으로 접힌다: ① 키가 아예 없는 응답(옛 배포)은
+         * 조용히 0 이 되고 ② 명시적 `null` 은 `ignoreUnknownKeys` 와 무관하게 **파싱 예외**를 던져
+         * (kotlinx 는 non-null 필드의 명시적 null 을 기본값으로 떨어뜨리지 않는다) 방 한 건 때문에
+         * 지도 목록 전체가 날아간다. 그래서 「모른다」를 null 로 남기고, 매퍼가 빈 멤버 목록으로
+         * 옮긴다([com.moyeota.data.remote.toRide]) — 실시간 추천 DTO
+         * ([MatchCandidateResponse.NearbyPartySummaryDto.currentMembers])와 **같은 방식**이다.
+         *
+         * 서버 record 는 `Integer` 이고(`PartyListResponse.PartyItem`) 값은 JPQL `count(m)` 이라
+         * 운영에서는 늘 1 이상이 실린다 — 이 nullable 은 그 계약을 의심하는 게 아니라 **계약이 깨진
+         * 응답 하나가 목록을 통째로 지우지 못하게** 하는 것이다.
+         */
+        val currentMembers: Int? = null,
         val capacity: Int = 0,
         val status: String = "",
         val departureLat: Double? = null,
@@ -49,7 +68,17 @@ data class PartyDetailResponse(
     val departure: String = "",
     val destination: String = "",
     val capacity: Int = 0,
-    val currentMembers: Int = 0,
+    /**
+     * 지금 합류한 인원. **앱은 이 값을 읽지 않는다** — 상세에는 [members] 가 함께 오고, 인원은 그
+     * 목록의 크기가 유일한 근거다(둘이 어긋나면 누가 들었는지 아는 쪽을 믿는다).
+     *
+     * 그래도 nullable 인 이유는 **명시적 `null` 하나가 방 화면을 못 열게 만들지 않기 위해서**다.
+     * 서버 `PartyDetailResult.currentMembers` 는 `party.getMembers().size()` 라 운영에서는 늘 실리지만,
+     * non-null 로 선언하면 null 이 오는 순간 파싱이 터져 상세가 **통째로** 실패한다 — 25·26 의 주기
+     * 조회가 이 상세 하나에 걸려 있어 그 실패는 배차·운행 전이를 영영 못 잡는 것으로 번진다.
+     * (같은 판단: [MemberInfo] 의 문자열 필드들, [version].)
+     */
+    val currentMembers: Int? = null,
     /**
      * 서버가 방에 박아 둔 반경(m). **사용자가 고른 값이 아니다** — 요청에서 빠지고 서버 고정값
      * (`Radius.DEFAULT` = 500m)이 됐다(Backend `a668aee`). 응답에는 남아 있어 서버 record 와 모양을
@@ -218,7 +247,14 @@ data class MemberLeftPayload(
 data class PartyStatusResponse(
     /** 서버 `PartyStatus` enum 이름(ACTIVE/COMPLETED/MATCHING/DRIVER_ASSIGNED/IN_RIDE/FINISHED/CANCELED). */
     val status: String = "",
-    val currentMembers: Int = 0,
+    /**
+     * 합류 **직후**의 인원. 서버 record 가 `Integer` 이고 값은 `party.getMembers().size()` 라 운영에서는
+     * 늘 1 이상이 실린다. 그래도 non-null 로 두지 않는 이유는 **여기서의 파싱 실패 대가가 가장 크기**
+     * 때문이다: 합류는 서버가 멤버 추가를 먼저 커밋하고 응답을 만들므로, 응답을 못 읽으면 앱은 실패로
+     * 보는데 서버에는 내가 들어가 있어 그 계정이 30분 스윕 전까지 **어떤 방에도 못 들어간다**
+     * (PartyMappersTest 「합류 응답 JSON 을 …」 참고). 명시적 null 하나로 그 상태를 만들지 않는다.
+     */
+    val currentMembers: Int? = null,
 )
 
 /**
@@ -255,7 +291,13 @@ data class OpenPartyResponse(
     val departure: String = "",
     val destination: String = "",
     val capacity: Int = 0,
-    val currentMembers: Int = 0,
+    /**
+     * 방을 만든 **직후**의 인원이라 서버에서는 늘 1(생성자 본인)이다. 그래도 non-null 로 두지 않는 건
+     * 목록·상세와 같은 이유다([PartyListResponse.PartyItem.currentMembers]): 0 은 서버가 만들 수 없는
+     * 값이고, 명시적 null 은 파싱을 터뜨린다 — 방은 이미 만들어졌는데 앱만 실패로 보는 상태가 된다.
+     * 모르면 매퍼가 멤버를 **지어내지 않고** 빈 목록으로 남긴다([com.moyeota.data.remote.toRide]).
+     */
+    val currentMembers: Int? = null,
     /** 서버 고정값(500m). 요청에 없는 값이고 도메인으로도 옮기지 않는다 — [PartyDetailResponse.departureRadius] 참고. */
     val departureRadius: Int = 0,
     val destinationRadius: Int = 0,

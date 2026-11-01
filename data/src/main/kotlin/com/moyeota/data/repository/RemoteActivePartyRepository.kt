@@ -17,9 +17,18 @@ import retrofit2.HttpException
  * 두 단계로 찾는다.
  * 1. **로컬 기억**(DataStore) — 방을 만들거나 합류할 때 호출부가 심어 둔 partyId. 가장 싸고 정확하다.
  *    다만 기억은 힌트일 뿐이라 반드시 상세 조회로 검증한다(끝난 방·내가 나간 방일 수 있다).
- * 2. **채팅방 목록**(`GET /chat-rooms/me`) — 기억이 없을 때의 폴백. 방이 매칭되면 채팅방이 생기므로
- *    "내가 속한 채팅방의 partyId" 가 곧 "내가 속한 방"의 후보다. 앱을 지우고 다시 깔았거나
- *    다른 기기에서 합류한 경우를 여기서 건진다.
+ * 2. **채팅방 목록**(`GET /chat-rooms/me`) — 기억이 없을 때의 폴백. 채팅방은 **방을 만들거나 합류하는
+ *    순간** 생기므로(백엔드 `PartyOpener` 가 생성자 본인으로 `PartyMemberJoinedEvent` 를 발행 →
+ *    `ChatRoomMatchingListener`) "내가 속한 채팅방의 partyId" 가 곧 "내가 속한 방"의 후보다.
+ *    앱을 지우고 다시 깔았거나 다른 기기에서 합류한 경우를 여기서 건진다.
+ *
+ *    **모집 중(21)인 방도 걸린다** — 「정원이 차야 채팅방이 생긴다」가 아니다. 이 한 줄을 반대로 읽으면
+ *    「재설치하면 모집 중인 방을 잃는다」는 없는 결함을 세우게 된다(2026-11-01 실제로 그렇게 읽었다).
+ *
+ *    2026-11-01 실측(로컬 :8080 + 에뮬레이터): 방을 연 즉시 `chat_room` 행이 생겼고, 앱 데이터를
+ *    통째로 지운 뒤(`pm clear` — `/data/data/com.moyeota` 가 빈 디렉터리) 다시 로그인하자
+ *    `GET /chat-rooms/me`(50ms) → `GET /chat-rooms/{id}`(16ms) → `GET /matching/rooms/{partyId}`(25ms)
+ *    **3요청**으로 모집 중이던 방을 되찾아 21 화면으로 바로 들어갔다.
  *
  *    목록 응답(백엔드 `ChatRoomUserResult`)에는 partyId 필드가 **없다** — 2026-09-14 서버부터 방 정보
  *    (출발·도착·상태)가 목록에 함께 실리면서 [com.moyeota.data.remote.toChatRoomOrNull] 이 방 상세를

@@ -10,6 +10,7 @@ import com.moyeota.domain.model.ChatMember
 import com.moyeota.domain.model.ChatMessage
 import com.moyeota.domain.model.ChatRealtimeEvent
 import com.moyeota.domain.model.ChatMessagePage
+import com.moyeota.domain.model.ChatReportReason
 import com.moyeota.domain.model.ChatRoom
 import com.moyeota.domain.model.ChatRoomMembership
 import com.moyeota.domain.model.ChatRoomStatus
@@ -464,4 +465,10 @@ private class FakeChatRepository(
     override suspend fun deleteMessage(chatRoomId: Long, messageId: Long) = error("쓰이지 않는다")
     override suspend fun searchMessages(chatRoomId: Long, keyword: String, cursor: Long?, size: Int): ChatMessagePage =
         error("쓰이지 않는다")
+    override suspend fun reportMessage(
+        chatRoomId: Long,
+        chatMessageId: Long,
+        reason: ChatReportReason,
+        description: String?,
+    ) = error("쓰이지 않는다")
 }

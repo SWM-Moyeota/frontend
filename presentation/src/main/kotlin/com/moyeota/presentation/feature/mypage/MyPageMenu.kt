@@ -12,6 +12,8 @@ import com.moyeota.presentation.core.SupportLinkTargets
 
 /** 그룹 머리말. 테스트와 화면이 같은 값을 보게 한 곳에 둔다. */
 internal object MyPageGroupLabel {
+    /** 지난 탑승 기록. 「설정」 위에 따로 둔 이유는 [myPageGroups] KDoc 에 있다. */
+    const val RIDES = "탑승"
     const val SETTINGS = "설정"
     const val INFO = "안내"
     const val ACCOUNT = "계정"
@@ -41,6 +43,14 @@ internal sealed interface MyPageAction {
 
     /** 메일 앱으로 문의 열기 (앱 밖). */
     data class SendMail(val address: String) : MyPageAction
+
+    /**
+     * 34 지난 탑승 기록 (앱 안). `GET /api/v1/users/me/parties` 로 하차까지 끝난 탑승만 받는다.
+     *
+     * 2026-11-01 에 서버가 이 엔드포인트를 주면서 생긴 행이다 — 그전까지는 「완료 방 목록 API 가
+     * 없다」가 이유여서 행 자체를 두지 않았다(`docs/BACKEND-GAP-CLEANUP.md` §1).
+     */
+    data object RideHistory : MyPageAction
 
     /** 확인 다이얼로그 → 세션 정리 → 04a 로그인 (앱 안). */
     data object Logout : MyPageAction
@@ -73,7 +83,7 @@ internal data class MyPageGroup(
 )
 
 /**
- * 35 의 메뉴 그룹 목록. 순서가 화면 순서다 — 설정 → 안내 → 계정.
+ * 35 의 메뉴 그룹 목록. 순서가 화면 순서다 — 탑승 → 설정 → 안내 → 계정.
  *
  * ### 왜 이 순서인가
  * 자주 쓰는 것이 위, 되돌릴 수 없는 것이 맨 아래다. 「안내」(약관·개인정보·문의)는 평소에 보지
@@ -81,12 +91,27 @@ internal data class MyPageGroup(
  * 개인정보 처리방침이 가장 많이 찾는 문서고(스토어 심사도 이 경로를 본다), 계정 카드는
  * 로그아웃 → 탈퇴 순으로 파괴적인 쪽이 아래다.
  *
+ * ### 「탑승」이 「설정」 안이 아니라 맨 위의 새 그룹인 이유 (2026-11-01)
+ * 「설정」은 지금 `알림 설정` 한 행뿐이고 그건 **앱 밖**으로 나가는 행이다(`EXTERNAL`).
+ * 지난 탑승 기록은 앱 안으로 들어가는 행(`CHEVRON`)이라 성격이 반대고, 한 카드에 섞으면
+ * 이 화면이 기호에 준 뜻(↗ = 앱 밖, › = 앱 안)이 카드 경계와 어긋나 읽힌다. 그리고 사용자가
+ * 마이페이지에서 가장 자주 찾을 값이라 맨 위가 맞다 — 설정·약관은 「찾을 때만」 보는 것들이다.
+ *
  * ### 빈 그룹을 거르는 규칙은 하나다
  * 마지막 `filter` 한 줄이 **모든 그룹**에 적용된다. 「안내」만 특별히 처리하지 않는 이유는,
  * 나중에 다른 그룹이 조건부 행만 갖게 돼도 빈 카드가 생기지 않게 하기 위해서다.
  * (지금은 「설정」·「계정」의 행이 조건 없이 생기므로 「안내」만 사라질 수 있다.)
  */
 internal fun myPageGroups(links: SupportLinkTargets): List<MyPageGroup> = listOf(
+    MyPageGroup(
+        label = MyPageGroupLabel.RIDES,
+        rows = listOf(
+            // 「내 탑승」이 아니라 **「지난」** 탑승 기록이다 — 예약 개념이 서버에 없는 지금
+            // 「내 탑승」은 진행 중인 방까지 있을 것처럼 읽힌다(그게 예전 34 삭제 사유의 일부였다:
+            // 「예정」 탭 + 35 와의 순환 링크). 진행 중인 방은 홈·탐색 배너가 보여 준다.
+            MyPageRow("지난 탑승 기록", MyPageAction.RideHistory, MyPageRowMark.CHEVRON),
+        ),
+    ),
     MyPageGroup(
         label = MyPageGroupLabel.SETTINGS,
         rows = listOf(

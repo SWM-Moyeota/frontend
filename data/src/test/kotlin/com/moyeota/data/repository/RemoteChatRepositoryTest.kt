@@ -4,11 +4,13 @@ import com.moyeota.data.remote.ChatApi
 import com.moyeota.data.remote.dto.ChatMemberResponse
 import com.moyeota.data.remote.dto.ChatMessageResponse
 import com.moyeota.data.remote.dto.ChatMessageSliceResponse
+import com.moyeota.data.remote.dto.ChatReportRequestDto
 import com.moyeota.data.remote.dto.ChatRoomResponse
 import com.moyeota.data.remote.dto.ChatRoomUserResponse
 import com.moyeota.data.remote.dto.SendMessageRequestDto
 import com.moyeota.domain.model.AuthState
 import com.moyeota.domain.model.ChatException
+import com.moyeota.domain.model.ChatReportReason
 import com.moyeota.domain.session.UserSession
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -314,6 +316,76 @@ class RemoteChatRepositoryTest {
         assertTrue(chat.isRoomNotFound)
     }
 
+    // ─── 메시지 신고 ───
+
+    /**
+     * 사유는 **대문자 enum 이름**으로 나가야 한다 — 소문자를 보내면 서버가 400
+     * 「요청 본문이 없거나 형식이 잘못되었습니다」로 거절하고(실측) 무엇이 틀렸는지 말해 주지
+     * 않는다. 방 id 가 경로로, 메시지 id 가 본문으로 가는 것도 함께 고정한다(둘을 뒤집으면 403).
+     */
+    @Test
+    fun `신고는 방 id 를 경로로 사유를 대문자로 보낸다`() = runBlocking {
+        val api = FakeChatApi()
+
+        RemoteChatRepository(api, FakeChatSession())
+            .reportMessage(chatRoomId = 8, chatMessageId = 12, reason = ChatReportReason.SEXUAL)
+
+        assertEquals(8L, api.reportRoomId)
+        assertEquals(12L, api.reportBody?.chatMessageId)
+        assertEquals("SEXUAL", api.reportBody?.reason)
+        assertNull("상세를 안 넘겼는데 본문에 들어갔다", api.reportBody?.description)
+    }
+
+    /**
+     * 공백만 적은 상세는 **없는 것과 같게 접는다.**
+     *
+     * 안 접으면 「기타」 사유에서 서버 `isBlank` 검사에 걸려 400
+     * `CHAT_REPORT_DESCRIPTION_REQUIRED` 다(실측) — 사용자는 **뭔가 적었는데** 「상세 내용을
+     * 입력해야 합니다」를 받는다. 그 밖의 사유에서는 공백을 실어 보낼 이유 자체가 없다.
+     */
+    @Test
+    fun `공백만 있는 상세는 없는 것으로 접는다`() = runBlocking {
+        val api = FakeChatApi()
+
+        RemoteChatRepository(api, FakeChatSession())
+            .reportMessage(8, 12, ChatReportReason.ABUSE, description = "   \n ")
+
+        assertNull(api.reportBody?.description)
+    }
+
+    /** 적어 둔 상세는 앞뒤 공백만 빼고 그대로 간다 — 서버가 500자까지 받는다. */
+    @Test
+    fun `상세를 적었으면 그대로 보낸다`() = runBlocking {
+        val api = FakeChatApi()
+
+        RemoteChatRepository(api, FakeChatSession())
+            .reportMessage(8, 12, ChatReportReason.ETC, description = "같은 말을 계속 보내요")
+
+        assertEquals("ETC", api.reportBody?.reason)
+        assertEquals("같은 말을 계속 보내요", api.reportBody?.description)
+    }
+
+    /**
+     * 신고 실패도 [ChatException] 으로 좁혀 올라와야 한다 — 화면이 `isAlreadyReported` 로 분기해
+     * 「이미 신고한 메시지예요」를 띄우는 근거가 이 변환이다. `chatCall` 을 빼먹으면 날것의
+     * `HttpException` 이 올라와 그 분기가 **전부 else 로 떨어진다**(원문 메시지만 보인다).
+     */
+    @Test
+    fun `중복 신고 409 는 이미 신고함으로 읽힌다`() = runBlocking {
+        val api = FakeChatApi(
+            failure = httpException(409, """{"code":"CHAT_ALREADY_REPORTED","message":"이미 신고한 메시지입니다."}"""),
+        )
+
+        val error = runCatching {
+            RemoteChatRepository(api, FakeChatSession()).reportMessage(8, 12, ChatReportReason.ABUSE)
+        }.exceptionOrNull()
+
+        val chat = error as? ChatException ?: error("ChatException 이 아니다: $error")
+        assertTrue(chat.isAlreadyReported)
+        // 종료된 방(409 CHAT_ROOM_CLOSED)과 섞이지 않는다 — 둘 다 409 라 상태 코드만으로는 못 가린다.
+        assertFalse(chat.isRoomClosed)
+    }
+
     private fun httpException(code: Int, body: String) = HttpException(
         Response.error<Any>(code, body.toResponseBody("application/json".toMediaType())),
     )
@@ -452,5 +524,16 @@ private class FakeChatApi(
         failIfNeeded()
         searchCall = listOf(chatRoomId, keyword, cursor, size)
         return ChatMessageSliceResponse(messages = history, nextCursor = null, hasNext = false)
+    }
+
+    var reportRoomId: Long? = null
+        private set
+    var reportBody: ChatReportRequestDto? = null
+        private set
+
+    override suspend fun reportMessage(chatRoomId: Long, request: ChatReportRequestDto) {
+        failIfNeeded()
+        reportRoomId = chatRoomId
+        reportBody = request
     }
 }

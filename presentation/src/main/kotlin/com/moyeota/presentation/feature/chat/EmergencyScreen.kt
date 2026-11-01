@@ -74,9 +74,14 @@ private val EmCardShadow = Color(0x1A1B2A4A)
  * 27 · 긴급 신고 ViewModel [S17]
  *
  * 새 흐름 (사유 선택 없음 — 서버 ReportRequest 는 partyId/위치뿐):
- * 3초 홀드 완료 → ①신고 저장 발사(reportEmergency — 실패해도 플래그만, 통화가 최우선)
+ * 3초 홀드 완료 → ①신고 저장 발사(reportEmergency — 실패해도 **통화는 막지 않는다**)
  * ②UI 가 즉시 112 다이얼(ACTION_DIAL) → 앱 복귀(ON_RESUME) → "실제로 통화하셨나요?" 다이얼로그
  * → confirmEmergencyCall(called) 저장 성공 시 done → 26 복귀
+ *
+ * **실패를 숨기지 않는다.** 신고 저장이 실패하면 화면이 그 사실을 배너로 말하고 재시도를 내놓는다
+ * ([UiState.reportSaveFailed]) — 예전엔 이 플래그를 아무도 읽지 않아, 지하 주차장·터널에서 저장이
+ * 실패해도 버튼 문구만 「112 통화 화면으로 연결했어요」로 바뀌었다. 사용자는 위치·운행 정보가
+ * 운영팀에 전달됐다고 믿는다(화면 상단이 그렇게 약속한다).
  */
 class EmergencyViewModel(
     private val repository: RideRepository,
@@ -85,17 +90,35 @@ class EmergencyViewModel(
 
     data class UiState(
         val dialLaunched: Boolean = false,      // 3초 홀드 완료 — 112 다이얼 발사됨
-        val reportSaveFailed: Boolean = false,  // 신고 저장 실패 (플래그만 — 통화 흐름은 계속)
+        /**
+         * 신고 저장(`reportEmergency`) 실패. **통화 흐름은 멈추지 않는다** — 통화가 최우선이라는
+         * 기존 설계는 그대로고, 달라진 건 이 사실을 **화면이 말한다**는 것뿐이다.
+         */
+        val reportSaveFailed: Boolean = false,
+        /** 신고 저장 재시도 중 — 배너의 버튼을 잠그는 데만 쓴다 */
+        val reportRetrying: Boolean = false,
         val showCallConfirm: Boolean = false,   // 다이얼 복귀 후 통화 여부 다이얼로그
         val confirmSaving: Boolean = false,
         val confirmError: String? = null,       // call-result 저장 실패 안내 (재선택 가능)
+        /**
+         * 통화 여부를 **아직 못 보냈고, 다이얼로그는 닫아 둔** 상태(「나중에」).
+         *
+         * 통화 여부는 운영팀 참고값이라 저장이 안 된다고 사용자를 잡아 둘 이유가 없다 — 예전에는
+         * 네트워크가 없으면 두 버튼이 둘 다 실패하고 다이얼로그가 back·바깥 탭 둘 다 막아서,
+         * 운행 중 화면·채팅으로 **돌아갈 길이 전혀 없었다**(실기 QA). 닫아 둔 뒤에도 사실은 남겨
+         * 두고(배너 + 「다시 선택」) 다시 고를 수 있게 한다.
+         */
+        val callConfirmPending: Boolean = false,
         val done: Boolean = false,              // call-result 저장 완료 → 26 복귀
     )
 
     private val _uiState = MutableStateFlow(UiState())
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
 
-    /** 3초 홀드 완료 — 신고 저장을 발사한다. 실패해도 다이얼은 이미 열리므로 플래그만 남긴다. */
+    /**
+     * 3초 홀드 완료 — 신고 저장을 발사한다. 실패해도 다이얼은 이미 열리므로 **통화를 막지 않고**
+     * [UiState.reportSaveFailed] 만 세운다. 그 플래그는 화면의 배너가 읽는다.
+     */
     fun onEmergencyHold() {
         if (_uiState.value.dialLaunched) return
         _uiState.value = _uiState.value.copy(dialLaunched = true)
@@ -108,12 +131,56 @@ class EmergencyViewModel(
         }
     }
 
-    /** 다이얼에서 앱 복귀(ON_RESUME) — 홀드 이후라면 통화 여부 다이얼로그를 띄운다 */
+    /**
+     * 운영팀 전달(신고 저장) **재시도**. 통화와 무관하게 언제든 누를 수 있다 —
+     * 지하 주차장·터널을 벗어난 뒤 한 번 더 보내는 게 이 버튼의 쓸모다.
+     */
+    fun retryReport() {
+        val current = _uiState.value
+        if (current.reportRetrying || !current.reportSaveFailed) return
+        _uiState.value = current.copy(reportRetrying = true)
+        viewModelScope.launch {
+            _uiState.value = try {
+                repository.reportEmergency(partyId)
+                _uiState.value.copy(reportRetrying = false, reportSaveFailed = false)
+            } catch (e: Exception) {
+                _uiState.value.copy(reportRetrying = false, reportSaveFailed = true)
+            }
+        }
+    }
+
+    /**
+     * 다이얼에서 앱 복귀(ON_RESUME) — 홀드 이후라면 통화 여부 다이얼로그를 띄운다.
+     *
+     * 「나중에」로 닫아 둔 뒤([UiState.callConfirmPending])에는 **다시 띄우지 않는다** — 복귀마다
+     * 되살아나면 닫을 길을 만든 의미가 없다(앱을 전환할 때마다 같은 자리에 갇힌다).
+     * 다시 고르는 길은 화면의 「다시 선택」이다([reopenCallConfirm]).
+     */
     fun onResumedFromDial() {
         val current = _uiState.value
-        if (current.dialLaunched && !current.done && !current.showCallConfirm) {
+        if (current.dialLaunched && !current.done && !current.showCallConfirm && !current.callConfirmPending) {
             _uiState.value = current.copy(showCallConfirm = true)
         }
+    }
+
+    /**
+     * 「나중에」 — 통화 여부를 **보류**하고 다이얼로그를 닫는다. 저장 중에는 무시한다(응답을 기다린다).
+     * 성공 경로는 건드리지 않는다 — 저장이 되면 [UiState.done] 으로 26 에 돌아간다.
+     *
+     * [UiState.confirmError] 는 **지우지 않는다.** 그 값이 다이얼로그의 탈출구를 여는 조건이라,
+     * 지워 버리면 「다시 선택」으로 열었을 때 다시 갇힌다(한 번 더 실패해야 탈출구가 돌아온다).
+     */
+    fun dismissCallConfirm() {
+        val current = _uiState.value
+        if (current.confirmSaving) return
+        _uiState.value = current.copy(showCallConfirm = false, callConfirmPending = true)
+    }
+
+    /** 보류해 둔 통화 여부를 다시 고른다 — 화면 배너의 「다시 선택」 */
+    fun reopenCallConfirm() {
+        val current = _uiState.value
+        if (current.done) return
+        _uiState.value = current.copy(showCallConfirm = true, callConfirmPending = false)
     }
 
     /** 「통화했어요」/「통화 안 했어요」 선택 — 저장 성공 시 done, 실패 시 안내 후 재선택 */
@@ -126,6 +193,8 @@ class EmergencyViewModel(
                 _uiState.value = _uiState.value.copy(
                     confirmSaving = false,
                     showCallConfirm = false,
+                    callConfirmPending = false,
+                    confirmError = null,
                     done = true,
                 )
             } catch (e: Exception) {
@@ -187,9 +256,15 @@ fun EmergencyRoute(
     EmergencyScreen(
         rideSummary = rideSummary,
         dialLaunched = state.dialLaunched,
+        // 운영팀 전달 실패·통화 여부 보류는 **숨기지 않고** 비차단 배너로 알린다 (통화는 막지 않는다)
+        reportSaveFailed = state.reportSaveFailed,
+        reportRetrying = state.reportRetrying,
+        callConfirmPending = state.callConfirmPending,
+        onRetryReport = viewModel::retryReport,
+        onReopenCallConfirm = viewModel::reopenCallConfirm,
         onBack = onBack,
         onHoldCompleted = {
-            // ①신고 저장 발사 (실패해도 플래그만) ②즉시 112 다이얼 — 통화가 최우선
+            // ①신고 저장 발사 (실패해도 통화는 계속) ②즉시 112 다이얼 — 통화가 최우선
             viewModel.onEmergencyHold()
             runCatching {
                 context.startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:112")))
@@ -203,6 +278,7 @@ fun EmergencyRoute(
             errorText = state.confirmError,
             onCalled = { viewModel.onCallConfirm(true) },
             onNotCalled = { viewModel.onCallConfirm(false) },
+            onLater = viewModel::dismissCallConfirm,
         )
     }
 }
@@ -215,6 +291,7 @@ fun EmergencyRoute(
  *   · 3초 롱프레스 유지 실패 시 미전송 (오작동 방지)
  * - 사유 선택 없음 — 서버가 사유를 받지 않는다 (partyId/위치만 전송)
  * - 「지금 타고 있는 차」 카드는 [rideSummary] 가 있을 때만 보인다(번호판 표기 없음)
+ * - [reportSaveFailed]·[callConfirmPending] 이면 상단에 **비차단 배너**가 뜬다 — 통화는 막지 않는다
  *
  * Safety500/600 색상은 이 화면(신고) 전용.
  */
@@ -222,6 +299,16 @@ fun EmergencyRoute(
 fun EmergencyScreen(
     rideSummary: String? = null,
     dialLaunched: Boolean = false,
+    /**
+     * 운영팀 전달(신고 저장)이 실패했다. 화면 상단이 「현재 위치와 운행 정보가 운영팀에 전달되고」라고
+     * 약속하므로 **이 실패를 숨기면 거짓말이 된다** — 지하 주차장·터널에서 실제로 일어난다.
+     */
+    reportSaveFailed: Boolean = false,
+    reportRetrying: Boolean = false,
+    /** 통화 여부를 「나중에」로 보류했다 — 다시 고를 수 있게 안내만 남긴다 */
+    callConfirmPending: Boolean = false,
+    onRetryReport: () -> Unit = {},
+    onReopenCallConfirm: () -> Unit = {},
     onBack: () -> Unit = {},
     onHoldCompleted: () -> Unit = {},
 ) {
@@ -268,6 +355,35 @@ fun EmergencyScreen(
                 fontWeight = FontWeight.Normal,
                 color = EmTextMute,
             )
+
+            // 운영팀 전달 실패 — **이 실패가 통화를 막지 않는다**는 것만 말한다. 이 배너 때문에
+            // 사용자가 통화를 멈추면 더 나쁘다. 재시도는 터널·지하를 벗어난 뒤를 위한 길이다.
+            //
+            // 「112 통화는 정상 진행됩니다」라고 **단정하지 않는다.** 앱은 통화 여부를 모른다 —
+            // `ACTION_DIAL` 로 다이얼러를 열 뿐 발신은 사용자가 하고, 이 화면은 10초 뒤에
+            // 「112와 실제로 통화하셨나요?」라고 되묻는다. 모른다고 적어 둔 값을 배너가
+            // 「정상 진행」으로 말하면, 통화가 안 된 사용자에게 됐다고 알리는 꼴이다.
+            if (reportSaveFailed) {
+                Spacer(Modifier.height(18.dp))
+                EmergencyNotice(
+                    text = "운영팀에 전달하지 못했어요. 112 통화에는 지장이 없어요\n" +
+                        "통신이 되는 곳에서 다시 시도해 주세요",
+                    actionLabel = if (reportRetrying) "보내는 중…" else "다시 시도",
+                    actionEnabled = !reportRetrying,
+                    onAction = onRetryReport,
+                )
+            }
+
+            // 통화 여부를 「나중에」로 닫아 둔 상태 — 사실은 남기고 다시 고를 길을 준다
+            if (callConfirmPending) {
+                Spacer(Modifier.height(18.dp))
+                EmergencyNotice(
+                    text = "통화 여부를 아직 보내지 못했어요. 운영팀 참고용이라 안 보내도 괜찮아요",
+                    actionLabel = "다시 선택",
+                    actionEnabled = true,
+                    onAction = onReopenCallConfirm,
+                )
+            }
 
             if (rideSummary != null) {
                 Spacer(Modifier.height(22.dp))
@@ -366,8 +482,61 @@ fun EmergencyScreen(
 }
 
 /**
+ * 비차단 안내 배너 — 신고 저장 실패·통화 여부 보류를 **감추지 않고** 알린다.
+ *
+ * 다이얼로그가 아니라 배너인 게 요점이다: 이 화면의 본업(112 통화)을 한 순간도 막지 않는다.
+ * 문구는 「무슨 일이 일어났고 / 통화는 어떻게 되는지 / 사용자가 할 수 있는 일」 순서로 적는다.
+ */
+@Composable
+private fun EmergencyNotice(
+    text: String,
+    actionLabel: String,
+    actionEnabled: Boolean,
+    onAction: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(MoyeotaColor.Danger50)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+    ) {
+        Text(
+            text = text,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+            color = MoyeotaColor.Danger600,
+        )
+        Spacer(Modifier.height(10.dp))
+        Box(
+            modifier = Modifier
+                .height(36.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(if (actionEnabled) MoyeotaColor.SurfaceCanvas else MoyeotaColor.SurfaceSoft)
+                .clickable(enabled = actionEnabled) { onAction() }
+                .padding(horizontal = 16.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = actionLabel,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                color = if (actionEnabled) MoyeotaColor.Danger600 else MoyeotaColor.TextAsh,
+            )
+        }
+    }
+}
+
+/**
  * "112와 실제로 통화하셨나요?" — 다이얼 복귀 후 통화 여부 확인.
- * 바깥 탭·back 으로 닫히지 않는다 — 반드시 둘 중 하나를 선택해야 26 으로 복귀.
+ *
+ * 성공 경로는 예전과 같다: 둘 중 하나를 고르고 저장이 되면 26 으로 복귀한다. 바깥 탭으로는 여전히
+ * 닫히지 않는다 — 실수로 흘려 보내지 않게.
+ *
+ * **저장이 실패한 뒤에는 탈출구를 연다**([errorText] != null → back 허용 + 「나중에」).
+ * 예전에는 네트워크가 없으면 두 버튼이 둘 다 실패해 `done` 이 서지 않고, back·바깥 탭·X 버튼(이
+ * 다이얼로그에 가려진다)이 전부 막혀 **운행 중 화면·채팅으로 돌아갈 길이 없었다**(실기 QA).
+ * 통화 여부는 운영팀 참고값이라 그걸로 사용자를 잡아 둘 근거가 없다 — 보류해 두고 배너로 남긴다.
  */
 @Composable
 private fun CallConfirmDialog(
@@ -375,11 +544,15 @@ private fun CallConfirmDialog(
     errorText: String?,
     onCalled: () -> Unit,
     onNotCalled: () -> Unit,
+    onLater: () -> Unit,
 ) {
+    // 저장이 한 번이라도 실패한 뒤에만 열어 준다. 저장 중에는 응답을 기다린다(연타 방지).
+    val escapable = errorText != null && !saving
     Dialog(
-        onDismissRequest = { /* 선택 전에는 닫을 수 없다 */ },
+        onDismissRequest = { if (escapable) onLater() },
         properties = DialogProperties(
-            dismissOnBackPress = false,
+            dismissOnBackPress = escapable,
+            // 바깥 탭은 계속 막는다 — 실패했다고 실수로 흘려 보낼 길까지 열 이유는 없다
             dismissOnClickOutside = false,
         ),
     ) {
@@ -449,6 +622,22 @@ private fun CallConfirmDialog(
                         color = if (saving) MoyeotaColor.TextAsh else MoyeotaColor.TextOnDark,
                     )
                 }
+            }
+            // 저장이 실패한 뒤의 탈출구. 성공 경로에는 나타나지 않는다 — 평상시엔 둘 중 하나를 고르는 게 맞다.
+            if (escapable) {
+                Spacer(Modifier.height(14.dp))
+                Text(
+                    text = "나중에 하기",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = EmTextMute,
+                    modifier = Modifier
+                        .align(Alignment.CenterHorizontally)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                        ) { onLater() },
+                )
             }
         }
     }

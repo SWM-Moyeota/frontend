@@ -10,6 +10,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.moyeota.domain.model.FavoritePlace
+import com.moyeota.domain.model.FavoritePlaceException
 import com.moyeota.domain.model.Place
 import com.moyeota.domain.repository.PlaceRepository
 import com.moyeota.presentation.core.location.FormLocationIntervalMs
@@ -53,6 +54,8 @@ class DestinationViewModel(
         val favoritesLoading: Boolean = false,
         val favoritesErrorMessage: String? = null,
         val favoriteActionMessage: String? = null,
+        /** 담기·빼기 요청이 날아간 동안 true. 단건 삭제가 멱등이 아니라서 연타를 막는다 */
+        val favoriteActionLoading: Boolean = false,
         // null = 사용자가 고르지 않음 → 실위치를 쓴다
         val selectedOrigin: Place? = null,
         // 기기 GPS 로 받은 현재 위치. 권한 거부·미취득이면 null
@@ -172,7 +175,9 @@ class DestinationViewModel(
     }
 
     fun addFavorite(place: Place) {
+        if (_uiState.value.favoriteActionLoading) return
         viewModelScope.launch {
+            _uiState.update { it.copy(favoriteActionLoading = true) }
             try {
                 repository.addFavoritePlace(place)
                 _uiState.update { it.copy(favoriteActionMessage = "${place.name}을(를) 자주 가는 곳에 담았어요") }
@@ -181,6 +186,51 @@ class DestinationViewModel(
                 // 서버 409 CONFLICT: 이름 중복 · 10개 초과 (운영 OpenAPI 는 409 를 적어 두지 않았지만
                 // 실제 응답이 409 다 — 컨트롤러 @ApiResponses 누락. 어차피 사유를 가리지 않으므로 영향 없다)
                 _uiState.update { it.copy(favoriteActionMessage = "자주 가는 곳에 담지 못했어요 (중복이거나 10개를 넘었을 수 있어요)") }
+            } finally {
+                _uiState.update { it.copy(favoriteActionLoading = false) }
+            }
+        }
+    }
+
+    /**
+     * 담은 곳을 다시 뺀다(DELETE .../favorite-places/{placeId}).
+     *
+     * 잘못 담은 장소를 취소할 길이 이것뿐이다 — 등록 상한이 10개이고 같은 이름은 재등록도 막히므로
+     * (409 `FAVORITE_PLACE_DUPLICATED`) 빼지 못하면 오타 난 이름이 10칸 중 하나를 영구히 차지한다.
+     *
+     * **404 를 성공으로 접지 않는다.** 서버가 「이미 지워졌다」·「없다」·「남의 것」을 같은 404 로
+     * 숨기므로, 성공으로 접으면 남의 행을 지우려는 시도까지 성공으로 보인다. 대신 실패 문구를 띄우고
+     * [loadFavorites] 로 목록을 다시 받아 ★ 상태를 서버와 맞춘다 — 그 404 는 화면이 들고 있던
+     * 목록이 낡았다는 신호이기도 하다.
+     */
+    fun removeFavorite(id: Long) {
+        if (_uiState.value.favoriteActionLoading) return
+        val name = _uiState.value.favorites.firstOrNull { it.id == id }?.name
+        viewModelScope.launch {
+            _uiState.update { it.copy(favoriteActionLoading = true) }
+            try {
+                repository.deleteFavoritePlace(id)
+                val label = name?.let { "${it}을(를) " }.orEmpty()
+                _uiState.update { it.copy(favoriteActionMessage = "${label}자주 가는 곳에서 뺐어요") }
+            } catch (e: CancellationException) {
+                // 취소는 실패가 아니다 — 화면을 떠난 것이라 문구를 세울 자리가 없다(runSearch 와 같은 규칙).
+                throw e
+            } catch (e: FavoritePlaceException) {
+                _uiState.update {
+                    it.copy(
+                        favoriteActionMessage = if (e.isNotFound) {
+                            "이미 지워졌거나 없는 곳이에요"
+                        } else {
+                            "자주 가는 곳에서 빼지 못했어요"
+                        },
+                    )
+                }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(favoriteActionMessage = "자주 가는 곳에서 빼지 못했어요") }
+            } finally {
+                // 성공이든 실패든 목록을 다시 받는다 — 실패가 「목록이 낡았다」는 뜻일 수 있다
+                loadFavorites()
+                _uiState.update { it.copy(favoriteActionLoading = false) }
             }
         }
     }
@@ -237,9 +287,11 @@ fun DestinationRoute(
         favoritesLoading = state.favoritesLoading,
         favoritesErrorMessage = state.favoritesErrorMessage,
         favoriteActionMessage = state.favoriteActionMessage,
+        favoriteActionLoading = state.favoriteActionLoading,
         selectedPlace = state.selectedPlace,
         onPlaceSelect = viewModel::selectPlace,
         onAddFavorite = viewModel::addFavorite,
+        onRemoveFavorite = viewModel::removeFavorite,
         onBack = onBack,
         onConfirmRoute = { destination -> state.origin?.let { onConfirmRoute(it, destination) } },
     )

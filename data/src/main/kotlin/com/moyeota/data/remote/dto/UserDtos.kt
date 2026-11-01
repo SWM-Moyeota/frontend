@@ -3,10 +3,14 @@ package com.moyeota.data.remote.dto
 import kotlinx.serialization.Serializable
 
 /**
- * GET /api/v1/local/users/info 의 200 응답. 백엔드 `UserResponse(UUID uuid, String name)` 와 필드 1:1.
+ * GET /api/v1/local/users/info 의 200 응답.
+ * 백엔드 `UserResponse(UUID uuid, String name, String imageUrl)` 와 필드 1:1.
  *
- * 실측(localhost:8080, testuser1):
- * `{"uuid":"01a06145-3caf-7614-a3bd-cee6e25316b1","name":"김성윤"}`
+ * 실측(2026-11-01, localhost:8080, `moyeota1` — 사진을 고른 적 없는 사용자):
+ * `{"uuid":"01a187cc-3d2f-74c3-94d5-b0d8657088ac","name":"모여타일","imageUrl":"https://cdn.moyeota.co.kr/profile/presets/default.png"}`
+ * 사진을 고른 뒤에는 `imageUrl` 만 `…/profile/presets/07.png` 로 바뀐다.
+ *
+ * (옛 실측, `imageUrl` 이 생기기 전: `{"uuid":"01a06145-…","name":"김성윤"}` — 필드가 둘이었다.)
  *
  * **[name] 이 nullable 인 건 방어가 아니라 서버 계약 그대로다.**
  * `LocalUserService.getProfile` 은 `user.nickname` 을 먼저 보고, 없으면 프로필 실명으로 폴백한 뒤
@@ -16,11 +20,33 @@ import kotlinx.serialization.Serializable
  *
  * [uuid] 의 기본값은 서버가 필드를 빼는 경우가 아니라 **빈 값 판정을 Repository 한 곳으로 모으기 위한 것**이다
  * (`RegisterResponse` 와 같은 방식).
+ *
+ * [imageUrl] 은 2026-10-15 배포(Backend #235)로 생겼다. **서버는 이 값을 비워 보내지 않는다** —
+ * 고른 적 없는 사용자에게는 기본 이미지의 전체 주소를 준다(`ProfileImages.toUrl` 이 key 가 null 이면
+ * `default-key` 를 붙인다). 기본값 null 은 구버전 서버 대비용이다.
  */
 @Serializable
 data class UserProfileResponse(
     val uuid: String = "",
     val name: String? = null,
+    val imageUrl: String? = null,
+)
+
+/**
+ * GET /api/v1/users/profile-images 의 200 응답 **항목**. 본문은 엔벨로프 없는 벗은 JSON 배열이다.
+ * 백엔드 `ProfileImageResponse(String key, String url)` 과 필드 1:1.
+ *
+ * **[key] 와 [url] 의 순서를 뒤집지 마라.** [key] 가 `PATCH /users/me` 에 싣는 값이고
+ * ([UpdateProfileRequest.imageKey]) [url] 은 화면에 그리는 CDN 전체 주소다. 뒤집어 보내면
+ * 400 `USER112` 인데, 원인이 응답 파싱이라 추적이 어렵다 — 그래서 매퍼에 전용 테스트가 있다.
+ *
+ * 기본 이미지(`profile/presets/default.png`)는 **이 목록에 들어 있지 않다**. 서버 설정의
+ * `default-key` 는 `presets` 목록 밖이고, 그래서 기본 키로 PATCH 하면 프리셋이 아니라 400 이다.
+ */
+@Serializable
+data class ProfileImageResponse(
+    val key: String = "",
+    val url: String = "",
 )
 
 /**

@@ -47,11 +47,30 @@ private const val BOUNDS_DEBOUNCE_MS = 400L
  */
 private const val NEARBY_POLL_INTERVAL_MS = 4_000L
 
+/**
+ * 몇 번 연속으로 갱신에 실패하면 「최신 정보를 받지 못했어요」를 띄우는가 ([staleAfterPollFailures]).
+ *
+ * **3회 = 12초**([NEARBY_POLL_INTERVAL_MS] × 3). 1회로 두면 터널·엘리베이터처럼 금방 복구되는
+ * 끊김마다 경고가 깜빡이고, 그러면 사용자가 곧 무시하게 된다. 반대로 상한이 **아예 없으면**
+ * (고치기 전의 동작) 실패가 조용히 버려져 낡은 마커가 **영구히** 남고, 사용자는 이미 사라진 방의
+ * 「합류」를 눌러 20 에서야 「사라진 방이에요」를 본다.
+ *
+ * 12초는 「탭했을 때 이미 틀린 목록일 수 있다」를 의심하기 시작할 만한 시간이고(방이 차고 비는 주기가
+ * 분 단위다), 지하철 역 사이 터널(보통 1~2분)보다는 짧아 **진짜 끊김은 반드시 드러난다.**
+ */
+internal const val STALE_NOTICE_FAILURES = 3
+
 class ExploreViewModel(private val repository: RideRepository) : ViewModel() {
 
     sealed interface UiState {
         data object Loading : UiState
-        data class Success(val parties: List<Ride>) : UiState
+
+        /**
+         * 그릴 목록 하나. [stale] 은 「보여 주고는 있지만 갱신이 연속 실패했다」는 뜻이다
+         * ([STALE_NOTICE_FAILURES]) — 목록을 **치우지 않고** 화면이 비차단 표시만 올린다.
+         * 조회가 한 번이라도 성공하면 그 결과로 교체되므로 자동으로 false 로 돌아온다.
+         */
+        data class Success(val parties: List<Ride>, val stale: Boolean = false) : UiState
         data class Error(val message: String) : UiState
     }
 
@@ -175,12 +194,36 @@ class ExploreViewModel(private val repository: RideRepository) : ViewModel() {
                 shownSeq = req.seq
                 if (step == NearbyPollStep.DEBOUNCE_THEN_QUERY) delay(BOUNDS_DEBOUNCE_MS)
                 load(req.bounds)
+                // 연속 실패 횟수는 **패스마다 0 에서 시작한다** — 범위가 바뀌거나 화면이 다시 보이면
+                // 새 패스이고, 그때는 직전 범위에서의 실패를 이어 셈할 이유가 없다.
+                var failures = 0
                 while (isActive) {
                     delay(NEARBY_POLL_INTERVAL_MS)
-                    val parties = runCatching { req.bounds.query() }.getOrNull() ?: continue
+                    val parties = runCatching { req.bounds.query() }.getOrNull()
+                    if (parties == null) {
+                        // 실패해도 보던 목록은 그대로 둔다(지도를 에러 화면으로 바꾸지 않는다).
+                        // 다만 **버리지 않고 세어 둔다** — 상한이 없던 동안 낡은 마커가 영구히 남았다.
+                        failures++
+                        if (staleAfterPollFailures(failures)) markStale()
+                        continue
+                    }
+                    failures = 0
                     _uiState.value = UiState.Success(parties)
                 }
             }
+        }
+    }
+
+    /**
+     * 들고 있는 목록은 그대로 두고 「낡음」만 켠다 — 화면이 그 사실을 비차단으로 알린다.
+     *
+     * 목록이 없는 상태(Loading·Error)에서는 아무것도 하지 않는다: 보여 줄 게 없으면 「낡았다」가
+     * 아니라 첫 조회 실패이고, 그쪽은 [load] 가 에러 화면으로 다룬다.
+     */
+    private fun markStale() {
+        val current = _uiState.value
+        if (current is UiState.Success && !current.stale) {
+            _uiState.value = current.copy(stale = true)
         }
     }
 
@@ -198,6 +241,8 @@ class ExploreViewModel(private val repository: RideRepository) : ViewModel() {
         } catch (e: Exception) {
             // 갱신 실패로 지도를 통째로 에러 화면으로 바꾸지 않는다(21 대기 화면과 같은 판단) —
             // 보던 목록을 남기고 다음 주기에 다시 읽는다. 처음부터 실패한 경우만 에러 화면.
+            // 이 실패가 계속되면 주기 루프가 연속 횟수를 세어 「낡음」을 알린다([markStale]) —
+            // 목록을 남기는 것과 **아무 말도 안 하는 것**은 다르다.
             if (hadParties) return
             UiState.Error("동승 목록을 불러오지 못했어요")
         }
@@ -279,19 +324,96 @@ fun ExploreRoute(
         is ExploreViewModel.UiState.Error -> TabStateScaffold(MoyeotaTab.EXPLORE, onTabSelect) {
             ErrorBox(message = current.message, onRetry = viewModel::refresh)
         }
-        is ExploreViewModel.UiState.Success -> ExploreScreen(
-            parties = current.parties,
-            activeRide = activeRide,
-            locationGranted = myLocation.isGranted,
-            myLocation = myFix,
-            onJoinParty = onJoinParty,
-            onOngoingRideClick = onOngoingRideClick,
-            onCreateRoomClick = onCreateRoomClick,
-            onRequestLocationPermission = myLocation.onRequestPermission,
-            onVisibleBoundsChange = viewModel::onVisibleBoundsChange,
-            onTabSelect = onTabSelect,
-        )
+        is ExploreViewModel.UiState.Success -> {
+            // 내가 이미 참여 중인 방은 목록·마커에서 뺀다([exploreList]).
+            //
+            // **ViewModel 이 아니라 여기서** 거르는 이유:
+            // ① [activeRide] 는 `ActivePartyViewModel`(NavHost 바깥, 앱 전체가 공유하는 홀더)이
+            //    들고 있는 값이고 이 ViewModel 은 그걸 모른다. 넘겨주려면 탐색 ViewModel 에 두 번째
+            //    데이터 출처가 생기고, 그 출처가 바뀔 때마다 상태를 다시 만들어야 한다.
+            // ② `UiState.Success(parties, stale)` 는 **서버가 말한 것**이어야 한다. 거기서 걸러
+            //    버리면 `stale`(갱신 연속 실패 표시)과 목록이 다른 뜻을 갖게 된다 — 「서버 목록은
+            //    낡지 않았는데 내가 뺀 탓에 비었다」를 구분할 수 없고, `hasParties` 같은 폴링 판정이
+            //    표시용 목록을 보게 된다.
+            // 거르는 층이 화면 쪽이라도 **마커·카드·헤더 N 은 어긋나지 않는다** — 셋 다
+            // [ExploreScreen] 의 `parties` **한 파라미터**에서 나온다(지도는 `rides = parties`).
+            val list = remember(current.parties, activeRide?.id) {
+                exploreList(current.parties, activeRide?.id)
+            }
+            ExploreScreen(
+                parties = list.parties,
+                myPartyHidden = list.myPartyHidden,
+                stale = current.stale,
+                activeRide = activeRide,
+                locationGranted = myLocation.isGranted,
+                myLocation = myFix,
+                onJoinParty = onJoinParty,
+                onOngoingRideClick = onOngoingRideClick,
+                onCreateRoomClick = onCreateRoomClick,
+                onRequestLocationPermission = myLocation.onRequestPermission,
+                onVisibleBoundsChange = viewModel::onVisibleBoundsChange,
+                onTabSelect = onTabSelect,
+            )
+        }
     }
+}
+
+/**
+ * 17 이 실제로 그릴 목록 — 서버 목록에서 **내가 이미 참여 중인 방**을 뺀 결과.
+ *
+ * @param parties 서버가 지도 범위로 돌려준 목록(`status = ACTIVE` 인 방만 온다)
+ * @param myPartyHidden 이 범위의 목록에서 **내 방을 실제로 빼냈는가**. 빈 목록 문구가 이 값으로
+ *   갈린다 — 내 방 하나뿐인 동네에서 「이 근처엔 동승이 없어요」는 거짓말이 된다
+ */
+internal data class ExploreList(
+    val parties: List<Ride>,
+    val myPartyHidden: Boolean,
+)
+
+/**
+ * 내가 참여 중인 방을 17 목록·마커에서 **뺀다.**
+ *
+ * **왜 빼는가.** 서버 목록은 내 방을 빼지 않아서, 내가 속한 방이 남의 방과 **똑같은 「합류」 카드**로
+ * 섞여 보였다. 그 카드는 거짓말을 한다 — 「합류」 버튼이 활성이고 인원 배지는 내가 들어가기 **전**의
+ * 수처럼 읽힌다. 눌러서 20 합류 확인에 가면 `joinGate` 가 `ALREADY_JOINED` 로 받아 「이미 참여
+ * 중인 방이에요」 + 「방으로 돌아가기」를 주므로 막힌 길은 아니지만, **같은 화면 맨 위에 진행 중 방
+ * 배너가 이미 있다**(`ExploreScreen` 의 `ActiveRideBanner` → `onOngoingRideClick`): 한 번 눌러
+ * 21/25/26 으로 바로 간다. 20 을 거치는 카드는 탭이 한 번 더 들고 방 상세를 한 번 더 읽는 **더 긴
+ * 우회로**이며, 그 사이 화면은 내가 합류할 수 있는 방처럼 보인다. 돌아가는 길이 이미 더 짧게 있으니
+ * 그 카드는 소음이다.
+ *
+ * **20 의 `ALREADY_JOINED` 분기는 그대로 남는다** — 이 필터는 17 의 **표시**만 바꾼다. 목록이
+ * 낡아 내 방이 아직 섞여 있는 순간, 알림으로 20 에 바로 들어오는 경우, 그리고 `activeRide` 홀더가
+ * 아직 비어 있는 순간(앱 시작 직후 첫 `resolve` 전)이 모두 그 분기로 간다.
+ *
+ * **판정은 `activeRide` 의 id 하나로 한다.** `ride.members.any { it.isMe }` 는 이 데이터로는
+ * **영원히 false** 다 — 목록 응답에는 멤버 식별자가 없어 매퍼가 자리 표시용 멤버를 만들고
+ * (`PartyMappers.placeholderMembers`) 그 멤버에는 `publicId` 가 없어 [com.moyeota.domain.model.User.isMe] 가 늘 false 다.
+ * 즉 목록 데이터만으로는 「내가 그 방에 있는가」를 알 수 없고, 알고 있는 쪽은 방 상세를 읽어 둔
+ * `ActivePartyViewModel` 뿐이다.
+ *
+ * id 비교는 **Long 으로 먼저** 본다(`needsDetailAfterRemember` 와 같은 이유): 두 값은 서로 다른
+ * 응답에서 왔고(목록 `partyId`, 상세 `id`) 문자열 모양이 어긋날 수 있다. 숫자로 안 읽히는 id 는
+ * 문자열로 비교한다 — Preview 의 예시 방(`"ride-1"`)이 그 길로 간다.
+ *
+ * [activeRide] 의 단계는 보지 않는다. 끝난 방(COMPLETED·CANCELED)은 `status = ACTIVE` 목록에
+ * 아예 오지 않아 id 가 걸릴 일이 없고, 「어느 단계부터 거른다」는 조건을 두면 그 조건이 배너를
+ * 그리는 조건(null 이 아니면 그린다)과 갈릴 수 있다.
+ */
+internal fun exploreList(parties: List<Ride>, myPartyId: String?): ExploreList {
+    if (myPartyId.isNullOrBlank()) return ExploreList(parties, myPartyHidden = false)
+    val remaining = parties.filterNot { samePartyId(it.id, myPartyId) }
+    return ExploreList(
+        parties = remaining,
+        myPartyHidden = remaining.size != parties.size,
+    )
+}
+
+/** 같은 방인가. 숫자로 읽히면 숫자로, 아니면 문자열로 본다([exploreList] KDoc). */
+private fun samePartyId(a: String, b: String): Boolean {
+    val left = a.toLongOrNull()
+    val right = b.toLongOrNull()
+    return if (left != null || right != null) left == right else a == b
 }
 
 /**
@@ -343,3 +465,16 @@ internal fun nearbyPollStep(
     manual || !hasParties || requestSeq == shownSeq -> NearbyPollStep.QUERY_NOW
     else -> NearbyPollStep.DEBOUNCE_THEN_QUERY
 }
+
+/**
+ * 갱신 실패를 **사용자에게 알릴 때인가** — [nearbyPollStep] 과 같은 자리의 판정이다(순수 함수 한 곳에
+ * 모으고 루프는 결과만 따른다).
+ *
+ * 한 번의 실패는 알리지 않는다(지도 앱의 흔한 일시 끊김이다). 연속 [STALE_NOTICE_FAILURES] 회부터
+ * 알린다 — 임계값의 근거는 그 상수에 적어 두었다. **성공 한 번이 카운터를 0 으로 돌린다**(호출부)
+ * 이므로, 이 함수는 「지금까지 연속 몇 번 실패했는가」만 보면 된다.
+ *
+ * @param consecutiveFailures 마지막 성공 이후 연속 실패 횟수(성공하면 0 으로 돌아간다)
+ */
+internal fun staleAfterPollFailures(consecutiveFailures: Int): Boolean =
+    consecutiveFailures >= STALE_NOTICE_FAILURES

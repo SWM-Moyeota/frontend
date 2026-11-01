@@ -17,7 +17,7 @@ class TokenAuthenticatorTest {
     @Test
     fun `401 이면 재발급한 액세스 토큰으로 원요청을 재시도한다`() {
         val tokens = FakeTokenHolder(accessToken = "old.access", refreshToken = "old.refresh")
-        val refresher = FakeRefresher(TokenPair("new.access", "new.refresh"))
+        val refresher = FakeRefresher(rotated("new.access", "new.refresh"))
 
         val retry = TokenAuthenticator(tokens, refresher).authenticate(null, unauthorized("old.access"))
 
@@ -31,7 +31,7 @@ class TokenAuthenticatorTest {
     @Test
     fun `재발급 성공 시 회전된 리프레시까지 저장한다`() {
         val tokens = FakeTokenHolder(accessToken = "old.access", refreshToken = "old.refresh")
-        val refresher = FakeRefresher(TokenPair("new.access", "new.refresh"))
+        val refresher = FakeRefresher(rotated("new.access", "new.refresh"))
 
         TokenAuthenticator(tokens, refresher).authenticate(null, unauthorized("old.access"))
 
@@ -41,10 +41,11 @@ class TokenAuthenticatorTest {
         assertEquals(0, tokens.sessionExpiredCount)
     }
 
+    /** 서버가 "이 리프레시는 못 쓴다"고 답한 경우(401·403·USER001~005). 재로그인 외에 길이 없다. */
     @Test
-    fun `재발급이 실패하면 세션 만료를 알리고 재시도를 포기한다`() {
+    fun `서버가 재발급을 거절하면 세션 만료를 알리고 재시도를 포기한다`() {
         val tokens = FakeTokenHolder(accessToken = "old.access", refreshToken = "revoked.refresh")
-        val refresher = FakeRefresher(result = null)
+        val refresher = FakeRefresher(RefreshResult.Rejected)
 
         val retry = TokenAuthenticator(tokens, refresher).authenticate(null, unauthorized("old.access"))
 
@@ -54,10 +55,32 @@ class TokenAuthenticatorTest {
         assertNull(tokens.refreshToken)
     }
 
+    /**
+     * **이 테스트가 이번 수정의 핵심이다.** 운영 액세스 토큰 수명이 30분이라 활성 사용자는 30분마다
+     * 반드시 재발급을 한 번 타는데, 그 순간 지하철·엘리베이터에 있거나 서버 배포 중 503 을 맞으면
+     * 예전 구현은 「응답을 못 받았다」를 「서버가 거절했다」와 똑같이 보고 멀쩡한 세션을 지웠다
+     * — 서버에서는 아무 일도 없었고 리프레시는 14일 수명 그대로 유효한데 「세션이 만료됐어요」가 떴다.
+     *
+     * 세션을 유지한 채 null 을 돌려주면 401 이 호출부로 올라가고, 다음 요청이 재발급을 다시 시도한다.
+     */
+    @Test
+    fun `재발급 응답을 못 받으면 세션을 유지한 채 재시도만 포기한다`() {
+        val tokens = FakeTokenHolder(accessToken = "old.access", refreshToken = "live.refresh")
+        val refresher = FakeRefresher(RefreshResult.Unavailable)
+
+        val retry = TokenAuthenticator(tokens, refresher).authenticate(null, unauthorized("old.access"))
+
+        assertNull("답을 못 받았으면 재시도할 토큰이 없다", retry)
+        assertEquals("네트워크 실패로 세션을 지웠다", 0, tokens.sessionExpiredCount)
+        // 다음 요청이 같은 리프레시로 재발급을 다시 시도할 수 있어야 한다.
+        assertEquals("old.access", tokens.accessToken)
+        assertEquals("live.refresh", tokens.refreshToken)
+    }
+
     @Test
     fun `리프레시 토큰이 없으면 재발급을 시도하지 않고 세션을 만료시킨다`() {
         val tokens = FakeTokenHolder(accessToken = "orphan.access", refreshToken = null)
-        val refresher = FakeRefresher(TokenPair("new.access", "new.refresh"))
+        val refresher = FakeRefresher(rotated("new.access", "new.refresh"))
 
         val retry = TokenAuthenticator(tokens, refresher).authenticate(null, unauthorized("orphan.access"))
 
@@ -69,7 +92,7 @@ class TokenAuthenticatorTest {
     @Test
     fun `토큰을 싣지 않은 요청의 401 은 건드리지 않는다`() {
         val tokens = FakeTokenHolder(accessToken = "any.access", refreshToken = "any.refresh")
-        val refresher = FakeRefresher(TokenPair("new.access", "new.refresh"))
+        val refresher = FakeRefresher(rotated("new.access", "new.refresh"))
 
         // 미로그인 상태에서 보호 API 를 호출한 경우 — 재발급으로 풀 수 있는 문제가 아니다.
         val retry = TokenAuthenticator(tokens, refresher).authenticate(null, unauthorized(accessToken = null))
@@ -82,7 +105,7 @@ class TokenAuthenticatorTest {
     @Test
     fun `새 토큰으로도 401 이면 무한 루프 대신 포기한다`() {
         val tokens = FakeTokenHolder(accessToken = "new.access", refreshToken = "old.refresh")
-        val refresher = FakeRefresher(TokenPair("newer.access", "newer.refresh"))
+        val refresher = FakeRefresher(rotated("newer.access", "newer.refresh"))
         val secondFailure = unauthorized("new.access", prior = unauthorized("old.access"))
 
         val retry = TokenAuthenticator(tokens, refresher).authenticate(null, secondFailure)
@@ -95,7 +118,7 @@ class TokenAuthenticatorTest {
     fun `동시에 401 을 맞아도 재발급은 한 번만 일어난다`() {
         val tokens = FakeTokenHolder(accessToken = "old.access", refreshToken = "old.refresh")
         // 재발급이 느린 상황을 만들어 두 번째 스레드가 반드시 잠금 대기에 걸리게 한다.
-        val refresher = FakeRefresher(TokenPair("new.access", "new.refresh"), delayMillis = 200)
+        val refresher = FakeRefresher(rotated("new.access", "new.refresh"), delayMillis = 200)
         val authenticator = TokenAuthenticator(tokens, refresher)
 
         val start = CountDownLatch(1)
@@ -118,6 +141,9 @@ class TokenAuthenticatorTest {
         retries.forEach { assertEquals("Bearer new.access", it?.header("Authorization")) }
         assertEquals(0, tokens.sessionExpiredCount)
     }
+
+    private fun rotated(accessToken: String, refreshToken: String) =
+        RefreshResult.Rotated(TokenPair(accessToken, refreshToken))
 
     private fun unauthorized(accessToken: String?, prior: Response? = null): Response {
         val request = Request.Builder()
@@ -161,14 +187,19 @@ private class FakeTokenHolder(
     }
 }
 
+/**
+ * [result] 를 [RefreshResult] 로 받는 것이 중요하다. 예전 Fake 는 `TokenPair?` 하나로
+ * 401·타임아웃·503 을 전부 null 로 뭉개서, 「재발급이 실패하면 세션 만료를 알린다」 테스트가
+ * 오히려 결함(네트워크 실패를 인증 거절로 오인)을 통과 조건으로 고정하고 있었다.
+ */
 private class FakeRefresher(
-    private val result: TokenPair?,
+    private val result: RefreshResult,
     private val delayMillis: Long = 0,
 ) : TokenRefresher {
     val callCount = AtomicInteger()
     val usedRefreshTokens = java.util.Collections.synchronizedList(mutableListOf<String>())
 
-    override fun refresh(refreshToken: String): TokenPair? {
+    override fun refresh(refreshToken: String): RefreshResult {
         callCount.incrementAndGet()
         usedRefreshTokens += refreshToken
         if (delayMillis > 0) Thread.sleep(delayMillis)

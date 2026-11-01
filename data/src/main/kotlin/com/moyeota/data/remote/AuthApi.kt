@@ -3,6 +3,8 @@ package com.moyeota.data.remote
 import com.moyeota.data.remote.dto.LoginRequestDto
 import com.moyeota.data.remote.dto.NicknameCheckRequestDto
 import com.moyeota.data.remote.dto.NicknameCheckResponse
+import com.moyeota.data.remote.dto.PhoneCheckRequestDto
+import com.moyeota.data.remote.dto.PhoneCheckResponse
 import com.moyeota.data.remote.dto.RefreshTokenRequestDto
 import com.moyeota.data.remote.dto.RegisterRequestDto
 import com.moyeota.data.remote.dto.RegisterResponse
@@ -100,4 +102,22 @@ interface AuthApi {
      */
     @POST("api/v1/auth/nickname/check")
     suspend fun checkNickname(@Body request: NicknameCheckRequestDto): NicknameCheckResponse
+
+    /**
+     * 전화번호 가입 여부 확인. 200 `{"exists":boolean}`.
+     *
+     * [checkNickname] 과 같은 이유로 이 API(Bearer 미부착)에 있다 — 가입 도중 호출이라 토큰이 없고,
+     * **깨진 토큰을 실으면 permitAll 경로인데도 JWT 필터가 401 `USER001` 을 낸다**
+     * (실측 2026-11-01, 로컬 :8080 — 헤더 없음 200 / 유효 토큰 200 / `Bearer not.a.jwt` 401).
+     * 인증 클라이언트로 보내면 **세션이 만료된 사용자가 가입을 다시 시도할 때만** 나는 결함이 된다.
+     *
+     * 형식이 틀리면 exists 판정 전에 400 `USER105` 다(서버가 `PhoneNumber` VO 를 먼저 만든다).
+     * 발송([sendSmsCode])은 같은 상황에서 `@Pattern` 에 먼저 걸려 `INVALID_REQUEST` 가 오므로
+     * **두 경로의 형식 오류 코드가 다르다** — 에러 매핑에서 헷갈리기 쉽다.
+     *
+     * **`exists=false` 를 「가입 가능」으로 읽지 마라.** 탈퇴한 번호도 false 다
+     * ([com.moyeota.data.remote.dto.PhoneCheckResponse] KDoc 참조) — 이 호출은 막는 데만 쓴다.
+     */
+    @POST("api/v1/auth/phone/check")
+    suspend fun checkPhone(@Body request: PhoneCheckRequestDto): PhoneCheckResponse
 }

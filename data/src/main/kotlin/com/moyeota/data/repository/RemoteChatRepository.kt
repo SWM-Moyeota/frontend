@@ -5,6 +5,7 @@ import com.moyeota.data.remote.ChatIdentity
 import com.moyeota.data.remote.chatCall
 import com.moyeota.data.remote.dto.ChatMemberResponse
 import com.moyeota.data.remote.dto.ChatMessageResponse
+import com.moyeota.data.remote.dto.ChatReportRequestDto
 import com.moyeota.data.remote.dto.SendMessageRequestDto
 import com.moyeota.data.remote.toChatMember
 import com.moyeota.data.remote.toChatMessage
@@ -15,6 +16,7 @@ import com.moyeota.domain.model.ChatMember
 import com.moyeota.domain.model.ChatRealtimeEvent
 import com.moyeota.domain.model.ChatMessage
 import com.moyeota.domain.model.ChatMessagePage
+import com.moyeota.domain.model.ChatReportReason
 import com.moyeota.domain.model.ChatRoom
 import com.moyeota.domain.model.MyChatRoom
 import com.moyeota.data.remote.dto.ChatRoomUserResponse
@@ -168,6 +170,31 @@ class RemoteChatRepository(
 
     override suspend fun deleteMessage(chatRoomId: Long, messageId: Long) = chatCall {
         api.deleteMessage(chatRoomId, messageId)
+    }
+
+    /**
+     * 신고는 참여자 사전과 **아무 상관이 없다** — 서버가 신고자를 토큰에서, 피신고자를 메시지에서
+     * 각각 찾는다. 그래서 다른 호출처럼 `resolveIdentity` 를 끼우지 않는다.
+     *
+     * 사유는 enum 직렬화에 맡기지 않고 [ChatReportReason.name] 을 명시적으로 넣는다 — 서버가
+     * 소문자를 400 으로 거절하므로(실측) 대문자 보장을 이 한 줄에 모아 둔다.
+     */
+    override suspend fun reportMessage(
+        chatRoomId: Long,
+        chatMessageId: Long,
+        reason: ChatReportReason,
+        description: String?,
+    ) = chatCall {
+        api.reportMessage(
+            chatRoomId,
+            ChatReportRequestDto(
+                chatMessageId = chatMessageId,
+                reason = reason.name,
+                // 빈 문자열·공백은 **없는 것과 같게 접는다.** 서버가 ETC 에서 isBlank 를 400 으로
+                // 거절하므로(실측) 공백을 그대로 실어 보내면 「썼는데 거절당했다」가 된다.
+                description = description?.takeIf { it.isNotBlank() },
+            ),
+        )
     }
 
     override suspend fun searchMessages(

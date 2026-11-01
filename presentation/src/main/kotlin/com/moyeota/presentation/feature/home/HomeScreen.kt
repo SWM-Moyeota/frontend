@@ -3,7 +3,9 @@ package com.moyeota.presentation.feature.home
 import android.location.Location
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -12,12 +14,16 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -51,9 +57,11 @@ import com.moyeota.core.designsystem.component.MoyeotaTab
 import com.moyeota.core.designsystem.component.NaverMapView
 import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.core.designsystem.theme.MoyeotaType
 import com.moyeota.domain.model.FavoritePlace
 import com.moyeota.domain.model.Ride
 import com.moyeota.presentation.core.ActiveRideBanner
+import com.moyeota.presentation.feature.auth.CheckMarkIcon
 import java.util.Locale
 import kotlin.math.roundToInt
 
@@ -108,9 +116,42 @@ fun HomeScreen(
     myLocation: UserCoordinates? = null,
     /** 서버 즐겨찾기(GET /users/me/favorite-places). 호출부가 sequence 순으로 정렬해 넘긴다 */
     favoritePlaces: List<FavoritePlace> = emptyList(),
+    /** 즐겨찾기 편집 모드. 행 탭이 15 이동 대신 선택 토글이 되고 삭제 손잡이가 나온다 */
+    editingFavorites: Boolean = false,
+    /** 편집 모드에서 고른 [FavoritePlace.id] 들 */
+    selectedFavoriteIds: Set<Long> = emptySet(),
+    /** 삭제 요청이 날아간 동안 true — 손잡이를 모두 잠근다(아래 [onDeleteSelected] 주석 참고) */
+    deletingFavorites: Boolean = false,
+    /** 삭제 실패 문구. 성공하면 null 로 돌아온다 */
+    favoriteErrorMessage: String? = null,
+    /**
+     * 목록 조회가 **한 번이라도 성공**했는가. 「전체 삭제」를 그릴지의 근거다 —
+     * 못 받은 상태에서 그리면 서버에 멀쩡히 있는 즐겨찾기를 지우는 버튼이 된다([onDeleteAll] 참고).
+     */
+    favoritesLoaded: Boolean = false,
+    /** 목록 조회가 실패했다. **빈 목록과 다르게** 그려야 한다 — 섞으면 위 버튼의 근거가 거짓이 된다 */
+    favoritesLoadFailed: Boolean = false,
+    onRetryFavorites: () -> Unit = {},
     onSearchClick: () -> Unit = {},
     onActiveRideClick: () -> Unit = {},
     onFavoritePlaceClick: (FavoritePlace) -> Unit = {},
+    onEditFavoritesToggle: () -> Unit = {},
+    onFavoriteSelectToggle: (FavoritePlace) -> Unit = {},
+    /**
+     * 「선택한 N곳 삭제」. 1곳이어도 다건 삭제(batch-delete)로 보낸다 — 서버가 전부-아니면-전무라
+     * 3개 중 1개만 지워진 어중간한 상태가 생기지 않는다(단건 삭제를 N번 돌리면 중간 404 에서
+     * 목록과 서버가 어긋난다).
+     */
+    onDeleteSelected: () -> Unit = {},
+    /**
+     * 「전체 삭제」. **목록이 비어 보일 때도 쓸 수 있어야 한다** — placeId·좌표가 없는 레거시 행은
+     * 매퍼가 버려 화면에 안 나오는데 서버에서는 10칸 중 하나를 계속 차지하고, 고를 수 없으니
+     * 이 경로가 유일한 탈출구다.
+     *
+     * **단 [favoritesLoaded] 가 true 일 때만 그린다.** 「비어 보인다」가 조회 실패 때문일 수도 있고,
+     * 그때는 서버에 멀쩡한 즐겨찾기가 있다 — 탈출구가 아니라 파괴 버튼이 된다.
+     */
+    onDeleteAll: () -> Unit = {},
     onTabSelect: (MoyeotaTab) -> Unit = {},
 ) {
     Column(modifier = Modifier.fillMaxSize().background(CanvasBg)) {
@@ -177,27 +218,88 @@ fun HomeScreen(
             },
             // 접히면 사라지는 상세 = 즐겨찾기 목록
             sheetDetail = {
+                // 확인 다이얼로그 대상. null 이면 다이얼로그 없음 — 탈퇴·로그아웃과 같은 방식으로
+                // 화면 안에 들고 있는다(ViewModel 까지 올릴 상태가 아니다).
+                var confirming by remember { mutableStateOf<FavoriteDeleteKind?>(null) }
+                // 편집 모드가 바뀌면 열려 있던 다이얼로그를 닫는다 — 안 닫으면 「완료」를 누른 뒤에
+                // 확인 창만 떠 있어 무엇에 대한 확인인지 알 수 없다.
+                // 조건부 대입이 아니라 LaunchedEffect 인 이유: 합성 중에 상태를 쓰면 안 된다.
+                LaunchedEffect(editingFavorites) { confirming = null }
+
                 Column(modifier = Modifier.fillMaxWidth().background(CanvasBg)) {
                     Spacer(Modifier.height(24.dp))
 
                     // 즐겨찾기 — 서버 등록 순서(sequence) 그대로 전부
-                    Text(
-                        text = "즐겨찾기",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = GrayMute,
-                        modifier = Modifier.padding(horizontal = 16.dp),
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "즐겨찾기",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = GrayMute,
+                        )
+                        Spacer(Modifier.weight(1f))
+                        // 아이콘 자산이 없어 글자로 둔다(마이페이지의 ↗/› 방침과 같다).
+                        // **목록이 비어 보여도 숨기지 않는다** — 그때가 「전체 삭제」가 유일한
+                        // 탈출구인 경우(매퍼가 버린 레거시 행)라서 숨기면 탈출구가 함께 사라진다.
+                        Text(
+                            text = if (editingFavorites) "완료" else "편집",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (deletingFavorites) GrayAsh else MoyeotaColor.Primary500,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable(enabled = !deletingFavorites) { onEditFavoritesToggle() }
+                                .padding(horizontal = 6.dp, vertical = 4.dp),
+                        )
+                    }
                     Spacer(Modifier.height(10.dp))
                     if (favoritePlaces.isEmpty()) {
-                        // 서버에 등록된 즐겨찾기가 없을 때 (15 목적지 화면에서 ★ 로 등록한다)
-                        Text(
-                            text = "즐겨찾기를 등록하면 여기서 바로 부를 수 있어요",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = GrayAsh,
-                            modifier = Modifier.padding(horizontal = 16.dp),
-                        )
+                        // ★ 「못 받았다」와 「없다」를 절대 같게 그리지 않는다.
+                        // 둘을 섞으면 조회가 끊긴 사용자에게 화면이 「등록한 곳이 없어요」라고 말하고,
+                        // 편집 중이면 거기에 더해 「전체 삭제로 비울 수 있어요」까지 권한다 —
+                        // 서버에는 멀쩡한 즐겨찾기가 있고, 통신이 돌아오는 순간 그게 전부 지워진다.
+                        if (favoritesLoadFailed) {
+                            Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+                                Text(
+                                    text = "즐겨찾기를 불러오지 못했어요",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = GrayAsh,
+                                )
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    text = "다시 시도",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MoyeotaColor.Primary500,
+                                    modifier = Modifier
+                                        .heightIn(min = 48.dp)
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .clickable { onRetryFavorites() }
+                                        .padding(horizontal = 10.dp)
+                                        .wrapContentHeight(),
+                                )
+                            }
+                        } else {
+                            Text(
+                                // 편집 중에 비어 보이는 목록은 「등록해 보세요」로 끝낼 수 없다 —
+                                // 서버에 남은 안 보이는 행을 치우려고 편집에 들어온 경우가 그 자리다.
+                                // 단 **조회에 성공한 뒤**에만 그렇게 말할 수 있다(위 분기가 그걸 보장한다).
+                                text = if (editingFavorites) {
+                                    "목록에 안 보이는 장소가 서버에 남아 있을 수 있어요. 「전체 삭제」로 비울 수 있어요"
+                                } else {
+                                    // 등록은 15 목적지 화면에서 ★ 로 한다
+                                    "즐겨찾기를 등록하면 여기서 바로 부를 수 있어요"
+                                },
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = GrayAsh,
+                                modifier = Modifier.padding(horizontal = 16.dp),
+                            )
+                        }
                     } else {
                         Column(
                             modifier = Modifier
@@ -211,7 +313,17 @@ fun HomeScreen(
                                 FavoritePlaceRow(
                                     place = place,
                                     distanceLabel = distanceLabel(myLocation, place),
-                                    onClick = { onFavoritePlaceClick(place) },
+                                    editing = editingFavorites,
+                                    selected = place.id in selectedFavoriteIds,
+                                    enabled = !deletingFavorites,
+                                    // 편집 중에는 15 로 튀어나가지 않는다 — 화면이 바뀌면 고른 것이 날아간다
+                                    onClick = {
+                                        if (editingFavorites) {
+                                            onFavoriteSelectToggle(place)
+                                        } else {
+                                            onFavoritePlaceClick(place)
+                                        }
+                                    },
                                 )
                                 if (index != favoritePlaces.lastIndex) {
                                     HorizontalDivider(
@@ -223,7 +335,91 @@ fun HomeScreen(
                         }
                     }
 
+                    // ★ 「전체 삭제」는 **조회에 한 번이라도 성공했을 때만** 그린다.
+                    // 레거시 행 탈출구라는 명분은 「목록을 받아 왔고 그 결과가 비었다」일 때만 선다 —
+                    // 못 받은 상태에서 그리면 멀쩡한 즐겨찾기를 지우는 버튼이 된다.
+                    if (editingFavorites && favoritesLoaded) {
+                        Spacer(Modifier.height(12.dp))
+                        Column(
+                            modifier = Modifier.padding(horizontal = 16.dp),
+                            // 파괴적 동작 두 줄이 맞닿아 있으면 「선택한 N곳」을 노린 손가락이
+                            // 「전체 삭제」를 집는다. 둘 사이를 벌려 둔다.
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            // TextButton 을 쓰지 않는다 — 이 앱에서 TextButton 은 다이얼로그 안에만 있다.
+                            if (favoritePlaces.isNotEmpty()) {
+                                DangerTextRow(
+                                    text = "선택한 ${selectedFavoriteIds.size}곳 삭제",
+                                    // 0곳이면 서버가 400 INVALID_PLACE_IDS 를 준다 — 누를 수 없게 둔다
+                                    enabled = selectedFavoriteIds.isNotEmpty() && !deletingFavorites,
+                                    onClick = { confirming = FavoriteDeleteKind.SELECTED },
+                                )
+                            }
+                            DangerTextRow(
+                                text = "전체 삭제",
+                                enabled = !deletingFavorites,
+                                onClick = { confirming = FavoriteDeleteKind.ALL },
+                            )
+                        }
+                    }
+
+                    if (favoriteErrorMessage != null) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = favoriteErrorMessage,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MoyeotaColor.Danger600,
+                            modifier = Modifier.padding(horizontal = 16.dp),
+                        )
+                    }
+
                     Spacer(Modifier.height(16.dp))
+                }
+
+                // 되돌릴 수 없는 삭제라 확인을 받는다(탈퇴·로그아웃과 같은 모양).
+                // 다이얼로그는 목록을 되풀이하지 않는다 — 「되돌릴 수 없다」 한 가지만 말한다.
+                val pending = confirming
+                if (pending != null) {
+                    AlertDialog(
+                        onDismissRequest = { confirming = null },
+                        title = {
+                            Text(
+                                text = when (pending) {
+                                    FavoriteDeleteKind.SELECTED -> "선택한 곳을 지울까요?"
+                                    FavoriteDeleteKind.ALL -> "즐겨찾기를 모두 지울까요?"
+                                },
+                                style = MoyeotaType.HeadingMd,
+                            )
+                        },
+                        text = {
+                            Text(
+                                text = when (pending) {
+                                    FavoriteDeleteKind.SELECTED -> "지우면 되돌릴 수 없어요"
+                                    FavoriteDeleteKind.ALL -> "등록해 둔 곳이 모두 사라지고 되돌릴 수 없어요"
+                                },
+                                style = MoyeotaType.BodySm,
+                                color = MoyeotaColor.TextBody,
+                            )
+                        },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                confirming = null
+                                when (pending) {
+                                    FavoriteDeleteKind.SELECTED -> onDeleteSelected()
+                                    FavoriteDeleteKind.ALL -> onDeleteAll()
+                                }
+                            }) {
+                                Text(text = "삭제", fontWeight = FontWeight.Bold, color = MoyeotaColor.Danger500)
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { confirming = null }) {
+                                Text(text = "취소", color = MoyeotaColor.TextMute)
+                            }
+                        },
+                        containerColor = MoyeotaColor.SurfaceCanvas,
+                    )
                 }
             },
         )
@@ -302,13 +498,31 @@ private fun HeroSection(
     }
 }
 
-/** 즐겨찾기 한 행 — 점 · 이름/도로명주소 · (실위치가 있을 때만) 직선 거리 */
+/** 어떤 삭제의 확인을 받는 중인지. 다이얼로그 제목·본문·동작이 전부 이 값으로 갈린다 */
+private enum class FavoriteDeleteKind { SELECTED, ALL }
+
+/**
+ * 즐겨찾기 한 행 — 점 · 이름/도로명주소 · (실위치가 있을 때만) 직선 거리.
+ *
+ * 편집 모드([editing])에서는 거리 라벨 자리를 체크박스가 대신한다. **제스처는 쓰지 않는다** —
+ * 이 목록은 세로로 드래그되는 시트 안이고 그 배경은 패닝되는 지도라, 행 위 가로 스와이프가
+ * 시트 드래그와 지도 제스처 둘 다와 싸운다. 편집 모드는 탭만 쓴다.
+ */
 @Composable
-private fun FavoritePlaceRow(place: FavoritePlace, distanceLabel: String?, onClick: () -> Unit) {
+private fun FavoritePlaceRow(
+    place: FavoritePlace,
+    distanceLabel: String?,
+    editing: Boolean,
+    selected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onClick() }
+            // 삭제가 날아간 동안 탭을 막는다 — 단건·다건 삭제가 멱등이 아니라서(두 번째가 404)
+            // 연타가 「지우지 못했어요」로 보인다
+            .clickable(enabled = enabled) { onClick() }
             .padding(horizontal = 18.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -332,7 +546,10 @@ private fun FavoritePlaceRow(place: FavoritePlace, distanceLabel: String?, onCli
                 color = GrayMute,
             )
         }
-        if (distanceLabel != null) {
+        if (editing) {
+            Spacer(Modifier.size(12.dp))
+            SelectBox(selected = selected)
+        } else if (distanceLabel != null) {
             Spacer(Modifier.size(12.dp))
             Text(
                 text = distanceLabel,
@@ -341,6 +558,50 @@ private fun FavoritePlaceRow(place: FavoritePlace, distanceLabel: String?, onCli
                 color = GrayMute,
             )
         }
+    }
+}
+
+/**
+ * 파괴적 동작 한 줄. 눌러서 **다이얼로그를 여는 것**까지가 역할이고 삭제는 확인 뒤에 일어난다.
+ *
+ * `TextButton` 을 쓰지 않는 이유: 이 앱은 화면 본문에 TextButton 을 두지 않는다 —
+ * 쓰인 자리가 전부 AlertDialog 안이다(프로필 수정 화면 주석의 방침).
+ */
+@Composable
+private fun DangerTextRow(text: String, enabled: Boolean, onClick: () -> Unit) {
+    Text(
+        text = text,
+        fontSize = 13.sp,
+        fontWeight = FontWeight.Bold,
+        color = if (enabled) MoyeotaColor.Danger500 else GrayAsh,
+        modifier = Modifier
+            .fillMaxWidth()
+            // 되돌릴 수 없는 동작이라 터치 타깃을 48dp 로 채운다. 세로 패딩만으로는 38dp 였고,
+            // 바로 아래 「전체 삭제」와 맞닿아 손가락이 옆 줄을 집었다.
+            .heightIn(min = 48.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(enabled = enabled) { onClick() }
+            .padding(vertical = 10.dp)
+            .wrapContentHeight(),
+    )
+}
+
+/** 편집 모드의 선택 상자 — material-icons 가 없어 테두리는 Canvas, 체크는 로그인 화면 것을 쓴다 */
+@Composable
+private fun SelectBox(selected: Boolean) {
+    Box(
+        modifier = Modifier
+            .size(20.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .background(if (selected) MoyeotaColor.Primary500 else MoyeotaColor.SurfaceCanvas)
+            .border(
+                width = 1.5.dp,
+                color = if (selected) MoyeotaColor.Primary500 else RowDot,
+                shape = RoundedCornerShape(6.dp),
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (selected) CheckMarkIcon(iconSize = 14.dp, color = MoyeotaColor.TextOnDark)
     }
 }
 
@@ -398,8 +659,8 @@ private fun HomeScreenPreview() {
         userName = "김성윤",
         myLocation = UserCoordinates(latitude = 35.2316, longitude = 129.0846),
         favoritePlaces = listOf(
-            FavoritePlace("집", "부산 부산진구 중앙대로 672", 35.1577, 129.0592, sequence = 1),
-            FavoritePlace("학교", "부산 금정구 부산대학로 63번길 2", 35.2334, 129.0798, sequence = 2),
+            FavoritePlace(1, "집", "부산 부산진구 중앙대로 672", 35.1577, 129.0592, sequence = 1),
+            FavoritePlace(2, "학교", "부산 금정구 부산대학로 63번길 2", 35.2334, 129.0798, sequence = 2),
         ),
     )
 }
@@ -408,4 +669,30 @@ private fun HomeScreenPreview() {
 @Composable
 private fun HomeScreenEmptyFavoritesPreview() {
     HomeScreen(userName = "김성윤")
+}
+
+/** 편집 모드 — 체크박스와 두 삭제 줄이 어떻게 보이는지 확인용 */
+@Preview(showBackground = true, widthDp = 393, heightDp = 852)
+@Composable
+private fun HomeScreenEditingFavoritesPreview() {
+    HomeScreen(
+        userName = "김성윤",
+        favoritePlaces = listOf(
+            FavoritePlace(1, "집", "부산 부산진구 중앙대로 672", 35.1577, 129.0592, sequence = 1),
+            FavoritePlace(2, "학교", "부산 금정구 부산대학로 63번길 2", 35.2334, 129.0798, sequence = 2),
+        ),
+        editingFavorites = true,
+        selectedFavoriteIds = setOf(2L),
+    )
+}
+
+/**
+ * 목록이 비어 보이는데 편집 중인 경우 — **「전체 삭제」가 남아 있어야 한다.**
+ * placeId·좌표 없는 레거시 행은 매퍼가 버려 화면에 안 나오지만 서버 10칸 중 하나를 차지하므로,
+ * 이 화면이 그 행을 치울 유일한 자리다.
+ */
+@Preview(showBackground = true, widthDp = 393, heightDp = 852)
+@Composable
+private fun HomeScreenEditingEmptyFavoritesPreview() {
+    HomeScreen(userName = "김성윤", editingFavorites = true)
 }

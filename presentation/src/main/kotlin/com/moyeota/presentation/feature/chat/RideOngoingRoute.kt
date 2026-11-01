@@ -7,6 +7,8 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.compose.LifecycleStartEffect
+import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
@@ -22,7 +24,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
 /**
  * 운행 완료 폴링 간격 — **8초**. 기사가 운행을 끝낸 뒤 최악의 경우 이만큼 기다렸다 33 으로 넘어간다.
@@ -59,6 +63,43 @@ class RideOngoingViewModel(
     val ride: StateFlow<Ride?> = _ride.asStateFlow()
 
     /**
+     * 화면이 지금 **보이는가** — 완료 폴링의 스위치. Route 의 `LifecycleStartEffect` 가 내려 준다
+     * ([onScreenStart]·[onScreenStop]).
+     *
+     * ### 왜 필요한가
+     * 예전에는 Route 의 `LaunchedEffect` 가 이 루프를 들고 있었다. `LaunchedEffect` 는 **컴포지션
+     * 이탈**에만 취소되고 **앱 백그라운드**에는 반응하지 않는데, `NavHost` 컴포지션은 앱이 뒤로 가도
+     * 살아 있다([com.moyeota.presentation.core.ActiveParty] KDoc). 그래서 홈 버튼을 눌러도 8초마다
+     * 쿼리 3개짜리 방 상세가 계속 나갔다 — 30분 운행이면 승객 1명당 약 225회다. 같은 레포의 다른
+     * 폴링은 전부 `LifecycleStartEffect` 경계를 쓴다(21 매칭 대기·17 탐색·24 채팅방·호스트 폴링).
+     *
+     * ### 왜 끊어도 안전한가
+     * 이 루프가 기다리는 전이는 **운행 완료 하나**고, 그건 서버 status 에 남아 있다 — 놓치는 게 아니라
+     * **늦게 보는** 것뿐이다. 그래서 복귀하면 주기를 기다리지 않고 **그 자리에서 한 번 읽는다**
+     * (루프 본문이 조회 → 판정 → `delay` 순서라 다시 시작하는 순간 첫 조회가 나간다).
+     * 가려진 동안 FINISHED 가 됐더라도 복귀 즉시 33 으로 넘어간다.
+     *
+     * ### 기본값이 true 인 이유
+     * 배선이 빠진 채 머지되면 최악이 「고쳐지지 않은 상태 유지」여야 한다 — false 면 화면이 영영
+     * 33 으로 넘어가지 않는 기능 손실이 된다(`MatchWaitingViewModel.visible` 과 같은 이유).
+     */
+    private val visible = MutableStateFlow(true)
+
+    init {
+        observeRideFinish()
+    }
+
+    /** 화면이 보이기 시작했다(첫 진입·앱 복귀·위에 올라온 27 신고의 pop) — 폴링을 즉시 재개한다 */
+    fun onScreenStart() {
+        visible.value = true
+    }
+
+    /** 화면이 가려졌다(앱 백그라운드·27 신고가 위에 올라옴) — 폴링을 멈춘다. 들고 있던 상세는 그대로 둔다 */
+    fun onScreenStop() {
+        visible.value = false
+    }
+
+    /**
      * 방 상세([RideRepository.getPartyDetail], `GET /matching/rooms/{id}`)를 주기적으로 읽어
      * 기사측 운행 종료(`POST /dispatch/rides/{id}/complete`)를 따라잡는다.
      * 서버 status IN_RIDE → FINISHED 전이가 [RideStatus.ONGOING] → [RideStatus.COMPLETED] 로 매핑된다.
@@ -79,34 +120,45 @@ class RideOngoingViewModel(
      * 지도용 상세를 "첫 성공 한 번만" 읽던 분기는 **없어졌다** — 폴링이 주는 게 곧 그 상세다.
      * 첫 조회가 실패해도 다음 주기가 자동으로 복구한다(예전에 `shouldLoadRideDetail` 이 하던 일).
      *
-     * 스코프는 25 배차 현황의 pollDriver 처럼 **호출자(Route)** 것을 쓴다 — LaunchedEffect 가
-     * 화면 이탈 시 이 함수를 취소해 폴링이 함께 멈춘다.
+     * 스코프는 **ViewModel** 것이고, 도는지 마는지는 [visible] 이 정한다 — `collectLatest` 가 화면이
+     * 가려지는 순간 진행 중인 조회와 `delay` 를 **함께** 취소하고, 다시 보이면 같은 패스를 처음부터
+     * 시작한다(21 매칭 대기 `observeFallbackPolling` 과 같은 모양). 예전엔 Route 의 `LaunchedEffect`
+     * 스코프였고, 그래서 앱이 백그라운드로 가도 멈추지 않았다([visible] KDoc).
+     *
+     * 복귀하면 **첫 주기를 기다리지 않는다** — 본문이 조회 → 판정 → `delay` 순서라 패스가 다시 시작하는
+     * 순간 조회가 나간다. 가려진 동안 FINISHED 가 됐어도 돌아온 즉시 33 으로 넘어간다.
      *
      * 폴링 실패는 일시적 네트워크 문제일 뿐이라 화면을 에러로 덮지 않고 다음 주기를 기다린다
      * (운행 중 화면은 27 신고 진입점이라 무슨 일이 있어도 가려지면 안 된다 — QA D-3 동류).
      */
-    suspend fun observeRideFinish() {
-        Log.d(TAG, "운행 완료 폴링 시작 partyId=$partyId")
-        try {
-            while (currentCoroutineContext().isActive) {
-                val held = _ride.value
-                // 실패 시 마지막 성공값을 유지한다 — 마커가 깜빡이면 "사라졌다"로 읽힌다.
-                val fetched = runCatching { repository.getPartyDetail(partyId) }
-                    .onFailure { Log.d(TAG, "상세 폴링 실패 — 다음 주기 재시도: ${it.message}") }
-                    .getOrNull()
-                if (fetched != null && shouldPublishDetail(held, fetched)) {
-                    _ride.value = fetched
+    private fun observeRideFinish() {
+        viewModelScope.launch {
+            visible.collectLatest { shown ->
+                // 끝난 뒤에는 가시성이 바뀌어도 되살아나지 않는다 — 가시성은 스위치, 완료는 종결이다.
+                if (!shouldPollRideFinish(visible = shown, finished = _finished.value)) return@collectLatest
+                Log.d(TAG, "운행 완료 폴링 시작 partyId=$partyId")
+                try {
+                    while (currentCoroutineContext().isActive) {
+                        val held = _ride.value
+                        // 실패 시 마지막 성공값을 유지한다 — 마커가 깜빡이면 "사라졌다"로 읽힌다.
+                        val fetched = runCatching { repository.getPartyDetail(partyId) }
+                            .onFailure { Log.d(TAG, "상세 폴링 실패 — 다음 주기 재시도: ${it.message}") }
+                            .getOrNull()
+                        if (fetched != null && shouldPublishDetail(held, fetched)) {
+                            _ride.value = fetched
+                        }
+                        // 판정은 **이번 주기에 받은 값**으로만 한다 — 실패한 주기(null)는 "아직 아니다"다.
+                        if (isRideFinished(fetched)) {
+                            Log.d(TAG, "운행 완료 감지 partyId=$partyId → 33 도착 완료")
+                            _finished.value = true
+                            return@collectLatest
+                        }
+                        delay(RIDE_POLL_INTERVAL_MS)
+                    }
+                } finally {
+                    Log.d(TAG, "운행 완료 폴링 중단 partyId=$partyId")
                 }
-                // 판정은 **이번 주기에 받은 값**으로만 한다 — 실패한 주기(null)는 "아직 아니다"다.
-                if (isRideFinished(fetched)) {
-                    Log.d(TAG, "운행 완료 감지 partyId=$partyId → 33 도착 완료")
-                    _finished.value = true
-                    return
-                }
-                delay(RIDE_POLL_INTERVAL_MS)
             }
-        } finally {
-            Log.d(TAG, "운행 완료 폴링 중단 partyId=$partyId")
         }
     }
 
@@ -125,8 +177,8 @@ class RideOngoingViewModel(
  * 33 으로의 전이는 서버 status 전이가 유일한 신호다([isRideFinished]) — 화면 안에 수동 트리거는 없다.
  *
  * **이 화면은 택시 모드에서만 보인다** — 동승 모드 서버는 `ONGOING` 을 내지 않는다
- * (`docs/MODE-ROUTES.md`). 그래서 [RideOngoingViewModel.observeRideFinish] 의 상세 폴링도
- * 택시 모드에서만 돈다.
+ * (`docs/MODE-ROUTES.md`). 그래서 `RideOngoingViewModel.observeRideFinish` 의 상세 폴링도
+ * 택시 모드에서만 돈다. 그 폴링은 **화면이 보이는 동안만** 돈다([shouldPollRideFinish]).
  */
 @Composable
 fun RideOngoingRoute(
@@ -160,9 +212,18 @@ fun RideOngoingRoute(
     val finished by viewModel.finished.collectAsState()
     val ride by viewModel.ride.collectAsState()
 
-    // 화면이 살아있는 동안만 폴링한다 — 이탈하면 LaunchedEffect 가 취소돼 함께 멈춘다 (25 pollDriver 와 동일)
-    LaunchedEffect(viewModel) {
-        viewModel.observeRideFinish()
+    // 화면이 **보이는 동안만** 폴링한다 — 위에 27 신고가 올라오거나 앱이 백그라운드로 가면 멈추고,
+    // 돌아오면 그 자리에서 첫 주기를 즉시 돈다(21 매칭 대기·17 탐색·24 채팅방과 같은 경계).
+    //
+    // 예전에는 `LaunchedEffect(viewModel)` 였다. 그건 **컴포지션 이탈**에만 취소되고 앱 백그라운드에는
+    // 반응하지 않는데, NavHost 컴포지션은 앱이 뒤로 가도 살아 있어서 홈 버튼을 눌러도 8초마다
+    // 쿼리 3개짜리 방 상세가 계속 나갔다(30분 운행 ≈ 승객 1명당 225회).
+    //
+    // RESUMED 가 아니라 STARTED 를 쓰는 이유는 MatchWaitingRoute 의 같은 배선에 적어 두었다
+    // (NavHost 는 전환 애니메이션이 끝나야 RESUMED 라 복귀가 그만큼 늦는다).
+    LifecycleStartEffect(viewModel) {
+        viewModel.onScreenStart()
+        onStopOrDispose { viewModel.onScreenStop() }
     }
 
     LaunchedEffect(finished) {
@@ -206,5 +267,22 @@ fun RideOngoingRoute(
  * 조회가 실패한 주기(null)는 "아직 안 끝났다"로 본다 — 한 번의 네트워크 오류로 화면을 넘기지 않는다.
  */
 internal fun isRideFinished(ride: Ride?): Boolean = ride?.status == RideStatus.COMPLETED
+
+/**
+ * 완료 폴링을 지금 돌려야 하는가 — **가시성 게이트의 판정**(`RideOngoingViewModel.observeRideFinish`).
+ *
+ * | 판정 | 조건 | 왜 |
+ * |---|---|---|
+ * | 돌지 않는다 | [visible] 이 false | **이 함수의 존재 이유.** 보이지 않는 화면이 8초마다 쿼리 3개짜리 상세를 부를 이유가 없다. 예전 배선(`LaunchedEffect`)은 앱 백그라운드를 잡지 못해 30분 운행에 승객 1명당 약 225회가 나갔다 — **화면에는 아무 증상이 없어** logcat·프록시로만 드러나므로 판정을 여기에 모아 못 박는다(17 탐색 `nearbyPollStep`·21 `fallbackPollStep` 과 같은 자리) |
+ * | 돌지 않는다 | [finished] 가 true | 이미 33 으로 넘겼다. **기존 종료 조건** — 가시성이 다시 켜져도 되살아나면 회귀다(가시성은 스위치, 완료는 종결이다) |
+ * | 돈다 | 그 밖 | 보이고, 아직 끝나지 않았다 |
+ *
+ * 끊어도 안전한 근거는 **기다리는 전이가 서버 status 에 남아 있다**는 것이다 — 놓치는 게 아니라 늦게 보는
+ * 것뿐이고, 복귀하면 루프 본문이 조회부터 시작하므로 그 지연도 없다(`RideOngoingViewModel.visible` KDoc).
+ *
+ * @param visible 화면이 사용자에게 보이는가(`LifecycleStartEffect` 로 받는다)
+ * @param finished 운행 완료를 이미 감지했는가([isRideFinished])
+ */
+internal fun shouldPollRideFinish(visible: Boolean, finished: Boolean): Boolean = visible && !finished
 // 「지도용 상세를 아직 못 받았을 때만 읽는다」(shouldLoadRideDetail)는 없앴다 — 폴링이 주는 게 곧
 // 그 상세여서 읽을지 고를 대상이 없다. 첫 조회 실패도 다음 주기가 그냥 복구한다.

@@ -64,7 +64,8 @@ private val CardShadow = Color(0x0F1B2A4A)
  * 구성: 프로필 카드 → 「설정」 카드 → 「안내」 카드 → 「계정」 카드 → 버전 → (디버그) 개발자 옵션
  *
  * ```
- * 프로필 카드 (이름 / 닉네임 바꾸기)         ›
+ * 프로필 카드 (사진 · 이름 / 닉네임·사진 바꾸기)  ›
+ * [탑승]  지난 탑승 기록                       ›   ← 2026-11-01 추가
  * [설정]  알림 설정                          ↗
  * [안내]  개인정보 처리방침 / 이용약관 / 문의하기   ↗   ← 한 카드, 구분선
  * [계정]  로그아웃 / 탈퇴하기(빨강)            ›   ← 한 카드, 구분선
@@ -76,6 +77,7 @@ private val CardShadow = Color(0x0F1B2A4A)
  * 이동(디스크립션):
  * - 하단탭 홈 / 합승 / 채팅 → 14 / 17 / 24 (onTabSelect)
  * - 프로필 카드 → 36 프로필 수정 (onEditProfile)
+ * - 「지난 탑승 기록」 → 34 지난 탑승 기록 (onRideHistory)
  * - 「알림 설정」 → OS 앱 알림 설정 (앱 밖)
  * - 「개인정보 처리방침」 · 「이용약관」 → 브라우저 (앱 밖)
  * - 「문의하기」 → 메일 앱, 제목·환경 정보 자동 입력 (앱 밖)
@@ -94,23 +96,30 @@ private val CardShadow = Color(0x0F1B2A4A)
  *    같이 들어가면 행 안에 뜻이 다른 두 정보가 섞인다.
  *
  * 상태(디스크립션):
- * - **없는 기능은 행을 만들지 않는다.** 탑승 기록 · 고객센터는 서버 API 가 없어 빠져 있고
+ * - **없는 기능은 행을 만들지 않는다.** 고객센터는 서버 API 가 없어 빠져 있고
  *   (`docs/BACKEND-GAP-CLEANUP.md`), 매너 점수 · 마일리지 · 결제 수단도 같은 이유로 없다.
- *   레퍼런스에 있는 「로그인 수단 안내」도 두지 않았다 — 지금 이 화면이 아는 서버 값은 이름뿐이고,
- *   로그인 수단은 추측해서 적을 값이 아니다.
+ *   **「지난 탑승 기록」만 2026-11-01 에 들어왔다** — 서버에 `GET /api/v1/users/me/parties` 가
+ *   생겨 「없다」가 더 이상 사실이 아니게 됐다(`docs/BACKEND-GAP-CLEANUP.md` §6).
+ *   레퍼런스에 있는 「로그인 수단 안내」도 두지 않았다 — 지금 이 화면이 아는 서버 값은 이름과
+ *   프로필 사진뿐이고, 로그인 수단은 추측해서 적을 값이 아니다.
  * - 「안내」 행은 [links] 의 주소가 null 이면 그리지 않고, 셋 다 null 이면 **카드와 머리말까지**
  *   사라진다(`myPageGroups` 가 판정하고 `MyPageMenuRulesTest` 가 고정한다).
  * - 앱 안에 알림 토글을 두지 않는 이유는 [openAppNotificationSettings] 의 설명과 같다
  *   (서버에 알림 설정 저장 API 가 없어 앱만의 토글은 지키지 못할 약속이 된다).
- * - 이름만 서버 값이다(GET /local/users/info — 닉네임, 없으면 실명). 조회 전에는 자리만 비워 둔다.
+ * - 이름과 프로필 사진이 서버 값이다(GET /local/users/info — 이름은 닉네임, 없으면 실명).
+ *   둘 다 한 번의 조회에서 함께 오고, **조회 전에는 둘 다 자리만 비워 둔다**(스켈레톤·빈 원).
+ *   사진을 고른 적 없는 사용자에게도 서버는 기본 이미지 주소를 주므로, 로딩 중에 그리면
+ *   기본 이미지가 한 번 스쳐 보인다. 사진은 36 에서 서버가 주는 16장 중에 고른다.
  * - 하단 버전 표기는 설치된 패키지의 versionName 이다(읽기 실패 시 숨김).
  * - 개발자 옵션(동승/택시 모드 강제)은 [modeDebug] 가 있을 때만, 즉 디버그 빌드에서만 그린다.
  */
 @Composable
 fun MyPageScreen(
-    // 로그인 사용자의 표시 이름(닉네임). 조회 전에는 Loading(자리만 비움), 서버에 이름이 없으면 Resolved(null).
+    // 로그인 사용자의 표시 이름(닉네임)과 프로필 사진 주소. 조회 전에는 Loading(이름·사진 자리를 비움),
+    // 서버에 이름이 없으면 Resolved(null). 사진을 따로 받지 않는 이유는 아바타 호출부 주석에 적어 뒀다.
     userName: UserNameState = UserNameState.Loading,
     onEditProfile: () -> Unit = {},          // → 36 프로필 수정
+    onRideHistory: () -> Unit = {},          // → 34 지난 탑승 기록
     onLogout: () -> Unit = {},               // → 04a 로그인 (세션 정리 후)
     onDeleteAccount: () -> Unit = {},        // → 37 회원 탈퇴
     onTabSelect: (MoyeotaTab) -> Unit = {},  // → 14 / 17 / 24
@@ -131,6 +140,7 @@ fun MyPageScreen(
             MyPageAction.NotificationSettings -> context.openAppNotificationSettings()
             is MyPageAction.OpenWeb -> context.openWebPage(action.url)
             is MyPageAction.SendMail -> context.openSupportEmail(action.address)
+            MyPageAction.RideHistory -> onRideHistory()
             MyPageAction.Logout -> logoutConfirming = true
             MyPageAction.DeleteAccount -> onDeleteAccount()
         }
@@ -171,7 +181,21 @@ fun MyPageScreen(
             ) {
                 // 아바타의 인증 체크 배지는 두지 않는다 — 서버가 학교·재직 인증 여부를 주지 않는
                 // 지금은 체크 표시 자체가 거짓 신호다.
-                AvatarCircle(size = 56.dp)
+                //
+                // 사진 주소를 따로 받지 않고 [userName] 에서 꺼낸다 — 이름과 사진은 같은 한 번의
+                // 조회(GET /local/users/info)에서 함께 오는 값이라, 파라미터를 하나 더 두면
+                // "이름은 왔는데 사진은 아직"이라는 있을 수 없는 조합이 타입으로 표현돼 버린다.
+                //
+                // Loading 이면 `as?` 가 null 을 주고, 그래서 **로딩 중에는 요청조차 만들지 않는다.**
+                // 바로 아래 이름이 스켈레톤인 것과 같은 이유다 — 서버는 고른 적 없는 사용자에게도
+                // 기본 이미지 주소를 주므로, 로딩 중에 그리면 기본 이미지가 한 번 스쳐 보인다.
+                //
+                // label 은 비워 둔다. 이니셜을 깔면 사진 로드에 실패했을 때 옆 18sp 이름과 같은 글자가
+                // 두 번 보인다 — 여기는 이름이 바로 옆에 있는 자리라 이니셜이 주는 정보가 없다.
+                AvatarCircle(
+                    size = 56.dp,
+                    imageUrl = (userName as? UserNameState.Resolved)?.imageUrl,
+                )
                 Spacer(Modifier.size(14.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     when (userName) {
@@ -190,9 +214,16 @@ fun MyPageScreen(
                     }
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        // 36 에서 바꿀 수 있는 게 닉네임 하나뿐이라 그렇게 적는다 — 「프로필 수정」 이라
-                        // 적어 두면 사진·전화번호까지 바꿀 수 있다는 기대로 들어오게 된다.
-                        text = "닉네임 바꾸기",
+                        // 36 에서 바꿀 수 있는 것을 **빠짐없이 적는다.** 사진을 고를 수 있게 되면서
+                        // 「닉네임 바꾸기」는 거짓이 됐지만, 그렇다고 「프로필 수정」으로 넓히지는 않았다
+                        // — 실명·생년월일·성별·휴대폰·이메일은 서버에 수정 경로가 아예 없어서
+                        // 「프로필 수정」을 보고 전화번호를 바꾸려 들어온 사람은 헛걸음을 한다.
+                        // 바꿀 수 있는 둘을 그대로 적는 쪽이 들어가기 전에 알려 준다.
+                        // (36 의 상단바 제목은 「프로필 수정」이다 — 그쪽은 들어온 뒤에 보는 글이라
+                        //  무엇을 바꿀 수 있는지는 화면 안의 입력칸이 이미 말하고 있다.)
+                        // 세 번째 값이 수정 가능해지면 이 라벨은 더 못 늘어난다. 그때가 「프로필 수정」
+                        // 으로 넓힐 자리다.
+                        text = "닉네임·사진 바꾸기",
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Medium,
                         color = GrayMute,
@@ -468,4 +499,19 @@ private fun MyPageScreenDebugPreview() {
 @Composable
 private fun MyPageScreenNoNamePreview() {
     MyPageScreen(userName = UserNameState.Resolved(null))
+}
+
+// 36 에서 사진을 고른 사용자. **프리뷰에서는 회색 원이 보이는 게 정상이다** — 프리뷰 샌드박스에는
+// 네트워크가 없어 요청이 실패하고, AvatarCircle 이 그걸 빈 원으로 떨어뜨린다. 그래서 이 프리뷰가
+// 고정하는 건 사진 자체가 아니라 **사진이 실린 상태에서도 카드 레이아웃이 그대로인가**다
+// (56dp 원 + 14dp 간격 + 두 줄 글자 + 꺾쇠가 104dp 카드 안에 들어가는가). 사진은 실기에서 본다.
+@Preview(showBackground = true, widthDp = 393, heightDp = 852, name = "프로필 사진 있음")
+@Composable
+private fun MyPageScreenWithPhotoPreview() {
+    MyPageScreen(
+        userName = UserNameState.Resolved(
+            name = "성윤",
+            imageUrl = "https://cdn.moyeota.co.kr/profile/presets/03.png",
+        ),
+    )
 }

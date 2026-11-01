@@ -9,6 +9,7 @@ import com.moyeota.data.remote.authCall
 import com.moyeota.data.remote.dto.AccountDeletionRequest
 import com.moyeota.data.remote.dto.LoginRequestDto
 import com.moyeota.data.remote.dto.NicknameCheckRequestDto
+import com.moyeota.data.remote.dto.PhoneCheckRequestDto
 import com.moyeota.data.remote.dto.RefreshTokenRequestDto
 import com.moyeota.data.remote.dto.SmsSendRequestDto
 import com.moyeota.data.remote.dto.SmsVerifyRequestDto
@@ -22,10 +23,13 @@ import com.moyeota.domain.model.AuthException
 import com.moyeota.domain.model.AuthPolicy
 import com.moyeota.domain.model.AuthState
 import com.moyeota.domain.model.NewUser
+import com.moyeota.domain.model.ProfileImage
 import com.moyeota.domain.model.UserProfileInfo
 import com.moyeota.domain.repository.AuthRepository
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
@@ -125,28 +129,52 @@ class RemoteAuthRepository(
         return userUuid
     }
 
+    /**
+     * ### 왜 [NonCancellable] 인가 — 「로그아웃했는데 안 됐다」를 막는다
+     * 호출부는 `MainNavGraph` 의 `rememberCoroutineScope()` 라, 화면이 재구성되거나 액티비티가
+     * 다시 만들어지면(화면 회전·시스템 종료) 이 코루틴이 **중간에 취소된다.** 그런데 아래 FCM 해제는
+     * 최대 [FCM_UNREGISTER_TIMEOUT_MS] 동안 매달려 있고 [FcmTokenRegistrar.unregister] 는
+     * [CancellationException] 만은 되던지므로, 그 취소가 [SessionManager.onLoggedOut] 까지
+     * 도달하지 못하고 **세션이 그대로 남는다** — 사용자는 로그아웃된 줄 아는데 토큰은 살아 있다.
+     * 공용 기기에서는 안전 문제다. 그래서 「해제 → 세션 비우기 → 서버 무효화」 한 묶음을
+     * 취소되지 않는 구간으로 만든다. 길이는 FCM 2초 + 로그아웃 왕복으로 상한이 잡혀 있다.
+     *
+     * ### 순서는 그대로다 — FCM 해제가 세션 비우기보다 **앞**이다
+     * "세션을 먼저 비우면 취소 문제가 사라지지 않나"는 함정이다. 서버는 `@CurrentUser` 로 대상을
+     * 찾으므로 세션을 먼저 비우면 Bearer 가 사라져 해제가 **항상** 401 이 된다 — 즉 "가끔 남을 수도
+     * 있다"가 아니라 "매번 남는다"가 된다. 서버는 `users.fcm_token` 한 칸에 사용자별로 토큰을
+     * 들고 있고(`UserFcmTokenService`), 발송 실패 시 스스로 지우지도 않는다
+     * (`FcmPassengerNotifier` 는 실패를 로그만 남긴다). 그 칸이 남아 있으면 **로그아웃한 계정의
+     * 알림이 이 기기로 계속 오고**, 같은 기기에 다른 계정이 로그인하면 그 사람이 앞 사용자의 알림을
+     * 보게 된다. 취소 문제는 [NonCancellable] 로 이미 막혔으니 순서를 희생할 이유가 없다.
+     *
+     * ### 상한을 거는 이유
+     * 해제는 로그아웃 경로에 네트워크 호출을 하나 끼워 넣는 일이라, 서버가 죽어 있으면 OkHttp 기본
+     * 타임아웃(연결+읽기 최대 20초)만큼 사용자가 버튼을 누른 채 기다리게 된다. "로그아웃은 절대
+     * 막히지 않는다"는 계약을 지키려고 짧은 상한을 건다 — 초과하면 그냥 포기하고,
+     * 남은 서버 토큰은 같은 계정이 다음에 로그인할 때 덮어써진다.
+     */
     override suspend fun logout() {
-        // 세션을 비우기 **전에** 해제한다 — 순서가 뒤집히면 Bearer 가 사라져 401 이 나고,
-        // 서버에는 죽은 토큰이 남아 다음 사용자에게 갈 알림이 이 기기로 온다.
-        //
-        // 다만 이건 로그아웃 경로에 네트워크 호출을 하나 끼워 넣는 일이라, 서버가 죽어 있으면
-        // OkHttp 기본 타임아웃(연결+읽기 최대 20초)만큼 사용자가 버튼을 누른 채 기다리게 된다.
-        // "로그아웃은 절대 막히지 않는다"는 계약을 지키려고 짧은 상한을 건다 — 초과하면 그냥 포기한다
-        // (서버 토큰은 다음 로그인 때 덮어써지거나, 발송 실패로 FCM 이 스스로 정리한다).
-        if (session.isLoggedIn) {
-            withTimeoutOrNull(FCM_UNREGISTER_TIMEOUT_MS) { fcmTokenRegistrar.unregister() }
-        }
+        withContext(NonCancellable) {
+            if (session.isLoggedIn) {
+                // runCatching 으로 한 번 더 감싼다 — unregister 가 취소를 되던지므로, 감싸지 않으면
+                // 그 예외가 아래 세션 비우기를 건너뛰게 만든다(이 메서드가 고치려는 결함 그 자체다).
+                runCatching {
+                    withTimeoutOrNull(FCM_UNREGISTER_TIMEOUT_MS) { fcmTokenRegistrar.unregister() }
+                }
+            }
 
-        // 로컬을 먼저 비운다 — 서버 호출이 실패해도 사용자가 로그아웃하지 못하고 갇히면 안 된다.
-        val refreshToken = session.onLoggedOut() ?: return
+            // 서버 무효화보다 먼저 비운다 — 서버 호출이 실패해도 사용자가 로그아웃하지 못하고 갇히면 안 된다.
+            val refreshToken = session.onLoggedOut() ?: return@withContext
 
-        // 서버 무효화는 최선 노력. 실패(오프라인 등)해도 예외를 올리지 않는다.
-        try {
-            api.logout(RefreshTokenRequestDto(refreshToken))
-        } catch (e: CancellationException) {
-            throw e
-        } catch (_: Throwable) {
-            // 리프레시는 이미 로컬에서 지워졌고, 서버 쪽 토큰은 만료로 자연 소멸한다.
+            // 서버 무효화는 최선 노력. 실패(오프라인 등)해도 예외를 올리지 않는다.
+            try {
+                api.logout(RefreshTokenRequestDto(refreshToken))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                // 리프레시는 이미 로컬에서 지워졌고, 서버 쪽 토큰은 만료로 자연 소멸한다.
+            }
         }
     }
 
@@ -178,16 +206,24 @@ class RemoteAuthRepository(
     override suspend fun deleteAccount(password: String) {
         authCall { userApi.deleteAccount(AccountDeletionRequest(password)) }
 
-        // 여기부터는 실패해도 되돌리지 않는다 — 서버 계정은 이미 사라졌다.
-        try {
-            activePartyStorage.clear()
-        } catch (e: CancellationException) {
-            throw e
-        } catch (_: Throwable) {
-            // 디스크 실패로 "탈퇴가 안 된 것처럼" 보이게 하지 않는다. 남은 기억은 다음 로그인 때
-            // 계정 가드(ownerUuid 비교)가 걸러 낸다 — 최악은 쓰이지 않는 방 id 하나가 남는 것이다.
+        // 204 를 받은 뒤부터는 **취소되어서는 안 된다.** 서버 계정은 이미 사라졌는데 여기서 호출부
+        // 스코프가 끊기면(화면 회전 등으로 액티비티 재생성) 앱만 로그인 상태로 남는다. 그러면 다음
+        // 요청마다 401 을 맞고 재발급도 거절돼 「세션이 만료됐어요」가 뜬다 — **스스로 탈퇴한
+        // 사용자에게는 거짓말이고**, 탈퇴가 실패한 것처럼 보여 다시 시도하게 만든다.
+        // [logout] 과 같은 장치다.
+        withContext(NonCancellable) {
+            // 여기부터는 실패해도 되돌리지 않는다 — 서버 계정은 이미 사라졌다.
+            //
+            // CancellationException 을 되던지지 않는다: NonCancellable 안이라 지킬 구조적 동시성
+            // 불변식이 없고, 되던지면 바로 아래 세션 비우기를 건너뛰어 이 블록의 목적을 깬다.
+            try {
+                activePartyStorage.clear()
+            } catch (_: Throwable) {
+                // 디스크 실패로 "탈퇴가 안 된 것처럼" 보이게 하지 않는다. 남은 기억은 다음 로그인 때
+                // 계정 가드(ownerUuid 비교)가 걸러 낸다 — 최악은 쓰이지 않는 방 id 하나가 남는 것이다.
+            }
+            session.onLoggedOut()
         }
-        session.onLoggedOut()
     }
 
     /**
@@ -200,9 +236,35 @@ class RemoteAuthRepository(
     override suspend fun isNicknameTaken(nickname: String): Boolean =
         authCall { api.checkNickname(NicknameCheckRequestDto(nickname.trim())) }.exists
 
+    /**
+     * 가입 여부 확인도 **가입 전**, 즉 토큰이 없는 상태에서 불린다 — [isNicknameTaken] 과 같은 이유로
+     * Bearer 가 붙지 않는 [api] 쪽이다([com.moyeota.data.remote.AuthApi.checkPhone] KDoc 참조).
+     * 인증 클라이언트로 보내면 멀쩡한 번호가 401 로 떨어진다(실측: 깨진 Bearer → 401 `USER001`).
+     *
+     * 하이픈은 서버가 지우므로 그대로 보내도 되지만, 발송·확인·가입 세 경로가 보내는 번호와
+     * 어긋나지 않게 [AuthPolicy.normalizePhoneNumber] 로 같은 형태로 맞춘다 — 어긋나면
+     * 「발송은 되는데 선확인만 400」 같은, 번호 표기부터 의심해야 하는 결함이 된다.
+     */
+    override suspend fun isPhoneRegistered(phoneNumber: String): Boolean =
+        authCall { api.checkPhone(PhoneCheckRequestDto(AuthPolicy.normalizePhoneNumber(phoneNumber))) }.exists
+
     /** 204 라 돌려받을 값이 없다. 실패는 전부 [AuthException] 으로 좁혀 올린다. */
     override suspend fun updateProfile(nickname: String?, imageKey: String?) {
         authCall { userApi.updateProfile(UpdateProfileRequest(nickname?.trim(), imageKey)) }
+    }
+
+    /**
+     * 서버 순서가 곧 표시 순서라 **정렬하지 않는다** — 섞으면 서버가 정한 추천 순서가 사라진다.
+     *
+     * 빈 목록도 정상 응답으로 통과시킨다(설정이 비었을 때). 화면이 "고를 게 없다"로 그리면 되고,
+     * 여기서 예외로 바꾸면 멀쩡한 닉네임 수정까지 막힌다.
+     */
+    override suspend fun getProfileImages(): List<ProfileImage> =
+        authCall { userApi.getProfileImages() }.map { it.toDomain() }
+
+    /** 204 · 멱등이라 돌려받을 값도, 현재 상태를 미리 확인할 필요도 없다. */
+    override suspend fun resetProfileImage() {
+        authCall { userApi.resetProfileImage() }
     }
 
     /**

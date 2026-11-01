@@ -1,6 +1,7 @@
 package com.moyeota.app
 
 import android.content.Context
+import android.util.Log
 import com.moyeota.data.local.DataStoreActivePartyStorage
 import com.moyeota.data.push.FcmTokenRegistrar
 import com.moyeota.data.remote.NetworkModule
@@ -12,6 +13,7 @@ import com.moyeota.data.remote.chat.ChatSocket
 import com.moyeota.data.repository.RemoteChatRepository
 import com.moyeota.data.repository.RemoteDispatchRepository
 import com.moyeota.data.repository.RemotePlaceRepository
+import com.moyeota.data.repository.RemoteRideRecordRepository
 import com.moyeota.data.repository.RemoteRideRepository
 import com.moyeota.data.session.DataStoreTokenStorage
 import com.moyeota.data.session.SessionManager
@@ -21,19 +23,37 @@ import com.moyeota.domain.repository.AuthRepository
 import com.moyeota.domain.repository.ChatRepository
 import com.moyeota.domain.repository.DispatchRepository
 import com.moyeota.domain.repository.PlaceRepository
+import com.moyeota.domain.repository.RideRecordRepository
 import com.moyeota.domain.repository.RideRepository
 import com.moyeota.domain.session.UserSession
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import okhttp3.OkHttpClient
 
 // 수동 DI 컨테이너. 백엔드 연동 시 Hilt 로 교체 예정.
 // debugLogging: HTTP 본문 로깅 여부. 디버그 빌드에서만 켠다(호출자가 판단해 주입).
 class AppContainer(context: Context, debugLogging: Boolean) {
 
-    // 화면 생명주기와 무관하게 살아야 하는 작업(세션 디스크 복원·토큰 저장) 전용 스코프.
-    // SupervisorJob: 저장 실패 하나가 이후 저장까지 막지 않게 한다.
-    private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    /**
+     * 화면 생명주기와 무관하게 살아야 하는 작업(세션 디스크 복원·토큰 저장) 전용 스코프.
+     *
+     * `SupervisorJob`: 저장 실패 하나가 이후 저장까지 막지 않게 한다. **다만 SupervisorJob 은
+     * 형제 코루틴의 취소만 막고 예외를 삼키지 않는다** — `launch` 의 미처리 예외는 그대로
+     * [CoroutineExceptionHandler] → (없으면) `Thread.uncaughtExceptionHandler` → 안드로이드 기본
+     * 핸들러(프로세스 종료)로 간다. 그래서 핸들러를 **마지막 방어선**으로 직접 붙인다:
+     * 세션 복원·저장 경로는 각자 자기 예외를 잡지만([com.moyeota.data.session.SessionManager]),
+     * 앞으로 이 스코프에 올라올 작업이 빠뜨렸을 때 앱이 죽는 대신 로그만 남게 한다.
+     *
+     * 로그에는 **예외 종류와 메시지만** 남긴다 — 이 스코프를 타는 값에 토큰·전화번호가 섞여 있어
+     * 스택트레이스나 값을 찍으면 그대로 logcat 에 새어 나간다.
+     */
+    private val applicationScope = CoroutineScope(
+        SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, throwable ->
+            Log.e(TAG, "애플리케이션 스코프의 처리되지 않은 예외: ${throwable.javaClass.simpleName}: ${throwable.message}")
+        },
+    )
 
     // 세션 단일 출처. 생성 즉시 디스크 복원을 시작하므로 앱 재시작 후에도 로그인이 유지된다.
     private val sessionManager = SessionManager(
@@ -48,6 +68,16 @@ class AppContainer(context: Context, debugLogging: Boolean) {
 
     // 화면이 로그인 상태와 내 UUID 를 얻는 단일 출처(내부 사용자 PK 는 앱에 없다).
     val userSession: UserSession = sessionManager
+
+    /**
+     * 프로필 사진 로더가 쓰는 OkHttp. **인증 인터셉터가 붙지 않은** 클라이언트다
+     * (근거는 [NetworkModule.Apis.imageClient] KDoc — 이미지는 모여타 API 가 아니라 CDN 에서 온다).
+     *
+     * [MoyeotaApplication.newImageLoader] 가 이걸 Coil 에 넘긴다. 넘기지 않으면 Coil 이 자기
+     * 기본 OkHttpClient 를 따로 만들어 쓰는데, **동작은 하기 때문에** 커넥션 풀이 하나 더 생기고
+     * 여기서 정한 타임아웃이 적용되지 않는 걸 눈치채기 어렵다.
+     */
+    val imageClient: OkHttpClient = apis.imageClient
 
     // 긴급 신고에 싣는 실측 좌표 — 권한 없음/타임아웃이면 null 을 돌려주고 신고는 계속된다.
     private val reportLocationProvider = ReportLocationProvider(context.applicationContext)
@@ -83,6 +113,17 @@ class AppContainer(context: Context, debugLogging: Boolean) {
         partyEvents = PartyEventSource(BuildConfig.BASE_URL, apis.streamClient),
     )
     val placeRepository: PlaceRepository = RemotePlaceRepository(apis.place)
+
+    /**
+     * 34 지난 탑승 기록(`GET /api/v1/users/me/parties`). **끝난 탑승만 다룬다** —
+     * 「지금 타고 있는 방」은 [activePartyRepository] 쪽이고, 둘을 섞지 않는다.
+     * 이 응답에는 진행 중인 방이 들어오지 않아(실측 2026-11-01, 로컬 `:8080`) 서로를 대체할 수 없다.
+     *
+     * 세션을 넘기는 건 조회가 아니라 **번역** 때문이다 — 멤버마다 `isMe` 가 오지 않아 매퍼가
+     * `publicId == currentUserUuid` 로 「나」를 판정한다(RemoteRideRecordRepository KDoc).
+     */
+    val rideRecordRepository: RideRecordRepository =
+        RemoteRideRecordRepository(apis.user, sessionManager)
     // 세션을 넘기는 건 메시지의 "내 것" 판정 때문이다(RemoteChatRepository KDoc).
     // 채팅은 실시간(STOMP) + 폴링을 함께 쓴다 — 소켓이 앞서고, 끊긴 구간은 폴링이 메운다.
     val chatRepository: ChatRepository = RemoteChatRepository(
@@ -103,4 +144,8 @@ class AppContainer(context: Context, debugLogging: Boolean) {
         storage = activePartyStorage,
         session = sessionManager,
     )
+
+    private companion object {
+        const val TAG = "AppContainer"
+    }
 }

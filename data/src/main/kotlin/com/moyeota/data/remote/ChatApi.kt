@@ -3,6 +3,7 @@ package com.moyeota.data.remote
 import com.moyeota.data.remote.dto.ChatMemberResponse
 import com.moyeota.data.remote.dto.ChatMessageResponse
 import com.moyeota.data.remote.dto.ChatMessageSliceResponse
+import com.moyeota.data.remote.dto.ChatReportRequestDto
 import com.moyeota.data.remote.dto.ChatRoomResponse
 import com.moyeota.data.remote.dto.ChatRoomUserResponse
 import com.moyeota.data.remote.dto.SendMessageRequestDto
@@ -15,6 +16,7 @@ import retrofit2.http.Query
 
 /**
  * 경로 기준: chat/presentation/{ChatRoom,ChatRoomUser,ChatMessage}Controller.java
+ * + chat/report/presentation/ChatReportController.java
  *
  * **주체는 Bearer 토큰 하나가 정한다.** 채팅 컨트롤러가 `@RequestHeader("X-User-Id") Long userId` 에서
  * `@CurrentUser Long userId` 로 전환되면서(백엔드 PR #72) 앱이 사용자 id 를 실어 보낼 자리는 사라졌다.
@@ -107,4 +109,27 @@ interface ChatApi {
         @Query("cursor") cursor: Long?,
         @Query("size") size: Int,
     ): ChatMessageSliceResponse
+
+    // --- ChatReportController ---
+    /**
+     * 메시지 신고. **201 Created, 본문 없음** — reportId 를 주지 않는다(기존 긴급 신고
+     * `POST /api/v1/reports` 는 `{reportId}` 를 준다. 둘은 다른 엔드포인트다).
+     *
+     * 참여자만 부를 수 있다. 아니면 403 `CHAT_NOT_PARTICIPANT` 인데, **없는 방도 같은 403** 이다
+     * (404 가 아니다 — 실측). 반면 없는 메시지 id 는 404 `CHAT_MESSAGE_NOT_FOUND` 다.
+     *
+     * **방이 끝난 뒤에도 받는다** — 파티 상태를 보지 않고 채팅방 참여 여부만 본다
+     * (CANCELED 파티의 방에서도 201. 위치 공유 쪽과 권한 기준이 다른 지점이다).
+     *
+     * 같은 메시지를 두 번 신고하면 409 `CHAT_ALREADY_REPORTED` 이고, **사유를 바꿔도 409** 다 —
+     * 중복 판정이 「신고자 + 메시지」라 사유별로 따로 쌓이지 않는다(실측). 내 메시지면
+     * 400 `CHAT_CANNOT_REPORT_SELF` 라 화면이 애초에 길을 만들지 않는다.
+     *
+     * 실측(2026-11-01, 로컬 :8080).
+     */
+    @POST("api/v1/chat-rooms/{chatRoomId}/reports")
+    suspend fun reportMessage(
+        @Path("chatRoomId") chatRoomId: Long,
+        @Body request: ChatReportRequestDto,
+    )
 }
