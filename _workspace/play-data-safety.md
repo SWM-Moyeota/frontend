@@ -1,6 +1,6 @@
 # Google Play 「데이터 보안(Data safety)」 양식 답안
 
-> 조사일 2026-10-14 · 대상 `com.moyeota` (versionName `app/build.gradle.kts:80` · applicationId `:76` 기준)
+> 조사일 2026-10-14 · **2026-11-01 갱신**(Crashlytics 도입·채팅 신고 추가) · 대상 `com.moyeota` (versionName `app/build.gradle.kts:80` · applicationId `:76` 기준)
 > 근거: 앱 소스(`frontend`) · 백엔드(`backend`) · 배포된 법적 고지(`_workspace/legal-site/`)
 > **이 문서는 조사·작성만 했다. 코드와 법적 고지는 한 줄도 고치지 않았다.**
 
@@ -20,7 +20,10 @@
    `app/google-services.json` 에도 analytics 블록이 없다. `MoyeotaApplication.onCreate`
    (`app/src/main/kotlin/com/moyeota/app/MoyeotaApplication.kt:25-30`)가 초기화하는 것은
    `AppContainer` · 알림 채널 · FCM 토큰 조회뿐이다.
-   → **「앱 정보 및 성능」 세 항목(비정상 종료 로그 · 진단 · 기타 앱 성능 데이터)은 전부 「수집 안 함」.**
+   → ~~**「앱 정보 및 성능」 세 항목(비정상 종료 로그 · 진단 · 기타 앱 성능 데이터)은 전부 「수집 안 함」.**~~
+   > **2026-11-01 무효.** Firebase Crashlytics 를 도입했다(`gradle/libs.versions.toml` ·
+   > `app/build.gradle.kts` · `MoyeotaApplication.configureCrashReporting`). 아래 표 1 의
+   > 「앱 정보 및 성능」 행을 다시 보라. 행태 분석(`firebase-analytics`)은 **여전히 없다.**
 
 2. **성별은 「선택」이 아니라 「필수」다.** 작업 지시서에는 "통계 목적의 선택 항목"이라고 적혀 있지만
    코드는 그렇지 않다 — `SignupDraft.toNewUser()` 가 `val genderValue = gender ?: return null`
@@ -127,7 +130,31 @@
 | 파일 및 문서 | 저장소 권한 없음 |
 | 캘린더 | 권한 없음 |
 | 연락처 | `READ_CONTACTS` 없음 |
-| **앱 정보 및 성능 — 비정상 종료 로그 / 진단 / 기타 앱 성능 데이터** | **크래시·성능 SDK 가 하나도 없다** — 위 「결론 1」의 전수 확인 결과. `firebase-crashlytics`·`firebase-perf` 미도입, `app/google-services.json` 에 analytics 설정 없음 |
+| ~~**앱 정보 및 성능**~~ | **2026-11-01 변경 — 아래 「§4-1 앱 정보 및 성능」 참조.** `firebase-perf` 는 여전히 미도입 |
+
+### §4-1 앱 정보 및 성능 (2026-11-01 추가)
+
+Firebase Crashlytics 도입으로 이 범주는 **「수집 안 함」이 아니게 됐다.** 콘솔에 넣을 답:
+
+| 범주(콘솔 표기) | 실제 항목 | 수집 | 공유 | 필수·선택 | 목적 | 근거 |
+|---|---|---|---|---|---|---|
+| **앱 정보 및 성능 — 비정상 종료 로그** | 예외 클래스 이름, 소스의 파일·함수·줄 번호, 앱 버전·Android 버전·기기 모델·발생 시각 | **예** | **예**(Google) | **필수** | 앱 기능(고장 수정) | `app/src/main/kotlin/com/moyeota/app/CrashlyticsErrorReporter.kt` · `app/src/main/kotlin/com/moyeota/app/MoyeotaApplication.kt` (`configureCrashReporting`) |
+| **앱 정보 및 성능 — 진단** | 앱 세션(실행 사실과 시각). `firebase-crashlytics:20.1.0` 이 끌고 오는 **`firebase-sessions:3.0.7`** 이 보낸다 | **예** | **예**(Google) | **필수** | 앱 기능(오류 묶음 판정) | 2026-11-01 실측: `./gradlew :app:dependencies --configuration releaseRuntimeClasspath \| grep firebase` 출력에 `com.google.firebase:firebase-sessions:3.0.7` |
+| **앱 정보 및 성능 — 기타 앱 성능 데이터** | 없음 | 아니오 | — | — | — | `firebase-perf` 미도입(의존 목록에 없음) |
+| **기기 또는 다른 ID** | Firebase 설치 ID | **예** | **예**(Google) | **필수** | 앱 기능(알림 전달·오류 묶음) | `firebase-installations` — FCM 때부터 있었다 |
+
+**보내지 않는 것(코드로 보장).** 계정 식별자(`setUserId` 미호출), 예외 **메시지**
+(`CrashlyticsErrorReporter.sanitize` 가 원본을 넘기지 않고 종류·지점만 담은 예외를 새로 만든다 —
+kotlinx.serialization 파싱 실패 메시지가 응답 본문 조각을 담기 때문), 커스텀 키(미사용),
+위치·채팅 본문.
+
+**디버그 빌드에서는 수집이 꺼진다**(`setCrashlyticsCollectionEnabled(!isDebuggableBuild())`).
+
+### §4-2 채팅 신고 (2026-11-01 추가)
+
+| 범주(콘솔 표기) | 실제 항목 | 수집 | 공유 | 필수·선택 | 목적 | 근거 |
+|---|---|---|---|---|---|---|
+| **메시지 — 기타 인앱 메시지** | 신고 사유(고른 값)와 **직접 적은 설명(최대 500자)**, 신고 대상 메시지 | **예** | 아니오 | 선택 | 사기 방지·보안 및 규정 준수 | `data/src/main/kotlin/com/moyeota/data/remote/dto/ChatReportDtos.kt` |
 
 ### 보안 관행 (Security practices) — 양식 뒷부분
 

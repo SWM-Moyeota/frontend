@@ -1,6 +1,8 @@
 package com.moyeota.data.remote.auth
 
 import com.moyeota.data.session.TokenHolder
+import com.moyeota.domain.diagnostics.Diagnostics
+import com.moyeota.domain.diagnostics.FailureSite
 import okhttp3.Authenticator
 import okhttp3.Request
 import okhttp3.Response
@@ -56,6 +58,14 @@ class TokenAuthenticator(
 
                             // 서버가 "이 리프레시는 못 쓴다"고 답했다 — 재로그인 외에 길이 없다.
                             RefreshResult.Rejected -> {
+                                // 사용자를 로그인 화면으로 쫓아내는 **유일한** 경로다. 정상 만료(14일)로도
+                                // 오지만, 회전 버그나 서버 계약 변경으로 터질 때도 여기로 온다 — 둘을 앱에서
+                                // 가를 수 없으므로 건수 추이로 본다. 평소보다 치솟으면 그게 신호다.
+                                // 토큰 값은 넘기지 않는다(예외를 새로 만들어 종류만 남긴다).
+                                Diagnostics.report(
+                                    site = FailureSite.TOKEN_REFRESH_REJECTED,
+                                    throwable = IllegalStateException("refresh rejected by server"),
+                                )
                                 tokens.onSessionExpired()
                                 null
                             }
