@@ -3,8 +3,10 @@ package com.moyeota.data.push
 import com.moyeota.data.remote.UserApi
 import com.moyeota.data.remote.dto.AccountDeletionRequest
 import com.moyeota.data.remote.dto.FcmTokenRequest
+import com.moyeota.data.remote.dto.ProfileImageResponse
 import com.moyeota.data.remote.dto.UpdateProfileRequest
 import com.moyeota.data.remote.dto.UserProfileResponse
+import com.moyeota.data.remote.dto.RideRecordPageResponse
 import com.moyeota.domain.model.AuthState
 import com.moyeota.domain.session.UserSession
 import kotlinx.coroutines.CancellationException
@@ -212,6 +214,12 @@ private class FakeUserApi(private val failure: Throwable? = null) : UserApi {
     override suspend fun updateProfile(request: UpdateProfileRequest): Unit =
         throw UnsupportedOperationException("푸시 토큰 등록과 무관하다")
 
+    override suspend fun getProfileImages(): List<ProfileImageResponse> =
+        throw UnsupportedOperationException("푸시 토큰 등록과 무관하다")
+
+    override suspend fun resetProfileImage(): Unit =
+        throw UnsupportedOperationException("푸시 토큰 등록과 무관하다")
+
     override suspend fun registerFcmToken(request: FcmTokenRequest) {
         failure?.let { throw it }
         registered += request
@@ -223,5 +231,9 @@ private class FakeUserApi(private val failure: Throwable? = null) : UserApi {
     }
 
     override suspend fun deleteAccount(request: AccountDeletionRequest): Unit =
+        throw UnsupportedOperationException("푸시 토큰 등록과 무관하다")
+
+    // UserApi 에 탑승 기록 조회(GET /users/me/parties)가 들어와 생긴 구현. 이 테스트와 무관하다.
+    override suspend fun getMyRideRecords(cursor: Long?, size: Int): RideRecordPageResponse =
         throw UnsupportedOperationException("푸시 토큰 등록과 무관하다")
 }

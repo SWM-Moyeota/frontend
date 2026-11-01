@@ -13,11 +13,13 @@ import com.moyeota.domain.model.AuthException
 import com.moyeota.domain.model.AuthPolicy
 import com.moyeota.domain.repository.AuthRepository
 import com.moyeota.presentation.feature.auth.authUserMessage
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * 37 이 보여 주는 「무엇이 지워지는가」 목록. **서버가 실제로 하는 일만 적는다.**
@@ -116,38 +118,51 @@ class AccountDeleteViewModel(private val repository: AuthRepository) : ViewModel
      * `DELETE /api/v1/users/me` 로 비밀번호를 보낸다.
      *
      * 성공하면 Repository 안에서 세션·로컬 기억이 비워지고 `authState` 가 전이한다 —
-     * **이 화면은 성공을 따로 알릴 필요가 없다.** NavGraph 의 로그인 전이 감지가 스택을 통째로
-     * 비우며 04a 로 보내므로 이 화면도 그때 사라진다. 그래서 `deleted` 같은 성공 플래그를 두지 않고,
-     * 성공 경로에서 [UiState.submitting] 을 **켜 둔 채로 끝낸다** — 화면이 사라지기까지의 한두 프레임
-     * 동안 버튼이 로딩 상태로 남아, 눌릴 수 있는 버튼이 깜빡 보이는 일이 없다.
+     * **이 화면은 성공 뒤의 이동을 하지 않는다.** NavGraph 의 로그인 전이 감지가 스택을 통째로
+     * 비우며 04a 로 보내므로 이 화면도 그때 사라진다. 그래서 성공 경로에서는 [UiState.submitting] 을
+     * **켜 둔 채로 끝낸다** — 화면이 사라지기까지의 한두 프레임 동안 버튼이 로딩 상태로 남아,
+     * 눌릴 수 있는 버튼이 깜빡 보이는 일이 없다.
      *
-     * [onSubmitting] 은 **요청을 보내기 직전에** 불린다. 성공하면 세션이 사라지는데, NavGraph 의
-     * 로그인 전이 감지가 "스스로 끝낸 세션인가"를 미리 세워 둔 표시로 판단하기 때문이다 —
-     * 응답이 온 뒤에 알리면 늦는다(그 전이가 이미 "세션 만료"로 처리된다).
-     * 실패했으면 [onKept] 로 그 표시를 되돌린다.
+     * 결과를 **세 갈래**로 알린다. NavGraph 는 세션이 사라진 이유를 이 신호들로만 구분할 수 있다:
+     * - [onSubmitting] — 요청을 보내기 직전. 아직 아무것도 모른다("보냈다"는 사실뿐이다).
+     * - [onDeleted] — 서버가 204 를 돌려줬다. **「탈퇴가 처리됐어요」를 말할 수 있는 유일한 지점.**
+     * - [onKept] — 실패해 세션이 그대로 남았다.
+     *
+     * 예전에는 [onSubmitting] 하나가 "탈퇴됐다"의 근거였다. 그러면 `DELETE /users/me` 가 401 →
+     * 재발급 실패로 끝나 세션이 사라졌을 때도 **계정이 살아 있는데** 로그인 화면에 「탈퇴가
+     * 처리됐어요」가 떴다(2026-10-28 결함).
+     *
+     * 요청·응답 처리를 [NonCancellable] 로 감싸는 이유: 성공하면 세션이 사라져 NavGraph 가 스택을
+     * 통째로 비우고 이 화면을 걷어낸다 → ViewModel 이 cleared 되며 `viewModelScope` 가 **취소된다.**
+     * 그대로 두면 응답을 받아 놓고도 [onDeleted] 가 불리지 않아(또는 취소가 아래 catch 로 흘러들어
+     * [onKept] 가 불려) 「탈퇴됐다」의 근거가 사라진다. 끊기지 않게 응답 처리까지 한 덩어리로 돌린다.
      */
-    fun delete(onSubmitting: () -> Unit = {}, onKept: () -> Unit = {}) {
+    fun delete(onSubmitting: () -> Unit = {}, onDeleted: () -> Unit = {}, onKept: () -> Unit = {}) {
         val state = _uiState.value
         if (!canSubmitAccountDeletion(state.password, state.submitting)) return
         viewModelScope.launch {
             _uiState.update { it.copy(submitting = true, passwordError = null, bannerError = null) }
             onSubmitting()
-            try {
-                repository.deleteAccount(state.password)
-                // 비밀번호를 상태에 남기지 않는다 — 화면은 곧 사라지지만 ViewModel 이 몇 프레임 더 산다.
-                // submitting 은 끄지 않는다(위 KDoc): 이 화면은 성공 후 로딩 상태로 사라진다.
-                _uiState.update { it.copy(password = "") }
-            } catch (e: Exception) {
-                onKept()
-                val error = (e as? AuthException)?.error ?: AuthError.UNKNOWN
-                val message = e.authUserMessage()
-                _uiState.update {
-                    when (accountDeleteErrorSlot(error)) {
-                        AccountDeleteErrorSlot.PASSWORD_FIELD ->
-                            // 틀린 비밀번호는 비워 준다 — 고쳐 치는 것보다 다시 치는 쪽이 빠르다.
-                            it.copy(submitting = false, password = "", passwordError = message)
-                        AccountDeleteErrorSlot.BANNER ->
-                            it.copy(submitting = false, bannerError = message)
+            withContext(NonCancellable) {
+                try {
+                    repository.deleteAccount(state.password)
+                    // 204 를 받은 **이 자리**가 탈퇴를 말할 수 있는 지점이다
+                    onDeleted()
+                    // 비밀번호를 상태에 남기지 않는다 — 화면은 곧 사라지지만 ViewModel 이 몇 프레임 더 산다.
+                    // submitting 은 끄지 않는다(위 KDoc): 이 화면은 성공 후 로딩 상태로 사라진다.
+                    _uiState.update { it.copy(password = "") }
+                } catch (e: Exception) {
+                    onKept()
+                    val error = (e as? AuthException)?.error ?: AuthError.UNKNOWN
+                    val message = e.authUserMessage()
+                    _uiState.update {
+                        when (accountDeleteErrorSlot(error)) {
+                            AccountDeleteErrorSlot.PASSWORD_FIELD ->
+                                // 틀린 비밀번호는 비워 준다 — 고쳐 치는 것보다 다시 치는 쪽이 빠르다.
+                                it.copy(submitting = false, password = "", passwordError = message)
+                            AccountDeleteErrorSlot.BANNER ->
+                                it.copy(submitting = false, bannerError = message)
+                        }
                     }
                 }
             }
@@ -164,19 +179,23 @@ class AccountDeleteViewModel(private val repository: AuthRepository) : ViewModel
 /**
  * 37 회원 탈퇴 — `DELETE /api/v1/users/me` 진입점.
  *
- * @param onSessionEndExpected 서버에 탈퇴를 보내기 **직전**. NavGraph 가 "다음 로그아웃 전이는
- *   사용자가 의도한 것"이라고 표시해 두는 자리다 — 안 하면 성공 직후 로그인 화면에
+ * @param onSessionEndExpected 서버에 탈퇴를 보내기 **직전**. NavGraph 가 "지금 뜬 로그아웃 전이는
+ *   탈퇴 때문일 수 있다"고 표시해 두는 자리다 — 안 하면 성공 직후 로그인 화면에
  *   「세션이 만료됐어요」가 뜬다(스스로 탈퇴한 사람에게 할 말이 아니다).
+ * @param onDeleted 서버가 204 를 돌려줬다. **「탈퇴가 처리됐어요」의 유일한 근거**이고, 요청만
+ *   보낸 상태([onSessionEndExpected])와 반드시 구분돼야 한다 — 401 로 끝난 탈퇴에도 그 안내가
+ *   뜨면 계정이 살아 있는 사람에게 거짓을 말한다.
  * @param onSessionKept 탈퇴가 실패해 세션이 그대로 남았다. 위 표시를 되돌린다.
  *
- * 성공 콜백이 **없는 게 맞다** — 세션이 사라지면 NavGraph 의 로그인 전이가 스택을 비우며 04a 로
- * 보내므로 이 화면이 할 이동이 없다. 콜백을 두면 그 전이와 겹쳐 navigate 가 두 번 일어난다.
+ * 성공 뒤의 **이동**은 여기서 하지 않는다 — 세션이 사라지면 NavGraph 의 로그인 전이가 스택을
+ * 비우며 04a 로 보내므로 이 화면이 할 이동이 없다. 여기서 또 navigate 하면 그 전이와 겹친다.
  */
 @Composable
 fun AccountDeleteRoute(
     repository: AuthRepository,
     onBack: () -> Unit = {},
     onSessionEndExpected: () -> Unit = {},
+    onDeleted: () -> Unit = {},
     onSessionKept: () -> Unit = {},
 ) {
     val viewModel: AccountDeleteViewModel =
@@ -190,7 +209,11 @@ fun AccountDeleteRoute(
         bannerError = state.bannerError,
         onPasswordChange = viewModel::onPasswordChange,
         onDelete = {
-            viewModel.delete(onSubmitting = onSessionEndExpected, onKept = onSessionKept)
+            viewModel.delete(
+                onSubmitting = onSessionEndExpected,
+                onDeleted = onDeleted,
+                onKept = onSessionKept,
+            )
         },
         onBack = onBack,
     )

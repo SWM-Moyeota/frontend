@@ -12,6 +12,8 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.moyeota.domain.model.PartyEvent
 import com.moyeota.domain.model.PartyFinishException
+import com.moyeota.domain.model.PartyLeaveException
+import com.moyeota.domain.model.PartyMembershipLostException
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.model.User
@@ -94,6 +96,27 @@ class MatchWaitingViewModel(
     val partyClosed: StateFlow<Boolean> = _partyClosed.asStateFlow()
 
     /**
+     * **나는 이 방의 멤버가 아니다** — 「방이 닫혔다」([_partyClosed])와 **다른 사실**이고, 사용자가
+     * 할 일은 같다(이 화면에 있을 이유가 없다). Route 가 받아 홈으로 보낸다.
+     *
+     * 두 가지 근거로 선다.
+     * 1. **SSE 403** `NOT_PARTY_MEMBER`([PartyMembershipLostException]) — 서버가 멤버십을 말해 주는
+     *    **유일한 창구**다. 방 상세(`GET /matching/rooms/{id}`)에는 참여자 검사가 없어 멤버가 아니어도
+     *    조회가 계속 성공한다.
+     * 2. **상세의 members 에 내가 없다**([hasLostMembership]) — SSE 가 아예 붙지 않는 망(프록시가
+     *    `text/event-stream` 을 막는 경우)에서는 1번 창구가 열리지 않으므로 폴백 조회로 한 번 더 본다.
+     *
+     * 이 값이 없던 동안 403 은 「스트림이 끝났다」와 똑같이 뭉개졌고, 그러면 폴백 폴링이 **내가 들어
+     * 있지 않은 방**을 6초마다 영원히 읽으면서 「같이 탈 사람을 찾고 있어요」를 띄웠다. 거기서
+     * 「그만 찾기」를 눌러도 다시 403 이라 **벗어날 길이 없었다.**
+     *
+     * [_partyClosed] 와 합치지 않는 이유: 저 값은 서버가 보낸 `closed` 신호라는 **사실**이고, 닫히지
+     * 않은 방을 닫혔다고 적으면 그 값을 읽는 쪽(폴백 종료 조건)의 뜻이 흐려진다.
+     */
+    private val _membershipLost = MutableStateFlow(false)
+    val membershipLost: StateFlow<Boolean> = _membershipLost.asStateFlow()
+
+    /**
      * SSE 가 살아 있는가 — [PartyEvent.Snapshot] 을 받으면 true, [PartyEvent.Disconnected] 와
      * 스트림 종료·구독 취소에서 false. **폴백 폴링이 이번 주기에 읽을지의 스위치다**([shouldPollFallback]).
      */
@@ -130,8 +153,11 @@ class MatchWaitingViewModel(
     private val visible = MutableStateFlow(true)
 
     /**
-     * SSE 스트림이 **종결**로 끝났다 — 방 닫힘(`closed`)·403(멤버 아님)·404(방 없음), 또는 스트림 자체가
-     * 없는 저장소(더미). 그 밖의 끊김은 데이터 계층이 3초 뒤 스스로 다시 붙으므로 여기까지 오지 않는다.
+     * SSE 스트림이 **종결**로 끝났다 — 방 닫힘(`closed`)·404(방 없음), 또는 스트림 자체가 없는
+     * 저장소(더미). 그 밖의 끊김은 데이터 계층이 백오프 뒤 스스로 다시 붙으므로 여기까지 오지 않는다.
+     *
+     * **403(멤버 아님)도 여기를 세우지만 그것만으로 끝나지 않는다** — [_membershipLost] 가 함께 서고,
+     * 그쪽이 화면을 떠나게 한다. 둘을 같은 값으로 뭉개면 「내가 없는 방」을 영원히 폴링한다.
      *
      * 가시성 게이트가 **되살려야 하는 것과 그러면 안 되는 것**을 가르는 값이다: 가려져서 취소된 구독은
      * 복귀 때 다시 붙지만, 종결로 끝난 구독은 다시 붙어도 같은 답이라 붙지 않는다(게이트 이전 동작과 동일).
@@ -170,6 +196,18 @@ class MatchWaitingViewModel(
      */
     @Volatile
     private var heldVersion: Long? = null
+
+    /**
+     * 서버가 준 멤버 목록에서 **나를 한 번이라도 봤는가**([User.isMe] 가 true 인 멤버).
+     *
+     * [hasLostMembership] 의 전제다. 이 플래그 없이 「목록에 내가 없다」만 보면 **내가 누군지 모르는
+     * 경우까지 멤버십 상실로 읽는다**: `isMe` 는 `publicId == 세션 uuid` 비교라, 세션 uuid 가 없으면
+     * (미로그인·복원 전) 아무도 나로 표시되지 않아 목록이 정상이어도 none 이 참이 된다. 그러면
+     * **멀쩡히 방에 들어 있는 사용자를 쫓아낸다** — 틀렸을 때의 대가가 한쪽으로 크게 기울어 있으므로,
+     * 「나를 본 적이 있다」는 증거가 생긴 뒤에만 그 판정을 켠다.
+     */
+    @Volatile
+    private var sawMyself = false
 
     init {
         refresh()
@@ -244,9 +282,12 @@ class MatchWaitingViewModel(
      * 그래서 프레임마다 실려 오는 순번으로 순서를 가린다 — [deltaVerdict]·[acceptsSnapshot].
      * 가시성 때문에 끊었다 붙는 것도 서버 입장에선 똑같은 재연결이고, 그때도 같은 판정이 걸린다.
      *
-     * 수집이 **스스로** 끝나는 건 종결뿐이다(방 닫힘·403 멤버 아님·404 방 없음). 그때는 다시 붙어도 같은
-     * 답이라 복귀해도 붙지 않고([streamEnded]) 폴백이 갱신을 맡는다 — 내가 방을 나간 경우라면 Route 가
+     * 수집이 **스스로** 끝나는 건 종결뿐이다(방 닫힘·404 방 없음). 그때는 다시 붙어도 같은 답이라
+     * 복귀해도 붙지 않고([streamEnded]) 폴백이 갱신을 맡는다 — 내가 방을 나간 경우라면 Route 가
      * 이미 화면을 떠났고 수집도 함께 취소된다.
+     *
+     * **403 멤버 아님은 그 종결에 섞이지 않는다** — 데이터 계층이 [PartyMembershipLostException] 으로
+     * 올리고, 여기서 받아 [_membershipLost] 를 세운다. 그러면 폴백도 멈추고 Route 가 화면을 떠난다.
      */
     private fun observeEvents() {
         viewModelScope.launch {
@@ -258,6 +299,13 @@ class MatchWaitingViewModel(
                     repository.observePartyEvents(partyId).collect { event -> applyEvent(event) }
                     // 여기까지 왔으면 스트림이 **종결**로 끝났다. 화면이 가려져 취소된 경우는
                     // CancellationException 으로 빠져나가 이 줄을 지나지 않는다 — 그래서 복귀 때 다시 붙는다.
+                    streamEnded.value = true
+                } catch (e: PartyMembershipLostException) {
+                    // 403 `NOT_PARTY_MEMBER` — 끊긴 게 아니라 **내가 이 방 사람이 아니다**.
+                    // 다시 붙어 봐야 같은 답이라 종결로 적되(streamEnded), 「스트림이 끝났다」와 갈라
+                    // 화면을 떠나게 한다. 순서가 중요하다: 상실을 먼저 세워야 폴백 패스가 다시
+                    // 평가될 때 READ_NOW 를 거치지 않고 곧바로 STOP 으로 떨어진다.
+                    _membershipLost.value = true
                     streamEnded.value = true
                 } finally {
                     // 종결이든 취소든 실시간 근거가 사라진다. 취소된 뒤에도 true 로 남겨 두면 복귀해서
@@ -290,6 +338,7 @@ class MatchWaitingViewModel(
                 if (acceptsSnapshot(heldVersion, event.version)) {
                     heldVersion = event.version ?: heldVersion
                     appliedEvents++
+                    rememberMyself(event.ride)
                     _uiState.value = UiState.Success(event.ride)
                 }
             }
@@ -386,10 +435,18 @@ class MatchWaitingViewModel(
      * 내용이 똑같은 상세를 다시 흘려 넣어도 재구성은 일어나지 않는다 — [UiState.Success] 와 [Ride] 가
      * data class 라 [MutableStateFlow] 가 같은 값으로 보고 내보내지 않는다
      * (25·26 이 [com.moyeota.presentation.core.shouldPublishDetail] 로 명시해 둔 것과 같은 절약이다).
+     *
+     * **읽어 온 목록에서 내가 사라졌는지도 여기서 본다**([hasLostMembership]). SSE 403 이 같은 사실을
+     * 먼저 말해 주지만, 그 스트림이 아예 붙지 않는 망에서는 이 조회가 **유일한 창구**다 — 방 상세에는
+     * 참여자 검사가 없어 멤버가 아니어도 200 이 오므로, 보지 않으면 내가 없는 방을 계속 그린다.
+     * 판정은 **버려진 결과에도** 적용한다: 멤버십은 순번과 무관한 사실이고, 늦게 온 응답이라고
+     * 「내가 그 방에 없다」가 뒤집히지는 않는다.
      */
     private suspend fun readDetail(): Boolean {
         val mark = appliedEvents
         val detail = runCatching { repository.getPartyDetailWithVersion(partyId) }.getOrNull() ?: return false
+        rememberMyself(detail.ride)
+        if (hasLostMembership(sawMyself, detail.ride)) _membershipLost.value = true
         // 가드가 둘인 이유가 다르다: appliedEvents 는 **내 반영**이 끼어들었는지(왕복 지연), acceptsSnapshot 은
         // 읽어 온 상세가 **서버 기준으로** 과거인지(순서 역전). 둘 중 하나만으로는 각자의 경우를 못 막는다.
         if (appliedEvents == mark && acceptsSnapshot(heldVersion, detail.version)) {
@@ -397,6 +454,15 @@ class MatchWaitingViewModel(
             _uiState.value = UiState.Success(detail.ride)
         }
         return true
+    }
+
+    /**
+     * 서버가 준 멤버 목록에 내가 있었다는 사실을 기록한다 — [hasLostMembership] 의 전제([sawMyself]).
+     *
+     * 한 번 true 가 되면 되돌리지 않는다. 「전에는 있었는데 지금은 없다」가 바로 상실의 정의다.
+     */
+    private fun rememberMyself(ride: Ride) {
+        if (ride.members.any { it.isMe }) sawMyself = true
     }
 
     /**
@@ -423,16 +489,22 @@ class MatchWaitingViewModel(
      */
     private fun observeFallbackPolling() {
         viewModelScope.launch {
-            // streamEnded 가 combine 입력인 이유: 가려진 사이에 스트림이 종결되면(방 닫힘·403·404)
+            // streamEnded 가 combine 입력인 이유: 가려진 사이에 스트림이 종결되면(방 닫힘·404)
             // 복귀 때 다시 붙을 스트림이 없다. 평범한 변수로 두면 패스가 이미 WAIT_THEN_READ 로
             // 확정된 뒤라 READ_NOW 가 영영 타지 않고, 그 전이가 늘 6초 늦는다(QA 125 D-2).
-            combine(visible, _partyClosed, streamEnded, ::Triple).collectLatest { (shown, closed, ended) ->
-                val step = fallbackPollStep(
+            //
+            // _membershipLost 도 같은 이유로 입력이다 — 403 은 streamEnded 와 **같은 순간**에 서지만,
+            // 평범한 변수로 읽으면 그 값이 바뀌어도 패스가 다시 평가되지 않아 「내가 없는 방」을
+            // 6초마다 계속 읽는다. 판정을 입력으로 끌어올려 상실이 서는 즉시 루프가 죽게 한다.
+            combine(visible, _partyClosed, streamEnded, _membershipLost) { shown, closed, ended, lost ->
+                fallbackPollStep(
                     visible = shown,
                     partyClosed = closed,
                     fallbackDone = fallbackDone,
                     streamEnded = ended,
+                    membershipLost = lost,
                 )
+            }.collectLatest { step ->
                 if (step == FallbackStep.STOP) return@collectLatest
                 // 평상시(WAIT_THEN_READ)는 첫 주기를 그대로 기다린다 — 복귀의 갱신은 폴백이 아니라
                 // **재구독 스냅샷**이 맡으므로, 여기서 즉시 읽으면 복귀마다 상세 1건이 덧붙는다.
@@ -455,7 +527,21 @@ class MatchWaitingViewModel(
         }
     }
 
-    fun leaveParty() = runAction(failureMessage = "방에서 나가지 못했어요") {
+    /**
+     * 「그만 찾기」·「방 나가기」 — 성공하면 Route 가 홈으로 보낸다.
+     *
+     * **403 `NOT_PARTY_MEMBER` 는 여기까지 실패로 오지 않는다** — 데이터 계층이 성공으로 되돌린다
+     * (`RemoteRideRepository.leaveParty`). 그래야 204 응답이 유실된 사용자가(터널·타임아웃)
+     * 「나가지 못했어요」를 보고 다시 눌렀을 때 **같은 문구의 403** 에 갇히지 않는다 — 그 상태에서는
+     * 로컬 기억과 홈 배너가 그 방을 계속 들고 있어 화면상 나는 아직 그 방에 있다.
+     *
+     * 남은 실패는 [leaveFailureMessage] 가 사유별로 가른다 — 409 는 「매칭이 시작돼 못 나간다」라서
+     * 재시도 안내와 **다음 행동이 다르다**(완료의 [finishFailureMessage] 와 같은 선례).
+     */
+    fun leaveParty() = runAction(
+        failureMessage = LEAVE_FAILED_MESSAGE,
+        messageOf = { (it as? PartyLeaveException)?.let(::leaveFailureMessage) },
+    ) {
         // 나가는 주체는 Bearer 토큰이 정한다 — memberId 를 넘기지 않는다 (22 보고서 §2)
         repository.leaveParty(partyId)
         _actionState.update { it.copy(left = true) }
@@ -492,7 +578,9 @@ class MatchWaitingViewModel(
      * 액션 공통: 중복 실행 차단 → 진행 표시 → 실패 시 한국어 메시지.
      *
      * [messageOf] 가 실패를 **사유별 문구**로 옮긴다 — null 이면 [failureMessage] 로 떨어진다.
-     * 기본값이 "항상 null" 이라 사유를 가르지 않는 액션(나가기)은 예전과 똑같이 동작한다.
+     * 기본값이 "항상 null" 이라 사유를 가르지 않는 액션은 예전과 똑같이 동작한다. 지금은 두 액션
+     * (나가기·합승 완료) 다 사유를 가르므로 기본값을 쓰는 호출부가 없지만, 남겨 둔다 — 새 액션이
+     * 사유를 가르기 전에도 돌아야 한다.
      */
     private fun runAction(
         failureMessage: String,
@@ -544,7 +632,7 @@ internal fun shouldPollFallback(realtimeAlive: Boolean, hasRide: Boolean): Boole
  * | 판정 | 조건 | 왜 |
  * |---|---|---|
  * | 구독하지 않는다 | [visible] 이 false | **이 함수의 존재 이유.** 보이지 않는 화면이 연결을 붙들 이유가 없다 — 멤버 합류에는 FCM 이 없어 백그라운드에서 받아도 띄울 데가 없고, OS 가 네트워크를 조여 「죽고 재연결」만 되풀이된다(QA 123 D-3) |
- * | 구독하지 않는다 | [streamEnded] 가 true | 종결로 끝난 스트림이다(방 닫힘·403 멤버 아님·404 방 없음·스트림 없는 저장소). 다시 붙어도 같은 답이고, 게이트 이전에도 다시 붙지 않았다 |
+ * | 구독하지 않는다 | [streamEnded] 가 true | 종결로 끝난 스트림이다(방 닫힘·404 방 없음·403 멤버 아님·스트림 없는 저장소). 다시 붙어도 같은 답이고, 게이트 이전에도 다시 붙지 않았다 |
  * | 구독한다 | 그 밖 | 보이고, 아직 종결되지 않았다 |
  *
  * 끊어도 안전한 근거는 **재연결마다 서버가 방 상세 전체를 다시 준다**는 것이다(`connected` =
@@ -583,29 +671,57 @@ internal enum class FallbackStep {
  * | [FallbackStep.STOP] | [visible] 이 false | **이 함수의 존재 이유.** 보이지 않는 화면이 서버를 부를 이유가 없다 (QA 123 D-3) |
  * | [FallbackStep.STOP] | [partyClosed] | 서버가 방이 닫혔다고 알려 왔다 — 닫힌 방을 다시 읽어도 「닫혔다」만 재확인한다. **기존 종료 조건** |
  * | [FallbackStep.STOP] | [fallbackDone] | 방이 대기 단계를 벗어나 루프가 이미 끝났다. **기존 종료 조건** — 복귀로 되살아나면 회귀다 |
+ * | [FallbackStep.STOP] | [membershipLost] | **내가 이 방 멤버가 아니다.** 읽어도 남의 방이고, Route 가 곧 화면을 떠난다 |
  * | [FallbackStep.READ_NOW] | [streamEnded] | 다시 붙을 스트림이 없다(종결·더미). 복귀 갱신을 맡을 스냅샷이 없으므로 6초를 기다리지 않는다 |
  * | [FallbackStep.WAIT_THEN_READ] | 그 밖 | 평상시. 복귀 즉시 재구독이 스냅샷을 가져오므로, 여기서 또 읽으면 복귀마다 상세 1건이 덧붙는다 |
  *
  * 가시성이 맨 앞인 게 요점이다 — **보이지 않는 동안에는 나머지 조건을 보지 않는다.**
- * 반대로 [partyClosed]·[fallbackDone] 은 「끝났다」는 사실이라 복귀해도 되돌아가지 않는다:
- * 가시성은 스위치, 이 둘은 종결이다.
+ * 반대로 [partyClosed]·[fallbackDone]·[membershipLost] 는 「끝났다」는 사실이라 복귀해도 되돌아가지
+ * 않는다: 가시성은 스위치, 나머지는 종결이다.
+ *
+ * **[membershipLost] 가 [streamEnded] 보다 위에 있는 게 요점이다.** 그 둘은 403 에서 **같은 순간에**
+ * 서는데, 순서가 뒤집히면 「다시 붙을 스트림이 없으니 지금 읽어라」(READ_NOW)가 이겨서 **내가 들어
+ * 있지 않은 방**을 6초마다 영원히 읽는다 — 이 함수가 고치는 결함이 정확히 그것이었다.
  *
  * @param visible 화면이 사용자에게 보이는가(`LifecycleStartEffect` 로 받는다)
  * @param partyClosed 서버가 `closed` 를 보냈는가([PartyEvent.Closed])
  * @param fallbackDone 대기 단계를 벗어나 루프가 끝났는가([isWaitingForMembers] false 를 본 뒤)
  * @param streamEnded SSE 가 종결로 끝나 재구독할 것이 없는가([shouldObservePartyEvents])
+ * @param membershipLost 내가 이 방 멤버가 아니라고 서버가 말했는가(SSE 403 · 상세의 members 에 내가 없음)
  */
 internal fun fallbackPollStep(
     visible: Boolean,
     partyClosed: Boolean,
     fallbackDone: Boolean,
     streamEnded: Boolean,
+    membershipLost: Boolean = false,
 ): FallbackStep = when {
     !visible -> FallbackStep.STOP
-    partyClosed || fallbackDone -> FallbackStep.STOP
+    partyClosed || fallbackDone || membershipLost -> FallbackStep.STOP
     streamEnded -> FallbackStep.READ_NOW
     else -> FallbackStep.WAIT_THEN_READ
 }
+
+/**
+ * 서버가 준 멤버 목록에서 **내가 사라졌는가** — 「유령 대기방」 판정.
+ *
+ * SSE 403 이 같은 사실을 더 빨리 말해 주지만([PartyMembershipLostException]), 그 스트림이 붙지 않는
+ * 망에서는 이 판정이 **유일한 창구**다: `GET /matching/rooms/{partyId}` 에는 참여자 검사가 **없어**
+ * 멤버가 아니어도 200 이 오고, 그러면 화면은 남의 방을 「같이 탈 사람을 찾고 있어요」로 그린다.
+ *
+ * 세 조건을 **모두** 요구한다 — 틀렸을 때 멀쩡히 방에 들어 있는 사람을 쫓아내기 때문이다.
+ *
+ * | 조건 | 없으면 |
+ * |---|---|
+ * | [sawMyself] | `isMe` 는 `publicId == 세션 uuid` 라, 세션 uuid 가 없으면(미로그인·복원 전) 아무도 나로 표시되지 않는다 — 정상인 방까지 상실로 읽는다 |
+ * | 목록이 비어 있지 않다 | 멤버가 0명인 방은 **있을 수 없다**(마지막 멤버가 나가면 서버가 방을 닫는다). 빈 목록은 응답이 이상하다는 뜻이라 판정 근거가 되지 못한다 |
+ * | 목록에 내가 없다 | 상실의 정의 그 자체 |
+ *
+ * 반대로 **status 는 보지 않는다.** 내가 멤버가 아니라는 사실은 방이 어느 단계인지와 무관하고,
+ * ACTIVE 유령 방이 바로 이 결함의 본체였다(닫힌 방은 [PartyEvent.Closed] 가 이미 잡는다).
+ */
+internal fun hasLostMembership(sawMyself: Boolean, ride: Ride): Boolean =
+    sawMyself && ride.members.isNotEmpty() && ride.members.none { it.isMe }
 
 /**
  * [PartyEvent.MemberJoined] 적용 — 멤버 목록에 더하고 서버가 준 **들어온 뒤의** [status] 로 바꾼다.
@@ -910,6 +1026,38 @@ internal fun finishFailureMessage(e: PartyFinishException): String = when {
 }
 
 /**
+ * 사유를 가릴 수 없는 나가기 실패의 일반 문구 — 네트워크 실패와 **모르는 코드**가 여기로 떨어진다.
+ *
+ * 「이미 나갔다」(403)가 여기 오지 않는 것이 핵심이다 — 그건 실패가 아니라 **이미 됨**이라 데이터
+ * 계층이 성공으로 되돌린다([PartyLeaveException] KDoc). 되돌림이 없던 동안에는 이 문구가 「서버는
+ * 나를 내보냈는데 앱만 모르는」 상태의 영구 실패 안내였다.
+ */
+private const val LEAVE_FAILED_MESSAGE = "방에서 나가지 못했어요"
+
+/**
+ * 나가기 실패를 사용자 문구로 옮긴다 — 실패마다 **다음 행동이 다르다**
+ * ([finishFailureMessage] 와 같은 자리·같은 이유).
+ *
+ * | 사유 | 서버 코드(HTTP) | 사용자가 할 일 |
+ * |---|---|---|
+ * | 모집 단계가 아니다 | `PARTY_NOT_RECRUITING` (409) | 기다린다 — 배차가 시작돼 나갈 수 없다 |
+ * | 방 없음 | `PARTY_NOT_FOUND` (404) | 홈으로 돌아간다(이미 닫힌 방이다) |
+ * | 그 밖·네트워크 | 코드 없음 | [LEAVE_FAILED_MESSAGE] |
+ *
+ * 「이미 나갔다」(403 `NOT_PARTY_MEMBER`)는 **이 함수에 오지 않는다** — 데이터 계층이 성공으로
+ * 되돌리므로 화면은 나가기 성공과 같은 길(홈)로 간다.
+ *
+ * 409 에 「잠시 후 다시 시도」를 붙이지 않는다: 다시 눌러도 같은 409 다(방이 모집 단계로 돌아가는
+ * 길은 없다). 대신 **왜** 못 나가는지를 말한다 — 화면은 이 단계에서 버튼을 이미 비활성으로
+ * 바꾸지만([canLeaveParty]) 전이를 알아채기까지 한 주기가 비고, 그 틈에 눌린 것이 여기로 온다.
+ */
+internal fun leaveFailureMessage(e: PartyLeaveException): String = when {
+    e.isNotRecruiting -> "매칭이 시작돼 지금은 나갈 수 없어요"
+    e.isPartyNotFound -> "이미 사라진 방이에요. 홈으로 돌아가 주세요"
+    else -> LEAVE_FAILED_MESSAGE
+}
+
+/**
  * 21 매칭 대기 — SSE 변경분 구독(+끊김 폴백) · 나가기/합승 완료 진입점. partyId 없으면 오류 안내 후 되돌린다.
  *
  * 방 상태의 출처는 [MatchWaitingViewModel] 하나뿐이다 — 이 화면에서 SSE 를 두 번 수집하면 서버가 서로의
@@ -967,6 +1115,7 @@ fun MatchWaitingRoute(
     val state by viewModel.uiState.collectAsState()
     val action by viewModel.actionState.collectAsState()
     val closed by viewModel.partyClosed.collectAsState()
+    val membershipLost by viewModel.membershipLost.collectAsState()
 
     // 지도의 파란 점. 권한을 자동 요청하지 않는다 — 대기 화면의 본질은 지도가 아니라 「기다림」이라,
     // 여기서 다이얼로그를 띄우면 흐름을 끊는다. 이미 허용돼 있으면(14·17 에서 받았을 것) 점이 뜬다.
@@ -995,6 +1144,17 @@ fun MatchWaitingRoute(
     // 예전에는 폴링이 FINISHED/CANCELED 를 읽어 와야 알았고, 지금은 신호 하나로 바로 떠난다.
     LaunchedEffect(closed) {
         if (closed) onPartyClosed()
+    }
+    // **나는 이 방 멤버가 아니다**(SSE 403 · 상세에서 내가 사라짐). 「방이 닫혔다」와 다른 사실이지만
+    // 할 일은 같아 같은 길로 보낸다 — 진행 중 기억을 지우고 홈으로. 그대로 머무르면 내가 들어 있지
+    // 않은 방을 6초마다 폴링하며 「같이 탈 사람을 찾고 있어요」를 띄우고, 「그만 찾기」도 403 이라
+    // 벗어날 길이 없다([MatchWaitingViewModel.membershipLost]).
+    //
+    // 기억을 지우는 쪽([onPartyClosed])을 고른 이유: 그 방은 내 방이 아니므로 홈 배너가 다시
+    // 그리로 데려가면 같은 자리로 되돌아온다. 방을 유지하는 [onExitKeepingParty] 는 "내가 어느 방에
+    // 있는지 모를 때"의 길이고, 여기서는 **모르는 게 아니라 아니라는 걸 안다.**
+    LaunchedEffect(membershipLost) {
+        if (membershipLost) onPartyClosed()
     }
 
     // 매칭 시작 버튼이 없어졌으므로, 25 배차 현황으로의 이동은 서버 status 전이가 유일한 신호다.

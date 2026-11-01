@@ -6,13 +6,29 @@ import android.app.NotificationManager
 import android.content.pm.ApplicationInfo
 import android.os.Build
 import android.util.Log
+import coil3.ImageLoader
+import coil3.PlatformContext
+import coil3.SingletonImageLoader
+import coil3.disk.DiskCache
+import coil3.disk.directory
+import coil3.memory.MemoryCache
+import coil3.network.okhttp.OkHttpNetworkFetcherFactory
+import coil3.util.DebugLogger
 import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
-class MoyeotaApplication : Application() {
+/**
+ * [SingletonImageLoader.Factory] 를 **구현**하는 쪽을 골랐다 — `onCreate` 에서
+ * `SingletonImageLoader.setSafe` 를 부르는 방식과 비교해서다.
+ *
+ * `setSafe` 는 이미 기본 로더가 만들어진 뒤에 불리면 `IllegalStateException` 으로 터진다. 반면
+ * Coil 의 안드로이드 구현은 첫 요청 때 `applicationContext as? SingletonImageLoader.Factory` 로
+ * 직접 찾아가므로, 이렇게 두면 **호출 순서에 의존하는 경로가 아예 없어진다.**
+ */
+class MoyeotaApplication : Application(), SingletonImageLoader.Factory {
     lateinit var appContainer: AppContainer
         private set
 
@@ -28,6 +44,51 @@ class MoyeotaApplication : Application() {
         createNotificationChannel()
         fetchFcmToken()
     }
+
+    /**
+     * 프로필 사진용 [ImageLoader]. Coil 이 첫 요청 때 **한 번만** 부른다.
+     *
+     * ### 왜 OkHttp 를 직접 넘기나
+     * `coil-network-okhttp` 는 ServiceLoader 로 자기 기본 페처를 등록하므로 **아무것도 넘기지 않아도
+     * 이미지는 뜬다.** 그래도 명시해 넘기는 이유는 "이미지 요청에는 토큰이 붙지 않는다"를 기본값에
+     * 의존하지 않고 **코드로 못 박기** 위해서다([AppContainer.imageClient] KDoc 에 근거).
+     * 인증 클라이언트가 섞이면 액세스 토큰이 CDN 액세스 로그로 새어 나간다.
+     *
+     * `OkHttpNetworkFetcherFactory(callFactory = ...)` 에서 **이름 인자를 빼면 컴파일되지 않는다** —
+     * `() -> Call.Factory` 를 첫 인자로 받는 오버로드가 셋이라 trailing lambda 형태
+     * (`OkHttpNetworkFetcherFactory { ... }`)는 overload resolution ambiguity 다.
+     *
+     * ### 캐시
+     * 프리셋 PNG 는 512x512 에 장당 약 160KB 이고 CDN 이 `cache-control: max-age=31536000, immutable`
+     * 을 주므로, 한 번 받으면 디스크 캐시에서 끝난다. 디렉터리 이름을 직접 지정하는 이유는 Coil 의
+     * 기본 디스크 캐시가 **프로세스 전역 싱글톤 디렉터리**라, 같은 경로에 인스턴스가 둘 생기면
+     * 캐시가 깨진다고 Coil 자신이 경고하기 때문이다.
+     *
+     * [MemoryCache.Builder] 는 **크기를 지정하지 않고 `build()` 하면 런타임에 터진다**(`maxSizeBytesFactory == null`).
+     */
+    override fun newImageLoader(context: PlatformContext): ImageLoader =
+        ImageLoader.Builder(context)
+            .components { add(OkHttpNetworkFetcherFactory(callFactory = { appContainer.imageClient })) }
+            .memoryCache { MemoryCache.Builder().maxSizePercent(context, 0.15).build() }
+            .diskCache {
+                DiskCache.Builder()
+                    .directory(cacheDir.resolve("moyeota_image_cache"))
+                    .maxSizeBytes(32L * 1024 * 1024)
+                    .build()
+            }
+            // ★ crossfade 를 켜지 않는다. 켜면 아바타의 대체 표시 장치가 무력화된다.
+            //
+            // `MemberAvatar`·`AvatarCircle` 은 이니셜/회색 원을 **아래에 깔고 `onSuccess` 에서 가린다.**
+            // 그런데 Coil 은 `onState`(= onSuccess) 콜백을 **CrossfadePainter 를 설치한 뒤에** 부르고,
+            // placeholder 가 없으니 그 페인터는 알파 0 에서 올라온다. 즉 crossfade 가 켜져 있으면
+            // 이니셜이 사라진 **뒤** 100ms 동안 빈 원만 남았다가 사진이 떠오른다 — 서버가 전원에게
+            // 기본 이미지 URL 을 주므로 첫 진입 때 21 매칭 대기의 아바타가 한꺼번에 그 깜빡임을 낸다.
+            // (메모리 캐시 적중이면 Coil 이 전환을 NONE 으로 바꿔 문제가 없다. 그래서 **첫 표시에만** 보인다.)
+            //
+            // 36~80dp 아바타에 100ms 페이드가 주는 값이 그 깜빡임보다 작다. 사진을 크게 띄우는 화면이
+            // 생기면 그 호출부에서만 `ImageRequest.Builder(...).crossfade(true)` 로 켜는 게 맞다.
+            .apply { if (isDebuggableBuild()) logger(DebugLogger()) }
+            .build()
 
     // HTTP 본문 로깅을 디버그 빌드로 제한하는 판단 근거.
     // data 는 라이브러리 모듈이라 자체 BuildConfig.DEBUG 가 app 의 빌드 타입과 일치하지 않고,

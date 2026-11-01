@@ -3,12 +3,15 @@ package com.moyeota.data.remote.chat
 import android.util.Log
 import com.moyeota.data.remote.dto.ChatMessageResponse
 import com.moyeota.data.session.TokenHolder
+import kotlin.random.Random
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -21,8 +24,45 @@ import org.hildan.krossbow.websocket.okhttp.OkHttpWebSocketClient
 
 private const val TAG = "ChatSocket"
 
-/** 끊긴 뒤 다시 붙기까지 기다리는 시간. 서버가 잠깐 재시작해도 몇 초 안에 돌아온다 */
-private const val RECONNECT_DELAY_MS = 3_000L
+/**
+ * 연속 실패 1·2·3·4회째의 재연결 대기 — **고정 3초가 아니다.**
+ *
+ * 예전에는 상수 하나(3초)였다. 서버가 5xx 로 누워 있는 동안 한 단말이 분당 20번 WebSocket
+ * 업그레이드를 시도하는 하드 루프가 됐고, **서버가 아플 때 가장 세게 때리는** 모양이었다.
+ * 같은 레포의 `AppConfigViewModel.RETRY_DELAYS_MS`(2s·5s·15s)도 같은 이유로 증가 간격을 쓴다.
+ *
+ * 값과 모양은 SSE 쪽(`com.moyeota.data.remote.matching` 의 같은 이름 함수)과 **일부러 같게** 뒀다 —
+ * 두 실시간 통로가 같은 장애에 다르게 반응할 이유가 없다. 지수식(`base shl n`)이 아니라 표인 이유도
+ * 그쪽과 같다: 간격이 눈에 보이고, 상한이 계산 결과가 아니라 적어 둔 값이다.
+ *
+ * 횟수를 **넘어가면 마지막 값(30초)에 머문다.** 멈추지는 않는다 — 소켓이 끊긴 동안 호출부의
+ * 폴링(3초)이 메시지를 메우긴 하지만, 폴링은 왕복이 잦고 읽음 처리도 REST 로 떨어진다. 결국 다시
+ * 붙는 쪽이 싸다.
+ */
+private val RECONNECT_DELAYS_MS = longArrayOf(3_000L, 6_000L, 12_000L, 30_000L)
+
+/**
+ * 대기 시간에 더하는 **지터** 비율(0~20%). 서버가 재기동하면 끊긴 단말들이 **같은 초에** 다시 몰려
+ * 또 넘어진다 — 표만으로는 그 동기화를 풀 수 없다. 음수 쪽으로 흔들지 않는 건 상한(30초)과
+ * 하한(3초)이 둘 다 **지키려는 값**이기 때문이다.
+ */
+private const val RECONNECT_JITTER_RATIO = 0.2
+
+/**
+ * 연속 실패 [failures] 회째의 재연결 대기(ms) — **네트워크 없이 테스트할 수 있는 순수 함수다.**
+ *
+ * [RECONNECT_DELAYS_MS] 표를 1회째부터 차례로 읽고, 표를 다 쓰면 마지막 값에 머문다. 거기에
+ * [RECONNECT_JITTER_RATIO] 만큼의 지터를 **더한다**(0 ≤ [jitter] ≤ 1 이 그 안에서의 위치다).
+ *
+ * [failures] 가 0 이하여도 첫 간격으로 떨어진다 — 세는 쪽이 틀려도 0ms 하드 루프가 되지 않게.
+ * **구독까지 성공하면 호출부가 횟수를 0 으로 되돌린다**([ChatSocket.room]) — 그러지 않으면 몇 시간
+ * 붙어 있던 연결이 한 번 끊겼을 때 30초를 기다린다.
+ */
+internal fun reconnectDelayMs(failures: Int, jitter: Double = Random.nextDouble()): Long {
+    val index = (failures.coerceAtLeast(1) - 1).coerceAtMost(RECONNECT_DELAYS_MS.lastIndex)
+    val base = RECONNECT_DELAYS_MS[index]
+    return base + (base * RECONNECT_JITTER_RATIO * jitter.coerceIn(0.0, 1.0)).toLong()
+}
 
 /** 서버가 이 세션의 요청을 거절할 때 쓰는 통로(`StompExceptionHandler`). 구독은 인증만 되면 허용된다 */
 private const val ERROR_DESTINATION = "/user/queue/errors"
@@ -69,10 +109,6 @@ class ChatSocket(
     @Serializable
     private data class ReadFrame(val lastReadMessageId: Long)
 
-    /**
-     * 이 방의 새 메시지 흐름. 수집이 취소될 때까지 유지되고, 끊기면 [RECONNECT_DELAY_MS] 뒤 다시 붙는다.
-     * 미로그인이면 연결하지 않고 다음 주기를 기다린다(로그인 뒤 자연히 붙는다).
-     */
     /** 연결 하나에서 오는 신호. 구독이 걸린 순간([Connected])을 알려야 호출부가 그 전의 공백을 메울 수 있다 */
     sealed interface RoomSignal {
         data object Connected : RoomSignal
@@ -80,19 +116,44 @@ class ChatSocket(
         data object Disconnected : RoomSignal
     }
 
+    /**
+     * 이 방의 새 메시지 흐름. 수집이 취소될 때까지 유지되고, 끊기면 [reconnectDelayMs] 뒤 다시 붙는다
+     * (연속 실패마다 늘어나는 간격 + 소량 지터 — 고정 3초가 아니다).
+     * 미로그인이면 연결하지 않고 다음 주기를 기다린다(로그인 뒤 자연히 붙는다).
+     *
+     * **[Dispatchers.IO] 에서 돈다.** 업스트림 본문이 [TokenHolder.currentAccessToken] 을 부르는데
+     * 그 구현은 디스크 복원을 **최대 5초 블로킹으로 기다린다** — 「OkHttp I/O 스레드에서만 부른다」는
+     * 전제의 API 다([TokenHolder] KDoc). 수집은 `viewModelScope`(= `Dispatchers.Main.immediate`)에서
+     * 일어나므로 `flowOn` 이 없으면 그 블로킹이 **메인 스레드에서** 일어나 앱이 최대 5초 멎는다
+     * (앱 시작 직후 채팅방으로 바로 들어가는 경로가 그렇다). `flowOn` 은 업스트림만 옮기므로
+     * 호출부의 수집은 그대로 메인에서 일어난다 — 화면 갱신 쪽은 바뀌지 않는다.
+     */
     fun room(chatRoomId: Long): Flow<RoomSignal> = flow {
+        // 연속 실패 횟수 — 붙는 데 성공하면(Connected) 0 으로 되돌린다
+        var failures = 0
         while (true) {
             try {
-                collectRoom(chatRoomId) { emit(it) }
+                collectRoom(chatRoomId) { signal ->
+                    // 구독까지 성공했으면 백오프를 처음으로 되돌린다. 긴 연결이 끊긴 것과
+                    // 「붙지도 못하는 상태」를 같게 다루면 멀쩡한 서버에도 30초를 기다린다.
+                    if (signal is RoomSignal.Connected) failures = 0
+                    emit(signal)
+                }
+                // 예외 없이 돌아오는 경우(미로그인·구독 종료)도 **실패로 센다** — 조건이 그대로면
+                // 다음 시도도 같은 결과라, 3초마다 깨어나는 하드 루프가 된다.
+                failures++
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                Log.d(TAG, "연결 끊김 roomId=$chatRoomId — ${RECONNECT_DELAY_MS}ms 뒤 재시도: ${e.message}")
+                failures++
+                Log.d(TAG, "연결 끊김 roomId=$chatRoomId — ${failures}회째 실패: ${e.message}")
             }
             emit(RoomSignal.Disconnected)
-            delay(RECONNECT_DELAY_MS)
+            val wait = reconnectDelayMs(failures)
+            Log.d(TAG, "재연결 대기 roomId=$chatRoomId — ${wait}ms (${failures}회째)")
+            delay(wait)
         }
-    }
+    }.flowOn(Dispatchers.IO)
 
     /**
      * 이 방으로 메시지를 **보낸다**(SEND `/pub/chat-rooms/{id}/messages`).

@@ -10,6 +10,9 @@ import com.moyeota.data.remote.dto.FcmTokenRequest
 import com.moyeota.data.remote.dto.LoginRequestDto
 import com.moyeota.data.remote.dto.NicknameCheckRequestDto
 import com.moyeota.data.remote.dto.NicknameCheckResponse
+import com.moyeota.data.remote.dto.PhoneCheckRequestDto
+import com.moyeota.data.remote.dto.PhoneCheckResponse
+import com.moyeota.data.remote.dto.ProfileImageResponse
 import com.moyeota.data.remote.dto.RefreshTokenRequestDto
 import com.moyeota.data.remote.dto.RegisterRequestDto
 import com.moyeota.data.remote.dto.RegisterResponse
@@ -19,6 +22,7 @@ import com.moyeota.data.remote.dto.SmsVerifyResponse
 import com.moyeota.data.remote.dto.TokenResponse
 import com.moyeota.data.remote.dto.UpdateProfileRequest
 import com.moyeota.data.remote.dto.UserProfileResponse
+import com.moyeota.data.remote.dto.RideRecordPageResponse
 import com.moyeota.data.session.FakeTokenStorage
 import com.moyeota.data.session.SessionManager
 import com.moyeota.data.session.StoredSession
@@ -27,8 +31,12 @@ import com.moyeota.domain.model.AuthException
 import com.moyeota.domain.model.AuthState
 import com.moyeota.domain.model.Gender
 import com.moyeota.domain.model.NewUser
+import com.moyeota.domain.model.ProfileImage
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.ResponseBody.Companion.toResponseBody
@@ -400,6 +408,50 @@ class RemoteAuthRepositoryTest {
         assertEquals(AuthError.INVALID_NICKNAME, (thrown as AuthException).error)
     }
 
+    // ───────────────────────── 전화번호 가입 여부 선확인 ─────────────────────────
+
+    /**
+     * 서버도 하이픈을 지우지만(`PhoneNumber` VO), 앱이 발송·확인·가입과 **다른 형태**를 보내면
+     * 「발송은 되는데 선확인만 400」처럼 번호 표기부터 의심해야 하는 어긋남이 생긴다.
+     * 네 경로가 모두 `AuthPolicy.normalizePhoneNumber` 를 거치는지를 여기서 못 박는다.
+     */
+    @Test
+    fun `가입 여부 확인은 하이픈을 떼고 보낸다`() = runBlocking {
+        val api = FakeAuthApi()
+
+        repository(api, session()).isPhoneRegistered("010-1234-5678")
+
+        assertEquals(PhoneCheckRequestDto("01012345678"), api.phoneRequest)
+    }
+
+    @Test
+    fun `가입 여부 확인은 exists 를 그대로 돌려준다`() = runBlocking {
+        assertTrue(repository(FakeAuthApi(phoneExists = true), session()).isPhoneRegistered("01012345678"))
+        assertFalse(repository(FakeAuthApi(phoneExists = false), session()).isPhoneRegistered("01012345678"))
+    }
+
+    /**
+     * **발송과 확인의 형식 오류 코드가 다르다.** 발송 요청에는 `@Pattern` 이 있어 Bean Validation 이
+     * 먼저 걸려 `INVALID_REQUEST` 이고, 확인 요청에는 없어 서버 `PhoneNumber` VO 가 걸러
+     * 400 `USER105` 다(실측 2026-11-01, 로컬 :8080).
+     *
+     * 매핑을 놓치면 400 폴백이 `INVALID_REQUEST` 인데 serverMessage 가 `"phoneNumber"` 로 시작하지도
+     * 않아 화면의 분기에 걸리지 않고 서버 원문이 그대로 뜬다.
+     */
+    @Test
+    fun `가입 여부 확인의 400 USER105 는 INVALID_PHONE_NUMBER 로 올라온다`() = runBlocking {
+        val api = FakeAuthApi(
+            phoneCheckFailure = httpException(
+                400,
+                """{"code":"USER105","message":"전화번호 형식이 올바르지 않습니다."}""",
+            ),
+        )
+
+        val thrown = runCatching { repository(api, session()).isPhoneRegistered("abc") }.exceptionOrNull()
+
+        assertEquals(AuthError.INVALID_PHONE_NUMBER, (thrown as AuthException).error)
+    }
+
     /** null 필드는 본문에서 빠진다 — 서버가 "넘어온 것만 갱신"하므로 null 로 지우기를 표현할 수 없다. */
     @Test
     fun `프로필 수정은 넘어온 값만 서버로 보낸다`() = runBlocking {
@@ -421,6 +473,97 @@ class RemoteAuthRepositoryTest {
         }.exceptionOrNull()
 
         assertEquals(AuthError.NICKNAME_DUPLICATED, (thrown as AuthException).error)
+    }
+
+    // ───────────────────────────── 프로필 이미지 ─────────────────────────────
+
+    /**
+     * **오늘 실제로 났던 결함을 못 박는 자리다** — 앱이 이미지를 골라도 `imageKey = null` 만 보내
+     * PATCH 가 아무것도 바꾸지 않고 204 로 끝났다. 서버는 빠진 필드를 건드리지 않으므로
+     * 요청은 성공으로 보이고, 사용자는 「저장됐어요」를 본 뒤 화면을 다시 열면 옛 이미지를 만난다.
+     *
+     * 닉네임이 `null` **그대로** 남는 것도 함께 본다. 빈 문자열로 바뀌면 서버가 닉네임까지 갱신하려 들어
+     * 400 이고, 서버는 imageKey 를 닉네임보다 먼저 검사하므로 거절되면 **이미지도 함께 안 바뀐다**.
+     */
+    @Test
+    fun `이미지 키만 바꿀 때 닉네임을 싣지 않는다`() = runBlocking {
+        val userApi = FakeUserApi()
+
+        repository(FakeAuthApi(), session(), userApi)
+            .updateProfile(nickname = null, imageKey = "profile/presets/03.png")
+
+        assertEquals(
+            listOf(UpdateProfileRequest(nickname = null, imageKey = "profile/presets/03.png")),
+            userApi.profileUpdates,
+        )
+    }
+
+    /**
+     * 서버가 준 순서가 곧 격자에 그려지는 순서다 — 정렬하거나 뒤섞으면 서버가 정한 순서가 사라진다.
+     * 같은 단언이 key·url 이 뒤집히지 않는 것까지 본다(뒤집히면 PATCH 가 400 `USER112` 다).
+     */
+    @Test
+    fun `프로필 이미지 목록을 서버 순서 그대로 도메인으로 넘긴다`() = runBlocking {
+        val images = repository(FakeAuthApi(), session(), FakeUserApi()).getProfileImages()
+
+        assertEquals(
+            listOf(
+                ProfileImage(key = "profile/presets/01.png", url = "https://cdn.moyeota.co.kr/profile/presets/01.png"),
+                ProfileImage(key = "profile/presets/02.png", url = "https://cdn.moyeota.co.kr/profile/presets/02.png"),
+            ),
+            images,
+        )
+    }
+
+    /**
+     * 설정이 비어 0장이 와도 **정상 응답**이다. 여기서 예외로 바꾸면 이미지와 상관없는
+     * 닉네임 수정까지 같은 화면에서 막힌다.
+     */
+    @Test
+    fun `빈 이미지 목록도 그대로 통과한다`() = runBlocking {
+        val userApi = FakeUserApi(profileImages = emptyList())
+
+        assertTrue(repository(FakeAuthApi(), session(), userApi).getProfileImages().isEmpty())
+    }
+
+    /**
+     * 되돌리기는 204·멱등이라 돌려받을 값이 없고, 확인할 수 있는 건 「정확히 한 번 나갔는가」뿐이다.
+     * 재시도를 끼워 넣지 않는지까지 보는 이유는 경로가 **회원 탈퇴와 한 조각 차이**이기 때문이다
+     * (`DELETE /users/me/profile-image` 대 `DELETE /users/me`) — 경로 검사는
+     * [com.moyeota.data.remote.AuthenticatedPathContractTest] 쪽이 맡는다.
+     */
+    @Test
+    fun `되돌리기는 DELETE 를 한 번만 부른다`() = runBlocking {
+        val userApi = FakeUserApi()
+
+        repository(FakeAuthApi(), session(), userApi).resetProfileImage()
+
+        assertEquals(1, userApi.resetCount)
+    }
+
+    /**
+     * 새로 들어온 두 메서드도 [HttpException] 을 밖으로 흘리지 않아야 한다. 화면은 [AuthException] 만
+     * 다루므로 그대로 새면 「다시 로그인」 안내로 이어지지 못하고 처리되지 않은 예외가 된다.
+     */
+    @Test
+    fun `프로필 이미지 조회와 되돌리기 실패도 AuthException 으로 좁힌다`() {
+        val expired = httpException(401, """{"code":"USER005","message":"로그인이 필요합니다."}""")
+
+        val listFailure = runCatching {
+            runBlocking {
+                repository(FakeAuthApi(), session(), FakeUserApi(profileImagesFailure = expired))
+                    .getProfileImages()
+            }
+        }.exceptionOrNull()
+        val resetFailure = runCatching {
+            runBlocking {
+                repository(FakeAuthApi(), session(), FakeUserApi(resetProfileImageFailure = expired))
+                    .resetProfileImage()
+            }
+        }.exceptionOrNull()
+
+        assertEquals(AuthError.SESSION_EXPIRED, (listFailure as AuthException).error)
+        assertEquals(AuthError.SESSION_EXPIRED, (resetFailure as AuthException).error)
     }
 
     /**
@@ -469,6 +612,33 @@ class RemoteAuthRepositoryTest {
         assertEquals(1, userApi.deleteCount)
         assertEquals("access.jwt", userApi.accessTokenAtDelete)
         assertEquals(AuthState.Unauthenticated, session.authState.value)
+    }
+
+    /**
+     * **로그아웃이 중간에 취소돼도 세션은 비워져야 한다.** 호출부는 `MainNavGraph` 의
+     * `rememberCoroutineScope()` 라, 푸시 해제를 기다리는 최대 2초 안에 화면이 회전하면 스코프가
+     * 취소된다. [FcmTokenRegistrar] 는 [CancellationException] 만은 되던지므로, 예전 구현은
+     * 그 취소가 `session.onLoggedOut()` 에 닿지 못해 **세션이 그대로 남았다** —
+     * 사용자는 로그아웃된 줄 아는데 토큰은 살아 있었다(공용 기기면 안전 문제다).
+     *
+     * 해제가 매달려 있는 동안 정확히 취소를 걸어 그 창을 재현한다. [entered] 를 기다리는 게 중요하다
+     * — 그냥 취소하면 `logout()` 에 들어가기도 전에 끝나 다른 상황을 검증하게 된다.
+     */
+    @Test
+    fun `로그아웃 중 호출부가 취소돼도 세션은 비워진다`() = runBlocking {
+        val session = session(StoredSession("uuid-1", "access.jwt", "refresh.jwt"))
+        val entered = CompletableDeferred<Unit>()
+        val userApi = SuspendingFcmUserApi(entered)
+        val repo = repository(FakeAuthApi(), session, userApi, FcmTokenRegistrar(userApi, session))
+
+        val job = launch(Dispatchers.Default) { repo.logout() }
+        entered.await()
+        // 화면 회전으로 rememberCoroutineScope 가 날아간 순간.
+        job.cancel()
+        job.join()
+
+        assertEquals(AuthState.Unauthenticated, session.authState.value)
+        assertNull(session.currentAccessToken())
     }
 
     /** 보낼 Bearer 가 없으니 401 만 받는다. 로그아웃 경로에 헛된 왕복을 끼워 넣지 않는다. */
@@ -698,6 +868,8 @@ private class FakeAuthApi(
     private val logoutFailure: Throwable? = null,
     private val nicknameExists: Boolean = false,
     private val nicknameFailure: Throwable? = null,
+    private val phoneExists: Boolean = false,
+    private val phoneCheckFailure: Throwable? = null,
     private val smsSendFailure: Throwable? = null,
     private val smsVerifyFailure: Throwable? = null,
     private val verificationToken: String = "3f2b8c1e-0000-4000-8000-000000000001",
@@ -705,6 +877,8 @@ private class FakeAuthApi(
     var registerRequest: RegisterRequestDto? = null
         private set
     var nicknameRequest: NicknameCheckRequestDto? = null
+        private set
+    var phoneRequest: PhoneCheckRequestDto? = null
         private set
     var loginRequest: LoginRequestDto? = null
         private set
@@ -753,7 +927,26 @@ private class FakeAuthApi(
         nicknameFailure?.let { throw it }
         return NicknameCheckResponse(exists = nicknameExists)
     }
+
+    override suspend fun checkPhone(request: PhoneCheckRequestDto): PhoneCheckResponse {
+        phoneRequest = request
+        phoneCheckFailure?.let { throw it }
+        return PhoneCheckResponse(exists = phoneExists)
+    }
 }
+
+/**
+ * 목록 응답 픽스처. 백엔드 `ProfileImages` 설정 기준이다 — **실서버로 확인한 값이 아니다**
+ * (이번에는 로컬 DB 가 죽어 API 를 호출하지 못했다). key 는 `profile/presets/NN.png` 로
+ * 제로패딩이고, url 은 같은 key 를 CDN 주소에 붙인 값이다.
+ *
+ * 실제 목록은 16장이지만 두 장만 둔다 — 여기서 확인하는 건 「서버 순서가 보존되는가」와
+ * 「key·url 이 뒤집히지 않는가」뿐이고, 장수는 그 둘과 무관하다.
+ */
+private val PRESET_PROFILE_IMAGES = listOf(
+    ProfileImageResponse(key = "profile/presets/01.png", url = "https://cdn.moyeota.co.kr/profile/presets/01.png"),
+    ProfileImageResponse(key = "profile/presets/02.png", url = "https://cdn.moyeota.co.kr/profile/presets/02.png"),
+)
 
 /** 기본값은 실서버 실측 응답 그대로(testuser1). */
 private class FakeUserApi(
@@ -763,6 +956,9 @@ private class FakeUserApi(
     private val fcmFailure: Throwable? = null,
     private val profileFailure: Throwable? = null,
     private val deleteAccountFailure: Throwable? = null,
+    private val profileImages: List<ProfileImageResponse> = PRESET_PROFILE_IMAGES,
+    private val profileImagesFailure: Throwable? = null,
+    private val resetProfileImageFailure: Throwable? = null,
 ) : UserApi {
     /** 푸시 토큰 호출이 **일어난 순서**. 어떤 호출이 실제로 나갔는지를 그대로 남긴다. */
     val fcmCalls = mutableListOf<String>()
@@ -773,6 +969,13 @@ private class FakeUserApi(
     /** 탈퇴 요청으로 나간 본문. 비밀번호가 다듬어지지 않았는지까지 본다. */
     val deletions = mutableListOf<AccountDeletionRequest>()
 
+    /**
+     * 되돌리기가 나간 횟수. 204 라 돌려받을 값이 없어 **"몇 번 나갔는가"만이 검증 대상**이다 —
+     * 경로가 회원 탈퇴(`DELETE /users/me`)와 한 조각 차이라 왕복이 늘어나는 것 자체가 위험 신호다.
+     */
+    var resetCount = 0
+        private set
+
     override suspend fun getMyProfile(): UserProfileResponse {
         failure?.let { throw it }
         return UserProfileResponse(uuid = uuid, name = name)
@@ -781,6 +984,17 @@ private class FakeUserApi(
     override suspend fun updateProfile(request: UpdateProfileRequest) {
         profileUpdates += request
         profileFailure?.let { throw it }
+    }
+
+    override suspend fun getProfileImages(): List<ProfileImageResponse> {
+        profileImagesFailure?.let { throw it }
+        return profileImages
+    }
+
+    override suspend fun resetProfileImage() {
+        // 실패해도 세어 둔다 — "몇 번 나갔는가"는 실패 경로에서도 검증 대상이다(탈퇴와 경로가 비슷하다).
+        resetCount++
+        resetProfileImageFailure?.let { throw it }
     }
 
     override suspend fun registerFcmToken(request: FcmTokenRequest) {
@@ -798,6 +1012,10 @@ private class FakeUserApi(
         deletions += request
         deleteAccountFailure?.let { throw it }
     }
+
+    // UserApi 에 탑승 기록 조회(GET /users/me/parties)가 들어와 생긴 구현. 인증 흐름과 무관하다.
+    override suspend fun getMyRideRecords(cursor: Long?, size: Int): RideRecordPageResponse =
+        throw UnsupportedOperationException("인증 흐름과 무관하다")
 }
 
 /**
@@ -816,6 +1034,12 @@ private class TokenProbingUserApi(private val accessToken: () -> String?) : User
     override suspend fun updateProfile(request: UpdateProfileRequest) =
         throw UnsupportedOperationException("푸시 해제 순서 검증 전용 페이크다")
 
+    override suspend fun getProfileImages(): List<ProfileImageResponse> =
+        throw UnsupportedOperationException("푸시 해제 순서 검증 전용 페이크다")
+
+    override suspend fun resetProfileImage() =
+        throw UnsupportedOperationException("푸시 해제 순서 검증 전용 페이크다")
+
     override suspend fun registerFcmToken(request: FcmTokenRequest) = Unit
 
     override suspend fun deleteFcmToken() {
@@ -825,4 +1049,48 @@ private class TokenProbingUserApi(private val accessToken: () -> String?) : User
 
     override suspend fun deleteAccount(request: AccountDeletionRequest) =
         throw UnsupportedOperationException("푸시 해제 순서 검증 전용 페이크다")
+
+    override suspend fun getMyRideRecords(cursor: Long?, size: Int): RideRecordPageResponse =
+        throw UnsupportedOperationException("푸시 해제 순서 검증 전용 페이크다")
+}
+
+/**
+ * 푸시 해제를 잠시 **매달아 둔다.** 그 사이에 호출부를 취소해 "로그아웃이 세션을 비우기 전에
+ * 취소되는" 창을 정확히 재현한다. [entered] 는 "해제 호출이 실제로 들어왔다"는 신호다.
+ *
+ * 매달아 두는 수단이 [delay] 인 것이 중요하다 — **취소 가능한 지점**이라, 취소를 무시하지 않는
+ * 구현에서는 반드시 여기서 [kotlinx.coroutines.CancellationException] 이 나고
+ * `session.onLoggedOut()` 까지 가지 못한다. 완료 신호로 깨우는 방식은 경합에 따라 취소를
+ * 비껴갈 수 있어 회귀 테스트로서 믿을 수 없다.
+ */
+private class SuspendingFcmUserApi(private val entered: CompletableDeferred<Unit>) : UserApi {
+    override suspend fun getMyProfile(): UserProfileResponse =
+        throw UnsupportedOperationException("로그아웃 취소 검증 전용 페이크다")
+
+    override suspend fun updateProfile(request: UpdateProfileRequest) =
+        throw UnsupportedOperationException("로그아웃 취소 검증 전용 페이크다")
+
+    override suspend fun getProfileImages(): List<ProfileImageResponse> =
+        throw UnsupportedOperationException("로그아웃 취소 검증 전용 페이크다")
+
+    override suspend fun resetProfileImage() =
+        throw UnsupportedOperationException("로그아웃 취소 검증 전용 페이크다")
+
+    override suspend fun registerFcmToken(request: FcmTokenRequest) = Unit
+
+    override suspend fun deleteFcmToken() {
+        entered.complete(Unit)
+        delay(HANGING_MILLIS)
+    }
+
+    override suspend fun deleteAccount(request: AccountDeletionRequest) =
+        throw UnsupportedOperationException("로그아웃 취소 검증 전용 페이크다")
+
+    override suspend fun getMyRideRecords(cursor: Long?, size: Int): RideRecordPageResponse =
+        throw UnsupportedOperationException("로그아웃 취소 검증 전용 페이크다")
+
+    private companion object {
+        /** FCM 해제 상한(2초)보다 충분히 짧게 — 타임아웃이 먼저 터지면 취소를 검증하지 못한다. */
+        const val HANGING_MILLIS = 100L
+    }
 }

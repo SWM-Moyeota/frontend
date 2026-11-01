@@ -195,6 +195,102 @@ class PhoneVerifyStateTest {
         assertEquals(0, state.codeRemainingSeconds(NOW))
     }
 
+    // ───────────────────── 누르기 전 선확인(POST /auth/phone/check) ─────────────────────
+
+    /**
+     * 선확인이 「이미 가입된 번호」라고 답하면 발송 409 와 **같은 자리로 간다** — 문구는 번호 입력란
+     * 아래, 버튼은 잠금, 인증번호 입력칸은 열지 않음. 새 상태도 새 문구도 만들지 않는다.
+     */
+    @Test
+    fun `누르기 전 선확인도 인증번호 입력칸을 열지 않는다`() {
+        val state = PhoneVerifyState().onPhonePrecheckTaken("이미 가입된 번호예요")
+
+        assertEquals(PhoneVerifyStage.Idle, state.stage)
+        assertTrue(state.alreadyRegistered)
+        assertEquals("이미 가입된 번호예요", state.phoneMessage)
+        assertFalse(state.canRequestCode(PHONE, NOW))
+    }
+
+    /**
+     * ★ 이 작업에서 가장 쉽게 나는 결함을 막는다.
+     *
+     * 선확인은 발송을 시도한 적이 없으므로 묶인 번호가 없다. [PhoneVerifyState.boundPhone] 을
+     * 채워 두면 [PhoneVerifyState.onPhoneDigitsChanged] 가 「같은 번호」로 보고 상태를 **그대로 둬서**,
+     * 사용자가 번호를 고쳤다 되돌릴 때 「이미 가입된 번호예요」와 잠긴 버튼이 풀리지 않는다.
+     */
+    @Test
+    fun `선확인은 boundPhone 을 묶지 않는다`() {
+        val blocked = PhoneVerifyState().onPhonePrecheckTaken("이미 가입된 번호예요")
+
+        assertEquals("", blocked.boundPhone)
+        // 같은 번호가 다시 들어와도 묶인 번호가 없으니 상태가 비워진다 → 잠금이 풀린다.
+        assertEquals(PhoneVerifyState(), blocked.onPhoneDigitsChanged(PHONE))
+    }
+
+    /**
+     * ★ 사용자가 디바운스가 끝나는 순간 「인증번호 받기」를 누르면 두 경로가 겹친다.
+     *
+     * 늦게 온 선확인이 그대로 적용되면 [PhoneVerifyState.onRequestStart] 가 켠 진행 표시를 되돌리고
+     * (그쪽은 `alreadyRegistered` 를 false 로 리셋한다) 진행 중인 발송 위에 「이미 가입된 번호」가 뜬다.
+     */
+    @Test
+    fun `발송이 시작된 뒤 도착한 선확인은 무시된다`() {
+        val requesting = PhoneVerifyState().onRequestStart(PHONE)
+
+        val state = requesting.onPhonePrecheckTaken("이미 가입된 번호예요")
+
+        assertSame(requesting, state)
+        assertTrue(state.requesting)
+        assertFalse(state.alreadyRegistered)
+        assertNull(state.phoneMessage)
+    }
+
+    /** 인증을 이미 끝낸 뒤 늦게 온 선확인도 같다 — 통과한 인증을 되돌리지 않는다. */
+    @Test
+    fun `인증을 끝낸 뒤 도착한 선확인은 무시된다`() {
+        val done = verified()
+
+        assertSame(done, done.onPhonePrecheckTaken("이미 가입된 번호예요"))
+    }
+
+    @Test
+    fun `선확인이 켠 상태도 번호를 고치면 풀린다`() {
+        val blocked = PhoneVerifyState().onPhonePrecheckTaken("이미 가입된 번호예요")
+
+        val other = blocked.onPhoneDigitsChanged("01099998888")
+
+        assertEquals(PhoneVerifyState(), other)
+        assertTrue(other.canRequestCode("01099998888", NOW))
+    }
+
+    /**
+     * ★★ 선확인을 붙이는 바람에 **지금보다 나빠지는** 유일한 경로를 막는다.
+     *
+     * 실측(2026-11-01, 로컬 :8080): 탈퇴한 번호는 `POST /auth/phone/check` 에서 `{"exists":false}` 200
+     * 인데 `POST /auth/sms/send` 에서는 409 `USER109` 다 — 서버가 선확인에서는 활성 프로필 한 테이블만
+     * 보고 탈퇴 기록을 보지 않는다. 즉 **`exists=false` 는 「가입 가능」이 아니다.**
+     *
+     * 그래서 `exists=false` 에는 대응하는 전이가 없고(상태가 그대로다), 버튼은 열린 채로 남아
+     * 재가입 제한은 **발송 응답에서만** 드러난다. 구현자가 false 로 버튼을 열거나
+     * `rejoinRestricted` 를 미리 끄거나 두 플래그를 하나로 합치면, 사용자는 「쓸 수 있는 번호」라고
+     * 안심한 뒤 눌러서 「30일 동안 가입 불가」를 듣는다.
+     */
+    @Test
+    fun `선확인이 비어 있다고 해도 재가입 제한은 발송에서만 드러난다`() {
+        // exists=false → 전이가 없으므로 상태는 초기값 그대로다.
+        val idle = PhoneVerifyState()
+        assertFalse("false 를 보고 무언가를 열어 두면 안 된다", idle.alreadyRegistered)
+        assertFalse(idle.rejoinRestricted)
+        assertTrue("선확인은 발송을 막지 않는다 — 최종 판정이 그쪽에 있다", idle.canRequestCode(PHONE, NOW))
+
+        val blocked = idle.onRequestStart(PHONE)
+            .onRequestFailure(AuthError.REJOIN_RESTRICTED, "30일 동안 다시 가입할 수 없어요", NOW)
+
+        assertTrue(blocked.rejoinRestricted)
+        assertFalse("재가입 제한을 「로그인하면 된다」로 말하게 된다", blocked.alreadyRegistered)
+        assertFalse(blocked.canRequestCode(PHONE, NOW))
+    }
+
     /**
      * 탈퇴한 번호의 재가입 제한(409 `USER109`, 2026-10). 발송 단계에서 나는 것까지는
      * [AuthError.PHONE_NUMBER_DUPLICATED] 와 같지만 **같은 플래그로 묶으면 안 된다** —

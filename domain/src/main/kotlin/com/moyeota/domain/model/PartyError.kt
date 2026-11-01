@@ -194,3 +194,186 @@ class RealtimeMatchException(
      */
     val isOutOfServiceArea: Boolean get() = code == "OUT_OF_SERVICE_AREA"
 }
+
+/**
+ * 방 **생성** 실패를 화면이 **사유별로 안내할 수 있는 형태**로 좁힌 예외
+ * ([RideRepository.createParty][com.moyeota.domain.repository.RideRepository.createParty] 전용).
+ *
+ * 생성만 오래 예외가 없었다. 합류는 [PartyJoinException] 으로 6갈래, 완료는 [PartyFinishException] 으로
+ * 5갈래인데 생성은 **모든 실패가 「잠시 후 다시 시도해 주세요」 하나**였다. 그게 특히 나쁜 까닭은 이
+ * 엔드포인트의 실패가 **기다려서 풀리는 것과 사용자가 고쳐야 하는 것으로 갈리기** 때문이다:
+ *
+ * | 사유 | 서버 코드(HTTP) | 기다리면 풀리나 |
+ * |---|---|---|
+ * | 이미 참여 중인 방이 있다 | `ALREADY_JOINED_OTHER_PARTY` (409) | **아니다.** 그 방을 먼저 정리해야 한다 |
+ * | 출발지와 도착지가 같다 | `SAME_DEPARTURE_DESTINATION` (400) | **아니다.** 핀을 옮겨야 한다 |
+ * | 서비스 지역 밖 좌표 | `OUT_OF_SERVICE_AREA` (400) | **아니다.** 다른 곳을 골라야 한다 |
+ * | 정원이 1~3 이 아니다 | `INVALID_CAPACITY` (400) | **아니다.** 앱이 잘못 보냈다 |
+ * | 경로 엔진 장애·경로 없음 | `ROUTE_SEARCH_FAILED` (502) · `INVALID_ROUTE_ESTIMATE`·`ROUTE_NOT_FOUND` (400) | 장애면 그렇다 |
+ *
+ * **409 가 이 예외를 만든 직접적인 이유다.** 서버 `PartyService.open` 의 첫 줄이
+ * `validateNotInOngoingParty(creatorId)` 이고, 거기서 보는 「진행 중」은
+ * `PartyStatus.isOngoing()` = `!(CANCELED || FINISHED)` 다. 그런데 서버의 30분 스윕
+ * (`CompletedPartySweeper`)은 **COMPLETED 만** 쓸어내므로 **아무도 합류하지 않은 ACTIVE 방은 영구히
+ * 남아** 그 계정의 생성·합류를 계속 막는다. 유일한 탈출구가 홈 배너 → 21 → 「그만 찾기」인데, 그 배너는
+ * `ActivePartyRepository.resolve()` 가 방을 찾아야 뜬다 — 그래서 화면은 이 409 를 받으면 **문구로
+ * 안내하는 동시에 진행 중 방 조회를 되살려야** 한다. 그 둘 다 「잠시 후 다시 시도」 아래에서는 할 수 없다.
+ *
+ * 분기 근거를 프로퍼티로 노출하는 건 [PartyJoinException]·[PartyFinishException] 과 같은 이유다 —
+ * 서버 코드 문자열 비교가 화면으로 새어 나가면 서버가 enum 이름을 바꿀 때 조용히 어긋난다.
+ * 그리고 **상태 코드로 폴백하지 않는다**(400 이 네 가지, 502 가 한 가지다): 코드를 모르면 [code] 는
+ * null 이고 화면은 **일반 문구**로 떨어진다. 서버가 코드를 늘려도 앱이 틀린 말을 하지 않는다.
+ */
+class PartyOpenException(
+    /** 서버 `MatchingErrorCode` 이름(`SAME_DEPARTURE_DESTINATION` 등). 본문이 없거나 파싱 실패면 null. */
+    val code: String?,
+    /** 서버가 준 한국어 원문 message. 없으면 null. */
+    val serverMessage: String?,
+    /** HTTP 상태 코드. 응답 자체가 없으면(네트워크 실패) null. 문구 분기에는 [isRouteUnavailable] 만 쓴다. */
+    val httpStatus: Int? = null,
+    cause: Throwable? = null,
+) : RuntimeException(serverMessage ?: code ?: "방을 만들지 못했습니다.", cause) {
+
+    /**
+     * 409 — **이미 참여 중인 방이 있다.** 그 방을 정리하지 않으면 새 방도, 다른 방 합류도 막힌다.
+     *
+     * 합류와 달리 「이 방인가」를 가릴 필요가 없다 — 만들려는 방은 아직 없으므로 **언제나 다른 방**이다.
+     * 그래서 [PartyJoinException.isAlreadyInThisParty] 같은 복구 분기가 없고, 대신 화면은 진행 중 방
+     * 조회를 되살려 홈 배너로 돌아갈 길을 만들어야 한다(위 KDoc).
+     *
+     * 두 코드를 함께 보는 건 [PartyJoinException.isAlreadyJoinedCode] 와 같은 이유다 — 서버 코드 문자열을
+     * 아는 곳을 늘리지 않는다.
+     */
+    val isAlreadyInAnotherParty: Boolean get() = PartyJoinException.isAlreadyJoinedCode(code)
+
+    /**
+     * 400 `SAME_DEPARTURE_DESTINATION` — 출발지와 도착지가 **같은 좌표**다(서버 `Party.open` 첫 검사).
+     *
+     * 15 목적지 화면의 50m 검사를 통과한 뒤에도 생긴다: 16 의 핀 조정은 그 검사를 **다시 거치지 않으므로**
+     * 두 핀을 겹쳐 놓으면 그대로 여기로 떨어진다. 사용자가 **고쳐야 하는** 실패라 「잠시 후 다시」로
+     * 안내하면 영원히 같은 400 을 맞는다.
+     */
+    val isSameDepartureDestination: Boolean get() = code == SAME_DEPARTURE_DESTINATION
+
+    /**
+     * 400 `OUT_OF_SERVICE_AREA` — 좌표가 서비스 지역(위 33~39 / 경 124~132) 밖이다.
+     * [RealtimeMatchException.isOutOfServiceArea] 와 같은 코드이고, **요청 필드명을 먼저 의심할 것**도 같다.
+     */
+    val isOutOfServiceArea: Boolean get() = code == OUT_OF_SERVICE_AREA
+
+    /**
+     * 400 `INVALID_CAPACITY` — 정원이 1~3 이 아니다(서버 `Capacity` record).
+     * 16 모달의 칩이 1~3 뿐이고 앱이 한 번 더 `coerceIn` 하므로 **앱 버그일 때만** 온다 —
+     * 그래도 「잠시 후 다시」로 뭉개지 않는다: 기다려서 풀리지 않는다.
+     */
+    val isInvalidCapacity: Boolean get() = code == INVALID_CAPACITY
+
+    /**
+     * 경로를 받지 못했다 — 서버가 방을 만들기 **전에** 경로를 추정하므로(`routeService.estimate`)
+     * 그 단계의 실패가 곧 생성 실패다.
+     *
+     * 세 코드를 한 갈래로 묶는다. 502 `ROUTE_SEARCH_FAILED`(엔진 장애)와 400
+     * `INVALID_ROUTE_ESTIMATE`·`ROUTE_NOT_FOUND`(받아온 추정이 쓸 수 없다/경로가 없다)는 원인이 다르지만
+     * **사용자가 할 수 있는 일이 같다** — 잠시 뒤 다시 시도하거나 핀을 조금 옮기는 것뿐이다.
+     * 502 를 상태 코드로도 받는 건 [RealtimeMatchException.isRouteUnavailable] 과 같은 선례다
+     * (게이트웨이가 본문 없이 502 만 돌려주는 경우).
+     */
+    val isRouteUnavailable: Boolean
+        get() = code == ROUTE_SEARCH_FAILED ||
+            code == INVALID_ROUTE_ESTIMATE ||
+            code == ROUTE_NOT_FOUND ||
+            httpStatus == 502
+
+    /**
+     * 서버 `MatchingErrorCode` 중 **이 엔드포인트가 실제로 던지는** 코드만 둔다
+     * (`PartyService.open` → `routeService.estimate` → `Party.open` → `Capacity`/`Location`).
+     * 「이미 참여 중」 두 코드는 [PartyJoinException] 이 이미 들고 있으므로 여기서 또 적지 않는다.
+     */
+    companion object {
+        const val SAME_DEPARTURE_DESTINATION = "SAME_DEPARTURE_DESTINATION"
+        const val OUT_OF_SERVICE_AREA = "OUT_OF_SERVICE_AREA"
+        const val INVALID_CAPACITY = "INVALID_CAPACITY"
+        const val INVALID_ROUTE_ESTIMATE = "INVALID_ROUTE_ESTIMATE"
+        const val ROUTE_NOT_FOUND = "ROUTE_NOT_FOUND"
+        const val ROUTE_SEARCH_FAILED = "ROUTE_SEARCH_FAILED"
+    }
+}
+
+/**
+ * 방 **나가기** 실패를 화면이 **사유별로 안내할 수 있는 형태**로 좁힌 예외
+ * ([RideRepository.leaveParty][com.moyeota.domain.repository.RideRepository.leaveParty] 전용).
+ *
+ * **403 `NOT_PARTY_MEMBER` 는 이 예외로 오지 않는다 — 데이터 계층이 그걸 성공으로 되돌린다.**
+ * 그게 이 예외를 만든 이유다. 서버 `Party.leave` 의 검사 순서가 「멤버인가 → 모집 중인가」인데,
+ * 204 응답이 유실되면(터널·타임아웃) 앱은 실패로 끝나고 **다시 누르면 403** 이다. 두 실패가 같은
+ * 문구로 떨어지면 **이미 나간 사람이 영구 실패 화면에 갇힌다** — 로컬 기억과 홈 배너는 그 방을 계속
+ * 들고 있으니 화면상 나는 아직 그 방에 있다. 합류가 409 를 성공으로 되돌리는 것
+ * ([PartyJoinException.isAlreadyInThisParty])과 **대칭**인 처방이다.
+ *
+ * 그래서 화면까지 올라오는 실패는 둘뿐이다:
+ *
+ * | 사유 | 서버 코드(HTTP) | 사용자가 할 일 |
+ * |---|---|---|
+ * | 모집 중이 아니다 | `PARTY_NOT_RECRUITING` (409) | 매칭이 시작돼 나갈 수 없다 — 기다린다 |
+ * | 방이 없다 | `PARTY_NOT_FOUND` (404) | 홈으로 돌아간다(이미 닫힌 방이다) |
+ * | 그 밖·네트워크 | 코드 없음 | 다시 시도한다 |
+ */
+class PartyLeaveException(
+    /** 서버 `MatchingErrorCode` 이름(`PARTY_NOT_RECRUITING` 등). 본문이 없거나 파싱 실패면 null. */
+    val code: String?,
+    /** 서버가 준 한국어 원문 message. 없으면 null. */
+    val serverMessage: String?,
+    /** HTTP 상태 코드. 응답 자체가 없으면(네트워크 실패) null. */
+    val httpStatus: Int? = null,
+    cause: Throwable? = null,
+) : RuntimeException(serverMessage ?: code ?: "방에서 나가지 못했습니다.", cause) {
+
+    /**
+     * 409 `PARTY_NOT_RECRUITING` — 모집 단계를 벗어난 방이다(기사 매칭이 시작됐다).
+     *
+     * 화면은 이 단계에서 나가기 버튼을 이미 비활성으로 바꾸지만(21 의 `canLeaveParty`), 전이를
+     * 알아채기까지 한 주기가 비어 그 틈에 눌릴 수 있다 — 그때 「나가지 못했어요」가 아니라 **왜**
+     * 못 나가는지 말해 줘야 한다.
+     */
+    val isNotRecruiting: Boolean get() = code == PARTY_NOT_RECRUITING
+
+    /** 404 `PARTY_NOT_FOUND` — 방이 사라졌다. 나갈 방이 없으므로 홈으로 보내면 된다. */
+    val isPartyNotFound: Boolean get() = code == PARTY_NOT_FOUND || (code == null && httpStatus == 404)
+
+    companion object {
+        /**
+         * 403 — 이 방의 멤버가 아니다 = **이미 나갔다**.
+         *
+         * 이 상수를 읽는 곳은 **데이터 계층 하나**다(`RemoteRideRepository.leaveParty` 가 성공으로
+         * 되돌린다). 화면이 이 코드를 보게 되면 그건 되돌림이 빠졌다는 뜻이다 — 위 KDoc 참고.
+         */
+        const val NOT_PARTY_MEMBER = "NOT_PARTY_MEMBER"
+        const val PARTY_NOT_RECRUITING = "PARTY_NOT_RECRUITING"
+        const val PARTY_NOT_FOUND = "PARTY_NOT_FOUND"
+    }
+}
+
+/**
+ * **나는 이 방의 멤버가 아니다** — 방 변화 신호 구독(SSE)이 403 `NOT_PARTY_MEMBER` 로 거절됐다
+ * ([RideRepository.observePartyEvents][com.moyeota.domain.repository.RideRepository.observePartyEvents]).
+ *
+ * 이 예외가 **멤버십을 알려 주는 유일한 창구**다. `GET /matching/rooms/{partyId}`(방 상세)에는 참여자
+ * 검사가 **없어** 멤버가 아니어도 조회가 계속 성공하기 때문이다 — 서버가 403 을 말해 주는 자리는
+ * `PartySseController` 뿐이고, 그쪽은 그 403 을 `@ApiResponse` 로 계약 문서화해 두었다.
+ *
+ * ### 왜 「스트림 종료」와 갈라야 하는가 ★
+ * 예전에는 이 403 이 그 밖의 종결(방 닫힘·404)과 **똑같이** 「스트림이 끝났다」로 뭉개졌다. 그러면
+ * 21 대기 화면은 다시 붙지 않는 대신 6초마다 방 상세를 **영원히** 폴링하면서, **내가 들어 있지 않은
+ * 방**을 「같이 탈 사람을 찾고 있어요」로 보여 준다. 인원 문구까지 자기모순을 말하고(내가 없으니
+ * 「나 외 N명」이 전체 인원과 같아진다), 거기서 「그만 찾기」를 누르면 다시 403 이라 **벗어날 길이 없다.**
+ *
+ * 그래서 신호를 **흐름의 정상 종료가 아니라 예외**로 올린다 — 「끝났다」와 「내가 있을 방이 아니다」는
+ * 호출부가 할 일이 다르고(폴백 폴링 / 화면 떠나기), 정상 종료로는 그 둘을 구분할 자리가 없다.
+ *
+ * 전파 경로에서 **흐름이 재연결을 멈춘다**: 403 은 다시 붙어 봐야 같은 답이다.
+ */
+class PartyMembershipLostException(
+    /** 어느 방이었는지. 로그·디버깅용이고 화면 분기에는 쓰지 않는다 */
+    val partyId: Long? = null,
+    cause: Throwable? = null,
+) : RuntimeException("이 방의 참여자가 아닙니다. (partyId=$partyId)", cause)

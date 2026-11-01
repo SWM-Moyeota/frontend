@@ -399,6 +399,87 @@ class PartyMappersTest {
         assertEquals(0, farePerPerson(estimateFare = null, capacity = 3))
     }
 
+    /**
+     * 1인당 요금은 **10원 단위 반올림**이다(예전에는 Int 나눗셈 절삭이었다).
+     *
+     * **아래 표는 presentation 쪽 `FarePerPersonRuleTest` 와 같은 값이어야 한다.** 16 도착지 확인은
+     * 방을 만들기 전의 추정 총액을 인원으로 나누고, 19 합류·22 상세·25 배차는 이 함수가 만든 값을
+     * 쓰는데 **나누는 수가 같은 값(정원)**이라 반올림 규칙만 어긋나도 같은 방이 화면마다 다른 금액을
+     * 보여 준다 — 실제로 7,900원·3인 방이 16 에서 2,630원, 25 에서 2,633원이었다. 모듈이 달라
+     * 함수를 공유할 수 없으니 **같은 표를 양쪽에 고정**해 둔다(한쪽만 고치면 반대쪽이 깨진다).
+     */
+    @Test
+    fun `1인당 요금은 10원 단위로 반올림한다`() {
+        assertEquals(2630, farePerPerson(estimateFare = 7900, capacity = 3)) // 2633.33 → 내림
+        assertEquals(2670, farePerPerson(estimateFare = 8000, capacity = 3)) // 2666.67 → 올림
+        assertEquals(4830, farePerPerson(estimateFare = 9650, capacity = 2)) // 4825 → 올림(.5)
+        assertEquals(3200, farePerPerson(estimateFare = 9600, capacity = 3)) // 딱 나뉘는 값
+        assertEquals(7900, farePerPerson(estimateFare = 7900, capacity = 1)) // 혼자 타면 전액
+    }
+
+    /**
+     * 목록 응답에 `currentMembers` 키가 없으면 **인원을 지어내지 않는다.**
+     *
+     * 예전 DTO 기본값(0)은 「0명인 방」과 「인원을 모른다」를 한 값으로 접었다. 이 목록은 서버가
+     * `status = ACTIVE` 로만 거른 방들이라 **0명인 방은 존재할 수 없고**(최소 방장 1명), 0 으로
+     * 접으면 17 탐색 카드가 「0/3명」이라는 없는 상태를 그린다. `Ride.members` 가 비어 있다 =
+     * 인원을 모른다는 규약이고, 화면은 그때 정원만 쓴다(`headcountLabel`).
+     */
+    @Test
+    fun `목록 아이템에 인원 수가 없으면 인원을 지어내지 않는다`() {
+        val body = """
+            {"list":[{"partyId":7,"departure":"서울시청","destination":"강남역","capacity":3,"status":"ACTIVE"}]}
+        """.trimIndent()
+
+        val ride = json.decodeFromString<PartyListResponse>(body).list.single().toRide()
+
+        assertTrue("없는 멤버를 만들었다", ride.members.isEmpty())
+        assertEquals(3, ride.capacity)
+    }
+
+    /**
+     * 명시적 `null` 이 섞여도 **목록 전체가 날아가지 않는다.** non-null 기본값이던 동안에는
+     * kotlinx 가 그 한 건에서 예외를 던져(기본값은 키 누락에만 쓰인다) 지도 목록이 통째로 비었다.
+     */
+    @Test
+    fun `목록에 인원 수가 null 인 방이 섞여도 나머지가 살아남는다`() {
+        val body = """
+            {"list":[
+              {"partyId":7,"departure":"서울시청","destination":"강남역","capacity":3,"status":"ACTIVE","currentMembers":null},
+              {"partyId":8,"departure":"장전역","destination":"서면역","capacity":3,"status":"ACTIVE","currentMembers":2}
+            ]}
+        """.trimIndent()
+
+        val rides = json.decodeFromString<PartyListResponse>(body).list.map { it.toRide() }
+
+        assertEquals(2, rides.size)
+        assertTrue("null 을 0명으로 접었다", rides[0].members.isEmpty())
+        assertEquals(2, rides[1].members.size)
+    }
+
+    /**
+     * 상세 응답의 `currentMembers` 가 null 이어도 **방 화면이 열린다.**
+     *
+     * 앱은 이 값을 읽지 않는다(인원의 근거는 `members` 목록이다). 그래도 non-null 로 받던 동안에는
+     * 명시적 null 하나가 상세를 통째로 파싱 실패로 만들었고, 25·26 의 주기 조회가 그 상세 하나에
+     * 걸려 있어 배차·운행 전이를 영영 못 잡는 것으로 번졌다.
+     */
+    @Test
+    fun `상세 응답에 인원 수가 null 이어도 상세가 열린다`() {
+        val body = """
+            {"id":7,"departure":"서울시청","destination":"강남역","capacity":3,"currentMembers":null,
+             "status":"ACTIVE","members":[{"publicId":"$UUID_ME","nickname":"성윤","rideCount":0,"host":true}]}
+        """.trimIndent()
+
+        val ride = json.decodeFromString<PartyDetailResponse>(body).toRide(currentUuid = UUID_ME)
+
+        assertEquals("7", ride.id)
+        assertEquals(RideStatus.RECRUITING, ride.status)
+        // 인원은 members 목록이 말한다 — currentMembers 가 없어도 1명이다.
+        assertEquals(1, ride.members.size)
+        assertTrue(ride.members.single().isMe)
+    }
+
     @Test
     fun `방 생성 응답은 멤버 목록 없이 인원 수만 주므로 자리 표시용 멤버를 만든다`() {
         val response = OpenPartyResponse(
@@ -431,9 +512,33 @@ class PartyMappersTest {
         assertNull(ride.driverId)
     }
 
+    /**
+     * **인원 수를 모르면(키 누락·null) 멤버를 지어내지 않는다.**
+     *
+     * 예전에는 DTO 기본값이 0 이라 이 테스트가 「0 이면 빈다」를 확인했는데, 그 0 은 서버가 만들 수
+     * 없는 값(생성 직후엔 늘 1 = 생성자)이라 사실상 「서버가 말하지 않았다」를 확인하고 있었다.
+     * 지금은 둘을 갈라 두었으므로 **모른다**를 확인한다 — 0 인 경우는 아래 테스트가 따로 본다.
+     */
+    @Test
+    fun `생성 응답에 인원 수가 없으면 멤버를 지어내지 않는다`() {
+        val ride = OpenPartyResponse(id = 12, capacity = 3, status = "ACTIVE").toRide()
+
+        assertTrue(ride.members.isEmpty())
+
+        // 명시적 null 도 같다 — 그리고 **파싱이 터지지 않는다**(non-null 이던 동안에는 예외였고,
+        // 방은 이미 만들어졌는데 앱만 실패로 보는 상태가 됐다).
+        val parsed = json.decodeFromString<OpenPartyResponse>(
+            """{"id":12,"capacity":3,"status":"ACTIVE","currentMembers":null}""",
+        ).toRide()
+
+        assertEquals("12", parsed.id)
+        assertTrue(parsed.members.isEmpty())
+    }
+
+    /** 0 이 와도 멤버를 만들지 않는다 — 0명인 방은 존재할 수 없으니 「모른다」와 같게 다룬다. */
     @Test
     fun `생성 응답 인원 수가 0 이면 멤버가 빈다`() {
-        val ride = OpenPartyResponse(id = 12, capacity = 3, status = "ACTIVE").toRide()
+        val ride = OpenPartyResponse(id = 12, capacity = 3, currentMembers = 0, status = "ACTIVE").toRide()
 
         assertTrue(ride.members.isEmpty())
     }
@@ -668,6 +773,24 @@ class PartyMappersTest {
     @Test
     fun `합류 응답 DTO 에는 상태와 인원 두 필드만 있다`() {
         assertEquals(listOf("status", "currentMembers"), PartyStatusResponse.serializer().fieldNames())
+    }
+
+    /**
+     * 합류 응답의 인원이 null 이어도 **파싱이 깨지지 않는다** — 이 응답에서의 파싱 실패 대가가 가장
+     * 크다: 서버는 멤버 추가를 **먼저 커밋**하고 응답을 만들므로, 앱이 응답을 못 읽으면 서버에는
+     * 내가 들어가 있는데 앱은 실패로 보고, 그 계정은 30분 스윕 전까지 어떤 방에도 못 들어간다.
+     *
+     * 도메인 `PartyStatus.currentMembers` 가 non-null 이라 0 으로 떨어지는데, 이 값을 읽는 화면이
+     * 없어서(21 매칭 대기는 SSE 첫 스냅샷을 믿는다) 그 0 이 화면에 나가지는 않는다.
+     */
+    @Test
+    fun `합류 응답에 인원 수가 null 이어도 상태를 읽는다`() {
+        val status = json.decodeFromString<PartyStatusResponse>(
+            """{"status":"ACTIVE","currentMembers":null}""",
+        ).toPartyStatus()
+
+        assertEquals(RideStatus.RECRUITING, status.status)
+        assertEquals(0, status.currentMembers)
     }
 
     /**

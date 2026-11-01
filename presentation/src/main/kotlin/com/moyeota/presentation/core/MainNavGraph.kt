@@ -2,6 +2,7 @@ package com.moyeota.presentation.core
 
 import android.content.pm.ApplicationInfo
 import android.util.Log
+import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -26,6 +27,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.moyeota.core.designsystem.component.MoyeotaTab
 import com.moyeota.domain.model.AuthState
+import com.moyeota.domain.model.Gender
 import com.moyeota.domain.model.Place
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.User
@@ -35,6 +37,7 @@ import com.moyeota.domain.repository.AuthRepository
 import com.moyeota.domain.repository.ChatRepository
 import com.moyeota.domain.repository.DispatchRepository
 import com.moyeota.domain.repository.PlaceRepository
+import com.moyeota.domain.repository.RideRecordRepository
 import com.moyeota.domain.repository.RideRepository
 import com.moyeota.presentation.feature.auth.LoginFormRoute
 import com.moyeota.presentation.feature.auth.LoginScreen
@@ -60,11 +63,13 @@ import com.moyeota.presentation.feature.mypage.MyPageScreen
 import com.moyeota.presentation.feature.mypage.ModeDebugOptions
 import com.moyeota.presentation.feature.mypage.ProfileEditRoute
 import com.moyeota.presentation.feature.mypage.RideCompleteScreen
+import com.moyeota.presentation.feature.mypage.RideHistoryRoute
 import com.moyeota.presentation.feature.onboarding.OnboardingSafetyScreen
 import com.moyeota.presentation.feature.onboarding.OnboardingSavingScreen
 import com.moyeota.presentation.feature.onboarding.OnboardingTrustScreen
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.time.LocalDate
 
 /**
  * 앱의 진입 라우팅. 세션이 확정되기 전에는 어떤 화면도 열지 않는다.
@@ -82,6 +87,15 @@ fun MainNavGraph(
     chatRepository: ChatRepository,
     dispatchRepository: DispatchRepository,
     activePartyRepository: ActivePartyRepository,
+    /**
+     * 34 지난 탑승 기록(`GET /api/v1/users/me/parties`).
+     *
+     * **필수 인자다.** 2026-11-01 에 `AppContainer.rideRecordRepository` 배선이 들어와
+     * 한동안 두고 있던 `null` 기본값과 자리값 구현(`UnwiredRideRecordRepository`)을 함께 지웠다.
+     * 기본값을 되살리면 배선을 빠뜨린 호출부가 컴파일에서 걸리지 않고 **실행 중에만** 34 가
+     * 「불러오지 못했어요」로 떨어진다 — 그 실패는 서버 장애와 구분되지 않는다.
+     */
+    rideRecordRepository: RideRecordRepository,
     /**
      * 채팅 알림 탭으로 열어 달라는 방. 로그인돼 있고 그래프가 준비되면 그 채팅방을 **스택에 쌓고**
      * [onPendingChatRoomHandled] 로 소비를 알린다. 미로그인이면 무시한다(로그인 뒤 엉뚱한 방을 여는 것보다 낫다).
@@ -105,6 +119,7 @@ fun MainNavGraph(
         chatRepository = chatRepository,
         dispatchRepository = dispatchRepository,
         activePartyRepository = activePartyRepository,
+        rideRecordRepository = rideRecordRepository,
         pendingChatRoomId = pendingChatRoomId,
         onPendingChatRoomHandled = onPendingChatRoomHandled,
     )
@@ -116,6 +131,12 @@ private const val CHAT_ROOM_ID_ARG = "roomId"
 
 // 하단탭 네 루트 — 탭 전환이 saveState 로 상태를 보관하는 대상이자, 로그아웃 때 그 보관분을 지울 대상.
 private val TabRoutes = listOf(Routes.HOME, Routes.EXPLORE, Routes.CHAT, Routes.MYPAGE)
+
+// 37 탈퇴 중 세션이 사라졌을 때 **탈퇴 응답을 기다리는 한도**. 기다리는 대상은 04a 로그인 화면의
+// 안내 문구 하나뿐이고(화면 이동은 어차피 일어난다), 실제로는 한두 프레임이면 결론이 난다.
+// 끝내 못 기다리면 「탈퇴됐다」도 「세션이 만료됐다」도 말하지 않는다(둘 중 하나는 거짓말이다).
+private const val ACCOUNT_DELETE_RESULT_WAIT_MS = 200L
+private const val ACCOUNT_DELETE_RESULT_POLL_MS = 16L
 
 // v15 와이어프레임 35화면 이동 규칙을 한곳에서 배선한다.
 // 각 화면은 콜백만 노출하는 순수 컴포저블 — 화면 안에는 네비게이션 코드가 없다.
@@ -129,6 +150,7 @@ private fun MainNavHost(
     chatRepository: ChatRepository,
     dispatchRepository: DispatchRepository,
     activePartyRepository: ActivePartyRepository,
+    rideRecordRepository: RideRecordRepository,
     pendingChatRoomId: Long? = null,
     onPendingChatRoomHandled: () -> Unit = {},
 ) {
@@ -184,22 +206,45 @@ private fun MainNavHost(
         onPauseOrDispose { }
     }
 
-    // 화면 사이에 넘겨야 하는 값 (백엔드 없는 와이어프레임 데모용 간이 상태)
-    // 10 프로필 만들기가 채우는 가입 정보 — 12 매너 서약에서 제출한다
-    var signupDraft by remember { mutableStateOf(SignupDraft()) }
+    // ── 화면 사이에 넘겨야 하는 값 ──
+    // 10 프로필 만들기가 채우는 가입 정보 — 12 매너 서약에서 제출한다.
+    //
+    // **구성 변경에 살아남아야 한다.** 회전·다크모드 전환·글꼴 크기·언어 변경은 액티비티를 다시
+    // 만드는데 [rememberNavController] 의 백스택은 **복원되므로** 12 로 그대로 돌아온다. 이 값이
+    // `remember` 였던 탓에 거기서 초안이 빈 [SignupDraft] 로 리셋돼, 「동의하고 가입 완료」가
+    // `toNewUser() == null` → 「가입 정보가 부족해요」에서 더 나아가지 못했다 — 10 으로 되돌아가면
+    // 입력값은 `rememberSaveable` 이라 살아 있지만, 사용자는 **가입 직전에 원인 불명의 거절**을 본다
+    // (프로세스 데스면 문자 인증까지 다시 받는다 — 1분 쿨다운·하루 5회 한도를 소모한다).
+    //
+    // 문자열 7개 + [LocalDate] + enum 이라 Bundle 에 담아도 가볍다([SignupDraftSaver] —
+    // confirmedOrigin 의 [PlaceSaver] 와 같은 방식). 비밀번호가 저장 상태에 실리는 것은 10 이 이미
+    // 같은 값을 `rememberSaveable` 로 들고 있어 새로 생기는 노출이 아니다(37 탈퇴의 비밀번호를
+    // ViewModel 에 둔 이유와는 상황이 다르다 — 그쪽은 저장할 이유 자체가 없다).
+    var signupDraft by rememberSaveable(stateSaver = SignupDraftSaver) { mutableStateOf(SignupDraft()) }
     // 12 가 가입에서 PHONE_NOT_VERIFIED 를 받고 10 으로 되돌려 보낸 횟수.
     // 10 은 이 값이 바뀔 때마다 문자 인증 블록을 초기화한다 — 토큰이 서버에서 이미 죽었기 때문이다.
     // Boolean 이 아니라 카운터인 이유: 같은 일이 두 번 일어날 수 있고(새 토큰도 또 만료될 수 있다),
     // Boolean 이면 두 번째 신호가 "이미 true" 에 묻혀 10 이 알아채지 못한다.
-    var reverifyPhoneRequest by remember { mutableIntStateOf(0) }
+    //
+    // **카운터라서 저장돼야 한다.** 비교 상대인 `PhoneVerifyViewModel.handledReverifyRequest` 는
+    // ViewModel 이라 구성 변경에서 값을 유지하는데, 이쪽만 0 으로 돌아가면 그 뒤의 재인증 신호가
+    // 「이미 처리한 번호」로 조용히 버려진다 — 10 은 멀쩡해 보이는 인증 블록을 들고 또 거절당한다.
+    // `Int` 는 Bundle 이 그대로 담는 원시 타입이다.
+    var reverifyPhoneRequest by rememberSaveable { mutableIntStateOf(0) }
     // 로그인 화면으로 돌아온 이유. 세션 만료일 때만 채워지고 사용자가 스스로 로그아웃하면 비운다.
     var signOutNotice by remember { mutableStateOf<String?>(null) }
     var logoutRequested by remember { mutableStateOf(false) }
-    // 37 탈퇴가 **요청을 보내기 직전에** 세우는 표시. [logoutRequested] 와 같은 장치이지만 값이 셋으로
-    // 갈리기 때문에 분리했다: 탈퇴는 세션 만료 안내를 지우는 데 그치지 않고 자기 안내를 띄운다.
-    // 요청 **전에** 세우는 이유는 성공 시 세션 전이가 응답 처리보다 먼저 도착하기 때문이다
-    // (아래 LaunchedEffect 가 NavHost 보다 앞에 선언돼 있어 같은 컴포지션에서 먼저 돈다).
-    // 탈퇴가 실패하면 AccountDeleteRoute 가 되돌린다 — 안 되돌리면 나중의 진짜 세션 만료가 조용해진다.
+    // ── 37 탈퇴의 두 표시 ──
+    //
+    // 하나로 두면 안 된다. 예전에는 **요청을 보내기 직전에** 세우는 플래그 하나였는데, 그 값은
+    // "204 를 받았다"가 아니라 "요청을 보냈다"는 뜻이었다. `DELETE /users/me` 가 401 → 재발급 실패로
+    // 끝나면 세션이 사라지면서 아래 전이 감지가 돌고, **계정이 살아 있는데** 로그인 화면에
+    // 「탈퇴가 처리됐어요」가 떴다(2026-10-28 결함). 그래서 「보냈다」와 「됐다」를 가른다.
+    //
+    // [accountDeleteRequested] = 요청을 보냈고 결과를 아직 모른다. 실패하면 AccountDeleteRoute 가
+    // 되돌린다 — 안 되돌리면 나중의 진짜 세션 만료가 조용해진다.
+    var accountDeleteRequested by remember { mutableStateOf(false) }
+    // [accountDeleted] = 서버가 204 를 돌려줬다. **「탈퇴가 처리됐어요」의 유일한 근거다.**
     var accountDeleted by remember { mutableStateOf(false) }
     // 14 홈이 넘기는 첫 검색어. **remember 로 남긴다** — 15 는 이 값을 첫 진입에 한 번만 읽고
     // (DestinationRoute: `state.query.isBlank()` 일 때만) 그 뒤 검색어는 ViewModel 이 들고 있어
@@ -250,7 +295,19 @@ private fun MainNavHost(
         navController.popBackStack()
     }
 
-    // 공통 규칙: 13 가입 완료 · 25 배차 이후에는 뒤로 갈 수 없도록 스택 초기화
+    /**
+     * 스택을 통째로 비우고 [route] **하나만** 남긴다(`popUpTo(0) { inclusive = true }` 는 루트 그래프까지
+     * 걷어낸다).
+     *
+     * 그래서 쓸 수 있는 곳은 **그 화면이 스택 바닥이어도 되는 자리**뿐이다 — 13 가입 완료·로그인
+     * 직후의 14 홈, 33 도착 완료의 「확인」, 04/04a(로그아웃·세션 만료는 [resetAfterSignOut]).
+     *
+     * 진행 화면(25·26)에는 쓰지 않는다. 목적지가 하나뿐인 스택에서 뒤로가기를 누르면 그 하나가
+     * pop 돼 **화면 없는 빈 그래프**가 남고([Routes.LOGIN_FORM] 의 onBack 이 가드를 둔 그 함정),
+     * 홈이 사라져 [navigateTab] 의 「탭 교체」도 「탭 쌓기」가 된다. 그 자리에는
+     * `popUpTo(Routes.HOME) { inclusive = false }` 로 **홈을 바닥에 남기는** 이동을 쓴다
+     * (26 진입·[navigateToStage] 가 그 모양이다).
+     */
     fun resetTo(route: String) {
         navController.navigate(route) {
             popUpTo(0) { inclusive = true }
@@ -278,11 +335,31 @@ private fun MainNavHost(
         }
         // 이미 그 탭이면 아무 것도 하지 않는다 (엔트리 재생성 방지)
         if (navController.currentDestination?.route == route) return
-        // 홈탭은 스택에 남아있는 기존 HOME 엔트리로 pop 복귀한다.
-        // navigate 로 새 엔트리를 만들면 NavHost 의 SaveableStateHolder 가 엔트리 id 로
-        // 상태를 보관하는 구조라 HomeScreen 의 rememberSaveable(지도 카메라 등)이 통째로 폐기된다.
-        if (route == Routes.HOME && navController.popBackStack(Routes.HOME, inclusive = false)) {
-            return
+        if (navController.currentBackStack.value.none { it.destination.route == Routes.HOME }) {
+            // 홈이 스택에 없으면 아래 두 장치(홈 pop 복귀 · popUpTo(HOME))가 **둘 다 무효**라
+            // 탭이 교체가 아니라 그냥 쌓인다 — [RIDE_ONGOING, CHAT_ROOM, HOME] 처럼. 그러면 홈에서
+            // 뒤로가기를 누를 때마다 방금 나온 채팅방·운행 중 화면이 되살아나고, 나간 방에 재진입도
+            // 된다(403 → ErrorBox). 그때는 스택을 실제로 비워 홈을 바닥에 세운다.
+            resetTo(Routes.HOME)
+            if (route == Routes.HOME) return
+            // 홈이 바닥에 섰다 — 아래 일반 경로가 그 위에 탭 하나를 세운다
+        } else if (route == Routes.HOME) {
+            // 홈탭은 스택에 남아있는 기존 HOME 엔트리로 pop 복귀한다.
+            // navigate 로 새 엔트리를 만들면 NavHost 의 SaveableStateHolder 가 엔트리 id 로
+            // 상태를 보관하는 구조라 HomeScreen 의 rememberSaveable(지도 카메라 등)이 통째로 폐기된다.
+            //
+            // `saveState` 가 붙은 이유: 이 pop 은 **떠나는 탭 엔트리를 폐기한다.** 다른 탭으로 갈 때는
+            // 아래 `popUpTo(HOME) { saveState = true }` + `restoreState` 가 지도 카메라·스크롤을 보관하는데
+            // 홈 경유만 초기화되는 비대칭이 있었다(합승→채팅→합승은 보존, 합승→홈→합승은 초기화).
+            //
+            // 다만 **탭에서 떠날 때만** 켠다. `saveState = true` 인 pop 은 엔트리를 DESTROYED 가 아니라
+            // CREATED 로 내려놓고 `ViewModelStore.clear` 를 **건너뛴다** — 21·25·26·채팅방에서
+            // navigateTab(HOME) 으로 빠져나오는 길까지 켜면 이미 떠난 방의 ViewModel 이 프로세스 끝까지
+            // 남는다(그 보관분을 지우는 clearBackStack 은 resetAfterSignOut 이 탭 넷에만 건다).
+            val leavingTab = navController.currentDestination?.route?.let { it in TabRoutes } == true
+            if (navController.popBackStack(Routes.HOME, inclusive = false, saveState = leavingTab)) {
+                return
+            }
         }
         navController.navigate(route) {
             // 홈을 탭 루트로 유지하고, 벗어나는 탭의 상태는 저장·복원한다
@@ -336,7 +413,8 @@ private fun MainNavHost(
         if (navController.popBackStack(route, inclusive = false)) return
         navController.navigate(route) {
             // 홈은 스택 바닥이라 여기까지만 걷어내면 「홈 위에 단계 화면 하나」가 된다.
-            // 26 처럼 스택을 비우고 진입한 화면에서는 홈이 없어 아무것도 걷어내지 않는다(그대로 쌓인다).
+            // 26 진입도 홈을 바닥에 남기도록 고쳤으므로(DispatchStatusRoute 의 onStartRide) 홈이 없는
+            // 스택은 더 이상 만들어지지 않는다. 그래도 남았다면 [navigateTab] 이 홈부터 다시 세운다.
             popUpTo(Routes.HOME) { inclusive = false }
             launchSingleTop = true
         }
@@ -358,22 +436,46 @@ private fun MainNavHost(
     // 어느 화면에 있든 결과는 같아야 하므로 개별 화면이 아니라 여기 한 곳에서 처리한다
     // (별도 이벤트 채널은 없다 — authState 스트림이 유일한 통보 경로다).
     var wasLoggedIn by remember { mutableStateOf(loggedIn) }
+    // 진행 중 방 자동 복귀의 빗장. 아래 두 이펙트가 함께 보기 때문에(복귀 이펙트가 세우고, 이
+    // 로그아웃 전이가 되돌린다) 둘보다 앞에 선언한다 — 쓰임은 복귀 이펙트의 KDoc 에 적었다.
+    var startupStageHandled by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(loggedIn) {
         if (wasLoggedIn && !loggedIn) {
-            // 세 경로가 같은 전이로 들어온다 — 탈퇴 · 사용자의 로그아웃 · 재발급까지 실패한 세션 만료.
-            // 안내가 서로 달라야 한다: 스스로 탈퇴한 사람에게 「세션이 만료됐어요」는 오해를 주고,
-            // 아무 안내도 없으면 탈퇴가 처리된 건지 알 수 없다.
+            // 37 탈퇴 요청이 떠 있으면 **결과를 기다린다.** 세션이 사라진 이유가 탈퇴 성공(204)인지
+            // 탈퇴 중 세션 만료(401 → 재발급 실패)인지를 가릴 수 있는 사실은 그 응답뿐인데, 두 경로가
+            // 모두 메인 디스패처라 도착 순서가 보장되지 않는다. 기다리지 않고 「요청을 보냈다」만 보고
+            // 판단하면 계정이 살아 있는데 「탈퇴가 처리됐어요」가 뜬다(2026-10-28 결함).
+            // 실패는 AccountDeleteRoute 의 catch 가 [accountDeleteRequested] 를 즉시 되돌리므로
+            // 그쪽 경로에서는 사실상 기다리지 않는다.
+            var waitedMs = 0L
+            while (accountDeleteRequested && !accountDeleted && waitedMs < ACCOUNT_DELETE_RESULT_WAIT_MS) {
+                delay(ACCOUNT_DELETE_RESULT_POLL_MS)
+                waitedMs += ACCOUNT_DELETE_RESULT_POLL_MS
+            }
+            // 네 경로가 같은 전이로 들어온다 — 탈퇴 성공 · 탈퇴 중 세션 만료 · 사용자의 로그아웃 ·
+            // 재발급까지 실패한 세션 만료. 안내가 서로 달라야 한다: 스스로 탈퇴한 사람에게
+            // 「세션이 만료됐어요」는 오해를 주고, 아무 안내도 없으면 탈퇴가 처리된 건지 알 수 없다.
             signOutNotice = when {
+                // 204 를 받았을 때만 탈퇴를 말한다
                 accountDeleted -> "탈퇴가 처리됐어요. 그동안 이용해 주셔서 고마웠어요"
+                // 요청은 보냈는데 결과를 끝내 못 봤다 — **아무 말도 하지 않는다.** 둘 중 하나는
+                // 거짓말이고(탈퇴됐는지 모른다), 사용자가 할 일은 어느 쪽이든 로그인 시도뿐이다.
+                accountDeleteRequested -> null
                 logoutRequested -> null
                 else -> "세션이 만료됐어요. 다시 로그인해 주세요"
             }
             accountDeleted = false
+            accountDeleteRequested = false
             logoutRequested = false
             // 로컬 기억은 남긴다(계정에 매인 값이라 같은 계정 재로그인 시 되살아나야 한다) —
             // 화면이 들고 있던 값만 버린다. 탈퇴는 예외로 디스크 기억까지 지우는데, 그건 여기가 아니라
             // AuthRepository.deleteAccount 가 세션을 비우면서 함께 한다(계정이 사라져 되살아날 길이 없다).
             activePartyViewModel.forget()
+            // 진행 중 방 복귀의 빗장도 되돌린다. [ActivePartyViewModel] 은 액티비티 스코프라
+            // 로그아웃 뒤에도 살아 있고 `forget()` 이 resolvedOnce 를 되돌리므로, **같은 프로세스에서
+            // 재로그인**하면 복귀 판단이 다시 돌아야 한다 — 빗장만 true 로 남으면 진행 중인 방이
+            // 있어도 홈에 떨어진다.
+            startupStageHandled = false
             resetAfterSignOut(Routes.LOGIN_FORM)
         }
         wasLoggedIn = loggedIn
@@ -385,16 +487,29 @@ private fun MainNavHost(
      * [ActivePartyViewModel.resolvedOnce] 를 기다리는 이유는 「아직 모른다」와 「없다」가 둘 다
      * null 이기 때문이다. 이미 사용자가 홈을 떠났으면 끼어들지 않는다 — 켜자마자 목적지를 검색하는
      * 사람의 화면을 빼앗는 것이 복귀보다 나을 리 없다.
+     *
+     * 복귀는 한 번만 하지만, 그 「한 번」을 세는 빗장([startupStageHandled])은 **① 실제로 복귀했을 때
+     * ② 사용자가 홈을 떠났을 때**만 선다. 방을 보기 전에 미리 세우면 「조회 실패」와 「방 없음」이
+     * 같아진다 — `resolve()` 는 네트워크 실패에도 null 을 주므로([ActivePartyViewModel] KDoc:
+     * Loading/Error 3상태가 없다), 서버가 살아난 뒤 재조회로 방을 찾아도 복귀하지 않고 위 약속이
+     * 조용히 깨졌다. 홈에 머무는 동안은 창을 열어 두어 늦게라도 복귀하게 한다.
      */
-    var startupStageHandled by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(activeResolved, activeRide) {
         if (!loggedIn || startupStageHandled || !activeResolved) return@LaunchedEffect
         // resolve 가 I/O 를 거치는 동안 NavHost 는 이미 그래프를 세웠을 것이다. 그래도 아주 빠른
         // 응답(캐시된 실패 등)이 같은 프레임에 닿으면 목적지가 아직 없어 navigate 가 던진다.
         if (navController.currentDestination == null) delay(100)
-        startupStageHandled = true
+        // 목적지를 아직 모르면 판단을 미룬다(다음 방출에서 다시 본다) — 빗장도 세우지 않는다.
+        val route = navController.currentDestination?.route ?: return@LaunchedEffect
+        if (route != Routes.HOME) {
+            // 사용자가 이미 홈을 떠났다 = 시작 복귀의 창이 닫혔다. **여기서 빗장을 건다.** 안 걸면
+            // 방을 만들어 21 로 올라간 뒤 「방을 두고 홈으로」 돌아올 때(홈 진입의 refresh() 가 ride 를
+            // 갱신해 이 이펙트가 다시 돈다) 방금 떠난 화면으로 사용자를 되끌어 올린다.
+            startupStageHandled = true
+            return@LaunchedEffect
+        }
         val ride = activeRide ?: return@LaunchedEffect
-        if (navController.currentDestination?.route != Routes.HOME) return@LaunchedEffect
+        startupStageHandled = true
         navigateToStage(ride)
     }
 
@@ -517,7 +632,13 @@ private fun MainNavHost(
         composable(Routes.SIGNUP_COMPLETE) {
             SignupCompleteScreen(
                 onStart = { resetTo(Routes.HOME) },
-                onExplore = { resetTo(Routes.EXPLORE) },
+                // 17 합승 탐색으로 보내되 **홈을 바닥에 남긴다.** resetTo(EXPLORE) 로 바로 가면
+                // 스택이 [EXPLORE] 하나뿐이라 ① 뒤로가기가 그 하나를 pop 해 빈 그래프가 되고
+                // ② [navigateTab] 이 걷어낼 홈이 없어 탭이 교체가 아니라 쌓인다.
+                onExplore = {
+                    resetTo(Routes.HOME)
+                    navigateTab(MoyeotaTab.EXPLORE)
+                },
             )
         }
 
@@ -562,6 +683,9 @@ private fun MainNavHost(
                 repository = rideRepository,
                 // 핀 조정·GPS 출발지의 좌표를 실주소로 되짚는다 (GET /places/reverse)
                 placeRepository = placeRepository,
+                // 「이미 참여 중인 방이 있어요」를 만났을 때의 **탈출구**. 문구만으로는 부족하다 —
+                // 기억이 지워졌거나 앱을 새로 깐 상태면 홈 배너가 없어 그 방으로 돌아갈 길이 없다.
+                onActivePartyRefresh = { activePartyViewModel.refresh() },
                 origin = confirmedOrigin,
                 destination = confirmedDestination,
                 onDismiss = ::back,
@@ -628,6 +752,14 @@ private fun MainNavHost(
 
         // F · 매칭 · 탑승 21–23 · 25
         composable(Routes.MATCH_WAITING) {
+            // 시스템 뒤로가기(버튼·제스처)는 NavController 기본 pop 이라 헤더 ← 가 타는 분기
+            // (MatchWaitingScreen: 나가기 확인 다이얼로그 / onExitKeepingParty)를 **건너뛴다.**
+            // 스택이 [HOME, DESTINATION, MATCH_WAITING] 이어서 그냥 pop 하면 15 목적지 검색으로
+            // 떨어졌고, 거기서 방을 또 만들면 서버가 409 로 막는다(진행 중인 방을 떠난 자리에서
+            // 받는 실패 메시지다). 그래서 `onExitKeepingParty` 와 같은 결론으로 모은다 — **방은
+            // 그대로 두고** 14 홈. 나가기 쪽으로 모으지 않는 이유: 되돌릴 수 없는 일을 시스템
+            // 뒤로가기로 일으키지 않는다(다이얼로그를 띄울 `canLeave` 는 화면 안의 상태라 여기서 못 본다).
+            BackHandler { navigateTab(MoyeotaTab.HOME) }
             MatchWaitingRoute(
                 repository = rideRepository,
                 partyId = createdPartyId,
@@ -681,7 +813,15 @@ private fun MainNavHost(
                 },
                 // 25 배차 현황으로 넘기는 건 status 전이를 관찰하는 21 매칭 대기뿐이다 —
                 // 자동 기사 매칭 전환으로 이 화면에는 수동 출발 CTA 가 없다.
-                onLeave = { navigateTab(MoyeotaTab.HOME) },
+                //
+                // 나가기는 **서버 나가기가 성공한 뒤에만** 불린다(RideDetailViewModel.left) —
+                // 21 의 onCancelSearch 와 같은 자리이므로 진행 중 기억도 같이 지운다. 안 지우면
+                // 홈 진입의 refresh() 가 돌아 스스로 낫기까지의 한 왕복 동안 배너가 이미 나간 방을
+                // 가리키고, 그걸 누르면 유령 대기방으로 들어간다.
+                onLeave = {
+                    activePartyViewModel.clearParty()
+                    navigateTab(MoyeotaTab.HOME)
+                },
             )
         }
         composable(Routes.PARTNER_PROFILE) {
@@ -701,13 +841,24 @@ private fun MainNavHost(
             }
         }
         composable(Routes.DISPATCH_STATUS) {
+            // 화면의 onBack 과 같은 결론으로 모은다 — 배차 후에는 되돌릴 화면이 없다. 21 은
+            // onMatchingStarted 가 이미 스택에서 지웠으므로 기본 pop 은 15·16 방 생성 플로우로
+            // 떨어진다(공통 규칙: 배차 후 되돌리기 차단).
+            BackHandler { navigateTab(MoyeotaTab.HOME) }
             DispatchStatusRoute(
                 rideRepository = rideRepository,
                 dispatchRepository = dispatchRepository,
                 partyId = activePartyId,
                 onStartRide = {
                     activePartyViewModel.refresh()
-                    resetTo(Routes.RIDE_ONGOING)
+                    // 26 운행 중으로 가며 25·15·16 을 걷어낸다. **홈은 바닥에 남긴다** — resetTo 로
+                    // 스택을 비우면 26 의 뒤로가기가 마지막 한 장을 pop 해 화면 없는 빈 그래프가 되고
+                    // (04a onBack 이 가드를 둔 그 함정), [navigateTab] 도 걷어낼 홈이 없어 탭이 쌓이기만
+                    // 한다. 되돌리기 차단은 popUpTo 가 중간 화면들을 지우는 것으로 족하다.
+                    navController.navigate(Routes.RIDE_ONGOING) {
+                        popUpTo(Routes.HOME) { inclusive = false }
+                        launchSingleTop = true
+                    }
                 },
                 // 매칭 3분 타임아웃 — 서버가 방을 취소해 되살릴 대상이 없다. 같은 조건으로
                 // 다시 만들려면 14 홈부터 시작해야 하므로 진행 중 방 id 도 함께 비운다.
@@ -729,7 +880,10 @@ private fun MainNavHost(
         composable(Routes.CHAT) {
             ChatRoute(
                 repository = chatRepository,
-                // 열린 방이 진행 중인 그 방이면 헤더에 「매칭 화면으로 →」가 뜬다
+                // 열린 방이 진행 중인 그 방이면 헤더에 「매칭 화면으로 →」가 뜨고 「나가기」가 사라진다.
+                // **판정의 1순위는 채팅방 id 다** — 이 경로의 방은 목록 응답(`GET /chat-rooms/me`)으로
+                // 만든 것이어서 partyId 가 0(모름)이고, 그걸로 비교하면 늘 "내 방이 아니다"가 됐다.
+                activeChatRoomId = activeChatRoomId,
                 activePartyId = activeRide?.id,
                 onOpenMatching = { activeRide?.let(::navigateToStage) },
                 onOpenRideOngoing = { navController.navigate(Routes.RIDE_ONGOING) },
@@ -758,6 +912,9 @@ private fun MainNavHost(
                 ChatRoomDestinationRoute(
                     repository = chatRepository,
                     roomId = roomId,
+                    // 이 경로는 방 상세에서 온 진짜 partyId 를 들고 있어 둘 다 근거가 된다.
+                    // 채팅방 id 를 아직 못 찾은 구간은 partyId 가 메운다.
+                    activeChatRoomId = activeChatRoomId,
                     activePartyId = activeRide?.id,
                     onBack = ::back,
                     onOpenMatching = { activeRide?.let(::navigateToStage) },
@@ -777,10 +934,15 @@ private fun MainNavHost(
             // 임시 수동 트리거였던 경유 카드 탭은 서버가 IN_RIDE→FINISHED 를 실제로 저장하게 되면서(D-2 해소) 걷어냈다.
             // 데모용 15초 자동 전환 타이머도 이전에 제거된 상태다 — 26 은 27 신고 진입점이라
             // 사용자가 머무는 동안 화면이 제멋대로 바뀌면 안 된다(QA D-3).
+
+            // 화면 ← 와 시스템 뒤로가기를 같은 결론으로 모은다 — 운행 중에는 되돌릴 화면이 없다
+            // (25 는 onStartRide 가 지웠다). 예전에는 `back()` 이라 스택이 [RIDE_ONGOING] 한 장일 때
+            // 그 한 장을 pop 해 **빈 화면**이 됐다(택시 모드를 켜는 날 터지는 자리였다).
+            BackHandler { navigateTab(MoyeotaTab.HOME) }
             RideOngoingRoute(
                 repository = rideRepository,
                 partyId = activePartyId,
-                onBack = ::back,
+                onBack = { navigateTab(MoyeotaTab.HOME) },
                 // 채팅방을 알면 쌓아 열어 뒤로가기로 26 에 돌아오게 한다.
                 // 아직 못 찾았으면(목록 조회 실패 등) 예전처럼 채팅 탭으로 — 길을 아예 막지는 않는다
                 onOpenChat = {
@@ -830,6 +992,7 @@ private fun MainNavHost(
             MyPageScreen(
                 userName = userName,
                 onEditProfile = { navController.navigate(Routes.PROFILE_EDIT) },
+                onRideHistory = { navController.navigate(Routes.RIDE_HISTORY) },
                 // logout() 은 실패하지 않는다 — 상태 전이는 위 LaunchedEffect 가 받아 04a 로 보낸다.
                 // logoutRequested 를 먼저 세워 두면 그 전이를 세션 만료로 오해하지 않는다.
                 onLogout = {
@@ -852,9 +1015,10 @@ private fun MainNavHost(
             )
         }
         composable(Routes.PROFILE_EDIT) {
-            // 36 프로필 수정 — 35 와 같은 이름 홀더를 쓴다. 저장이 끝나면 그 홀더를 다시 조회해
-            // 35 프로필 카드·14 홈 인사말이 새 닉네임으로 함께 바뀌게 한 뒤 되돌아간다
-            // (화면마다 따로 들고 있으면 한쪽만 옛 이름으로 남는다).
+            // 36 프로필 수정 — 35 와 같은 홀더를 쓴다. 홀더가 이름과 **프로필 사진 주소**를 함께
+            // 들고 있어, 36 은 그걸로 닉네임을 프리필하고 「기본 이미지로 되돌리기」를 보일지 정한다.
+            // 저장이 끝나면 그 홀더를 다시 조회해 35 프로필 카드·14 홈 인사말이 새 닉네임과 새 사진으로
+            // 함께 바뀌게 한 뒤 되돌아간다(화면마다 따로 들고 있으면 한쪽만 옛 값으로 남는다).
             ProfileEditRoute(
                 repository = authRepository,
                 userName = userName,
@@ -865,6 +1029,21 @@ private fun MainNavHost(
                 },
             )
         }
+        composable(Routes.RIDE_HISTORY) {
+            // 34 지난 탑승 기록 — GET /api/v1/users/me/parties.
+            //
+            // **진행 중인 방은 여기 나오지 않는다**(실측 2026-11-01, 로컬 :8080: status=MATCHING
+            // 방을 가진 계정도 빈 배열). 그래서 activePartyRepository 를 넘기지 않는다 — 둘은
+            // 서로를 대체하지 않고, 진행 중인 방은 14·17 의 배너가 보여 준다.
+            //
+            // 조회가 실패하면 화면은 「불러오지 못했어요 · 다시 시도」로 떨어진다. 조용히 빈 목록을
+            // 그리지 않는 이유: 「기록이 없다」와 「못 불러왔다」는 다른 사실이고, 앞쪽을 보여 주면
+            // 사용자는 자기 기록이 사라졌다고 읽는다.
+            RideHistoryRoute(
+                repository = rideRecordRepository,
+                onBack = ::back,
+            )
+        }
         composable(Routes.ACCOUNT_DELETE) {
             // 37 회원 탈퇴 — DELETE /api/v1/users/me.
             //
@@ -872,14 +1051,15 @@ private fun MainNavHost(
             // authState 가 전이하므로, 위의 로그인 전이 LaunchedEffect 가 스택을 통째로 비우며
             // 04a 로 보낸다(이 화면도 그때 사라진다). 여기서 또 navigate 하면 전이와 겹친다.
             //
-            // accountDeleted 를 **요청 직전에** 세우는 이유는 그 LaunchedEffect 가 NavHost 보다 앞에
-            // 선언돼 있어 같은 컴포지션에서 먼저 돌기 때문이다 — 응답을 받은 뒤에 세우면 늦어서
-            // 전이가 이미 「세션이 만료됐어요」로 처리된다.
+            // 플래그가 둘인 이유는 선언부 주석에 있다 — 「요청을 보냈다」와 「204 를 받았다」는
+            // 다른 사실이고, 안내를 고를 수 있는 것은 **뒤쪽**뿐이다. 응답이 전이보다 늦게 도착할 수
+            // 있어서 위 전이 감지가 짧게 기다린다(ACCOUNT_DELETE_RESULT_WAIT_MS).
             AccountDeleteRoute(
                 repository = authRepository,
                 onBack = ::back,
-                onSessionEndExpected = { accountDeleted = true },
-                onSessionKept = { accountDeleted = false },
+                onSessionEndExpected = { accountDeleteRequested = true },
+                onDeleted = { accountDeleted = true },
+                onSessionKept = { accountDeleteRequested = false },
             )
         }
     }
@@ -908,5 +1088,44 @@ private val PlaceSaver = listSaver<Place?, Any>(
                 longitude = values[3] as Double,
             )
         }
+    },
+)
+
+/**
+ * 가입 초안(10 프로필 만들기 → 12 매너 서약)을 **구성 변경 뒤에도** 되살린다.
+ *
+ * [PlaceSaver] 와 같은 방식이고, 담기는 값은 문자열 7개 + 날짜 + 성별뿐이라 저장 상태가 커질
+ * 걱정이 없다([Ride]·[User] 를 담지 않는 이유와 대비된다 — 그쪽은 멤버 목록까지 안은 큰 객체다).
+ *
+ * null 이 될 수 있는 [SignupDraft.birthDate]·[SignupDraft.gender] 는 **빈 문자열**로 눕힌다 —
+ * `listSaver` 의 리스트에 null 을 섞으면 복원 때 자리마다 null 검사를 하게 되고, 빈 문자열이면
+ * 「아직 안 고름」이 한 모양으로 모인다. 날짜는 ISO-8601(`LocalDate.toString`)로 왕복한다.
+ */
+private val SignupDraftSaver = listSaver<SignupDraft, Any>(
+    save = { draft ->
+        listOf(
+            draft.email,
+            draft.nickname,
+            draft.name,
+            draft.phoneNumber,
+            draft.birthDate?.toString() ?: "",
+            draft.gender?.name ?: "",
+            draft.loginId,
+            draft.password,
+            draft.verificationToken,
+        )
+    },
+    restore = { values ->
+        SignupDraft(
+            email = values[0] as String,
+            nickname = values[1] as String,
+            name = values[2] as String,
+            phoneNumber = values[3] as String,
+            birthDate = (values[4] as String).takeIf { it.isNotEmpty() }?.let { LocalDate.parse(it) },
+            gender = (values[5] as String).takeIf { it.isNotEmpty() }?.let { Gender.valueOf(it) },
+            loginId = values[6] as String,
+            password = values[7] as String,
+            verificationToken = values[8] as String,
+        )
     },
 )

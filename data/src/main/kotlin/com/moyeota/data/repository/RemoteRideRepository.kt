@@ -2,6 +2,7 @@ package com.moyeota.data.repository
 
 import com.moyeota.data.remote.MatchingApi
 import com.moyeota.data.remote.ReportApi
+import com.moyeota.data.remote.dto.ApiErrorDto
 import com.moyeota.data.remote.dto.CallResultRequestDto
 import com.moyeota.data.remote.dto.RealTimeMatchingRequestDto
 import com.moyeota.data.remote.dto.ReportRequestDto
@@ -25,6 +26,8 @@ import com.moyeota.domain.model.PartyDetail
 import com.moyeota.domain.model.PartyEvent
 import com.moyeota.domain.model.PartyFinishException
 import com.moyeota.domain.model.PartyJoinException
+import com.moyeota.domain.model.PartyLeaveException
+import com.moyeota.domain.model.PartyOpenException
 import com.moyeota.domain.model.PartyStatus
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RouteEstimate
@@ -34,6 +37,7 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.map
+import retrofit2.HttpException
 
 /**
  * 매칭·신고 도메인만 서버 연동 — 나머지는 더미로 위임한다.
@@ -85,9 +89,27 @@ class RemoteRideRepository(
     override suspend fun getPartyDetailWithVersion(partyId: Long): PartyDetail =
         api.getPartyDetail(partyId).let { PartyDetail(it.toRide(session.currentUserUuid), it.version) }
 
-    // 생성자는 서버가 토큰에서 정한다 — 요청 본문에도 응답에도 id 가 없다.
-    override suspend fun createParty(request: NewParty): Ride =
-        api.openParty(request.toRequestDto()).toRide()
+    /**
+     * 생성자는 서버가 토큰에서 정한다 — 요청 본문에도 응답에도 id 가 없다.
+     *
+     * 실패는 전부 [PartyOpenException] 으로 좁힌다([joinParty] 와 같은 모양·같은 이유) — 이 액션의
+     * 실패는 **기다리면 풀리는 것과 사용자가 고쳐야 하는 것으로 갈리는데**(409 진행 중인 방 · 400
+     * 좌표/정원 · 502 경로 엔진) 예전에는 전부 한 문구로 떨어져 **그중 어느 것도 다음 행동을 말해
+     * 주지 못했다.** 특히 409 는 아무도 합류하지 않은 ACTIVE 방이 30분 스윕에도 남아 영구 교착이 된다
+     * (그 예외 KDoc 참고).
+     *
+     * 에러 본문은 스트림이라 한 번만 읽을 수 있다 — 읽어서 들고 넘긴다([readApiError]).
+     * 복구 조회는 없다: 서버는 검사를 **먼저** 하고 방을 만들므로, 실패했으면 만들어진 방이 없다
+     * (확인할 것이 없다 — [finishParty] 와 같은 사정이다).
+     */
+    override suspend fun createParty(request: NewParty): Ride {
+        val response = runCatching { api.openParty(request.toRequestDto()) }
+        val failure = response.exceptionOrNull()
+            ?: return response.getOrThrow().toRide()
+        // runCatching 은 취소까지 삼키므로 되던져 화면 이탈이 에러로 보이지 않게 한다.
+        if (failure is CancellationException) throw failure
+        throw partyOpenException(failure, failure.readApiError())
+    }
 
     /**
      * 합류 응답은 더 이상 방 상세가 아니다(Backend #213) — 상태·인원만 담긴 [PartyStatus] 다
@@ -132,7 +154,32 @@ class RemoteRideRepository(
         return PartyStatus(ride.status, ride.members.size)
     }
 
-    override suspend fun leaveParty(partyId: Long) = api.leaveParty(partyId)
+    /**
+     * 나가기. **403 `NOT_PARTY_MEMBER` 는 성공으로 되돌린다** — [recoverMembership] 과 대칭인 처방이다.
+     *
+     * 되돌리는 근거: 서버 `Party.leave` 는 「멤버인가」를 먼저 보므로 그 403 은 **내가 이 방에 없다**는
+     * 뜻이고, 나가기의 목표가 정확히 그 상태다. 되돌리지 않으면 204 응답이 유실된 사용자가(터널·타임아웃)
+     * 「나가지 못했어요」를 보고 다시 눌러 **같은 문구의 403** 을 맞는다 — 로컬 기억과 홈 배너는 그 방을
+     * 계속 들고 있으니 화면상 나는 아직 그 방에 있고, 벗어날 길이 없다.
+     *
+     * 합류와 달리 **상세 조회로 확인하지 않는다**: 합류는 「이 방인가 다른 방인가」를 서버가 구분해 주지
+     * 않아 증거가 필요했지만, 이 403 은 그 자체로 「이 방에 내가 없다」를 말한다. 덧붙여 방 상세에는
+     * 참여자 검사가 없어([com.moyeota.domain.model.PartyMembershipLostException] KDoc) 읽어도 멤버십을
+     * 되묻지 못한다.
+     *
+     * 나머지 실패는 [PartyLeaveException] 으로 좁힌다 — 409 `PARTY_NOT_RECRUITING` 은 「매칭이 시작돼
+     * 나갈 수 없다」라서 재시도 안내와 **다음 행동이 다르다**.
+     */
+    override suspend fun leaveParty(partyId: Long) {
+        val failure = runCatching { api.leaveParty(partyId) }.exceptionOrNull() ?: return
+        // runCatching 은 취소까지 삼키므로 되던져 화면 이탈이 에러로 보이지 않게 한다.
+        if (failure is CancellationException) throw failure
+        // 에러 본문은 스트림이라 한 번만 읽을 수 있다 — 읽어서 들고 다닌다.
+        val error = failure.readApiError()
+        // 이미 나갔다 = 나가기는 "실패"가 아니라 "이미 됨"이다.
+        if (error?.code == PartyLeaveException.NOT_PARTY_MEMBER) return
+        throw partyLeaveException(failure, error)
+    }
 
     /**
      * 실패를 전부 [PartyFinishException] 으로 좁힌다 — **403 과 409 가 각각 두 가지 뜻**이라
@@ -225,4 +272,57 @@ class RemoteRideRepository(
     ): RouteEstimate = api.previewRoute(
         routeRequestDto(departureLat, departureLng, destinationLat, destinationLng),
     ).toRouteEstimate()
+}
+
+/**
+ * 방 생성 실패 → [PartyOpenException]. presentation 이 HTTP 를 알 필요가 없게 하는 경계다.
+ *
+ * `PartyMappers.kt` 의 [com.moyeota.data.remote.partyJoinException]·
+ * [com.moyeota.data.remote.partyFinishException] 과 **같은 모양**이지만 그 파일이 아니라 여기 있다 —
+ * 파일 소유가 갈려 있어서다(다른 작업과 동시에 고치는 중). 나중에 세 함수를 한곳에 모으는 쪽이 낫다.
+ *
+ * [error] 는 이미 읽어 둔 본문([readApiError])이다 — **본문은 한 번만 읽을 수 있으므로** 여기서 다시
+ * 읽지 않는다. 합류의 `isNetwork` 같은 구분은 두지 않는다: 이 액션은 응답을 못 받은 실패와 모르는
+ * 코드의 **대응이 같다**(일반 문구 = 잠시 후 다시 시도). 쓰지 않을 구분을 노출하면 나중에 네트워크
+ * 실패에 「핀을 옮겨 주세요」가 붙는 식으로 어긋난다.
+ */
+private fun partyOpenException(
+    failure: Throwable,
+    error: ApiErrorDto?,
+): PartyOpenException = when (failure) {
+    is PartyOpenException -> failure
+
+    is HttpException -> PartyOpenException(
+        code = error?.code,
+        serverMessage = error?.message,
+        httpStatus = failure.code(),
+        cause = failure,
+    )
+
+    // 응답 자체를 못 받았다(연결 거부·타임아웃·DNS) 또는 그 밖의 실패. 서버가 말해 준 사유가 없으므로
+    // code 는 null 이고, 화면은 일반 문구로 안내한다.
+    else -> PartyOpenException(code = null, serverMessage = null, cause = failure)
+}
+
+/**
+ * 나가기 실패 → [PartyLeaveException]. [partyOpenException] 과 같은 자리·같은 이유의 경계다.
+ *
+ * **403 `NOT_PARTY_MEMBER` 는 여기까지 오지 않는다** — 호출부가 그 전에 성공으로 되돌린다
+ * ([RemoteRideRepository.leaveParty]). 그 되돌림을 이 함수 안으로 옮기지 말 것: 예외를 만드는 자리가
+ * "실패가 아님"까지 판정하면 호출부가 성공 경로로 빠질 길이 없다.
+ */
+private fun partyLeaveException(
+    failure: Throwable,
+    error: ApiErrorDto?,
+): PartyLeaveException = when (failure) {
+    is PartyLeaveException -> failure
+
+    is HttpException -> PartyLeaveException(
+        code = error?.code,
+        serverMessage = error?.message,
+        httpStatus = failure.code(),
+        cause = failure,
+    )
+
+    else -> PartyLeaveException(code = null, serverMessage = null, cause = failure)
 }

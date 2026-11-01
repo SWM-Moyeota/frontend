@@ -111,10 +111,15 @@ private val waitingRideDummy = Ride(
  *   [onCancelSearch] 는 사용자가 「그만 찾기」를 확인한 뒤에만 호출된다.
  *
  *   **나가기는 모집 중([RideStatus.RECRUITING] = 서버 ACTIVE)에서만 가능하다.** 서버 `Party.leave` 가
- *   `ensureRecruiting()` 으로 막아, 정원이 차 기사 매칭이 시작되면 409 PARTY_CLOSED 가 온다.
- *   폴링이 MATCHING 을 감지해 25b 로 넘어가기까지 최대 4초가 비는데, 그 사이에도 누를 수 있으면
+ *   `ensureRecruiting()` 으로 막아, 정원이 차 기사 매칭이 시작되면 409 `PARTY_NOT_RECRUITING` 이 온다
+ *   (화면 문구는 [leaveFailureMessage] 가 「매칭이 시작돼 지금은 나갈 수 없어요」로 가른다).
+ *   폴링이 MATCHING 을 감지해 25b 로 넘어가기까지 한 주기가 비는데, 그 사이에도 누를 수 있으면
  *   실패하는 버튼이 된다 — 그래서 status 를 보고 **즉시** 버튼을 비활성 문구로 바꾸고,
  *   뒤로가기는 방을 유지한 채 홈으로만 보낸다([onExitKeepingParty]).
+ *
+ *   반대로 **403 `NOT_PARTY_MEMBER`(= 이미 나갔다)는 실패로 보이지 않는다** — 데이터 계층이 성공으로
+ *   되돌려 나가기 성공과 같은 길로 보낸다. 204 응답이 유실된 사용자가 다시 눌러 같은 문구에 갇히지
+ *   않게 하려는 것이다([com.moyeota.domain.model.PartyLeaveException] KDoc).
  * - 카드 탭 → 22 탑승 상세 (onCardClick)
  * - 「채팅 열기」 → 24 채팅방(독립 목적지, 뒤로가기로 여기 복귀) — [onOpenChat] 이 null 이 아닐 때만 그린다.
  *   채팅방은 **정원이 찬 뒤에** 생기므로 모집 중에는 대개 null 이다. 눌러도 열 것이 없는 버튼을 두지 않는다.
@@ -191,8 +196,8 @@ fun MatchWaitingScreen(
     // 정원 도달. 기사 모드에선 서버가 기사 매칭을 시작하는 시점이고, 1차 배포 모드에선 채팅으로 만나는 시점이다.
     // 문구·진행바가 이 경계로 갈린다.
     val isFull = foundCount >= ride.capacity
-    // 나를 뺀 인원. members 가 비어 있는 응답(더미 경로)에서는 0 이다.
-    val otherCount = ride.members.count { !it.isMe }
+    // 나를 뺀 인원 — **내가 목록에 있을 때만** 센다([otherMemberCount] KDoc).
+    val otherCount = otherMemberCount(ride)
     val progress = if (ride.capacity > 0) {
         (foundCount.toFloat() / ride.capacity).coerceIn(0f, 1f)
     } else {
@@ -642,6 +647,23 @@ private fun GrayActionButton(
         )
     }
 }
+
+/**
+ * 「나 외 M명」에 쓰는 **나를 뺀** 인원 — 내가 목록에 있을 때만 센다.
+ *
+ * 세지 않는 경우가 둘이다. 둘 다 `isMe` 가 아무 멤버에도 서지 않는 경우이고, 그때 "나를 뺀 인원"은
+ * 전체 인원과 같아진다 — 그러면 화면이 **「지금 같은 방향 2명(나 외 2명)」** 이라는 자기모순을 말한다.
+ *
+ * | 경우 | 왜 isMe 가 없나 |
+ * |---|---|
+ * | **내가 이 방 멤버가 아니다** | 유령 대기방 — 서버 목록에 내가 없다(`MatchWaitingViewModel.membershipLost` 가 화면을 떠나게 하지만, 그 전 한 프레임을 그린다) |
+ * | 식별자가 없는 목록 | 목록·생성 응답으로 만든 [Ride] 는 자리 표시용 멤버라 publicId 가 없다(`placeholderMembers`) |
+ *
+ * 0 을 돌려주면 호출부가 **괄호 없는 문구**(「지금 같은 방향 2명 · 목표 3명」)를 쓴다 — 모르는 값을
+ * 지어내지 않고 **말하지 않는** 쪽이다. 문구 포맷 자체는 건드리지 않았다.
+ */
+internal fun otherMemberCount(ride: Ride): Int =
+    if (ride.members.none { it.isMe }) 0 else ride.members.count { !it.isMe }
 
 @Preview(showBackground = true, widthDp = 393, heightDp = 852)
 @Composable

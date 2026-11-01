@@ -39,6 +39,7 @@ class PlaceMappersTest {
     @Test
     fun `즐겨찾기 응답의 placeName 을 도메인 name 으로 매핑한다`() {
         val item = FavoritePlaceListResponse.FavoritePlaceItem(
+            placeId = 7,
             placeName = "집",
             roadName = "서울 강남구 테헤란로 123",
             latitude = 37.5013,
@@ -46,7 +47,7 @@ class PlaceMappersTest {
             placeSequence = 2,
         )
 
-        val favorite = item.toFavoritePlace()
+        val favorite = item.toFavoritePlaceOrNull()!!
 
         assertEquals("집", favorite.name)
         assertEquals(2, favorite.sequence)
@@ -115,13 +116,12 @@ class PlaceMappersTest {
     fun `즐겨찾기 목록에 roadName 이 null 인 장소가 섞여도 목록 전체가 살아남는다`() {
         val body = """
             {"places":[
-              {"placeName":"집","roadName":"서울 강남구 테헤란로 123","latitude":37.5013,"longitude":127.0396,"placeSequence":1},
-              {"placeName":"도로명없는가게","roadName":null,"latitude":37.5665,"longitude":126.9780,"placeSequence":2}
+              {"placeId":1,"placeName":"집","roadName":"서울 강남구 테헤란로 123","latitude":37.5013,"longitude":127.0396,"placeSequence":1},
+              {"placeId":2,"placeName":"도로명없는가게","roadName":null,"latitude":37.5665,"longitude":126.9780,"placeSequence":2}
             ]}
         """.trimIndent()
 
-        val favorites = json.decodeFromString<FavoritePlaceListResponse>(body)
-            .places.map { it.toFavoritePlace() }
+        val favorites = json.decodeFromString<FavoritePlaceListResponse>(body).toFavoritePlaces()
 
         assertEquals(2, favorites.size)
         assertEquals("도로명없는가게", favorites[1].name)
@@ -129,6 +129,104 @@ class PlaceMappersTest {
         assertEquals(2, favorites[1].sequence)
         assertEquals("집", favorites[0].name)
         assertEquals("서울 강남구 테헤란로 123", favorites[0].roadName)
+    }
+
+    // --- 좌표 null 방어 (즐겨찾기) ---
+    // 예전 주석의 「서버 방어가 하나도 없다」는 **이제 틀렸다**: FavoritePlace.from() 이 좌표 null 과
+    // 서비스지역 밖을 400 INVALID_COORDINATES 로 막는다(실측 2026-11-01, 로컬 :8080 — 좌표 키 누락과
+    // (10.0, 10.0) 둘 다 400). 그래도 아래 방어는 그대로 둔다: DB 의 latitude/longitude 가 여전히
+    // NULL 허용이라 검증 도입 전 레거시 행이 남아 있을 수 있다.
+    // 그런 행 하나로 파싱이 터지면 GET /users/me/favorite-places 응답 전체가 날아가 14 홈은
+    // 즐겨찾기가 조용히 비고(runCatching → emptyList) 15 목적지는 영구히 에러 문구를 띄운다.
+    // 매퍼가 버린 그 행은 사용자 눈에만 안 보이고 서버 10칸 중 하나를 계속 차지하므로,
+    // 목록에서 고를 수 없다 — DELETE .../favorite-places/all(전체 삭제)이 유일한 탈출구다.
+
+    @Test
+    fun `좌표가 없는 즐겨찾기 한 건이 있어도 나머지 목록이 열린다`() {
+        val body = """
+            {"places":[
+              {"placeId":1,"placeName":"집","roadName":"서울 강남구 테헤란로 123","latitude":37.5013,"longitude":127.0396,"placeSequence":1},
+              {"placeId":2,"placeName":"좌표없는곳","roadName":"어딘가","latitude":null,"longitude":null,"placeSequence":2},
+              {"placeId":3,"placeName":"회사","roadName":"경기 성남시 분당구 판교역로 166","latitude":37.3948,"longitude":127.1112,"placeSequence":3}
+            ]}
+        """.trimIndent()
+
+        val favorites = json.decodeFromString<FavoritePlaceListResponse>(body).toFavoritePlaces()
+
+        // **한 건만 버린다** — 전에는 이 본문 하나로 목록 전체(세 건)가 사라졌다.
+        assertEquals(listOf("집", "회사"), favorites.map { it.name })
+    }
+
+    /** 경도만 빠진 경우도 같다 — 한쪽만 있는 좌표로는 지도를 찍을 수 없다. */
+    @Test
+    fun `좌표가 한쪽만 있는 즐겨찾기는 버린다`() {
+        val item = FavoritePlaceListResponse.FavoritePlaceItem(
+            placeId = 1,
+            placeName = "반쪽좌표",
+            latitude = 37.5013,
+            longitude = null,
+            placeSequence = 1,
+        )
+
+        assertNull(item.toFavoritePlaceOrNull())
+    }
+
+    /**
+     * 좌표가 없는 항목을 (0, 0) 으로 떨구지 않는다는 것 — 그 칩을 누르면 기니만 앞바다를 목적지로
+     * 요청하게 되고 서버가 400 `OUT_OF_SERVICE_AREA` 로 막는다. 사용자는 이유를 알 길이 없다.
+     */
+    @Test
+    fun `좌표가 없는 즐겨찾기를 0 0 으로 지어내지 않는다`() {
+        val favorites = json.decodeFromString<FavoritePlaceListResponse>(
+            """{"places":[{"placeId":1,"placeName":"좌표없는곳","placeSequence":1}]}""",
+        ).toFavoritePlaces()
+
+        assertEquals(0, favorites.size)
+    }
+
+    /**
+     * `placeSequence` 가 없으면 **맨 뒤**로 간다. 0 으로 접으면 그 행이 사용자가 정한 순서(「집」=1)
+     * 앞으로 끼어든다. 서버 `FavoritePlaceService.save()` 는 늘 `max + 1` 을 채우므로(그 계산이
+     * `mapToInt(getPlaceSequence)` 라 null 인 행이 있으면 서버의 등록 자체가 NPE 로 깨진다)
+     * null 은 「서버도 다룰 수 없는 행」이라는 뜻이다.
+     */
+    @Test
+    fun `순번이 없는 즐겨찾기는 목록 맨 뒤로 간다`() {
+        val body = """
+            {"places":[
+              {"placeId":2,"placeName":"순번없음","latitude":37.1,"longitude":127.1},
+              {"placeId":1,"placeName":"집","latitude":37.5013,"longitude":127.0396,"placeSequence":1}
+            ]}
+        """.trimIndent()
+
+        val favorites = json.decodeFromString<FavoritePlaceListResponse>(body).toFavoritePlaces()
+
+        assertEquals(listOf("집", "순번없음"), favorites.map { it.name })
+    }
+
+    /**
+     * 검색 응답의 `name` 이 null 인 항목이 섞여도 **목록 전체가 살아남는다.**
+     *
+     * 서버 `KakaoPlaceClient.toPlaceOrNull()` 은 좌표 파싱만 try 로 감싸므로, 좌표가 멀쩡하고
+     * `place_name` 만 null 인 카카오 문서는 걸러지지 않고 `"name": null` 로 실려 온다 —
+     * roadName 과 **같은 경로의 같은 함정**이다.
+     */
+    @Test
+    fun `검색 결과에 name 이 null 인 장소가 섞여도 목록 전체가 살아남는다`() {
+        val body = """
+            {"list":[
+              {"name":null,"roadName":"경기 성남시 분당구 판교역로 160","latitude":37.3947,"longitude":127.1112},
+              {"name":"판교역","roadName":"경기 성남시 분당구 판교역로 160","latitude":37.3947,"longitude":127.1112}
+            ]}
+        """.trimIndent()
+
+        val places = json.decodeFromString<PlaceSearchListResponse>(body).list.map { it.toPlace() }
+
+        assertEquals(2, places.size)
+        // 이름만 비고 나머지는 보존된다 — 항목을 버리지는 않는다(좌표는 서버가 보증한다).
+        assertEquals("", places[0].name)
+        assertEquals("경기 성남시 분당구 판교역로 160", places[0].roadName)
+        assertEquals("판교역", places[1].name)
     }
 
     // 키 자체가 없는 경우는 원래 기본값으로 떨어졌다 — nullable 로 바꾼 뒤에도 같은 결과여야 한다.
@@ -206,6 +304,66 @@ class PlaceMappersTest {
     @Test
     fun `세 필드가 모두 비면 표시할 주소가 없으므로 null 이다`() {
         assertNull(AddressResponseDto().toReverseAddressOrNull())
+    }
+
+    // --- placeId 방어 (즐겨찾기 삭제의 대상 식별자) ---
+    // 오래 「서버가 placeId 를 안 준다」고 적혀 있었지만 틀린 말이었다 — 앱 DTO 에 필드가 없어
+    // ignoreUnknownKeys 가 조용히 버리고 있었을 뿐이다. 아래 세 테스트가 그 복구와,
+    // **없는 값을 0 으로 지어내지 않는 것**을 못 박는다.
+
+    /** 실측 응답 본문 그대로(2026-11-01, 로컬 `:8080`, `moyeota2` — 2건 등록 후 조회). */
+    @Test
+    fun `즐겨찾기 응답의 placeId 를 도메인 id 로 가져온다`() {
+        val body = """
+            {"places":[{"placeId":19,"placeName":"지움테스트A","roadName":"서울 강남구 테헤란로 152","latitude":37.4979,"longitude":127.0276,"placeSequence":1},{"placeId":20,"placeName":"지움테스트B","roadName":"경기 성남시 분당구 판교역로 166","latitude":37.3948,"longitude":127.1112,"placeSequence":2}]}
+        """.trimIndent()
+
+        val favorites = json.decodeFromString<FavoritePlaceListResponse>(body).toFavoritePlaces()
+
+        assertEquals(listOf(19L, 20L), favorites.map { it.id })
+    }
+
+    /** 좌표 null 과 같은 모양 — 한 행이 목록 전체를 죽이지 않는다. */
+    @Test
+    fun `placeId 가 없는 즐겨찾기 한 건이 있어도 나머지 목록이 열린다`() {
+        val body = """
+            {"places":[
+              {"placeId":1,"placeName":"집","roadName":"서울 강남구 테헤란로 123","latitude":37.5013,"longitude":127.0396,"placeSequence":1},
+              {"placeId":null,"placeName":"식별자없는곳","roadName":"어딘가","latitude":37.5,"longitude":127.0,"placeSequence":2},
+              {"placeId":3,"placeName":"회사","roadName":"경기 성남시 분당구 판교역로 166","latitude":37.3948,"longitude":127.1112,"placeSequence":3}
+            ]}
+        """.trimIndent()
+
+        val favorites = json.decodeFromString<FavoritePlaceListResponse>(body).toFavoritePlaces()
+
+        assertEquals(listOf("집", "회사"), favorites.map { it.name })
+    }
+
+    /**
+     * **0 으로 접지 않는다는 것**이 핵심이다. 0 이 섞이면 `POST .../favorite-places/batch-delete` 가
+     * 404 `FAVORITE_PLACE_NOT_FOUND` 로 떨어지고 **선택 전체가 안 지워진다**(전부-아니면-전무.
+     * 실측 2026-11-01: `[19, 999999]` → 404 이고 19 도 그대로 남았다. id 0·음수도 404).
+     * 즉 지어낸 한 건이 멀쩡한 선택까지 전부 실패시킨다.
+     */
+    @Test
+    fun `placeId 가 없는 즐겨찾기를 0 으로 지어내지 않는다`() {
+        val favorites = json.decodeFromString<FavoritePlaceListResponse>(
+            """{"places":[{"placeName":"식별자없는곳","latitude":37.5,"longitude":127.0,"placeSequence":1}]}""",
+        ).toFavoritePlaces()
+
+        assertEquals(0, favorites.size)
+    }
+
+    /**
+     * 다건 삭제 본문의 키는 `placeIds` 다. 이름이 틀리면 서버가 모르는 키를 **무시**해 400
+     * `INVALID_PLACE_IDS` 로 조용히 실패하고(실측: `{"ids":[2]}` → 400), 컴파일도 실행도 통과하므로
+     * 문자열 비교로만 막을 수 있다.
+     */
+    @Test
+    fun `다건 삭제 요청 본문의 키는 placeIds 다`() {
+        val dto = listOf(1L, 2L).toFavoriteDeleteRequestDto()
+
+        assertEquals("""{"placeIds":[1,2]}""", Json.encodeToString(dto))
     }
 
     private fun errorResponse(code: Int, body: String): Response<AddressResponseDto> =

@@ -14,8 +14,11 @@ import okhttp3.Route
  *    동시에 재발급하면 늦은 쪽이 "이미 회전됨" 401 을 맞고 멀쩡한 세션이 날아간다.
  *    그래서 갱신 구간 전체를 [synchronized] 로 감싸고, 잠금을 얻었을 때 토큰이 이미 바뀌어 있으면
  *    (= 다른 스레드가 갱신을 끝냈으면) 재발급하지 않고 그 토큰으로 바로 재시도한다.
- * 2. **재발급이 실패하면 세션 만료를 알린다.** [TokenHolder.onSessionExpired] 가 authState 를
- *    Unauthenticated 로 바꾸고, presentation 이 그걸 보고 로그인 화면으로 보낸다.
+ * 2. **세션 만료는 서버가 거절했을 때만 알린다.** [RefreshResult.Rejected] 면
+ *    [TokenHolder.onSessionExpired] 가 authState 를 Unauthenticated 로 바꾸고, presentation 이
+ *    그걸 보고 로그인 화면으로 보낸다. 반대로 [RefreshResult.Unavailable] — 즉 **답을 못 받은 경우**
+ *    에는 세션을 건드리지 않는다. 예전에는 둘을 구분하지 않아, 지하철에서 토큰이 만료되거나 배포 중
+ *    503 을 맞은 멀쩡한 사용자가 로그인 화면으로 쫓겨났다(근거는 [RefreshResult] KDoc).
  * 3. **재시도는 1회.** 새 토큰으로도 401 이면 재발급으로 풀릴 문제가 아니다(권한 없음 등).
  *    무한 루프 대신 401 을 호출부로 올려보낸다.
  *
@@ -44,13 +47,22 @@ class TokenAuthenticator(
                         tokens.onSessionExpired()
                         null
                     } else {
-                        val refreshed = refresher.refresh(refreshToken)
-                        if (refreshed == null) {
-                            tokens.onSessionExpired()
-                            null
-                        } else {
-                            tokens.onTokensRefreshed(refreshed.accessToken, refreshed.refreshToken)
-                            refreshed.accessToken
+                        when (val refreshed = refresher.refresh(refreshToken)) {
+                            is RefreshResult.Rotated -> {
+                                val (accessToken, newRefreshToken) = refreshed.tokens
+                                tokens.onTokensRefreshed(accessToken, newRefreshToken)
+                                accessToken
+                            }
+
+                            // 서버가 "이 리프레시는 못 쓴다"고 답했다 — 재로그인 외에 길이 없다.
+                            RefreshResult.Rejected -> {
+                                tokens.onSessionExpired()
+                                null
+                            }
+
+                            // 답을 못 받았을 뿐이다. 세션을 **비우지 않고** 401 을 호출부로 올려보낸다 —
+                            // 리프레시는 14일 수명 그대로 유효하므로 다음 요청이 재발급을 다시 시도한다.
+                            RefreshResult.Unavailable -> null
                         }
                     }
                 }

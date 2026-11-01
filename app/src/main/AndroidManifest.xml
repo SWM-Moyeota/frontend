@@ -30,10 +30,34 @@
             android:name="com.naver.maps.map.NCP_KEY_ID"
             android:value="${naverMapsClientId}" />
 
+        <!--
+            windowSoftInputMode 는 **adjustResize 여야 한다**(예전 값 adjustNothing).
+
+            edge-to-edge 앱이라 키보드 여백은 Compose 의 Modifier.imePadding() 이 처리한다.
+            그 값의 출처가 WindowInsets.ime 인데, 플랫폼이 이 inset 을 직접 보고하는 것은
+            **API 30 부터**다. minSdk 가 24 라 API 24~29 에서는 androidx 의 백포트를 타는데,
+            그 백포트(WindowInsetsCompat$Impl20.getInsetsForType, androidx.core 1.19.0 바이트코드 확인)는
+            플랫폼 API 가 없으니 **창이 줄어든 양으로 키보드 높이를 역산**한다:
+
+                if (systemWindowInsets.bottom > rootStableInsets.bottom)
+                    return Insets.of(0, 0, 0, systemWindowInsets.bottom)
+
+            adjustNothing 은 창을 아예 줄이지 않으므로 systemWindowInsets.bottom 이
+            내비게이션 바 높이에 머물고, 위 조건이 **항상 false** → ime inset 0 →
+            imePadding() 이 무동작 → **API 24~29 에서 키보드가 입력창을 덮었다.**
+            (실측: API 29 에서 키보드 올림 시 content bottom 126 → 867, stable bottom 126 고정.)
+
+            API 30+ 는 Impl30 이 플랫폼 API 로 직접 받으므로 이 역산 경로를 타지 않고,
+            decorFitsSystemWindows=false 인 창에서는 R+ 가 ADJUST_RESIZE 를 사실상 무시한다
+            — 그래서 이 변경은 API 30+ 동작을 바꾸지 않는다(에뮬레이터 API 29/37 양쪽 측정으로 확인).
+
+            adjustPan 을 쓰지 않는 이유: 창 전체를 밀어 올려 상단 바가 화면 밖으로 나가고
+            imePadding() 과 이중으로 겹친다.
+        -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:windowSoftInputMode="adjustNothing">
+            android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

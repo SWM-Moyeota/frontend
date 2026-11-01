@@ -105,7 +105,23 @@ data class ChatMemberResponse(
     /** 현행 서버는 주지 않는다(항상 null). 구버전 응답 호환으로만 남긴 필드. */
     val userId: Long? = null,
     val publicId: String = "",
-    val nickname: String = "",
+    /**
+     * 참여자 닉네임. **nullable 인 건 방어가 아니라 서버 계약이다** —
+     * `users.nickname` 에 NOT NULL 제약이 없고(마이그레이션 V1~V9 어디에도 없다),
+     * `User` 엔티티에 `nickname = null` 로 사용자를 만드는 정식 경로(소셜 가입)가 있다.
+     * 같은 서버 값을 받는 [PartyDetailResponse.MemberInfo.nickname] 이 이미 nullable 이다 —
+     * 한쪽만 논-널로 두면 둘 중 하나가 거짓이 된다.
+     *
+     * **논-널로 선언하면 안 된다.** `ignoreUnknownKeys` 는 모르는 **필드**를 흘려보내는 설정이고
+     * (`coerceInputValues` 는 꺼져 있다) 논-널 필드에 명시적 `null` 이 오면 그 자리에서 예외다 —
+     * 닉네임 없는 참여자 한 명 때문에 `GET /chat-rooms/me` **응답 전체**가 깨져 채팅 탭이 영구 에러가
+     * 되고, 거기서 진행 중인 방을 찾는 `RemoteActivePartyRepository.findFromChatRooms()` 까지
+     * 빈손이 된다(앱을 다시 설치한 사용자의 방 복귀 경로다).
+     *
+     * 매퍼는 이 null 을 빈 문자열로 떨어뜨린다([toChatMember][com.moyeota.data.remote.toChatMember]) —
+     * 필드 자체가 없을 때와 같은 자리다.
+     */
+    val nickname: String? = null,
     val imageUrl: String? = null,
     val active: Boolean = true,
 )

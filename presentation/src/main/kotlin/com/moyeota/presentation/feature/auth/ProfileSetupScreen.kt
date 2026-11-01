@@ -456,6 +456,8 @@ fun ProfileSetupScreen(
                     .padding(horizontal = 20.dp, vertical = 20.dp),
             ) {
                 Text(
+                    // 여전히 참이다 — 업로드 경로는 서버에 없다. 2026-10-15 배포로 생긴 건
+                    // **제공 이미지 16장 중 고르기**이고, 그것도 가입이 아니라 36 프로필 수정에서 한다.
                     text = "사진은 올리지 않아요",
                     style = MoyeotaType.BodySm.copy(fontSize = 14.sp),
                     fontWeight = FontWeight.Bold,
@@ -465,8 +467,15 @@ fun ProfileSetupScreen(
                 Text(
                     // 가입 중에는 어떤 인증 배지도 발급되지 않는다(학교·재직 인증은 가입 경로에 없다).
                     // 「매너 기록」도 없다 — 평가 API 자체가 서버에 없어 User.rating 은 항상 0.0 이다
-                    // (`User` KDoc). 실제로 상대에게 보이는 것은 닉네임과 탑승 횟수뿐이다(2026-10-13).
-                    text = "탑승 상대에게는 닉네임과 탑승 횟수만 보여요",
+                    // (`User` KDoc).
+                    //
+                    // **프로필 사진을 2026-11-01 에 더했다.** 그전까지 보이는 건 닉네임과 탑승 횟수뿐이었다.
+                    // 지금은 서버가 고른 적 없는 사용자에게도 기본 이미지 URL 을 주고
+                    // (`UserProfileInfo.imageUrl`) `MemberAvatar` 가 그것을 그리므로, 20 합류 확인 ·
+                    // 21 매칭 대기 · 22 탑승 상세 · 23 동승자 프로필 · 24 채팅에서 **전원에게 사진이 보인다.**
+                    // 가입 시점의 이 고지를 빼면 「닉네임과 탑승 횟수만」을 읽고 가입한 사용자가
+                    // 자기 사진이 노출되는 걸 모르게 된다 — 이 저장소가 거짓 문구를 들어낸 이유다.
+                    text = "탑승 상대에게는 닉네임·프로필 사진·탑승 횟수만 보여요",
                     style = MoyeotaType.BodySm,
                     fontWeight = FontWeight.Medium,
                     color = SlateGray,

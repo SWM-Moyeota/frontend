@@ -3,6 +3,7 @@ package com.moyeota.domain.repository
 import com.moyeota.domain.model.ChatMember
 import com.moyeota.domain.model.ChatRealtimeEvent
 import com.moyeota.domain.model.ChatMessage
+import com.moyeota.domain.model.ChatReportReason
 import kotlinx.coroutines.flow.Flow
 import com.moyeota.domain.model.ChatMessagePage
 import com.moyeota.domain.model.ChatRoom
@@ -129,6 +130,32 @@ interface ChatRepository {
         cursor: Long? = null,
         size: Int = DEFAULT_PAGE_SIZE,
     ): ChatMessagePage
+
+    /**
+     * POST /api/v1/chat-rooms/{chatRoomId}/reports (201, 본문 없음) — **메시지 1건**을 신고한다.
+     *
+     * 긴급 신고([RideRepository.reportEmergency])와 **다른 것**이다: 그쪽은 「파티 + 내 좌표」를 신고하고
+     * 사유 필드가 없으며 112 통화로 이어진다. 이쪽은 특정 메시지와 그 글을 쓴 사람을 가리키고
+     * 후속 통화가 없다. 그래서 신고 대상을 고를 수 없는 자리(상단바 메뉴·동승자 프로필)에는
+     * 붙일 수 없다 — [chatMessageId] 가 서버에서 필수다.
+     *
+     * - [description] 은 [ChatReportReason.ETC] 에서만 필수이며, **공백만 있어도 서버가 거절한다**.
+     *   호출부가 비어 있는 값을 null 로 접어 보내므로 구현체는 빈 문자열을 그대로 싣지 않는다.
+     * - [ChatReportReason.MAX_DESCRIPTION_LENGTH]자를 넘기면 400 이다.
+     * - **종료된 방에서도 받는다** — 채팅방 참여 여부만 보고 파티 상태를 보지 않는다.
+     *
+     * 실패는 [ChatException][com.moyeota.domain.model.ChatException] 으로 온다. 화면이 분기해야
+     * 하는 것은 [isAlreadyReported][com.moyeota.domain.model.ChatException.isAlreadyReported]
+     * (재시도해도 같은 답이다) ·
+     * [isMessageNotFound][com.moyeota.domain.model.ChatException.isMessageNotFound] ·
+     * [isNotParticipant][com.moyeota.domain.model.ChatException.isNotParticipant] 다.
+     */
+    suspend fun reportMessage(
+        chatRoomId: Long,
+        chatMessageId: Long,
+        reason: ChatReportReason,
+        description: String? = null,
+    )
 
     companion object {
         const val DEFAULT_PAGE_SIZE = 30

@@ -106,6 +106,39 @@ data class NicknameCheckResponse(
     val exists: Boolean = false,
 )
 
+/**
+ * POST /api/v1/auth/phone/check 의 요청 본문 — 백엔드 `PhoneCheckRequest(@NotBlank String phoneNumber)`.
+ *
+ * [NicknameCheckRequestDto] 와 같은 자리에 있는 이유도 같다 — 가입 전(무토큰) 호출이라
+ * `/api/v1/auth` 프리픽스의 permitAll 구간이어야 하고, Bearer 가 붙지 않는 클라이언트로 보내야 한다.
+ *
+ * 서버 필드에 `@Pattern` 이 **없다**([SmsSendRequestDto] 와 갈리는 지점이다) — 형식이 틀리면
+ * Bean Validation 이 아니라 서버 `PhoneNumber` VO 가 걸러 **400 `USER105`** 다
+ * (실측 2026-11-01, 로컬 :8080 — `{"phoneNumber":"abc"}` → `{"code":"USER105",...}`).
+ * 빈 값·필드 누락만 400 `INVALID_REQUEST`(`"phoneNumber: 공백일 수 없습니다"`)로 온다.
+ */
+@Serializable
+data class PhoneCheckRequestDto(
+    val phoneNumber: String,
+)
+
+/**
+ * 200 응답 — 백엔드 `PhoneCheckResponse(boolean exists)`. 닉네임 쪽과 모양이 같다
+ * (실측 2026-11-01, 로컬 :8080 — `{"exists":true}` / `{"exists":false}`).
+ *
+ * 기본값 false 는 [NicknameCheckResponse] 와 같은 방어다: 필드가 빠진 응답을 「가입됨」으로 읽어
+ * 멀쩡한 번호를 막는 것보다, 통과시키고 문자 발송의 409 `USER104` 에서 걸리는 편이 낫다.
+ *
+ * **`exists=false` 는 「가입할 수 있다」는 뜻이 아니다.** 서버가 보는 건 활성 프로필
+ * (`user_profile.phone_hash`) 한 테이블뿐이고 탈퇴 기록(`user_deletion`)은 보지 않는다 —
+ * 탈퇴한 번호도 false 로 온다(실측 2026-11-01: `010-7777-0101` → `{"exists":false}` 200인데
+ * 같은 번호의 `POST /auth/sms/send` 는 409 `USER109`). 재가입 제한은 발송 단계에서만 드러난다.
+ */
+@Serializable
+data class PhoneCheckResponse(
+    val exists: Boolean = false,
+)
+
 /** POST /api/v1/auth/login — 백엔드 `UserLoginRequest`. */
 @Serializable
 data class LoginRequestDto(

@@ -2,8 +2,10 @@ package com.moyeota.data.session
 
 import android.content.Context
 import androidx.datastore.core.DataStore
+import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.first
@@ -58,4 +60,13 @@ class DataStoreTokenStorage(context: Context) : TokenStorage {
 }
 
 // 프로세스당 하나만 존재해야 한다(중복 생성 시 DataStore 가 IllegalStateException 을 던진다).
-private val Context.sessionDataStore: DataStore<Preferences> by preferencesDataStore(name = "moyeota_session")
+//
+// corruptionHandler: 파일이 손상되면(쓰기 중 전원 차단 등) DataStore 는 읽을 때마다
+// CorruptionException 을 던진다. 그 예외는 복원 코루틴을 타고 올라가 **매 실행 크래시**가 되고,
+// 사용자가 할 수 있는 복구는 앱 데이터 삭제/재설치뿐이다. 빈 Preferences 로 갈아 끼우면
+// 최악이 "재로그인 한 번"으로 줄어든다 — 어차피 손상된 파일에서 건질 토큰은 없다.
+// 이름(name)은 그대로여야 한다: 바꾸면 기존 사용자의 세션 파일을 못 찾아 전원 로그아웃된다.
+private val Context.sessionDataStore: DataStore<Preferences> by preferencesDataStore(
+    name = "moyeota_session",
+    corruptionHandler = ReplaceFileCorruptionHandler { emptyPreferences() },
+)

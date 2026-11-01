@@ -35,11 +35,16 @@ class MyPageMenuRulesTest {
     // ─────────────────────────── 그룹 구성 ───────────────────────────
 
     @Test
-    fun `주소가 다 있으면 설정 안내 계정 세 그룹이 이 순서로 선다`() {
+    fun `주소가 다 있으면 탑승 설정 안내 계정 네 그룹이 이 순서로 선다`() {
         val groups = myPageGroups(allLinks)
 
         assertEquals(
-            listOf(MyPageGroupLabel.SETTINGS, MyPageGroupLabel.INFO, MyPageGroupLabel.ACCOUNT),
+            listOf(
+                MyPageGroupLabel.RIDES,
+                MyPageGroupLabel.SETTINGS,
+                MyPageGroupLabel.INFO,
+                MyPageGroupLabel.ACCOUNT,
+            ),
             groups.map { it.label },
         )
     }
@@ -65,7 +70,8 @@ class MyPageMenuRulesTest {
         val groups = myPageGroups(SupportLinkTargets.None)
 
         assertNull("안내 카드가 빈 채로 남았다", groups.group(MyPageGroupLabel.INFO))
-        // 주소와 무관한 두 그룹은 그대로 있어야 한다 — 로그아웃·탈퇴가 사라지면 갇힌다.
+        // 주소와 무관한 세 그룹은 그대로 있어야 한다 — 로그아웃·탈퇴가 사라지면 갇힌다.
+        assertEquals(listOf("지난 탑승 기록"), groups.rowTexts(MyPageGroupLabel.RIDES))
         assertEquals(listOf("알림 설정"), groups.rowTexts(MyPageGroupLabel.SETTINGS))
         assertEquals(listOf("로그아웃", "탈퇴하기"), groups.rowTexts(MyPageGroupLabel.ACCOUNT))
     }
@@ -149,7 +155,7 @@ class MyPageMenuRulesTest {
                 is MyPageAction.OpenWeb,
                 is MyPageAction.SendMail,
                 -> true
-                MyPageAction.Logout, MyPageAction.DeleteAccount -> false
+                MyPageAction.RideHistory, MyPageAction.Logout, MyPageAction.DeleteAccount -> false
             }
             val expected = if (leavesApp) MyPageRowMark.EXTERNAL else MyPageRowMark.CHEVRON
             assertEquals(row.text, expected, row.mark)
@@ -205,15 +211,64 @@ class MyPageMenuRulesTest {
     /**
      * 서버 API 가 없는 메뉴는 행을 만들지 않는다(`docs/BACKEND-GAP-CLEANUP.md`).
      * 레퍼런스 앱의 「로그인 수단 안내」도 같은 이유로 없다 — 이 화면이 아는 서버 값은 이름뿐이다.
+     *
+     * ### 금지어에서 「탑승 기록」이 빠진 이유 (2026-11-01)
+     * **전제가 깨졌다 — 서버가 이제 준다.** `GET /api/v1/users/me/parties` 가 생겨
+     * 하차까지 끝난 탑승 기록을 돌려준다(실측: 기록 2건, `dropoffTime` 내림차순 + 커서 페이징).
+     * 그래서 「지난 탑승 기록」 행이 들어왔고(34 재도입, `docs/BACKEND-GAP-CLEANUP.md` §6)
+     * 이 목록에 그 말이 남아 있으면 **행을 추가하는 순간 이 테스트가 빨개진다.**
+     *
+     * 나머지 다섯은 **여전히 서버에 없다** — 고객센터(문의 접수 API), 매너 점수·마일리지(평가 API),
+     * 결제(요금 확정·결제 API), 로그인 수단. 그쪽은 계속 막는다.
+     *
+     * 반대로 `AccountDeleteRulesTest` 의 「탑승 기록」 금지는 **성격이 다르니 건드리지 마라** —
+     * 그건 탈퇴 경고가 「탑승 기록도 지워진다」고 거짓말하지 못하게 막는 것이고, 서버는 실제로
+     * 기록을 지우지 않는다(`docs/BACKEND-GAP-CLEANUP.md` §6).
      */
     @Test
     fun `서버가 주지 않는 것으로 행을 만들지 않는다`() {
         val texts = myPageGroups(allLinks).flatMap { it.rows }.map { it.text }
 
-        listOf("탑승 기록", "고객센터", "매너 점수", "마일리지", "결제", "로그인 수단").forEach { absent ->
+        listOf("고객센터", "매너 점수", "마일리지", "결제", "로그인 수단").forEach { absent ->
             assertFalse("없는 기능 행이 생겼다: $absent", texts.any { it.contains(absent) })
         }
         // 행 이름이 겹치면 사용자가 같은 것을 두 군데서 찾는다
         assertEquals(texts.size, texts.toSet().size)
+    }
+
+    // ─────────────────────────── 지난 탑승 기록 (2026-11-01) ───────────────────────────
+
+    /**
+     * 34 로 들어가는 입구가 **있어야** 한다. 서버에 `GET /api/v1/users/me/parties` 가 생겨
+     * 되살린 행이고(`docs/BACKEND-GAP-CLEANUP.md` §6), 이 행이 없으면 끝난 탑승을
+     * **다시 볼 길이 앱 안에 하나도 없다** — 33 도착 완료를 한 번 보고 끝이다.
+     *
+     * 기호가 `CHEVRON`(앱 안)인 것도 함께 못 박는다. `EXTERNAL`(↗)로 잘못 달면 사용자는
+     * 브라우저가 열릴 줄 알고 누른다 — 이 화면의 기호 규칙이 거짓이 된다.
+     */
+    @Test
+    fun `지난 탑승 기록 행이 마이페이지에 있다`() {
+        val rows = myPageGroups(allLinks).group(MyPageGroupLabel.RIDES)!!.rows
+
+        assertEquals(listOf("지난 탑승 기록"), rows.map { it.text })
+        assertEquals(MyPageAction.RideHistory, rows.single().action)
+        assertEquals(MyPageRowMark.CHEVRON, rows.single().mark)
+        assertFalse("기록 보기는 되돌릴 수 없는 동작이 아니다", rows.single().danger)
+    }
+
+    /**
+     * 행 이름이 「내 탑승」이 아니라 **「지난」 탑승 기록**이어야 한다.
+     *
+     * 예약 개념이 서버에 없는 지금 「내 탑승」은 진행 중인 방까지 있을 것처럼 읽힌다 — 그게
+     * 예전 34 삭제 사유의 일부였다(「예정」 탭 + 35 와의 순환 링크). 진행 중인 방은 이
+     * 엔드포인트에 **들어오지 않으므로**(실측) 들어간 사용자는 빈 목록을 보고 자기 방이
+     * 사라졌다고 읽는다.
+     */
+    @Test
+    fun `행 이름이 진행 중인 방까지 보여 줄 것처럼 읽히지 않는다`() {
+        val text = myPageGroups(allLinks).group(MyPageGroupLabel.RIDES)!!.rows.single().text
+
+        assertTrue(text, text.startsWith("지난"))
+        assertFalse("「예정」은 서버에 없는 개념이다: $text", text.contains("예정"))
     }
 }

@@ -201,6 +201,11 @@ fun JoinConfirmRoute(
             joinErrorMessage = join.errorMessage,
             onDismiss = onDismiss,
             onConfirmJoin = { viewModel.join() },
+            // 이미 그 방 멤버면 합류를 다시 시도할 이유가 없다 — **합류 성공과 같은 길**로 보낸다.
+            // 서버가 409 `ALREADY_JOINED` 를 돌려줬을 때 이미 이렇게 처리하고 있어(ViewModel.join 의
+            // isAlreadyInThisParty 분기) 새 네비게이션 인자가 필요 없다. partyId 는 이 Route 가
+            // 들고 있는 값이라 화면이 들고 있는 Ride 를 다시 쓰지 않는다.
+            onOpenJoinedRide = { _ -> onJoined(partyId) },
             onMemberClick = onMemberClick,
         )
     }

@@ -2,8 +2,10 @@ package com.moyeota.data.local
 
 import android.content.Context
 import androidx.datastore.core.DataStore
+import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.first
@@ -49,4 +51,13 @@ class DataStoreActivePartyStorage(context: Context) : ActivePartyStorage {
 }
 
 // 프로세스당 하나만 존재해야 한다(중복 생성 시 DataStore 가 IllegalStateException 을 던진다).
-private val Context.activePartyDataStore: DataStore<Preferences> by preferencesDataStore(name = "moyeota_active_party")
+//
+// [corruptionHandler] 는 세션 저장소([com.moyeota.data.session.DataStoreTokenStorage])와 **같은 이유로**
+// 있어야 한다: 파일이 손상되면 읽기마다 `CorruptionException`(IOException 하위)이 올라오는데,
+// 이 저장소를 읽는 쪽이 앱 시작 경로라 손상이 **매 실행 크래시**가 된다. 손상은 영구적이라
+// 앱 데이터 삭제·재설치 외에 복구 수단이 없다 — 비우고 다시 시작하는 쪽이 비교할 수 없이 낫다.
+// 잃는 것은 진행 중 방 id 하나이고, 그건 서버 조회(`resolve()`)로 되살아난다.
+private val Context.activePartyDataStore: DataStore<Preferences> by preferencesDataStore(
+    name = "moyeota_active_party",
+    corruptionHandler = ReplaceFileCorruptionHandler { emptyPreferences() },
+)
