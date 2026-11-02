@@ -2,6 +2,21 @@
 
 > `_` 로 시작하므로 S3 배포 대상이 아니다(README 의 `--exclude "_*"`).
 
+## 2026-11-03 — iOS 앱 제공 (당일 시행)
+
+고친 문서: `privacy/index.html`, `terms/index.html`, `account-deletion/index.html`
+
+| 자리 | 조치 | 근거 |
+|---|---|---|
+| privacy 제4·7조 | Apple APNs 를 수신자로 추가 | Backend #279 `ApnsConfig` 에 닉네임과 미리보기가 실린다 |
+| privacy 제1·9·12조 | 운영체제 버전, 키체인 | iOS `KeychainTokenStorage`, Crashlytics |
+| privacy 제3·6조 | 자주 가는 곳을 앱에서 지울 수 있다고 정정 | 제11조는 11-01 에 이미 고쳤고 이 두 곳이 남아 있었다 |
+| privacy 제5조 | 프로필 이미지는 앱이 제공하는 그림 중 선택 | `ProfileEditScreen` 의 프로필 사진 격자 |
+| terms, account-deletion | Android 전용 표현을 양쪽 스토어로 | iOS 앱 등록 |
+
+**판단 기록.** 처음에는 제16조대로 30일 공지(시행 2026-12-03)로 게시했으나, iOS 앱을 바로 출시해야 해서 같은 날 **당일 시행으로 바꿨다(오너 결정).** 제16조의 30일 공지와 약관 제3조의 7일 전 게시를 지키지 못했다는 사실을 처리방침 개정 이력과 공지 메일에 그대로 적는다.
+바뀌는 내용은 iPhone 이용자에게 해당한다. Android 이용자의 수집 항목은 그대로이고, iOS 이용자는 개정된 방침을 보고 가입한다.
+
 ## 2026-11-01 — 채팅 신고·Crashlytics 수집 항목 추가 (프로덕션 첫 게시 전)
 
 고친 문서: `privacy/index.html`
