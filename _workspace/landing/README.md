@@ -14,7 +14,23 @@ README.md               이 파일
 _report_landing.md      구현 보고 — 명세와 다르게 간 곳, 검증 수치
 ```
 
-**파일 11개 · 요청 11개 · 전송량 380 KB.** 더 늘리지 말 것.
+**페이지가 부르는 파일 11개 · 요청 11개 · 전송량 380 KB.** 더 늘리지 말 것.
+
+페이지의 서브리소스가 아닌 파일(2026-11-03 SEO 기초 작업으로 추가, 요청 수에 들지 않는다):
+
+```
+robots.txt              크롤러 정책 + Sitemap 선언. 없으면 S3 가 403 XML 을 돌려준다
+sitemap.xml             홈 1건. 고치면 lastmod 도 갱신
+404.html                CloudFront 커스텀 에러 응답(403/404 → /404.html, 코드 404)의 대상. noindex
+assets/og.png           1200×630 링크 공유 썸네일(카카오톡·슬랙). 크롤러·메신저만 받아 간다
+llms.txt                AI 검색엔진용 요약(선택 사항, Google 은 무시). 본문과 같은 사실만 적는다
+.well-known/security.txt  보안 제보 연락처(RFC 9116). Expires 를 해마다 갱신
+naver*.html             네이버 서치어드바이저 소유확인 파일이 있으면 여기 둔다(지금은 <head> 메타 태그로 인증)
+```
+
+`index.html` 의 `<head>` 에는 JSON-LD(Organization·WebSite·MobileApplication)가 인라인으로 들어 있다.
+스크립트 요청이 아니라 데이터 블록이라 「자바스크립트 0」 원칙과 충돌하지 않는다.
+**aggregateRating 은 실제 리뷰가 생기기 전까지 넣지 않는다.** installUrl 은 스토어 등록 뒤에 넣는다.
 
 ## 제약 (어기면 페이지의 전제가 깨진다)
 
@@ -23,7 +39,7 @@ _report_landing.md      구현 보고 — 명세와 다르게 간 곳, 검증 �
   (법적 문서로 가는 `https://legal.moyeota.p-e.kr/...` 링크는 **내비게이션**이지 서브리소스가 아니다.)
 - **색면은 3종뿐** — `--bg` / `--surface-soft` / `--accent-soft`.
   `--accent-soft` 는 히어로 스테이지와 다운로드 패널 **두 곳**에만 쓴다.
-- **채운 버튼은 페이지에 하나**(`어떻게 쓰는지 보기`). 그림자는 기기 목업에만 쓴다.
+- **채운 버튼은 페이지에 둘**: 히어로의 `어떻게 쓰는지 보기` 와 #get 의 `App Store 에서 받기` (2026-11-03, iPhone 출시로 README 의 「출시 후 교체」 지시대로 칩을 버튼으로 바꿨다). 그림자는 기기 목업에만 쓴다.
 
 ## 배포
 
@@ -47,6 +63,13 @@ aws s3 sync . s3://moyeota-landing/ --delete \
 
 aws cloudfront create-invalidation --distribution-id E3JP82KLN42LB1 --paths '/*'
 ```
+
+배포 뒤 확인: `curl -sI https://www.moyeota.p-e.kr/robots.txt` 가 `text/plain` 200,
+`curl -sI https://www.moyeota.p-e.kr/없는주소` 가 **404**(403 이면 CloudFront 커스텀 에러 응답이 빠진 것),
+`sitemap.xml` 이 `application/xml` 200.
+
+CloudFront 배포(E3JP82KLN42LB1)에는 커스텀 에러 응답 두 개가 있어야 한다 — **403 → /404.html (응답 코드 404)**,
+**404 → /404.html (404)**, 에러 캐시 TTL 60초. S3 는 ListBucket 권한이 없으면 없는 키에 403 을 주기 때문이다.
 
 - 인증서는 **us-east-1** 에 있어야 한다 (CloudFront 는 버지니아 인증서만 읽는다).
   `*.moyeota.p-e.kr` 와일드카드 인증서가 이미 있으면 서브도메인은 그걸 쓸 수 있다.

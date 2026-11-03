@@ -1,0 +1,5 @@
+# https://www.moyeota.p-e.kr/robots.txt
+User-agent: *
+Allow: /
+
+Sitemap: https://www.moyeota.p-e.kr/sitemap.xml
