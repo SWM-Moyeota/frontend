@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>모여타 — 택시비, 혼자 다 내지 마요</title>
-<meta name="description" content="같은 방향으로 가는 사람을 모아 택시 한 대를 나눠 타는 합승 매칭 앱. 모여타가 택시를 부르지는 않습니다 — 모인 사람들이 채팅으로 만날 곳을 정해 직접 탑니다. 앱 이용은 무료이고, 택시 요금은 탑승한 사람들이 냅니다.">
+<title>모여타 — 택시 합승 매칭 앱 · 택시비, 혼자 다 내지 마요</title>
+<meta name="description" content="같은 방향으로 가는 사람을 모아 택시 한 대를 나눠 타는 택시 합승 매칭 앱. 앱 이용은 무료이고, 택시 요금은 탑승한 사람들이 냅니다.">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0f1319" media="(prefers-color-scheme: dark)">
@@ -18,8 +18,68 @@
 <meta property="og:title" content="모여타 — 택시비, 혼자 다 내지 마요">
 <meta property="og:description" content="같은 방향으로 가는 사람을 모아 택시 한 대를 나눠 타는 합승 매칭 앱. 모여타가 택시를 부르지는 않습니다 — 모인 사람들이 채팅으로 만날 곳을 정해 직접 탑니다.">
 <meta property="og:url" content="https://www.moyeota.p-e.kr/">
+<meta property="og:image" content="https://www.moyeota.p-e.kr/assets/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="모여타 — 택시비, 혼자 다 내지 마요. 택시 합승 매칭 앱 홈 화면">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="모여타 — 택시비, 혼자 다 내지 마요">
+<meta name="twitter:description" content="같은 방향으로 가는 사람을 모아 택시 한 대를 나눠 타는 택시 합승 매칭 앱. 앱 이용은 무료이고, 택시 요금은 탑승한 사람들이 냅니다.">
+<meta name="twitter:image" content="https://www.moyeota.p-e.kr/assets/og.png">
 <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20rx='8'%20fill='%23085AF5'/%3E%3Ccircle%20cx='12.5'%20cy='16'%20r='5.6'%20fill='%23ffffff'%20fill-opacity='.95'/%3E%3Ccircle%20cx='20.5'%20cy='16'%20r='5.6'%20fill='%23ffffff'%20fill-opacity='.55'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="assets/style.css">
+<!-- 구조화 데이터. 외부 요청이 아니라 인라인 데이터다(자바스크립트 0 원칙과 무관).
+     aggregateRating/review 는 실제 리뷰가 생기기 전까지 절대 넣지 않는다(허위 표시 → 수동 조치).
+     installUrl/downloadUrl 은 스토어 등록 뒤에, sameAs 는 실제 프로필이 생긴 뒤에 넣는다.
+     operatingSystem 은 본문의 「안드로이드 앱입니다」와 같이 고친다. -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Organization",
+      "@id": "https://www.moyeota.p-e.kr/#organization",
+      "name": "모여타",
+      "alternateName": "Moyeota",
+      "url": "https://www.moyeota.p-e.kr/",
+      "email": "codingforest17@gmail.com",
+      "description": "모여타는 같은 방향으로 가는 사람을 모아 택시 한 대를 나눠 타게 이어 주는 택시 합승 매칭 앱을 운영합니다.",
+      "contactPoint": {
+        "@type": "ContactPoint",
+        "contactType": "customer support",
+        "email": "codingforest17@gmail.com",
+        "availableLanguage": ["ko"]
+      }
+    },
+    {
+      "@type": "WebSite",
+      "@id": "https://www.moyeota.p-e.kr/#website",
+      "url": "https://www.moyeota.p-e.kr/",
+      "name": "모여타",
+      "alternateName": "Moyeota",
+      "inLanguage": "ko-KR",
+      "publisher": {"@id": "https://www.moyeota.p-e.kr/#organization"}
+    },
+    {
+      "@type": "MobileApplication",
+      "@id": "https://www.moyeota.p-e.kr/#app",
+      "name": "모여타",
+      "alternateName": "Moyeota",
+      "description": "같은 방향으로 가는 사람을 모아 택시 한 대를 나눠 타는 택시 합승 매칭 앱. 모여타가 택시를 부르지는 않고, 모인 사람들이 채팅으로 만날 곳을 정해 직접 탑니다. 앱 이용은 무료이고, 택시 요금은 탑승한 사람들이 냅니다.",
+      "url": "https://www.moyeota.p-e.kr/",
+      "operatingSystem": "Android",
+      "applicationCategory": "TravelApplication",
+      "inLanguage": "ko-KR",
+      "image": "https://www.moyeota.p-e.kr/assets/og.png",
+      "screenshot": "https://www.moyeota.p-e.kr/assets/shots/14-home.webp",
+      "author": {"@id": "https://www.moyeota.p-e.kr/#organization"},
+      "publisher": {"@id": "https://www.moyeota.p-e.kr/#organization"},
+      "offers": {"@type": "Offer", "price": "0", "priceCurrency": "KRW"},
+      "dateModified": "2026-11-03"
+    }
+  ]
+}
+</script>
 </head>
 <body>
 
@@ -177,7 +237,7 @@
       <div class="values__head">
         <p class="eyebrow">왜 모여타</p>
         <h2 id="why-h" class="section-h">혼자 낼 이유가<br>없으니까요</h2>
-        <p class="values__lead">모여타가 하는 일은 세 가지뿐입니다. 하지 않는 일도 분명히 적어 두었어요.</p>
+        <p class="values__lead">모여타(Moyeota)는 같은 방향으로 가는 사람을 모아 택시 한 대를 나눠 타게 이어 주는 택시 합승 매칭 앱입니다. 하는 일은 세 가지뿐이고, 하지 않는 일도 분명히 적어 두었어요.</p>
       </div>
 
       <ul class="value-cards">
