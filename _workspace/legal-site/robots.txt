@@ -1,0 +1,5 @@
+# https://legal.moyeota.p-e.kr/robots.txt
+User-agent: *
+Allow: /
+
+Sitemap: https://legal.moyeota.p-e.kr/sitemap.xml
