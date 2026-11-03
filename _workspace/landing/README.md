@@ -23,6 +23,9 @@ robots.txt              크롤러 정책 + Sitemap 선언. 없으면 S3 가 403 
 sitemap.xml             홈 1건. 고치면 lastmod 도 갱신
 404.html                CloudFront 커스텀 에러 응답(403/404 → /404.html, 코드 404)의 대상. noindex
 assets/og.png           1200×630 링크 공유 썸네일(카카오톡·슬랙). 크롤러·메신저만 받아 간다
+llms.txt                AI 검색엔진용 요약(선택 사항, Google 은 무시). 본문과 같은 사실만 적는다
+.well-known/security.txt  보안 제보 연락처(RFC 9116). Expires 를 해마다 갱신
+naver*.html             네이버 서치어드바이저 소유확인 파일이 있으면 여기 둔다(지금은 <head> 메타 태그로 인증)
 ```
 
 `index.html` 의 `<head>` 에는 JSON-LD(Organization·WebSite·MobileApplication)가 인라인으로 들어 있다.
