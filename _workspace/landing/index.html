@@ -14,6 +14,8 @@
 <link rel="canonical" href="https://www.moyeota.p-e.kr/">
 <!-- 검색엔진 소유확인 태그. Google 은 DNS TXT(도메인 속성)로 이미 인증됐다. -->
 <meta name="naver-site-verification" content="94be4c8c24a1ba22d0b4d2aa8181725f3c985ff9">
+<!-- iOS Safari 스마트 앱 배너. 외부 요청이 아니라 Safari 가 자체 처리한다 -->
+<meta name="apple-itunes-app" content="app-id=6829815996">
 <meta property="og:type" content="website">
 <meta property="og:locale" content="ko_KR">
 <meta property="og:site_name" content="모여타">
@@ -33,7 +35,7 @@
 <!-- 구조화 데이터. 외부 요청이 아니라 인라인 데이터다(자바스크립트 0 원칙과 무관).
      aggregateRating/review 는 실제 리뷰가 생기기 전까지 절대 넣지 않는다(허위 표시 → 수동 조치).
      installUrl/downloadUrl 은 스토어 등록 뒤에, sameAs 는 실제 프로필이 생긴 뒤에 넣는다.
-     operatingSystem 은 본문의 「안드로이드 앱입니다」와 같이 고친다. -->
+     operatingSystem 과 installUrl 은 #get 섹션의 스토어 상태와 같이 고친다 (iPhone 출시 2026-11-02, 안드로이드 준비 중). -->
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
@@ -51,7 +53,8 @@
         "contactType": "customer support",
         "email": "codingforest17@gmail.com",
         "availableLanguage": ["ko"]
-      }
+      },
+      "sameAs": ["https://apps.apple.com/kr/app/%EB%AA%A8%EC%97%AC%ED%83%80/id6829815996"]
     },
     {
       "@type": "WebSite",
@@ -67,10 +70,15 @@
       "@id": "https://www.moyeota.p-e.kr/#app",
       "name": "모여타",
       "alternateName": "Moyeota",
-      "description": "같은 방향으로 가는 사람을 모아 택시 한 대를 나눠 타는 택시 합승 매칭 앱. 모여타가 택시를 부르지는 않고, 모인 사람들이 채팅으로 만날 곳을 정해 직접 탑니다. 앱 이용은 무료이고, 택시 요금은 탑승한 사람들이 냅니다.",
+      "description": "같은 방향으로 가는 사람을 모아 택시 한 대를 나눠 타는 택시 합승 매칭 앱. 모여타가 택시를 부르지는 않고, 모인 사람들이 채팅으로 만날 곳을 정해 직접 탑니다. 앱 이용은 무료이고, 택시 요금은 탑승한 사람들이 냅니다. iPhone 앱은 App Store 에서 받을 수 있고, 안드로이드 앱은 준비 중입니다.",
       "url": "https://www.moyeota.p-e.kr/",
-      "operatingSystem": "Android",
+      "operatingSystem": "iOS 17.0 이상",
       "applicationCategory": "TravelApplication",
+      "softwareVersion": "1.0",
+      "datePublished": "2026-11-02",
+      "installUrl": "https://apps.apple.com/kr/app/%EB%AA%A8%EC%97%AC%ED%83%80/id6829815996",
+      "downloadUrl": "https://apps.apple.com/kr/app/%EB%AA%A8%EC%97%AC%ED%83%80/id6829815996",
+      "sameAs": "https://apps.apple.com/kr/app/%EB%AA%A8%EC%97%AC%ED%83%80/id6829815996",
       "inLanguage": "ko-KR",
       "image": "https://www.moyeota.p-e.kr/assets/og.png",
       "screenshot": "https://www.moyeota.p-e.kr/assets/shots/14-home.webp",
@@ -112,7 +120,7 @@
         <p class="hero__fine">모여타가 택시를 부르지는 않습니다. 택시는 모인 사람들이 직접 탑니다. 앱 이용은 무료이고, 택시 요금은 탑승한 사람들이 냅니다.</p>
         <p class="hero__actions">
           <a class="btn btn--primary" href="#how">어떻게 쓰는지 보기</a>
-          <span class="store-note">Google Play 출시 준비 중</span>
+          <span class="store-note">iPhone 은 <a href="https://apps.apple.com/kr/app/%EB%AA%A8%EC%97%AC%ED%83%80/id6829815996" rel="noopener">App Store 에서 받기</a> · 안드로이드는 준비 중</span>
         </p>
       </div>
       <div class="hero__stage">
@@ -283,13 +291,14 @@
   <section id="get" class="cta" aria-labelledby="get-h">
     <div class="wrap">
       <div class="cta__panel">
-        <h2 id="get-h">설치는 아직<br>준비 중이에요</h2>
-        <p>모여타는 안드로이드 앱입니다. Google Play 에 올라가면 이 자리에 설치 링크를 둡니다.</p>
+        <h2 id="get-h">iPhone 은 지금,<br>안드로이드는 준비 중이에요</h2>
+        <p>모여타 iPhone 앱이 App Store 에 올라왔어요 (iOS 17 이상). 안드로이드 앱은 Google Play 에 올라가면 이 자리에 설치 링크를 둡니다.</p>
         <p class="cta__chips">
-          <!-- 출시 후: 아래 span 을 <a class="btn btn--primary" href="스토어주소"> 로 교체 -->
+          <!-- iPhone 은 2026-11-02 출시. 안드로이드 출시 후: 아래 span 을 <a class="btn btn--primary" href="플레이스토어주소"> 로 교체 -->
+          <a class="btn btn--primary" href="https://apps.apple.com/kr/app/%EB%AA%A8%EC%97%AC%ED%83%80/id6829815996" rel="noopener">App Store 에서 받기</a>
           <span class="chip" aria-label="Google Play 출시 준비 중">Google Play · 준비 중</span>
         </p>
-        <p class="cta__fine">만 14세 이상부터 가입할 수 있어요. 출시 소식은 <a href="mailto:codingforest17@gmail.com">codingforest17@gmail.com</a> 으로 물어보실 수 있어요.</p>
+        <p class="cta__fine">만 14세 이상부터 가입할 수 있어요 (App Store 연령 등급은 채팅 기능 기준 15+). 안드로이드 출시 소식은 <a href="mailto:codingforest17@gmail.com">codingforest17@gmail.com</a> 으로 물어보실 수 있어요.</p>
       </div>
     </div>
   </section>
