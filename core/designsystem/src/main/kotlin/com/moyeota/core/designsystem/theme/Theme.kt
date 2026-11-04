@@ -25,6 +25,7 @@ fun MoyeotaTheme(content: @Composable () -> Unit) {
     // 와이어프레임은 라이트 단일 테마
     MaterialTheme(
         colorScheme = LightColorScheme,
+        typography = MoyeotaTypography,
         content = content,
     )
 }
