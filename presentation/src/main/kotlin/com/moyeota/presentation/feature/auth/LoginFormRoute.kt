@@ -1,5 +1,7 @@
 package com.moyeota.presentation.feature.auth
 
+import com.moyeota.domain.analytics.Analytics
+import com.moyeota.domain.analytics.AnalyticsEvent
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -38,6 +40,7 @@ class LoginViewModel(private val repository: AuthRepository) : ViewModel() {
             try {
                 repository.login(loginId, password)
                 _uiState.update { it.copy(submitting = false, loggedIn = true) }
+                Analytics.track(AnalyticsEvent.LoginCompleted)
             } catch (e: Exception) {
                 _uiState.update { it.copy(submitting = false, errorMessage = e.authUserMessage()) }
             }

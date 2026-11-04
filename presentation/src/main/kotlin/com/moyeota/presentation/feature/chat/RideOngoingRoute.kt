@@ -1,5 +1,7 @@
 package com.moyeota.presentation.feature.chat
 
+import com.moyeota.domain.analytics.Analytics
+import com.moyeota.domain.analytics.AnalyticsEvent
 import android.util.Log
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -151,6 +153,7 @@ class RideOngoingViewModel(
                         if (isRideFinished(fetched)) {
                             Log.d(TAG, "운행 완료 감지 partyId=$partyId → 33 도착 완료")
                             _finished.value = true
+                            Analytics.track(AnalyticsEvent.RideFinished)
                             return@collectLatest
                         }
                         delay(RIDE_POLL_INTERVAL_MS)

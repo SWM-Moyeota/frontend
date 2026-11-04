@@ -9,6 +9,10 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import com.moyeota.domain.analytics.Analytics
+import com.moyeota.domain.analytics.AnalyticsEvent
+import com.moyeota.domain.analytics.MatchFailureReason
+import com.moyeota.domain.analytics.MatchRequestMethod
 import com.moyeota.domain.model.PartyJoinException
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.User
@@ -91,23 +95,50 @@ class JoinConfirmViewModel(
         if (_joinState.value.joining) return // 중복 제출 차단 (공통 규칙)
         viewModelScope.launch {
             _joinState.update { it.copy(joining = true, errorMessage = null) }
+            // Click — 요청이 나가는 순간(서버 응답 전)
+            Analytics.track(AnalyticsEvent.PartyJoinClicked)
             try {
                 repository.joinParty(partyId)
-                _joinState.update { it.copy(joining = false, joinedPartyId = partyId) }
+                finishJoin()
             } catch (e: CancellationException) {
                 // 화면을 떠나며 취소된 것 — 실패 문구를 띄우지 않는다
                 throw e
             } catch (e: PartyJoinException) {
                 if (e.isAlreadyInThisParty) {
-                    _joinState.update { it.copy(joining = false, joinedPartyId = partyId) }
+                    // 「이미 이 방 멤버」는 성공 경로 — iOS `finishJoin` 과 같이 request_match 도 센다(fail 은 없다)
+                    finishJoin()
                     return@launch
                 }
                 _joinState.update { it.copy(joining = false, errorMessage = joinFailureMessage(e)) }
+                Analytics.track(AnalyticsEvent.MatchRequestFailed(MatchRequestMethod.JOIN, joinFailureReason(e)))
                 if (e.isPartyFull || e.isPartyClosed) refreshQuietly()
             } catch (e: Exception) {
                 _joinState.update { it.copy(joining = false, errorMessage = JOIN_FAILED_MESSAGE) }
+                Analytics.track(AnalyticsEvent.MatchRequestFailed(MatchRequestMethod.JOIN, MatchFailureReason.UNKNOWN))
             }
         }
+    }
+
+    /**
+     * 합류 성공(또는 **이미 돼 있던** 합류) — 21 로 넘길 방 id 를 세우고 `request_match(join)` 을 기록한다
+     * (iOS `finishJoin(joinedPartyId:)`).
+     *
+     * 합류 응답([com.moyeota.domain.model.PartyStatus])에는 정원·요금이 없어, **합류 전에 보고 있던 상세**에서
+     * 꺼낸다. 방 상세에는 주소가 없어 지역은 싣지 않는다 — 방 생성 쪽만 지역이 있다. 정원은 0 으로 지어내지
+     * 않는다 — 상세를 못 읽었거나 0 이면 키를 뺀다.
+     */
+    private fun finishJoin() {
+        _joinState.update { it.copy(joining = false, joinedPartyId = partyId) }
+        val ride = (_uiState.value as? UiState.Success)?.ride
+        Analytics.track(
+            AnalyticsEvent.MatchRequested(
+                method = MatchRequestMethod.JOIN,
+                capacity = ride?.capacity?.takeIf { it > 0 },
+                originArea = null,
+                destinationArea = null,
+                estimatedFare = ride?.estimatedFare,
+            ),
+        )
     }
 
     // 떠 있는 방을 로딩으로 덮지 않고 다시 읽는다. 실패는 조용히 둔다 — 보던 값이 조금 낡는 것보다 낫다.
@@ -121,6 +152,20 @@ class JoinConfirmViewModel(
             initializer { JoinConfirmViewModel(repository, partyId) }
         }
     }
+}
+
+/**
+ * `fail_match_request(join)` 의 `reason` — [joinFailureMessage] 와 같은 분기를 **문구가 아니라 상수**로 옮긴다
+ * (iOS `joinFailureReason` 과 같은 표). [PartyJoinException.isAlreadyInThisParty] 는 여기 오지 않는다(성공 경로).
+ */
+internal fun joinFailureReason(e: PartyJoinException): String = when {
+    e.isPartyFull -> MatchFailureReason.PARTY_FULL
+    e.isPartyClosed -> MatchFailureReason.PARTY_CLOSED
+    e.isPartyNotFound -> MatchFailureReason.PARTY_NOT_FOUND
+    e.isAlreadyInAnotherParty -> MatchFailureReason.ALREADY_IN_PARTY
+    e.isAlreadyJoined -> MatchFailureReason.ALREADY_JOINED
+    e.isNetwork -> MatchFailureReason.NETWORK
+    else -> MatchFailureReason.UNKNOWN
 }
 
 /**

@@ -14,6 +14,11 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.moyeota.core.designsystem.component.latLngOrNull
+import com.moyeota.domain.analytics.Analytics
+import com.moyeota.domain.analytics.AnalyticsEvent
+import com.moyeota.domain.analytics.MatchFailureReason
+import com.moyeota.domain.analytics.MatchRequestMethod
+import com.moyeota.domain.analytics.administrativeArea
 import com.moyeota.domain.model.MatchCandidate
 import com.moyeota.domain.model.NewParty
 import com.moyeota.domain.model.PartyOpenException
@@ -90,6 +95,29 @@ internal fun openFailureMessage(e: PartyOpenException): String = when {
     else -> OPEN_FAILED_MESSAGE
 }
 
+/**
+ * `fail_match_request(create)` 의 `reason` — [openFailureMessage] 와 같은 분기를 **문구가 아니라 상수**로 옮긴다
+ * (iOS `openFailureReason` 과 같은 표). 문구를 그대로 보내면 카피를 다듬을 때마다 Mixpanel 의 집계가 갈라진다.
+ */
+internal fun createFailureReason(e: PartyOpenException): String = when {
+    e.isAlreadyInAnotherParty -> MatchFailureReason.ALREADY_IN_PARTY
+    e.isSameDepartureDestination -> MatchFailureReason.SAME_DEPARTURE_DESTINATION
+    e.isOutOfServiceArea -> MatchFailureReason.OUT_OF_SERVICE_AREA
+    e.isInvalidCapacity -> MatchFailureReason.INVALID_CAPACITY
+    e.isRouteUnavailable -> MatchFailureReason.ROUTE_UNAVAILABLE
+    else -> MatchFailureReason.UNKNOWN
+}
+
+/**
+ * `request_match` 의 `origin_area`/`destination_area` — 장소 주소의 시/구.
+ *
+ * iOS 는 `roadName` 하나로 계산하지만, Android 의 16 은 역지오코딩이 성공하면 실주소를 `name` 에 넣고
+ * `roadName` 을 비운다. 그래서 도로명을 먼저 보고, 비었거나 주소로 판정되지 않으면 이름(=역지오코딩 주소)을
+ * 본다. 둘 다 판정이 서지 않으면 null — 키를 빼고 보낸다.
+ */
+internal fun Place.analyticsArea(): String? =
+    roadName.takeIf { it.isNotBlank() }?.let(::administrativeArea) ?: administrativeArea(name)
+
 // 방 생성자는 서버가 Bearer 토큰 주체로 정한다 — 요청 본문에 사용자 id 를 싣지 않는다.
 class CreatePartyViewModel(private val repository: RideRepository) : ViewModel() {
 
@@ -128,6 +156,8 @@ class CreatePartyViewModel(private val repository: RideRepository) : ViewModel()
         if (_uiState.value.creating) return // 중복 제출 차단
         viewModelScope.launch {
             _uiState.update { it.copy(creating = true, errorMessage = null) }
+            // Click — 요청이 나가는 순간(서버 응답 전). iOS 와 같이 사용자가 고른 정원 그대로 싣는다.
+            Analytics.track(AnalyticsEvent.PartyCreateClicked(conditions.capacity))
             try {
                 val party = repository.createParty(
                     NewParty(
@@ -146,6 +176,16 @@ class CreatePartyViewModel(private val repository: RideRepository) : ViewModel()
                     ),
                 )
                 _uiState.update { it.copy(creating = false, createdParty = party) }
+                // 핵심 퍼널 2단계(방 만들기 쪽). 지역은 시/구까지만 — 좌표·번지는 싣지 않는다.
+                Analytics.track(
+                    AnalyticsEvent.MatchRequested(
+                        method = MatchRequestMethod.CREATE,
+                        capacity = party.capacity,
+                        originArea = origin.analyticsArea(),
+                        destinationArea = destination.analyticsArea(),
+                        estimatedFare = party.estimatedFare,
+                    ),
+                )
             } catch (e: CancellationException) {
                 // 모달을 닫으며 취소된 것 — 실패 문구를 띄우지 않는다(20 합류와 같은 처리)
                 throw e
@@ -158,9 +198,11 @@ class CreatePartyViewModel(private val repository: RideRepository) : ViewModel()
                         needsActivePartyRefresh = it.needsActivePartyRefresh || e.isAlreadyInAnotherParty,
                     )
                 }
+                Analytics.track(AnalyticsEvent.MatchRequestFailed(MatchRequestMethod.CREATE, createFailureReason(e)))
             } catch (e: Exception) {
                 // 데이터 계층이 좁히지 못한 실패(직렬화 등). 사유를 모르므로 일반 문구다.
                 _uiState.update { it.copy(creating = false, errorMessage = OPEN_FAILED_MESSAGE) }
+                Analytics.track(AnalyticsEvent.MatchRequestFailed(MatchRequestMethod.CREATE, MatchFailureReason.UNKNOWN))
             }
         }
     }

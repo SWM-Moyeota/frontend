@@ -61,6 +61,7 @@ jobs:
       - name: Build and test
         env:
           NAVER_MAPS_CLIENT_ID: ${{ secrets.NAVER_MAPS_CLIENT_ID }}
+          MIXPANEL_TOKEN: ${{ secrets.MIXPANEL_TOKEN }}
         run: ./gradlew :app:assembleDebug :data:testDebugUnitTest :presentation:testDebugUnitTest --no-daemon
 
       - name: Upload test report
