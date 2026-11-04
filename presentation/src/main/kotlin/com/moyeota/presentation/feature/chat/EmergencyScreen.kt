@@ -1,5 +1,7 @@
 package com.moyeota.presentation.feature.chat
 
+import com.moyeota.domain.analytics.Analytics
+import com.moyeota.domain.analytics.AnalyticsEvent
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.Canvas
@@ -122,6 +124,8 @@ class EmergencyViewModel(
     fun onEmergencyHold() {
         if (_uiState.value.dialLaunched) return
         _uiState.value = _uiState.value.copy(dialLaunched = true)
+        // 신고 저장의 성공 여부와 무관하게 「신고에 이르렀다」는 사실을 센다 — 안전 기능이 쓰이는 빈도다(iOS 와 같은 자리)
+        Analytics.track(AnalyticsEvent.EmergencyTriggered)
         viewModelScope.launch {
             try {
                 repository.reportEmergency(partyId)

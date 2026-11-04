@@ -10,6 +10,8 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import com.moyeota.domain.analytics.Analytics
+import com.moyeota.domain.analytics.AnalyticsEvent
 import com.moyeota.domain.model.PartyEvent
 import com.moyeota.domain.model.PartyFinishException
 import com.moyeota.domain.model.PartyLeaveException
@@ -60,6 +62,8 @@ private const val PARTY_FALLBACK_POLL_INTERVAL_MS = 6_000L
 class MatchWaitingViewModel(
     private val repository: RideRepository,
     private val partyId: Long,
+    /** 현재 시각(ms). `complete_match.waited_seconds` 계산용 — 테스트가 시계를 주입한다. */
+    private val clock: () -> Long = System::currentTimeMillis,
 ) : ViewModel() {
 
     sealed interface UiState {
@@ -209,6 +213,12 @@ class MatchWaitingViewModel(
     @Volatile
     private var sawMyself = false
 
+    /** 21 에 들어온 시각 — `complete_match.waited_seconds` 는 신청 시점이 아니라 이 화면 진입 기준이다(iOS `enteredAt`). */
+    private val enteredAtMillis: Long = clock()
+
+    /** `complete_match` 를 이미 기록했는가 — 이 ViewModel 수명 동안 한 번만([trackMatchCompletionIfNeeded]). */
+    private var matchCompletionTracked = false
+
     init {
         refresh()
         observeEvents()
@@ -339,7 +349,7 @@ class MatchWaitingViewModel(
                     heldVersion = event.version ?: heldVersion
                     appliedEvents++
                     rememberMyself(event.ride)
-                    _uiState.value = UiState.Success(event.ride)
+                    publish(event.ride)
                 }
             }
             // member 의 isMe 는 상세와 같은 근거(publicId == 세션 uuid)로 이미 채워져 온다 — 다시 판정하지 않는다
@@ -406,7 +416,7 @@ class MatchWaitingViewModel(
         }
         val delta = transform(held)
         appliedEvents++
-        _uiState.value = UiState.Success(delta.ride)
+        publish(delta.ride)
         if (needsDetailAfterDelta(delta)) readDetail()
     }
 
@@ -422,7 +432,7 @@ class MatchWaitingViewModel(
     private fun applyStatus(status: RideStatus, hostPublicId: String?) {
         val held = (_uiState.value as? UiState.Success)?.ride ?: return
         appliedEvents++
-        _uiState.value = UiState.Success(held.withHostSuccession(hostPublicId).ride.copy(status = status))
+        publish(held.withHostSuccession(hostPublicId).ride.copy(status = status))
     }
 
     /**
@@ -451,7 +461,7 @@ class MatchWaitingViewModel(
         // 읽어 온 상세가 **서버 기준으로** 과거인지(순서 역전). 둘 중 하나만으로는 각자의 경우를 못 막는다.
         if (appliedEvents == mark && acceptsSnapshot(heldVersion, detail.version)) {
             heldVersion = detail.version ?: heldVersion
-            _uiState.value = UiState.Success(detail.ride)
+            publish(detail.ride)
         }
         return true
     }
@@ -542,9 +552,14 @@ class MatchWaitingViewModel(
         failureMessage = LEAVE_FAILED_MESSAGE,
         messageOf = { (it as? PartyLeaveException)?.let(::leaveFailureMessage) },
     ) {
+        // 나가기 직전 들고 있던 방 — 퍼널에서 빠져나갈 때 몇 명이 모여 있었는지가 「왜 포기했나」의 첫 단서다
+        val held = heldRide()
         // 나가는 주체는 Bearer 토큰이 정한다 — memberId 를 넘기지 않는다 (22 보고서 §2)
         repository.leaveParty(partyId)
         _actionState.update { it.copy(left = true) }
+        if (held != null) {
+            Analytics.track(AnalyticsEvent.MatchCanceled(capacity = held.capacity, memberCount = held.members.size))
+        }
     }
 
     /**
@@ -570,8 +585,38 @@ class MatchWaitingViewModel(
         failureMessage = FINISH_FAILED_MESSAGE,
         messageOf = { (it as? PartyFinishException)?.let(::finishFailureMessage) },
     ) {
+        // 완료 직전 들고 있던 방의 인원. iOS 와 같이 들고 있는 방이 없으면 0 명으로 싣는다
+        val memberCount = heldRide()?.members?.size ?: 0
         repository.finishParty(partyId)
         _actionState.update { it.copy(finished = true) }
+        Analytics.track(AnalyticsEvent.PartyFinished(memberCount = memberCount))
+    }
+
+    private fun heldRide(): Ride? = (_uiState.value as? UiState.Success)?.ride
+
+    /**
+     * 화면 상태에 방을 싣는 **유일한 길**. SSE 스냅샷·변경분·상태 전이·상세 재조회 어느 쪽으로 알게 되든
+     * 여기를 지나므로 `complete_match` 판정도 한 자리다(iOS `publish` 와 같다).
+     */
+    private fun publish(ride: Ride) {
+        _uiState.value = UiState.Success(ride)
+        trackMatchCompletionIfNeeded(ride)
+    }
+
+    /**
+     * 핵심 퍼널 3단계 `complete_match` — 방이 정원 충족 이상([isMatchFull])인 것을 **이 ViewModel 이 처음 본 순간**
+     * 한 번만 기록한다. 처음부터 찬 방(마지막 자리를 채운 합류)도 첫 스냅샷에서 1회 센다.
+     */
+    private fun trackMatchCompletionIfNeeded(ride: Ride) {
+        if (matchCompletionTracked || !isMatchFull(ride.status)) return
+        matchCompletionTracked = true
+        Analytics.track(
+            AnalyticsEvent.MatchCompleted(
+                capacity = ride.capacity,
+                memberCount = ride.members.size,
+                waitedSeconds = ((clock() - enteredAtMillis) / 1000).toInt(),
+            ),
+        )
     }
 
     /**
@@ -605,6 +650,15 @@ class MatchWaitingViewModel(
         }
     }
 }
+
+/**
+ * 정원이 찼는가 — 정원 충족(MATCHED)과 그 뒤 단계(배차·운행). `complete_match` 의 판정이다(iOS `isMatchFull`).
+ *
+ * 닫힌 방(COMPLETED·CANCELED)은 아니다 — 모집 중 만료로 닫힌 방을 「매칭 완료」로 세면 퍼널이 거짓을 말한다.
+ * member 수로 세지 않는다: 목록은 유실될 수 있는 신호로 만든 값이고, status 는 서버가 판정한 값이다.
+ */
+internal fun isMatchFull(status: RideStatus): Boolean =
+    status == RideStatus.MATCHED || status == RideStatus.DISPATCHING || status == RideStatus.ONGOING
 
 /**
  * 21 대기 화면이 머무는 단계 — 아직 사람을 모으는 중(서버 ACTIVE)이거나 정원이 찬(서버 COMPLETED) 상태.

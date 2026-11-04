@@ -1,5 +1,8 @@
 package com.moyeota.presentation.feature.auth
 
+import com.moyeota.domain.analytics.Analytics
+import com.moyeota.domain.analytics.AnalyticsEvent
+import com.moyeota.domain.analytics.ageBand
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -81,6 +84,9 @@ class SignupViewModel(private val repository: AuthRepository) : ViewModel() {
                 // 자동 로그인 — 여기서 토큰이 저장되고 authState 가 Authenticated 로 바뀐다
                 repository.login(newUser.loginId, newUser.password)
                 _uiState.update { it.copy(submitting = false, done = true) }
+                // 핵심 퍼널 1단계 — 가입 **그리고** 자동 로그인까지 성공한 뒤에만. 재시도로 가입을 건너뛰고
+                // 로그인만 성공해도 이 자리에서 1회. 성별·연령대는 서버가 돌려주지 않아 가입 폼 값에서만 나온다.
+                Analytics.track(AnalyticsEvent.SignupCompleted(newUser.gender, ageBand(newUser.birthDate)))
             } catch (e: Exception) {
                 val error = (e as? AuthException)?.error
                 // 닉네임 중복만 따로 표시한다 — 이 화면에 없는 필드라 되돌아갈 경로를 함께 줘야 한다

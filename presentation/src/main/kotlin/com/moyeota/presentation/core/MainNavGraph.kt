@@ -26,6 +26,8 @@ import androidx.navigation.compose.dialog
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.moyeota.core.designsystem.component.MoyeotaTab
+import com.moyeota.domain.analytics.Analytics
+import com.moyeota.domain.analytics.AnalyticsEvent
 import com.moyeota.domain.model.AuthState
 import com.moyeota.domain.model.Gender
 import com.moyeota.domain.model.Place
@@ -68,6 +70,8 @@ import com.moyeota.presentation.feature.onboarding.OnboardingSafetyScreen
 import com.moyeota.presentation.feature.onboarding.OnboardingSavingScreen
 import com.moyeota.presentation.feature.onboarding.OnboardingTrustScreen
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 
@@ -156,6 +160,17 @@ private fun MainNavHost(
 ) {
     val navController = rememberNavController()
     val scope = rememberCoroutineScope()
+
+    // 화면 조회(`view_screen`)는 **여기 한 곳**에서만 기록한다(iOS MainNavGraph 와 같은 자리).
+    // 백스택 맨 위의 목적지가 바뀐 순간이 곧 「사용자가 그 화면을 봤다」이고, 초기 화면과 dialog 목적지(16)도
+    // 맨 위라 함께 잡힌다. 이름은 인자를 채우기 전 **패턴**(`chat/room/{roomId}`)이라 방 id 가 섞이지 않는다.
+    // 키가 navController 라 리컴포지션으로 다시 붙지 않고, distinctUntilChanged 가 같은 맨 위의 재방출을 거른다.
+    LaunchedEffect(navController) {
+        navController.currentBackStackEntryFlow
+            .map { it.destination.route }
+            .distinctUntilChanged()
+            .collect { route -> if (route != null) Analytics.track(AnalyticsEvent.ScreenViewed(route)) }
+    }
 
     // 로그인 사용자의 이름 — NavHost 바깥(액티비티 스코프)에 두어 홈·마이가 한 인스턴스를 공유한다.
     // 화면별 ViewModel 로 두면 탭을 오갈 때마다 같은 조회가 반복된다.

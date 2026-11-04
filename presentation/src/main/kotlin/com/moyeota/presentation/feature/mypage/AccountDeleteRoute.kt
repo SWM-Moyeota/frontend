@@ -1,5 +1,7 @@
 package com.moyeota.presentation.feature.mypage
 
+import com.moyeota.domain.analytics.Analytics
+import com.moyeota.domain.analytics.AnalyticsEvent
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -148,6 +150,9 @@ class AccountDeleteViewModel(private val repository: AuthRepository) : ViewModel
                     repository.deleteAccount(state.password)
                     // 204 를 받은 **이 자리**가 탈퇴를 말할 수 있는 지점이다
                     onDeleted()
+                    // 세션이 곧 사라지며 리포터가 사용자 연결을 끊는다(reset) — 그 전에 기록해야 탈퇴한 사람의
+                    // 이벤트로 남는다(iOS 와 같은 자리·순서). 위 콜백은 상태 플래그만 세우고 중단하지 않는다.
+                    Analytics.track(AnalyticsEvent.AccountDeleted)
                     // 비밀번호를 상태에 남기지 않는다 — 화면은 곧 사라지지만 ViewModel 이 몇 프레임 더 산다.
                     // submitting 은 끄지 않는다(위 KDoc): 이 화면은 성공 후 로딩 상태로 사라진다.
                     _uiState.update { it.copy(password = "") }
