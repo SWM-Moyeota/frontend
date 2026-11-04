@@ -247,6 +247,7 @@ private fun EmailCodeInput(
 ) {
     BasicTextField(
         value = code,
+        textStyle = MoyeotaType.DisplayMd,
         onValueChange = onCodeChange,
         enabled = enabled,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),

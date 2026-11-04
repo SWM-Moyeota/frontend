@@ -44,6 +44,7 @@ import com.moyeota.core.designsystem.component.NoticeBanner
 import com.moyeota.core.designsystem.component.NoticeKind
 import com.moyeota.core.designsystem.component.PrimaryCtaButton
 import com.moyeota.core.designsystem.component.StatusBarSpacer
+import com.moyeota.core.designsystem.theme.PretendardFontFamily
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.domain.model.Place
 import com.moyeota.domain.model.FavoritePlace as SavedPlace
@@ -535,6 +536,7 @@ private fun SearchInput(
             enabled = enabled,
             singleLine = true,
             textStyle = TextStyle(
+                fontFamily = PretendardFontFamily,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Bold,
                 color = MoyeotaColor.InkPrimary,
