@@ -96,7 +96,7 @@ Mixpanel 퍼널이 플랫폼별로 갈라진다. 바꿔야 하면 iOS·보드를
 |---|---|
 | SDK | `com.mixpanel.android:mixpanel-android` (`gradle/libs.versions.toml`) |
 | 초기화 | `MixpanelAPI.getInstance(context, token, trackAutomaticEvents = false)` — 자동 이벤트 **끔** |
-| 로깅 | Debug 빌드만 (`app/src/debug/AndroidManifest.xml` 의 `MPConfig.EnableDebugLogging`) |
+| 로깅 | Debug 빌드만 — 리포터가 `mixpanel.setEnableLogging(debuggable)` 로 켠다. logcat 태그 `MixpanelAPI.*` 에 큐잉·플러시가 찍힌다 |
 | super property | `build` = `debug`/`release` |
 | 토큰 없음 | SDK 를 켜지 않고 sink 도 안 꽂음 → `Analytics.track` 무동작 |
 
@@ -106,7 +106,7 @@ Mixpanel 퍼널이 플랫폼별로 갈라진다. 바꿔야 하면 iOS·보드를
   (보고서 Breakdown `$os`). 나누더라도 플랫폼이 아니라 운영/개발 기준으로 나눈다(`build` super property 로 지금은 충분).
 - 로컬: `local.properties`(gitignored) 에 `MIXPANEL_TOKEN=…` → `app/build.gradle.kts` `buildSetting` → `BuildConfig.MIXPANEL_TOKEN`.
   값은 iOS `frontend-ios/Config/Secrets.xcconfig` 의 `MIXPANEL_TOKEN` 과 같다(Settings → Project Settings → Project Token).
-- CI: GitHub Secrets `MIXPANEL_TOKEN` (`.github/workflows/build.yml`, 2026-11-04 등록). 비어 있어도 빌드는 되고 이벤트만 꺼진다.
+- CI: GitHub Secrets `MIXPANEL_TOKEN` 을 `.github/workflows/build.yml` 이 읽는다. **저장소 소유자가 `gh secret set MIXPANEL_TOKEN` 으로 등록해야 한다**(에이전트는 시크릿 쓰기가 막혀 있다). 비어 있어도 빌드는 되고 이벤트만 꺼진다.
 - 저장소에 토큰을 커밋하지 않는다.
 
 ### 사용자 식별 (identify / reset)
@@ -130,5 +130,5 @@ Mixpanel 퍼널이 플랫폼별로 갈라진다. 바꿔야 하면 iOS·보드를
 ## 남은 일
 
 - Play Console 데이터 보안 양식에 Mixpanel 수집 항목(사용자 ID·기기 ID·앱 상호작용·대략적 위치·성별·연령대)을 적는다.
-- 개인정보 처리방침에 Mixpanel(미국, Mixpanel Inc.) 국외 이전과 수집 항목 추가.
+- ~~개인정보 처리방침에 Mixpanel(미국, Mixpanel Inc.) 국외 이전과 수집 항목 추가.~~ 2026-11-05 반영(`_workspace/legal-site/_changes.md`). SDK 가 자동으로 붙이는 `$carrier`·`$bluetooth_*`·`$has_nfc`·`$has_telephone`·`$manufacturer`·`$brand` 까지 적었으므로, SDK 를 올려 자동 항목이 바뀌면 처리방침도 같이 본다.
 - 탈퇴 요청이 오면 서버뿐 아니라 Mixpanel 프로필도 지운다(Users → 프로필 → Delete). `delete_account` 이벤트가 그 사용자를 찾는 열쇠다.

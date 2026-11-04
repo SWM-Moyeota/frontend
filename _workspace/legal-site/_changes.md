@@ -2,6 +2,80 @@
 
 > `_` 로 시작하므로 S3 배포 대상이 아니다(README 의 `--exclude "_*"`).
 
+## 2026-11-05 — iPhone 앱 이용 기록(Mixpanel) 수집 항목 추가
+
+고친 문서: `privacy/index.html`, `account-deletion/index.html`
+안 고친 것: `index.html`, `terms/index.html`, `assets/style.css`
+
+iOS 앱 1.0.2(frontend-ios PR #25, TestFlight `v2026.1104.3`)가 Mixpanel 로 행동 이벤트를 보낸다. 그 빌드가 App Store 에
+나가기 전에 처리방침이 먼저 맞아야 한다. 근거는 frontend-ios 의 `docs/ANALYTICS.md`, `Moyeota/MixpanelAnalyticsReporter.swift`,
+`Moyeota/PrivacyInfo.xcprivacy`, `Packages/MoyeotaCore/Sources/MoyeotaDomain/Analytics/Analytics.swift`.
+
+| 자리 | 조치 | 근거 |
+|---|---|---|
+| privacy 머리말 | 시행일·최종 수정일 2026-11-05 | 수집 항목이 늘어나는 개정 |
+| privacy 제1조 표3 | 「앱 이용 기록(iPhone 앱)」·「Mixpanel 기기 식별자(iPhone 앱)」 두 줄 추가 | `AnalyticsEvent.properties`, SDK `AutomaticProperties`(앱 버전·OS 버전·모델·화면 크기·`$radio`·`$wifi`), `?ip=1` 로 국가·도시 |
+| privacy 제2조 | 7호에 「앱 이용 흐름의 집계와 분석」, notice 의 「행태 분석에 사용하지 않습니다」 삭제 → 범위를 제9조로 한정 | 그대로 두면 허위 고지 |
+| privacy 제6조 표5 | 「회원 탈퇴 시까지 — 탈퇴하면 Mixpanel 에 삭제 요청」 행 추가 | `docs/ANALYTICS.md` 「탈퇴 요청이 오면 Mixpanel 프로필도 지운다」 |
+| privacy 제7조 표6 | Mixpanel, Inc.(미국) 행 추가. 3항에서 「성별을 제공하지 않는다」를 빼고 Mixpanel 예외 명시 | `people.set(gender, age_band)`, `identify(publicId)` |
+| privacy 제8조 2항 | 「외부 분석·모니터링 업체로 보내지 않습니다」 삭제, 예외를 두 가지로 | |
+| **privacy 제9조** | 제목 「광고·행태 분석은 없고, 오류 진단만 수집합니다」 → 「앱 이용 기록의 수집과 오류 진단」. 1항 「행태 분석 도구 없음」 삭제, **3항 신설**(무엇을 왜 보내고 무엇을 안 보내는지, 끄는 설정 없음), 4·5항에 Mixpanel 식별자·미국 서버 | 11-01 과 같은 종류 — 제목이 사실을 부정하고 있었다 |
+| privacy 제10조 3항 | 탈퇴 시 지우는 정보에 Mixpanel 기록(삭제 요청) 추가 | |
+| privacy 제11조 5항 | 아직 없는 기능에 「이용 기록 수집을 끄는 설정」 추가 | 앱에 opt-out UI 없음(`optOutTracking` 호출처 0건) |
+| privacy 제16조 | 개정 이력 행 추가. 30일 공지 미준수를 적었다 | |
+| account-deletion | 「한눈에 보기」와 「탈퇴하면 바로 삭제되는 데이터」 표에 iPhone 앱 이용 기록 행 추가 | 계정과 연결된 기록이라 Crashlytics 와 달리 이 페이지에도 들어가야 한다 |
+
+### 판단 기록
+
+- **기기 식별자는 「무작위」로 적었다.** Mixpanel Swift SDK 7.0.0 은 `useUniqueDistinctId` 를 켜지 않으면 `UUID()` 를 쓴다
+  (`MixpanelInstance.defaultDeviceId`). IDFV 가 아니다. frontend-ios `PrivacyInfo.xcprivacy` 의 주석 「IDFV 기반」은 같은 날 고쳤다.
+- **IP 주소가 Mixpanel 에 전달된다고 적었다.** SDK 가 `?ip=1` 로 보내고 Mixpanel 이 국가·도시를 붙인다. Mixpanel 이 IP 원문을
+  얼마나 보관하는지는 실측하지 못해 적지 않았다 — 「전달된다」까지만.
+- **보관 기간은 「회원 탈퇴 시까지(삭제 요청)」로 적었다.** Mixpanel 쪽 자동 삭제가 없으니 모여타가 지워야 참이 된다.
+  **운영 할 일이 생긴다** — `delete_account` 이벤트가 오면 Mixpanel Users → 프로필 → Delete(또는 GDPR API). 이 절차를 지키지
+  않을 거면 이 줄을 「보관 기간을 정해두지 않았습니다」로 바꿔야 한다. 자동화하면 그때 문구를 「자동으로」로 올린다.
+- **플랫폼 구분 없이 「앱」으로 적었다(오너 결정, 11-05).** 처음엔 「iPhone 앱에서만」으로 썼으나 Android 가 같은 Mixpanel
+  프로젝트로 곧 따라올 예정이라 한 번의 개정·공지로 끝내기로 했다. 이 항목을 쓸 때 Android 앱에는 아직 Mixpanel 코드가 없었으므로 제9조 제3항과
+  개정 이력에 「Android 앱은 이 기능이 들어간 업데이트부터」라고 적어 시점을 못 박았다(11-01 의 「이 시행일 이후 배포되는 버전부터」와
+  같은 방식). Android 가 실제로 붙으면 이 문서는 고칠 것이 없고, 혹시 Android 계획이 취소되면 그 문장을 지워야 한다. 안드로이드 쪽 계약 문서는 `~/Documents/notes/moyeota/2026-11-03-mixpanel-이벤트-설계와-iOS-연동-정리.md`.
+- **시행일은 당일(11-05) — 오너 결정(2026-11-05).** 11-01·11-03 과 같은 선택이다. 제16조의 30일 공지를 또 지키지 못하며,
+  이번에는 App Store 에 실사용자가 있다. 30일을 지키려면 시행일을 2026-12-05 로 바꾸고 App Store 제출을 그 뒤로 미루거나,
+  Mixpanel 토큰을 비운 빌드를 먼저 내보내야 한다(토큰이 비면 SDK 가 꺼진다). 어느 쪽이든 결정을 여기에 적는다.
+- **공지문은 `_notice-20261105-mixpanel.md`.** 보낼지와 채널은 오너가 정한다. 지금 App Store 의 1.0.1 에는 이 수집이 없으므로
+  문구는 「다음 업데이트부터」다.
+
+### 같은 날 추가 — Android 앱이 붙었다 (frontend PR #76)
+
+Android 앱에 iOS 와 같은 계약으로 Mixpanel 이 들어갔다(`feature/mixpanel-analytics-v2`, `docs/ANALYTICS.md`, 같은 프로젝트
+codingforest 4080134·같은 토큰). 「이 기능이 들어간 업데이트부터」라는 시점 문장은 그대로 참이라 두었고, 본문에서 고친 것은
+**Android SDK 가 자동으로 붙이는 항목이 iOS 와 다르다**는 한 가지다.
+
+| 자리 | 조치 | 근거 |
+|---|---|---|
+| privacy 제1조 표3 「앱 이용 기록」 | 「Android 앱은 기기 제조사, 통신사 이름, 블루투스가 켜져 있는지와 그 버전, NFC·전화 기능이 있는지도 함께 붙습니다」 | 아래 SDK 확인 |
+| privacy 제7조 표6 Mixpanel 행 | 같은 항목을 괄호로 | |
+| privacy 제9조 3항 「기기와 접속 정보」 | 같은 항목 + 「앱이 고른 것이 아니라 Mixpanel 구성요소가 자동으로 붙이는 것」 | |
+| `_notice-20261105-mixpanel.md` | 「Android 앱은 아직 코드가 없어」 → 「같은 날 코드가 들어갔고 … Play 업데이트부터」. 이용자에게 보내는 문구는 그대로(「이 기능이 들어간 업데이트부터」) | |
+
+- **Android SDK 8.12.0 이 모든 이벤트에 자동으로 붙이는 키(바이트코드 `AnalyticsMessages$Worker$AnalyticsMessageHandler.getDefaultEventProperties` 에서 확인):**
+  `$app_version`·`$app_version_string`·`$app_release`·`$app_build_number`, `$os`·`$os_version`, `$manufacturer`·`$brand`·`$model`,
+  `$screen_dpi`·`$screen_height`·`$screen_width`, `$wifi`, `$carrier`, `$bluetooth_enabled`·`$bluetooth_version`, `$has_nfc`·`$has_telephone`, `$lib_version`·`mp_lib`.
+  iOS 목록(11-05 본문)에 없는 것은 제조사·브랜드, 통신사, 블루투스, NFC·전화 유무 — 이것만 「Android 앱은」으로 덧붙였다.
+- **IP 전달은 Android 도 같다.** `MPConfig.UseIpAddressForGeolocation` 기본값 `true`(바이트코드 `iconst_1`), 앱이 끄지 않았다.
+- **기기 식별자는 Android 도 무작위.** `PersistentIdentity` 가 `java.util.UUID.randomUUID()` 로 만든다. `ANDROID_ID` 를 읽는 코드 없음.
+  광고 식별자(ADID)도 읽지 않는다 — 앱 `MixpanelAnalyticsReporter.kt` 가 SDK 를 아는 유일한 파일이고 거기에 없다.
+- **앱이 직접 보내는 값은 iOS 와 같다.** `domain/.../analytics/Analytics.kt` 의 sealed class 가 전부이고, `AnalyticsTest`·`*AnalyticsTest`(presentation 607건)로 고정.
+  People 프로필에 `gender`·`age_band`, `identify(publicId)`, 로그아웃·탈퇴 시 `reset`.
+- **탈퇴 시 Mixpanel 삭제 요청은 Android 도 수동.** `delete_account` 이벤트가 열쇠인 것은 같다.
+- 검증: `python3 -I _check.py .` 실패 0.
+
+### 검증
+
+`python3 _check.py .` → 실패 0 (privacy id 26·앵커 31·목차 16, account-deletion id 18·앵커 41·목차 13).
+`terms/index.html`·`index.html`·`assets/style.css` 는 `git diff` 로 무변경 확인.
+배포는 2026-11-05 에 시도했으나 이 Mac 의 AWS 자격 증명(`default`·`moyeota` 프로필 모두)이 `InvalidClientTokenId` 로 거부돼
+**아직 하지 않았다.** 자격 증명을 다시 넣은 뒤 README 의 명령으로 배포하고 무효화 id 를 여기에 적는다.
+
 ## 2026-11-03 — iOS 앱 제공 (당일 시행)
 
 고친 문서: `privacy/index.html`, `terms/index.html`, `account-deletion/index.html`
