@@ -58,6 +58,13 @@ val moyeotaBaseUrl: String =
  *
  * 만드는 법과 전체 배포 절차는 `docs/RELEASE.md` 참고.
  */
+/**
+ * Mixpanel 프로젝트 토큰(codingforest 4080134 — iOS 와 같은 프로젝트). local.properties 또는 환경변수 MIXPANEL_TOKEN 에서 읽는다.
+ * 비어 있으면 MixpanelAnalyticsReporter 가 SDK 도 sink 도 설치하지 않는다 — 토큰 없는 팀원 로컬·fork 빌드는
+ * 이벤트를 보내지 않을 뿐 정상 동작한다. 토큰은 저장소에 커밋하지 않는다(CI 는 secrets.MIXPANEL_TOKEN).
+ */
+val mixpanelToken: String = buildSetting("MIXPANEL_TOKEN", default = "")
+
 val keystorePath: String = buildSetting("MOYEOTA_KEYSTORE_PATH", default = "")
 val keystorePassword: String = buildSetting("MOYEOTA_KEYSTORE_PASSWORD", default = "")
 val keyAliasValue: String = buildSetting("MOYEOTA_KEY_ALIAS", default = "")
@@ -94,6 +101,7 @@ android {
 
         manifestPlaceholders["naverMapsClientId"] = naverMapsClientId
         buildConfigField("String", "BASE_URL", "\"$moyeotaBaseUrl\"")
+        buildConfigField("String", "MIXPANEL_TOKEN", "\"$mixpanelToken\"")
     }
 
     signingConfigs {
@@ -174,6 +182,8 @@ dependencies {
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.messaging)
     implementation(libs.firebase.crashlytics)
+    // 행동 이벤트 전송. Mixpanel 을 아는 파일은 MixpanelAnalyticsReporter 하나다.
+    implementation(libs.mixpanel.android)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.junit)

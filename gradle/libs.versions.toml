@@ -27,6 +27,8 @@ crashlyticsPlugin = "3.0.8"
 naverMapSdk = "3.23.3"
 playServicesLocation = "21.4.0"
 firebaseBom = "34.17.0"
+# 2026-11-04 기준 Maven Central 최신 안정판(2026-10-30 배포)
+mixpanel = "8.12.0"
 junit = "4.13.2"
 junitVersion = "1.3.0"
 espressoCore = "3.7.0"
@@ -68,6 +70,7 @@ firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.r
 firebase-messaging = { group = "com.google.firebase", name = "firebase-messaging" }
 # 버전을 적지 않는다 — BOM 34.17.0 이 firebase-crashlytics 20.1.0 으로 고정한다(BOM pom 실측).
 firebase-crashlytics = { group = "com.google.firebase", name = "firebase-crashlytics" }
+mixpanel-android = { group = "com.mixpanel.android", name = "mixpanel-android", version.ref = "mixpanel" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
 androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }

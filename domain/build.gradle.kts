@@ -23,4 +23,6 @@ dependencies {
     // api 로 노출: AuthRepository.authState 가 StateFlow 라 presentation/data 가 그대로 본다.
     api(libs.kotlinx.coroutines.core)
     coreLibraryDesugaring(libs.desugar.jdk.libs)
+    // Analytics 이벤트 이름 고정·area/ageBand 변환처럼 프레임워크 없이 검증 가능한 순수 로직용
+    testImplementation(libs.junit)
 }

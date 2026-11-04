@@ -102,6 +102,9 @@ jobs:
       - name: APK 빌드 (서명된 릴리스)
         env:
           NAVER_MAPS_CLIENT_ID: ${{ secrets.NAVER_MAPS_CLIENT_ID }}
+          # Mixpanel 토큰. 비어 있으면 리포터가 SDK 를 켜지 않아 스토어 빌드의 이벤트가 **조용히 꺼진다** —
+          # build.yml(디버그)과 같은 시크릿을 여기에도 넣어야 운영 이벤트가 올라간다.
+          MIXPANEL_TOKEN: ${{ secrets.MIXPANEL_TOKEN }}
           # 스텝 수준 env 에서는 runner 컨텍스트를 쓸 수 있다. rootProject.file() 은 절대 경로를
           # 그대로 쓰므로 워크스페이스 밖 경로도 문제없다.
           MOYEOTA_KEYSTORE_PATH: ${{ runner.temp }}/${{ env.KEYSTORE_NAME }}

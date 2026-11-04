@@ -45,6 +45,14 @@ class MoyeotaApplication : Application(), SingletonImageLoader.Factory {
         // 수집 스위치가 뒤에 있으면 바로 그 사고만 영영 못 본다.
         configureCrashReporting()
         appContainer = AppContainer(context = this, debugLogging = isDebuggableBuild())
+        // 토큰이 비어 있으면 아무것도 꽂지 않는다(Analytics.track 무동작). 세션 구독은 appScope 수명만큼 산다.
+        MixpanelAnalyticsReporter.install(
+            context = this,
+            token = BuildConfig.MIXPANEL_TOKEN,
+            session = appContainer.userSession,
+            debuggable = isDebuggableBuild(),
+            scope = appScope,
+        )
         createNotificationChannel()
         fetchFcmToken()
     }
