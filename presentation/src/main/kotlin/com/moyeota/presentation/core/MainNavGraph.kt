@@ -1,6 +1,7 @@
 package com.moyeota.presentation.core
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -36,6 +37,7 @@ import com.moyeota.domain.repository.AppConfigRepository
 import com.moyeota.domain.repository.AuthRepository
 import com.moyeota.domain.repository.ChatRepository
 import com.moyeota.domain.repository.PlaceRepository
+import com.moyeota.domain.repository.NoShowRepository
 import com.moyeota.domain.repository.RideRecordRepository
 import com.moyeota.domain.repository.RideRepository
 import com.moyeota.presentation.feature.auth.LoginFormRoute
@@ -57,6 +59,7 @@ import com.moyeota.presentation.feature.matching.RideDetailRoute
 import com.moyeota.presentation.feature.mypage.AccountDeleteRoute
 import com.moyeota.presentation.feature.mypage.MyPageScreen
 import com.moyeota.presentation.feature.mypage.ProfileEditRoute
+import com.moyeota.presentation.feature.mypage.NoShowRecordsRoute
 import com.moyeota.presentation.feature.mypage.RideHistoryRoute
 import com.moyeota.presentation.feature.onboarding.OnboardingSafetyScreen
 import com.moyeota.presentation.feature.onboarding.OnboardingSavingScreen
@@ -92,6 +95,14 @@ fun MainNavGraph(
      */
     rideRecordRepository: RideRecordRepository,
     /**
+     * 38 노쇼 기록·이의 신청(`GET /api/v1/matching/no-shows`).
+     *
+     * **필수 인자다** — [rideRecordRepository] 와 같은 이유다. 기본값을 두면 배선을 빠뜨렸을 때
+     * 컴파일이 통과하고 **실행 중에만** 38 이 빈 화면으로 떨어진다. 그 화면은 노쇼로 찍힌 사람이
+     * 이의를 낼 **유일한 창구**라, 조용히 비어 있는 것이 가장 나쁜 실패다.
+     */
+    noShowRepository: NoShowRepository,
+    /**
      * 채팅 알림 탭으로 열어 달라는 방. 로그인돼 있고 그래프가 준비되면 그 채팅방을 **스택에 쌓고**
      * [onPendingChatRoomHandled] 로 소비를 알린다. 미로그인이면 무시한다(로그인 뒤 엉뚱한 방을 여는 것보다 낫다).
      */
@@ -114,6 +125,7 @@ fun MainNavGraph(
         chatRepository = chatRepository,
         activePartyRepository = activePartyRepository,
         rideRecordRepository = rideRecordRepository,
+        noShowRepository = noShowRepository,
         pendingChatRoomId = pendingChatRoomId,
         onPendingChatRoomHandled = onPendingChatRoomHandled,
     )
@@ -144,6 +156,7 @@ private fun MainNavHost(
     chatRepository: ChatRepository,
     activePartyRepository: ActivePartyRepository,
     rideRecordRepository: RideRecordRepository,
+    noShowRepository: NoShowRepository,
     pendingChatRoomId: Long? = null,
     onPendingChatRoomHandled: () -> Unit = {},
 ) {
@@ -275,6 +288,26 @@ private fun MainNavHost(
     // 가볍다([PlaceSaver] — ChatRoute 의 ChatRoomSaver 와 같은 방식).
     var confirmedOrigin by rememberSaveable(stateSaver = PlaceSaver) { mutableStateOf<Place?>(null) }
     var confirmedDestination by rememberSaveable(stateSaver = PlaceSaver) { mutableStateOf<Place?>(null) }
+
+    /**
+     * 17 예약 날짜 검색의 **도착지 필터**. null 이면 출발지만으로 찾는다.
+     *
+     * 서버는 도착지를 **둘 다 또는 둘 다 없이** 받고(400 `INCOMPLETE_DESTINATION`), 보내면
+     * 도착지도 1km 안인 방(`destinationNearby`)을 먼저 준다. 그래서 「없음」이 정상 상태다 —
+     * 기본값을 지어내면 사용자가 고르지 않은 조건으로 걸러진 목록을 보게 된다.
+     *
+     * [rememberSaveable] 이 아닌 이유: 검색 조건이라 프로세스가 죽었다 살아나면 **지워지는 쪽이
+     * 맞다.** 되살리면 날짜는 초기화됐는데 도착지만 남아 사용자가 고르지 않은 조합이 된다.
+     */
+    var reservationSearchDestination by remember { mutableStateOf<Place?>(null) }
+
+    /**
+     * 15 를 **도착지 필터를 고르러** 열었는가. 평소(홈 검색·방 만들기)에는 false 라 고른 뒤 16 으로 간다.
+     *
+     * 깃발을 쓰는 이유: 15 는 한 화면인데 **돌아갈 곳이 둘**이다(16 모달 / 17 필터). 라우트를 둘로
+     * 쪼개면 같은 화면이 두 벌이 되고, 15 가 들고 있는 검색 상태도 갈린다.
+     */
+    var pickingSearchDestination by remember { mutableStateOf(false) }
     // 「방금 끝난 방」을 잡아 두던 `finishedRide` 는 지웠다 — 그 값의 유일한 독자가 33 도착 완료
     // 화면이었고, 그 화면은 26 운행 중과 함께 사라졌다(서버가 운행 종료를 보낼 수 없다).
     // 이제 방이 끝나면 21 이 `onPartyClosed` 로 알려 주고, 사용자는 요약 없이 14 홈으로 간다.
@@ -668,14 +701,26 @@ private fun MainNavHost(
             )
         }
         composable(Routes.DESTINATION) {
+            // 15 를 떠날 때 깃발을 **반드시** 내린다. [onBack] 에만 두면 안 된다 — 시스템 뒤로가기
+            // 제스처는 그 람다를 타지 않아, 필터를 고르다 그냥 나온 사용자가 다음에 방을 만들려고
+            // 15 를 열면 16 이 뜨지 않고 고른 도착지가 조용히 필터로 먹힌다.
+            DisposableEffect(Unit) {
+                onDispose { pickingSearchDestination = false }
+            }
             DestinationRoute(
                 repository = placeRepository,
                 initialQuery = searchInitialQuery,
                 onBack = ::back,
                 onConfirmRoute = { origin, place ->
-                    confirmedOrigin = origin
-                    confirmedDestination = place
-                    navController.navigate(Routes.DESTINATION_CONFIRM)
+                    if (pickingSearchDestination) {
+                        // 17 의 도착지 필터만 고른 것이다 — 방을 만들러 온 길이 아니므로 16 을 열지 않는다.
+                        reservationSearchDestination = place
+                        back()
+                    } else {
+                        confirmedOrigin = origin
+                        confirmedDestination = place
+                        navController.navigate(Routes.DESTINATION_CONFIRM)
+                    }
                 },
             )
         }
@@ -727,6 +772,14 @@ private fun MainNavHost(
                 // 배너는 **지금 단계 화면**으로 바로 간다
                 onOngoingRideClick = { activeRide?.let(::navigateToStage) },
                 onCreateRoomClick = { navController.navigate(Routes.DESTINATION) },
+                // 예약 날짜 검색의 도착지 필터 — 15 를 **고르기 전용**으로 열었다가 돌아온다.
+                searchDestination = reservationSearchDestination,
+                onPickSearchDestination = {
+                    pickingSearchDestination = true
+                    searchInitialQuery = ""
+                    navController.navigate(Routes.DESTINATION)
+                },
+                onClearSearchDestination = { reservationSearchDestination = null },
                 onTabSelect = ::navigateTab,
             )
         }
@@ -888,6 +941,7 @@ private fun MainNavHost(
                 userName = userName,
                 onEditProfile = { navController.navigate(Routes.PROFILE_EDIT) },
                 onRideHistory = { navController.navigate(Routes.RIDE_HISTORY) },
+                onNoShowRecords = { navController.navigate(Routes.NO_SHOW_RECORDS) },
                 // logout() 은 실패하지 않는다 — 상태 전이는 위 LaunchedEffect 가 받아 04a 로 보낸다.
                 // logoutRequested 를 먼저 세워 두면 그 전이를 세션 만료로 오해하지 않는다.
                 onLogout = {
@@ -925,6 +979,20 @@ private fun MainNavHost(
             // 사용자는 자기 기록이 사라졌다고 읽는다.
             RideHistoryRoute(
                 repository = rideRecordRepository,
+                onBack = ::back,
+            )
+        }
+        composable(Routes.NO_SHOW_RECORDS) {
+            // 38 노쇼 기록·이의 신청 — GET /api/v1/matching/no-shows, 최대 20건.
+            //
+            // 34 와 달리 **진행 중인 방과 무관**하다. 노쇼는 이미 끝난 방에서만 생기므로
+            // activePartyRepository 를 넘길 이유가 없다.
+            //
+            // 이 화면이 하는 일의 절반은 **이의 신청**이다. 노쇼는 약속 시간부터 (횟수 × 24시간)
+            // 동안 방 만들기·참여를 막는 실제 제재이고, 잘못 찍힌 사람이 그걸 되돌릴 길은 여기뿐이다
+            // — 조회가 실패하면 빈 목록이 아니라 「불러오지 못했어요 · 다시 시도」로 떨어뜨린다.
+            NoShowRecordsRoute(
+                repository = noShowRepository,
                 onBack = ::back,
             )
         }

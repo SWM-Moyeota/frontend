@@ -73,6 +73,16 @@ object Routes {
     const val RIDE_HISTORY = "mypage/ride-history"           // 34 재도입 (지난 탑승 기록)
 
     /**
+     * 38 노쇼 기록·이의 신청 (신규, 2026-11-06) — `GET /api/v1/matching/no-shows` +
+     * `POST /api/v1/matching/rooms/{partyId}/no-show-objection`.
+     *
+     * 34 와 가르는 이유: 34 는 **탄** 방을, 38 은 **안 탄 것으로 기록된** 방을 보여 준다. 노쇼로
+     * 찍힌 방은 탑승 기록에서 빠지므로(서버) 한 화면에 섞으면 「없는 방」과 「없어진 방」이 한 목록에
+     * 들어간다. 38 은 그 방에 **이의를 내는 창구**이기도 해서 행마다 할 수 있는 일이 다르다.
+     */
+    const val NO_SHOW_RECORDS = "mypage/no-shows"            // 38 신규 (노쇼 기록·이의 신청)
+
+    /**
      * 37 회원 탈퇴 (신규, 2026-10) — `DELETE /api/v1/users/me`. Google Play 계정 삭제 요건.
      *
      * 다이얼로그가 아니라 **별 화면**인 이유는 [com.moyeota.presentation.feature.mypage.AccountDeleteScreen]

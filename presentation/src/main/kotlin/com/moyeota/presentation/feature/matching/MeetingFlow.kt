@@ -423,7 +423,7 @@ internal fun departConfirmMessage(notArrivedCount: Int): String = if (notArrived
     "모두 도착했어요. 출발하면 같이 탄 사람 모두의 방이 끝나요"
 } else {
     "같이 탄 사람 모두의 방이 끝나요. 아직 도착하지 않은 ${notArrivedCount}명은 노쇼로 기록돼요 — " +
-        "약속 시간부터 노쇼 횟수 × 24시간 동안 방을 만들거나 참여할 수 없어요"
+        "약속 시간부터 노쇼 횟수 × 24시간 동안 방·예약을 만들거나 참여할 수 없어요"
 }
 
 /** 「도착 2/3」 — 확정된 방에서 사람들이 가장 자주 확인하는 숫자다. 확정 전에는 뜻이 없어 null. */

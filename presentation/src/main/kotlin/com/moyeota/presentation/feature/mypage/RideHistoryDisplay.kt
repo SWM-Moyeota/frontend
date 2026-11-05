@@ -143,8 +143,13 @@ internal fun rideHistoryDateLabel(
     return "${at.monthValue}월 ${at.dayOfMonth}일 $meridiem $hour12:$minute"
 }
 
-/** 서버 ISO-8601(Instant 또는 오프셋 표기) → Instant. 그 외 형식은 null. */
-private fun String.toInstantOrNull(): Instant? =
+/**
+ * 서버 ISO-8601(Instant 또는 오프셋 표기) → Instant. 그 외 형식은 null.
+ *
+ * `internal` 인 이유: 같은 패키지의 38 노쇼 기록(`NoShowRecordsDisplay.kt`)이 같은 서버 표기를
+ * 읽는다. 파서를 한 번 더 베끼면 한쪽만 오프셋 표기를 받아 주는 식으로 조용히 갈린다.
+ */
+internal fun String.toInstantOrNull(): Instant? =
     runCatching { Instant.parse(this) }.getOrNull()
         ?: runCatching { OffsetDateTime.parse(this).toInstant() }.getOrNull()
 

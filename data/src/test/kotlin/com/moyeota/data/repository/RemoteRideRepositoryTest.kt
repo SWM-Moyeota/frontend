@@ -6,15 +6,23 @@ import com.moyeota.data.remote.dto.ConfirmMeetingRequestDto
 import com.moyeota.data.remote.dto.RealTimeMatchingRequestDto
 import com.moyeota.data.remote.dto.MatchCandidateResponse
 import com.moyeota.data.remote.dto.OpenPartyRequestDto
+import com.moyeota.data.remote.dto.MyNoShowListResponse
+import com.moyeota.data.remote.dto.NoShowObjectionRequestDto
 import com.moyeota.data.remote.dto.OpenPartyResponse
 import com.moyeota.data.remote.dto.PartyDetailResponse
 import com.moyeota.data.remote.dto.PartyListResponse
+import com.moyeota.data.remote.dto.OpenReservationRequestDto
 import com.moyeota.data.remote.dto.PartyStatusResponse
+import com.moyeota.data.remote.dto.ReservationItemDto
+import com.moyeota.data.remote.dto.ReservationListResponse
 import com.moyeota.data.remote.dto.RouteEstimateResponse
 import com.moyeota.data.remote.dto.RouteRequestDto
 import com.moyeota.domain.model.RealtimeMatchException
 import com.moyeota.domain.model.AuthState
 import com.moyeota.domain.model.NewParty
+import com.moyeota.domain.model.NewReservation
+import com.moyeota.domain.model.ReservationDestination
+import com.moyeota.domain.model.RoomType
 import com.moyeota.data.remote.matching.reconnectDelayMs
 import com.moyeota.domain.model.PartyArriveException
 import com.moyeota.domain.model.PartyConfirmException
@@ -954,6 +962,274 @@ class RemoteRideRepositoryTest {
         assertFalse(realtime.isRouteUnavailable)
     }
 
+    /**
+     * 예약 생성이 **같은 [com.moyeota.domain.model.Ride] 로 돌아오고**, 서버가 주는 두 사실이
+     * 그대로 실린다: 예약 방이고([RoomType.RESERVATION]) **처음부터 확정**이다.
+     *
+     * 확정은 「나갈 수 없다」는 뜻이라(409 `CANNOT_LEAVE_CONFIRMED_PARTY`) 이 값이 false 로 새면
+     * 화면이 누를 수 없는 「그만 찾기」를 띄운다. 그리고 요금·경로가 **비어 있는 것이 정상**이다 —
+     * 서버가 예약 방의 경로를 추정하지 않는다(공짜라서가 아니다).
+     */
+    @Test
+    fun `예약 생성은 확정된 예약 방을 돌려주고 요금 경로가 비어 있다`() = runBlocking {
+        val api = FakeMatchingApi()
+
+        val ride = RemoteRideRepository(api, session()).createReservation(
+            NewReservation(
+                departureLat = 37.4979,
+                departureLng = 127.0276,
+                destinationLat = 37.3948,
+                destinationLng = 127.1112,
+                departure = "강남역",
+                destination = "판교역",
+                capacity = 3,
+                departureAt = "2026-11-13T08:00:00Z",
+            ),
+        )
+
+        assertEquals("31", ride.id)
+        assertEquals(RoomType.RESERVATION, ride.roomType)
+        assertTrue("예약 방은 처음부터 확정이다", ride.isConfirmed)
+        assertEquals("2026-11-13T08:00:00Z", ride.departureAt)
+        assertEquals(1, ride.members.size)
+        // 서버가 추정하지 않으므로 비어 있다 — 0 을 「공짜」로 그리면 안 된다.
+        assertNull(ride.estimatedFare)
+        assertNull(ride.estimatedMinutes)
+        assertNull(ride.routePolyline)
+        assertEquals(0, ride.farePerPerson)
+    }
+
+    /**
+     * 요청 본문에 실리는 것은 **여덟 개뿐**이고 도착지 이름이 **전체 이름**이다 —
+     * 실시간 후보 본문(`destLat`)·검색 쿼리(`depLat`/`destLat`)와 **셋이 다르다**.
+     * 앱이 정원을 접지도, 시각을 고치지도 않는다(판정은 서버 몫 — 400 이 나야 앱 버그가 드러난다).
+     */
+    @Test
+    fun `예약 생성 요청은 좌표 이름 정원 출발시각을 그대로 싣는다`() = runBlocking {
+        val api = FakeMatchingApi()
+
+        RemoteRideRepository(api, session()).createReservation(
+            NewReservation(
+                departureLat = 37.4979,
+                departureLng = 127.0276,
+                destinationLat = 37.3948,
+                destinationLng = 127.1112,
+                departure = "강남역",
+                destination = "판교역",
+                // 서버가 거절할 값. 앱이 2 로 끌어올리면 안 된다.
+                capacity = 1,
+                departureAt = "2026-11-13T08:00:00Z",
+            ),
+        )
+
+        val sent = api.reserveRequest!!
+        assertEquals(37.3948, sent.destinationLat, 1e-9)
+        assertEquals(127.1112, sent.destinationLng, 1e-9)
+        assertEquals("강남역", sent.departure)
+        assertEquals(1, sent.capacity)
+        assertEquals("2026-11-13T08:00:00Z", sent.departureAt)
+    }
+
+    /**
+     * 예약 생성 실패는 **방 생성과 같은 [PartyOpenException]** 으로 좁혀진다 — 서버가 두 액션에
+     * 같은 record 로 응답하고 코드도 다섯이 겹치기 때문이다(예외를 하나로 둔 근거는 그 KDoc 에 있다).
+     *
+     * 예약에만 오는 둘이 사유로 갈리는지가 핵심이다. 특히 403 `NO_SHOW_RESTRICTED` 와
+     * 409 `PARTY_TIME_CONFLICT` 를 뭉개면 둘 다 「잠시 후 다시 시도」가 되는데 **둘 다 영구히
+     * 거짓**이다(제재는 시각이 지나야, 충돌은 시간을 옮겨야 풀린다).
+     */
+    @Test
+    fun `예약 생성 실패는 예약 전용 사유까지 갈린다`() = runBlocking {
+        val restricted = reserveError(httpError(403, "NO_SHOW_RESTRICTED", "노쇼로 이용이 제한된 상태입니다."))
+        assertTrue(restricted.isNoShowRestricted)
+        assertFalse(restricted.isAlreadyInAnotherParty)
+        assertFalse("제재는 경로 실패가 아니다", restricted.isRouteUnavailable)
+        assertEquals(403, restricted.httpStatus)
+        assertEquals("노쇼로 이용이 제한된 상태입니다.", restricted.serverMessage)
+
+        // 「다른 방에 있다」와 「그 시간대가 찼다」는 사용자가 할 일이 다르다 —
+        // 전자는 그 방을 정리해야 하고, 후자는 **시간을 옮기면 된다**(예약은 여러 건 가질 수 있다).
+        val conflict = reserveError(httpError(409, "PARTY_TIME_CONFLICT", "해당 시간대에 이미 예약이 있습니다."))
+        assertTrue(conflict.isPartyTimeConflict)
+        assertFalse(conflict.isAlreadyInAnotherParty)
+
+        val joined = reserveError(httpError(409, "ALREADY_JOINED_OTHER_PARTY", "이미 참여 중인 방이 있습니다."))
+        assertTrue(joined.isAlreadyInAnotherParty)
+        assertFalse(joined.isPartyTimeConflict)
+
+        val badTime = reserveError(httpError(400, "INVALID_DEPARTURE_TIME", "출발 시각이 올바르지 않습니다."))
+        assertTrue(badTime.isInvalidDepartureTime)
+        assertFalse(badTime.isInvalidCapacity)
+
+        // 겹치는 코드들도 그대로 갈린다(방 생성과 같은 표).
+        assertTrue(reserveError(httpError(400, "SAME_DEPARTURE_DESTINATION", "x")).isSameDepartureDestination)
+        assertTrue(reserveError(httpError(400, "OUT_OF_SERVICE_AREA", "x")).isOutOfServiceArea)
+        assertTrue(reserveError(httpError(400, "INVALID_CAPACITY", "x")).isInvalidCapacity)
+
+        // 모르는 코드·본문 없음은 사유를 추측하지 않는다 — 화면이 일반 문구로 떨어진다.
+        val unknown = reserveError(httpError(409, "SOMETHING_NEW", "x"))
+        assertFalse(unknown.isPartyTimeConflict)
+        assertFalse(unknown.isAlreadyInAnotherParty)
+        assertNull(reserveError(bodylessError(409)).code)
+    }
+
+    /** 예약에도 **방 생성과 같은 사유 표**가 적용되지만, 경로 실패는 **올 수 없다**(서버가 추정하지 않는다). */
+    @Test
+    fun `예약 생성에는 경로 실패가 사유로 오지 않는다`() = runBlocking {
+        // 서버가 이 코드를 예약에서 던지지는 않는다. 와도 같은 갈래로 떨어지는 것까지만 확인한다 —
+        // 분기를 지우지 않는 이유는 502 를 상태 코드로도 받기 때문이다(게이트웨이 응답).
+        assertTrue(reserveError(bodylessError(502)).isRouteUnavailable)
+    }
+
+    /**
+     * **예약 정원 1 은 `INVALID_CAPACITY` 로 오지 않는다** — 서버 Bean Validation(`@Min(2)`)이
+     * 도메인 `Capacity`(1~3 허용)보다 먼저 돌아 400 `INVALID_REQUEST` 로 떨어진다.
+     *
+     * 그 범용 코드를 [PartyOpenException.isInvalidCapacity] 에 넣지 **않았다**는 것을 못 박는다:
+     * 넣으면 실시간 쪽에서 본문이 깨진 실패에까지 「인원을 다시 고르세요」라고 말하게 된다.
+     * 즉 이 경우는 **사유를 알 수 없는 400** 이 맞고, 화면이 칩을 2·3 으로 묶어 막는다.
+     */
+    @Test
+    fun `예약 정원 하한 위반은 사유 없는 400 으로 떨어진다`() = runBlocking {
+        val error = reserveError(httpError(400, "INVALID_REQUEST", "정원은 2명 이상이어야 합니다."))
+
+        assertEquals("INVALID_REQUEST", error.code)
+        assertFalse("범용 400 을 정원 사유로 읽으면 본문 오류까지 「인원을 고치세요」가 된다", error.isInvalidCapacity)
+        assertFalse(error.isInvalidDepartureTime)
+        assertFalse(error.isSameDepartureDestination)
+    }
+
+    /** 기간 목록은 두 문자열을 **그대로** 넘기고, 예약 방으로 매핑해 돌려준다. */
+    @Test
+    fun `기간 목록은 from to 를 그대로 넘기고 예약 방으로 돌려준다`() = runBlocking {
+        val api = FakeMatchingApi(reservations = listOf(reservationItem()))
+
+        val rides = RemoteRideRepository(api, session())
+            .getReservations(from = "2026-11-13T00:00:00Z", to = "2026-11-14T00:00:00Z")
+
+        assertEquals("2026-11-13T00:00:00Z" to "2026-11-14T00:00:00Z", api.reservationRange)
+        assertEquals("12", rides.single().id)
+        assertEquals(RoomType.RESERVATION, rides.single().roomType)
+        assertTrue(rides.single().isConfirmed)
+    }
+
+    /**
+     * 「곧 출발」은 좌표를 **남서 → 북동 순서 그대로** 넘긴다([getPartiesWithin] 과 같은 순서).
+     * 섞이면 서버가 400 `INVALID_MAP_BOUNDS` 를 준다 — 방 목록 쪽은 그 검사가 없어 같은 실수가
+     * 한쪽에만 증상을 낸다.
+     *
+     * 돌려주는 것은 **[com.moyeota.domain.model.Ride] 그대로**다 — 이 응답에는 `destinationNearby`
+     * 가 없으므로 검색 결과로 감싸지 않는다.
+     */
+    @Test
+    fun `곧 출발은 남서 북동 순서 그대로 넘긴다`() = runBlocking {
+        val api = FakeMatchingApi(reservations = listOf(reservationItem()))
+
+        val rides = RemoteRideRepository(api, session()).getReservationsSoon(35.20, 129.05, 35.26, 129.12)
+
+        assertEquals(listOf(35.20, 129.05, 35.26, 129.12), api.reservationSoonCall)
+        assertEquals("12", rides.single().id)
+    }
+
+    /**
+     * ### 도착지는 **둘 다 또는 둘 다 아니다** ★
+     * 하나만 가면 서버가 400 `INCOMPLETE_DESTINATION` 이다. 저장소가 한 값([ReservationDestination])
+     * 에서 두 쿼리를 만들기 때문에 **쌍이 깨질 길이 없다** — 그 보장을 값으로 확인한다.
+     * (실제 URL 에서 두 키가 함께 빠지는지는 `ReservationSearchQueryTest` 가 본다.)
+     *
+     * [date] 도 **그대로** 넘긴다 — KST 달력 날짜를 만드는 일은 호출부 책임이고, 저장소가 기기
+     * 시간대로 다시 만들면 화면이 고른 날짜와 서버가 보는 날짜가 두 군데서 계산되어 어긋난다.
+     */
+    @Test
+    fun `검색은 도착지를 둘 다 넘기거나 둘 다 빼고 날짜를 고치지 않는다`() = runBlocking {
+        val withDestination = FakeMatchingApi(reservations = listOf(reservationItem(destinationNearby = true)))
+        val results = RemoteRideRepository(withDestination, session()).searchReservations(
+            departureLat = 37.4979,
+            departureLng = 127.0276,
+            date = "2026-11-13",
+            destination = ReservationDestination(latitude = 37.3948, longitude = 127.1112),
+        )
+
+        assertEquals(
+            listOf<Any?>(37.4979, 127.0276, "2026-11-13", 37.3948, 127.1112),
+            withDestination.reservationSearchCall,
+        )
+        assertEquals(true, results.single().destinationNearby)
+
+        val withoutDestination = FakeMatchingApi(reservations = listOf(reservationItem()))
+        val plain = RemoteRideRepository(withoutDestination, session()).searchReservations(
+            departureLat = 37.4979,
+            departureLng = 127.0276,
+            date = "2026-11-13",
+        )
+
+        // 둘 다 null — 하나만 null 인 상태를 만들 길이 없다.
+        assertEquals(
+            listOf<Any?>(37.4979, 127.0276, "2026-11-13", null, null),
+            withoutDestination.reservationSearchCall,
+        )
+        // **null 은 false 가 아니라 「물어보지 않았다」다.**
+        assertNull("도착지를 안 물었는데 false 로 접혔다", plain.single().destinationNearby)
+    }
+
+    /** 세 조회 모두 빈 목록이 정상이다 — 그 날 그 범위에 예약이 없을 뿐이다. */
+    @Test
+    fun `예약 조회 셋 모두 빈 목록이 정상이다`() = runBlocking {
+        val repository = RemoteRideRepository(FakeMatchingApi(), session())
+
+        assertTrue(repository.getReservations("2026-11-13T00:00:00Z", "2026-11-14T00:00:00Z").isEmpty())
+        assertTrue(repository.getReservationsSoon(1.0, 2.0, 3.0, 4.0).isEmpty())
+        assertTrue(repository.searchReservations(1.0, 2.0, "2026-11-13").isEmpty())
+    }
+
+    /** 더미 저장소는 예약을 **지어내지 않는다** — 없는 약속 시간을 그리면 프리뷰가 거짓이 된다. */
+    @Test
+    fun `더미 저장소의 예약 조회는 빈 목록이다`() = runBlocking {
+        val dummy = DummyRideRepository()
+
+        assertTrue(dummy.getReservations("2026-11-13T00:00:00Z", "2026-11-14T00:00:00Z").isEmpty())
+        assertTrue(dummy.getReservationsSoon(1.0, 2.0, 3.0, 4.0).isEmpty())
+        assertTrue(dummy.searchReservations(1.0, 2.0, "2026-11-13").isEmpty())
+        // 생성은 성공한 척하되 **예약 방의 성질**은 서버와 같게 맞춘다.
+        val created = dummy.createReservation(newReservation())
+        assertEquals(RoomType.RESERVATION, created.roomType)
+        assertTrue(created.isConfirmed)
+    }
+
+    // 예약 생성 실패만 바꿔 끼우는 호출 — [openError] 와 같은 모양이다(요청 값은 어느 테스트에서도 같다).
+    private fun reserveError(failure: Throwable): PartyOpenException = runBlocking {
+        runCatching {
+            RemoteRideRepository(FakeMatchingApi(reserveFailure = failure), session())
+                .createReservation(newReservation())
+        }.exceptionOrNull() as PartyOpenException
+    }
+
+    private fun newReservation() = NewReservation(
+        departureLat = 37.4979,
+        departureLng = 127.0276,
+        destinationLat = 37.3948,
+        destinationLng = 127.1112,
+        departure = "강남역",
+        destination = "판교역",
+        capacity = 3,
+        departureAt = "2026-11-13T08:00:00Z",
+    )
+
+    private fun reservationItem(destinationNearby: Boolean? = null) = ReservationItemDto(
+        partyId = 12,
+        departure = "강남역",
+        destination = "판교역",
+        currentMembers = 2,
+        capacity = 3,
+        status = "ACTIVE",
+        departureLat = 37.4979,
+        departureLng = 127.0276,
+        destinationLat = 37.3948,
+        destinationLng = 127.1112,
+        departureAt = "2026-11-13T08:00:00Z",
+        destinationNearby = destinationNearby,
+    )
+
     private fun error502() = HttpException(
         Response.error<Unit>(
             502,
@@ -985,7 +1261,13 @@ class RemoteRideRepositoryTest {
         private val confirmFailure: Throwable? = null,
         private val arriveFailure: Throwable? = null,
         private val departFailure: Throwable? = null,
+        private val reserveFailure: Throwable? = null,
+        private val reservations: List<ReservationItemDto> = emptyList(),
     ) : MatchingApi {
+        var reserveRequest: OpenReservationRequestDto? = null
+        var reservationRange: Pair<String, String>? = null
+        var reservationSoonCall: List<Double>? = null
+        var reservationSearchCall: List<Any?>? = null
         var realtimeRequest: RealTimeMatchingRequestDto? = null
         var joinCall: Long? = null
         var finishCall: Long? = null
@@ -1093,6 +1375,56 @@ class RemoteRideRepositoryTest {
             departFailure?.let { throw it }
         }
 
+        /**
+         * 예약 생성. **응답이 방 생성과 같은 record** 이고(`OpenPartyResponse`) 다른 점은 서버가
+         * 실제로 그렇게 주는 세 가지다: `roomType = "RESERVED"`, `departureAt` 이 요청 값,
+         * 그리고 **경로·요금·시간이 null**(서버가 예약 방의 경로를 추정하지 않는다).
+         */
+        override suspend fun createReservation(request: OpenReservationRequestDto): OpenPartyResponse {
+            reserveRequest = request
+            reserveFailure?.let { throw it }
+            return OpenPartyResponse(
+                id = 31,
+                departureLat = request.departureLat,
+                departureLng = request.departureLng,
+                destinationLat = request.destinationLat,
+                destinationLng = request.destinationLng,
+                departure = request.departure,
+                destination = request.destination,
+                capacity = request.capacity,
+                currentMembers = 1,
+                status = "ACTIVE",
+                roomType = "RESERVED",
+                departureAt = request.departureAt,
+            )
+        }
+
+        override suspend fun getReservations(from: String, to: String): ReservationListResponse {
+            reservationRange = from to to
+            return ReservationListResponse(list = reservations)
+        }
+
+        override suspend fun getReservationsSoon(
+            swLat: Double,
+            swLng: Double,
+            neLat: Double,
+            neLng: Double,
+        ): ReservationListResponse {
+            reservationSoonCall = listOf(swLat, swLng, neLat, neLng)
+            return ReservationListResponse(list = reservations)
+        }
+
+        override suspend fun searchReservations(
+            depLat: Double,
+            depLng: Double,
+            date: String,
+            destLat: Double?,
+            destLng: Double?,
+        ): ReservationListResponse {
+            reservationSearchCall = listOf(depLat, depLng, date, destLat, destLng)
+            return ReservationListResponse(list = reservations)
+        }
+
         // 실서버(localhost:8080) 응답을 축약한 값 — 폴리라인 필드명이 path 다.
         override suspend fun previewRoute(request: RouteRequestDto): RouteEstimateResponse {
             routeRequest = request
@@ -1102,6 +1434,15 @@ class RemoteRideRepositoryTest {
                 path = "ub`vEwtzrW?BQxA",
             )
         }
+
+        // 노쇼 두 경로는 같은 MatchingApi 에 얹혀 있지만(서버가 /api/v1/matching 아래에 두었다)
+        // 이 파일이 보는 것은 RemoteRideRepository 다 — 부를 일이 없으므로 불리면 실패로 드러낸다.
+        // 노쇼 쪽 검증은 RemoteNoShowRepositoryTest 가 자기 가짜로 한다.
+        override suspend fun getMyNoShows(): MyNoShowListResponse =
+            error("RemoteRideRepository 는 노쇼를 조회하지 않는다")
+
+        override suspend fun submitNoShowObjection(partyId: Long, request: NoShowObjectionRequestDto): Unit =
+            error("RemoteRideRepository 는 이의를 신청하지 않는다")
 
         // 정원이 차서 서버가 COMPLETED 로 마감한 방 — 앱이 매칭 시작을 트리거하지 않는다.
         private fun detail(partyId: Long) = PartyDetailResponse(

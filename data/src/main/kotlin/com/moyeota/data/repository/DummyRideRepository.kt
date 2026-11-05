@@ -2,10 +2,14 @@ package com.moyeota.data.repository
 
 import com.moyeota.domain.model.MatchCandidate
 import com.moyeota.domain.model.NewParty
+import com.moyeota.domain.model.NewReservation
 import com.moyeota.domain.model.PartyDetail
 import com.moyeota.domain.model.PartyStatus
+import com.moyeota.domain.model.ReservationDestination
+import com.moyeota.domain.model.ReservationSearchResult
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
+import com.moyeota.domain.model.RoomType
 import com.moyeota.domain.model.RouteEstimate
 import com.moyeota.domain.model.User
 import com.moyeota.domain.repository.RideRepository
@@ -121,6 +125,49 @@ class DummyRideRepository : RideRepository {
     override suspend fun arriveAtDeparture(partyId: Long, latitude: Double, longitude: Double) = Unit
 
     override suspend fun departParty(partyId: Long) = Unit
+
+    /**
+     * 예약 생성도 **성공한 척만 한다.** 돌려주는 방이 실시간 생성([createParty])과 다른 점은 둘이고
+     * 둘 다 서버가 실제로 그렇게 주는 값이다: [RoomType.RESERVATION] 이고 처음부터 확정이다.
+     * 요금·경로를 지어내지 않는 것도 서버와 같다 — 예약 방은 서버가 경로를 추정하지 않는다.
+     */
+    override suspend fun createReservation(request: NewReservation): Ride = Ride(
+        id = "dummy-reservation",
+        origin = request.departure,
+        destination = request.destination,
+        departureLabel = "",
+        capacity = request.capacity,
+        members = listOf(me),
+        farePerPerson = 0,
+        totalFare = 0,
+        status = RideStatus.RECRUITING,
+        originLat = request.departureLat,
+        originLng = request.departureLng,
+        destinationLat = request.destinationLat,
+        destinationLng = request.destinationLng,
+        departureAt = request.departureAt,
+        isConfirmed = true,
+        roomType = RoomType.RESERVATION,
+    )
+
+    // 예약 조회 셋은 **빈 목록이 정답이다.** 더미에는 예약 방이 없고, 지어내면 프리뷰에서
+    // 「11월 13일 08:00 출발」 같은 **실재하지 않는 약속**을 그려 준다 — 실시간 후보
+    // (findRealtimeCandidates)를 빈 목록으로 둔 것과 같은 근거다. 서버 없이 화면이 열리는지만 본다.
+    override suspend fun getReservations(from: String, to: String): List<Ride> = emptyList()
+
+    override suspend fun getReservationsSoon(
+        swLat: Double,
+        swLng: Double,
+        neLat: Double,
+        neLng: Double,
+    ): List<Ride> = emptyList()
+
+    override suspend fun searchReservations(
+        departureLat: Double,
+        departureLng: Double,
+        date: String,
+        destination: ReservationDestination?,
+    ): List<ReservationSearchResult> = emptyList()
 
     /**
      * 직선거리 기준으로 요금·시간을 지어낸다(서울 택시 기본요금 4,800원 + km 당 1,300원,

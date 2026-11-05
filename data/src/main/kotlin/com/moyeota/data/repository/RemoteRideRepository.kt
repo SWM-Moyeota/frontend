@@ -14,6 +14,7 @@ import com.moyeota.data.remote.realtimeMatchException
 import com.moyeota.data.remote.partyJoinException
 import com.moyeota.data.remote.readApiError
 import com.moyeota.data.remote.toMatchCandidate
+import com.moyeota.data.remote.toReservationSearchResult
 import com.moyeota.data.remote.routeRequestDto
 import com.moyeota.data.remote.toPartyEvent
 import com.moyeota.data.remote.toPartyStatus
@@ -22,6 +23,7 @@ import com.moyeota.data.remote.toRide
 import com.moyeota.data.remote.toRouteEstimate
 import com.moyeota.domain.model.MatchCandidate
 import com.moyeota.domain.model.NewParty
+import com.moyeota.domain.model.NewReservation
 import com.moyeota.domain.model.PartyArriveException
 import com.moyeota.domain.model.PartyConfirmException
 import com.moyeota.domain.model.PartyDepartException
@@ -32,6 +34,8 @@ import com.moyeota.domain.model.PartyJoinException
 import com.moyeota.domain.model.PartyLeaveException
 import com.moyeota.domain.model.PartyOpenException
 import com.moyeota.domain.model.PartyStatus
+import com.moyeota.domain.model.ReservationDestination
+import com.moyeota.domain.model.ReservationSearchResult
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RouteEstimate
 import com.moyeota.domain.repository.RideRepository
@@ -272,6 +276,68 @@ class RemoteRideRepository(
         return result.getOrThrow().mapNotNull { it.toMatchCandidate() }
     }
 
+    /**
+     * 예약 방 생성. 응답이 방 생성과 **같은 record** 라 같은 매퍼([toRide])를 그대로 쓴다 —
+     * 경로·요금·시간은 서버가 null 로 주므로 그 매퍼가 알아서 빈 자리로 옮긴다.
+     *
+     * 실패는 [createParty] 와 **같은 [PartyOpenException]** 으로 좁히고 **같은 변환 함수**를 쓴다
+     * ([partyOpenException]). 예외를 하나로 둔 근거는 그 클래스 KDoc 에 있고, 여기서 중요한 것은
+     * **변환도 하나**라는 점이다 — 두 벌이면 겹치는 다섯 코드의 매핑이 갈려, 한쪽만 서버 변경을
+     * 따라가는 자리가 다섯 개 생긴다.
+     *
+     * 복구 조회는 없다: 서버는 검사를 **먼저** 하고 방을 만들므로 실패했으면 만들어진 방이 없다.
+     *
+     * 요청 값을 **검사하지 않는다**(정원 2~3, 시각 범위) — 판정은 서버가 하고 화면은 애초에
+     * 만들 수 없는 값을 못 만들게 막는다([NewReservation] KDoc).
+     */
+    override suspend fun createReservation(request: NewReservation): Ride {
+        val response = runCatching { api.createReservation(request.toRequestDto()) }
+        val failure = response.exceptionOrNull()
+            ?: return response.getOrThrow().toRide()
+        // runCatching 은 취소까지 삼키므로 되던져 화면 이탈이 에러로 보이지 않게 한다.
+        if (failure is CancellationException) throw failure
+        // 에러 본문은 스트림이라 한 번만 읽을 수 있다 — 읽어서 들고 넘긴다.
+        throw partyOpenException(failure, failure.readApiError())
+    }
+
+    // 조회 셋은 실패를 감싸지 않는다(이 저장소의 조회 관례 — getParties·getPartyDetail 과 같다).
+    // 세 호출 모두 **재정렬하지 않는다**: 받은 순서가 서버의 정렬이다.
+    override suspend fun getReservations(from: String, to: String): List<Ride> =
+        api.getReservations(from = from, to = to).list.map { it.toRide() }
+
+    // 파라미터 순서가 getPartiesWithin 과 같다(남서 → 북동) — 섞이면 서버가 400 INVALID_MAP_BOUNDS 다.
+    override suspend fun getReservationsSoon(
+        swLat: Double,
+        swLng: Double,
+        neLat: Double,
+        neLng: Double,
+    ): List<Ride> = api.getReservationsSoon(swLat, swLng, neLat, neLng).list.map { it.toRide() }
+
+    /**
+     * 예약 검색. [destination] 이 null 이면 **두 쿼리가 함께 빠진다** — Retrofit 의 `@Query` 가
+     * null 을 키째 생략하기 때문이고, 그게 서버의 「둘 다 또는 둘 다 아님」 계약과 정확히 맞는다.
+     *
+     * **좌표를 하나만 싣는 경로가 이 함수에 없다**는 게 핵심이다. 파라미터가 `Double?` 두 개였다면
+     * 호출부의 실수로 400 `INCOMPLETE_DESTINATION` 이 났을 자리를 타입이 막는다
+     * ([ReservationDestination] KDoc).
+     *
+     * [date] 는 **손대지 않고 그대로 싣는다.** `yyyy-MM-dd` 모양인지, KST 달력의 날짜인지,
+     * 오늘~7일 안인지는 전부 호출부의 책임이다 — 여기서 기기 시간대로 다시 만들면 화면이 고른
+     * 날짜와 서버가 보는 날짜가 두 군데서 계산되어 어긋난다.
+     */
+    override suspend fun searchReservations(
+        departureLat: Double,
+        departureLng: Double,
+        date: String,
+        destination: ReservationDestination?,
+    ): List<ReservationSearchResult> = api.searchReservations(
+        depLat = departureLat,
+        depLng = departureLng,
+        date = date,
+        destLat = destination?.latitude,
+        destLng = destination?.longitude,
+    ).list.map { it.toReservationSearchResult() }
+
     // 백엔드가 POST 로 바뀌어 열린 엔드포인트. 응답 폴리라인 필드는 route 가 아니라 path 다.
     override suspend fun previewRoute(
         departureLat: Double,
@@ -285,6 +351,11 @@ class RemoteRideRepository(
 
 /**
  * 방 생성 실패 → [PartyOpenException]. presentation 이 HTTP 를 알 필요가 없게 하는 경계다.
+ *
+ * **실시간([RemoteRideRepository.createParty])과 예약([RemoteRideRepository.createReservation])이
+ * 둘 다 이 함수를 쓴다.** 서버가 두 액션에 같은 record 로 응답하고 코드도 다섯이 겹치므로 변환을
+ * 두 벌 두면 그 다섯 자리에서 한쪽만 서버 변경을 따라간다 — 예외를 하나로 둔 근거와 같다
+ * ([PartyOpenException] KDoc 의 「두 액션을 한 예외에 둔 이유」).
  *
  * `PartyMappers.kt` 의 [com.moyeota.data.remote.partyJoinException]·
  * [com.moyeota.data.remote.partyFinishException] 과 **같은 모양**이지만 그 파일이 아니라 여기 있다 —

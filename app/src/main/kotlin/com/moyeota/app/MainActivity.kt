@@ -70,6 +70,7 @@ class MainActivity : ComponentActivity() {
                     chatRepository = container.chatRepository,
                     activePartyRepository = container.activePartyRepository,
                     rideRecordRepository = container.rideRecordRepository,
+                    noShowRepository = container.noShowRepository,
                     pendingChatRoomId = pendingChatRoomId.value,
                     onPendingChatRoomHandled = { pendingChatRoomId.value = null },
                 )
