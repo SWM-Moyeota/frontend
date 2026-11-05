@@ -1,16 +1,18 @@
 package com.moyeota.domain.model
 
 /**
- * 방의 진행 단계.
+ * 방의 진행 단계. 서버 `PartyStatus` 의 네 값과 하나씩 짝이다 —
+ * `ACTIVE`→[RECRUITING] · `COMPLETED`→[MATCHED] · `FINISHED`→[COMPLETED] · `CANCELED`→[CANCELED].
  *
- * [CANCELED] 는 [COMPLETED] 와 갈라 둔다 — 서버는 **기사 매칭 3분 타임아웃**에도 방을 CANCELED 로
- * 바꾸는데, 그걸 「완료」와 같은 값으로 접으면 앱이 「기사님을 찾지 못했어요」를 정상 종료와
- * 구분할 수 없다. 정상 종료는 FINISHED 뿐이다.
+ * [CANCELED] 를 [COMPLETED] 와 갈라 두는 이유: 서버는 아무도 출발지에 도착하지 않은 방을 자동
+ * 정리할 때 CANCELED 로 닫는다. 그걸 「완료」와 같은 값으로 접으면 **탄 적 없이 닫힌 방**을
+ * 정상 종료와 구분할 수 없다. 정상 종료는 FINISHED 뿐이다.
  *
- * [DISPATCHING] 은 서버의 MATCHING(기사 찾는 중)과 DRIVER_ASSIGNED(배정 완료)를 함께 담는다 —
- * 둘의 구분은 [Ride.driverId] 유무로 한다(배정되면 taxiDriverId 가 채워진다).
+ * 택시 시절의 `DISPATCHING`·`ONGOING` 은 지웠다 — 기사·배차를 걷어내면서 서버가
+ * `MATCHING`·`DRIVER_ASSIGNED`·`IN_RIDE` 를 **보낼 수 없게** 됐다(서버 `PartyStatus` 에서 삭제).
+ * 모르는 문자열은 매퍼가 [RECRUITING] 으로 떨어뜨리므로 옛 값이 와도 파싱은 깨지지 않는다.
  */
-enum class RideStatus { RECRUITING, MATCHED, DISPATCHING, ONGOING, COMPLETED, CANCELED }
+enum class RideStatus { RECRUITING, MATCHED, COMPLETED, CANCELED }
 
 data class Ride(
     val id: String,
@@ -41,8 +43,6 @@ data class Ride(
     val estimatedMinutes: Int? = null,
     /** Google Encoded Polyline (정밀도 1e5, lat→lng 순). 서버 route. 지도 경로 그리기에 쓴다. */
     val routePolyline: String? = null,
-    /** 배정된 기사 id. 미배정이면 null. 서버 taxiDriverId. */
-    val driverId: Long? = null,
 )
 
 /**
@@ -84,7 +84,7 @@ val Ride.isHostedByMe: Boolean
  * 그 엔드포인트는 사라졌다(Backend `04f6be7`). 그래서 지문 필드도, 상세와 비교하던 `isSameAs` 도 없다.
  */
 data class PartyStatus(
-    /** 합류 **직후**의 상태. 내가 마지막 자리를 채웠으면 COMPLETED(기사 모드면 MATCHING)로 온다. */
+    /** 합류 **직후**의 상태. 내가 마지막 자리를 채웠으면 [RideStatus.MATCHED] 로 온다. */
     val status: RideStatus,
     val currentMembers: Int,
 )

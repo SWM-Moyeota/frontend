@@ -108,9 +108,6 @@ object NetworkModule {
             matching = retrofit.create(MatchingApi::class.java),
             place = retrofit.create(PlaceApi::class.java),
             chat = retrofit.create(ChatApi::class.java),
-            dispatch = retrofit.create(DispatchApi::class.java),
-            // 신고 두 엔드포인트 모두 @CurrentUser — 반드시 Bearer 가 붙는 apiClient 로 만든다.
-            report = retrofit.create(ReportApi::class.java),
             // 인증 API 와 이름이 비슷하지만 반드시 이쪽(apiClient) 이다 — 내 정보 조회는 토큰 필수다.
             user = retrofit.create(UserApi::class.java),
         )
@@ -151,13 +148,13 @@ object NetworkModule {
          */
         val imageClient: OkHttpClient,
         val auth: AuthApi,
-        /** 서버 운영 설정(택시 모드 등). 토큰 없는 클라이언트 */
+        /** 서버 운영 설정(강제 업데이트 기준 등). 토큰 없는 클라이언트 */
         val config: ConfigApi,
         val matching: MatchingApi,
         val place: PlaceApi,
         val chat: ChatApi,
-        val dispatch: DispatchApi,
-        val report: ReportApi,
         val user: UserApi,
+        // 배차(`DispatchApi`)와 긴급 신고(`ReportApi`)는 **없다** — 기사·배차를 걷어내면서 두
+        // 인터페이스를 지웠다. 채팅 메시지 신고는 [chat] 안에 있다(다른 기능이다).
     )
 }

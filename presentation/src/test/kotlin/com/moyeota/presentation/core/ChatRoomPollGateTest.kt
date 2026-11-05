@@ -23,14 +23,8 @@ class ChatRoomPollGateTest {
     /** D-1 성격의 누수 회귀 방지 — 안 보이면 **나머지 조건을 보지 않는다.** */
     @Test
     fun `안 보이면 어떤 조합에서도 폴링하지 않는다`() {
-        val rides = listOf(
-            null,
-            ride(RideStatus.RECRUITING),
-            ride(RideStatus.MATCHED),
-            ride(RideStatus.DISPATCHING),
-            ride(RideStatus.ONGOING),
-            ride(RideStatus.COMPLETED),
-        )
+        // **열거형 전체**를 훑는다 — 단계가 늘어도 「안 보이면 안 부른다」가 유지돼야 한다.
+        val rides = listOf(null) + RideStatus.entries.map { ride(it) }
         for (ride in rides) {
             for (roomId in listOf(null, 7L)) {
                 assertFalse(
@@ -48,8 +42,8 @@ class ChatRoomPollGateTest {
 
     /**
      * 모집 중(21 대기)에도 찾는다 — 서버가 채팅방을 **합류 시점에** 만든다(Backend #109).
-     * 「정원이 차야 생긴다」던 옛 가정으로 되돌리면 1차 배포 모드(정원이 차도 대기 단계)에서
-     * 21 의 「채팅 열기」가 영영 안 뜬다.
+     * 「정원이 차야 생긴다」던 옛 가정으로 되돌리면 21 의 「채팅 열기」가 영영 안 뜬다: 정원이
+     * 차도 방은 21 에 머물고(배차 단계가 사라졌다) 그다음 화면이 없다.
      */
     @Test
     fun `모집 중에도 채팅방을 찾는다`() {
@@ -59,13 +53,13 @@ class ChatRoomPollGateTest {
     /** 기존 종료 조건 — 찾으면 멈춘다(흐름이 null 을 내보내 진행 중 패스가 취소된다). */
     @Test
     fun `채팅방을 찾으면 멈춘다`() {
-        assertFalse(shouldPollChatRoom(visible = true, ride = ride(RideStatus.ONGOING), chatRoomId = 7L))
+        assertFalse(shouldPollChatRoom(visible = true, ride = ride(RideStatus.MATCHED), chatRoomId = 7L))
     }
 
     /** 「채팅방 나가기」·403 으로 캐시를 버리면(`forgetChatRoom`) 다시 찾아야 한다. */
     @Test
     fun `채팅방 캐시를 버리면 다시 찾는다`() {
-        assertTrue(shouldPollChatRoom(visible = true, ride = ride(RideStatus.ONGOING), chatRoomId = null))
+        assertTrue(shouldPollChatRoom(visible = true, ride = ride(RideStatus.MATCHED), chatRoomId = null))
     }
 
     @Test

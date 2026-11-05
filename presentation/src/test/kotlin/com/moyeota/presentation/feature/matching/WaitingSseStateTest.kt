@@ -66,17 +66,21 @@ class WaitingSseStateTest {
         assertEquals(RideStatus.RECRUITING, after.status)
     }
 
+    /**
+     * 예전에는 전이가 둘이었다 — 정원 충족(동승 모드)과 배차 시작(택시 모드). 기사·배차를 걷어낸
+     * 뒤로 서버가 실어 보낼 수 있는 값이 정원 충족 하나다.
+     *
+     * 못 박는 것은 전이의 종류가 아니라 **「서버가 실어 준 status 를 그대로 반영한다」**다 —
+     * 합류로 바뀐 상태를 앱이 다시 계산하거나 물어보지 않는다.
+     */
     @Test
     fun `입장 - 마지막 자리를 채우면 서버가 실어 준 전이가 그대로 반영된다`() {
-        // 서버는 정원이 차면 그 자리에서 정원 충족(동승 모드) · 배차 시작(택시 모드)까지 끝내고
-        // 그 결과 상태를 member-joined 에 싣는다 — 앱이 따로 물어볼 필요가 없다.
         val before = ride(status = RideStatus.RECRUITING, capacity = 2, members = listOf(me))
 
         val completed = before.withMemberJoined(user("u2"), RideStatus.MATCHED)
         assertEquals(RideStatus.MATCHED, completed.status)
-
-        val dispatching = before.withMemberJoined(user("u2"), RideStatus.DISPATCHING)
-        assertEquals(RideStatus.DISPATCHING, dispatching.status)
+        // 목록도 함께 늘어난다 — status 만 갈아 끼우는 것이 아니다
+        assertEquals(listOf("me", "u2"), completed.members.map { it.id })
     }
 
     @Test
@@ -447,11 +451,20 @@ class WaitingSseStateTest {
         assertFalse(hasMemberDrift(ride(status = RideStatus.RECRUITING, capacity = 4, members = listOf(me))))
     }
 
+    /**
+     * 대기 단계 밖에서는 어긋남을 보지 않는다 — Route 가 이미 화면을 떠나게 한다.
+     * 열거형 전체에서 그 둘만 빼고 훑으므로, 단계가 늘어도 「새 단계는 보지 않는다」가 유지된다.
+     */
     @Test
-    fun `어긋남 - 배차·종료 단계는 보지 않는다 (화면이 이미 넘어간다)`() {
-        for (status in listOf(RideStatus.DISPATCHING, RideStatus.ONGOING, RideStatus.COMPLETED, RideStatus.CANCELED)) {
-            assertFalse(hasMemberDrift(ride(status = status, capacity = 4, members = listOf(me))))
-        }
+    fun `어긋남 - 종료 단계는 보지 않는다 (화면이 이미 넘어간다)`() {
+        RideStatus.entries
+            .filter { it != RideStatus.RECRUITING && it != RideStatus.MATCHED }
+            .forEach { status ->
+                assertFalse(
+                    "$status 에서 어긋남을 판정했다",
+                    hasMemberDrift(ride(status = status, capacity = 4, members = listOf(me))),
+                )
+            }
     }
 
     @Test
@@ -482,13 +495,12 @@ class WaitingSseStateTest {
     fun `대기 단계는 모집 중과 정원 찬 상태뿐 - 그 밖이면 폴백을 끝낸다`() {
         assertTrue(isWaitingForMembers(RideStatus.RECRUITING))
         assertTrue(isWaitingForMembers(RideStatus.MATCHED))
-        for (status in listOf(
-            RideStatus.DISPATCHING,
-            RideStatus.ONGOING,
-            RideStatus.COMPLETED,
-            RideStatus.CANCELED,
-        )) {
-            assertFalse(isWaitingForMembers(status))
-        }
+        // 그 밖은 지금 닫힌 방 둘뿐이지만, 열거형 전체를 훑어 단계가 늘어도 폴백이 영원히
+        // 돌지 않게 못 박는다 — 끝나지 않는 6초 루프가 이 판정이 막는 것이다.
+        RideStatus.entries
+            .filter { it != RideStatus.RECRUITING && it != RideStatus.MATCHED }
+            .forEach { status ->
+                assertFalse("$status 가 대기 단계로 읽힌다", isWaitingForMembers(status))
+            }
     }
 }

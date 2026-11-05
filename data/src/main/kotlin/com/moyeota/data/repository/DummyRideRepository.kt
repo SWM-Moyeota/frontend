@@ -1,6 +1,5 @@
 package com.moyeota.data.repository
 
-import com.moyeota.domain.model.AssignedDriver
 import com.moyeota.domain.model.MatchCandidate
 import com.moyeota.domain.model.NewParty
 import com.moyeota.domain.model.PartyDetail
@@ -112,9 +111,6 @@ class DummyRideRepository : RideRepository {
 
     override suspend fun finishParty(partyId: Long) = Unit
 
-    override suspend fun getAssignedDriver(partyId: Long): AssignedDriver =
-        AssignedDriver(seats = 4, plateNumber = "12가 3456", vehicleType = "쏘나타")
-
     /**
      * 직선거리 기준으로 요금·시간을 지어낸다(서울 택시 기본요금 4,800원 + km 당 1,300원,
      * 평균 시속 22km + 승하차 3분). 경로는 출발·도착을 잇는 2점짜리 인코딩 폴리라인이라
@@ -169,9 +165,4 @@ class DummyRideRepository : RideRepository {
         }
         out.append((v + 63).toChar())
     }
-
-    // 신고도 성공한 척만 한다 — 프리뷰/오프라인에서 UI 흐름(다이얼→복귀 다이얼로그) 확인용.
-    override suspend fun reportEmergency(partyId: Long?): Long = 1L
-
-    override suspend fun confirmEmergencyCall(called: Boolean) = Unit
 }

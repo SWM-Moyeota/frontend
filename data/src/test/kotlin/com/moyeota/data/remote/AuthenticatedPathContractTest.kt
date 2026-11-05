@@ -1,7 +1,6 @@
 package com.moyeota.data.remote
 
 import com.moyeota.data.remote.dto.ChatReportRequestDto
-import com.moyeota.data.remote.dto.ReportRequestDto
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
@@ -235,8 +234,8 @@ class AuthenticatedPathContractTest {
      * **삭제했으므로**(`04f6be7` — 매칭방 변화가 SSE 전용이 되어 폴링용 조회가 쓰이지 않게 됐다)
      * 지금은 상세 하나만 남는다. `/status` 를 되살리면 **404** 다.
      *
-     * 25·26 의 주기 조회가 이 경로로 옮겨와 **폴링이 이 한 경로에 걸려 있다** — 틀리면 두 화면이
-     * 배차·운행 전이를 영영 못 잡는다(그 전이에는 SSE 도 FCM 도 없다).
+     * 상세는 방을 읽는 **유일한 경로**다 — 목록 응답에는 멤버·요금·경로가 없고, SSE 스냅샷도 이
+     * 상세와 같은 모양을 쓴다. 틀리면 방 화면이 통째로 열리지 않는다.
      */
     @Test
     fun `방 상세 조회 경로에는 뒤에 붙는 세그먼트가 없다`() {
@@ -246,11 +245,6 @@ class AuthenticatedPathContractTest {
             "MatchingApi 에 상태 조회(/status) 메서드가 되살아났다 — 서버에 없는 경로다",
             MatchingApi::class.java.methods.none { it.name == "getPartyStatus" },
         )
-    }
-
-    @Test
-    fun `기사 위치 조회는 partyId 만 담은 경로를 쓴다`() {
-        assertEquals("api/v1/dispatch/rides/{partyId}", DispatchApi::class.java.path("getDriverLocation"))
     }
 
     @Test
@@ -293,14 +287,6 @@ class AuthenticatedPathContractTest {
         )
     }
 
-    // 백엔드가 이 경로를 `{reportId}` 유무로 오간 이력이 있다. 현행 컨트롤러
-    // (report/interfaces/ReportController.java)는 reportId 없이 @CurrentUser 의 신고에 기록한다 —
-    // 컨트롤러 소스 기준(실서버 미검증)이며, 다시 바뀌면 이 테스트부터 깨지는 게 정상이다.
-    @Test
-    fun `통화 결과 확정은 reportId 없는 경로를 쓴다`() {
-        assertEquals("api/v1/reports/call-result", ReportApi::class.java.path("confirmCallResult"))
-    }
-
     /**
      * 전환된 엔드포인트에 memberId/userId 가 되살아나는 걸 막는다.
      * 채팅이 마지막 예외였는데 백엔드가 `@CurrentUser` 로 넘기면서 **전 도메인이 대상이 됐다**
@@ -311,9 +297,7 @@ class AuthenticatedPathContractTest {
     fun `전환된 API 어디에도 memberId userId 파라미터가 남아 있지 않다`() {
         val leftovers = listOf(
             MatchingApi::class.java,
-            DispatchApi::class.java,
             PlaceApi::class.java,
-            ReportApi::class.java,
             UserApi::class.java,
             ChatApi::class.java,
         )
@@ -381,31 +365,23 @@ class AuthenticatedPathContractTest {
     }
 
     /**
-     * 채팅 메시지 신고와 긴급 신고는 **다른 엔드포인트·다른 본문**이다. 둘을 한 DTO 로 합치려는
-     * 시도를 막는다 — 긴급 신고에는 사유 필드가 없고(`ReportDtos.kt` KDoc: 「사유(reason) 필드는
-     * 서버에 없다 — 임의로 추가하지 말 것」) 메시지 신고에는 `reason` 이 **필수**다. 섞으면
-     * 서버가 400 `INVALID_REQUEST` 를 낸다(실측 2026-11-01).
+     * **앱에 남은 신고는 채팅 메시지 신고 하나다.** 운행 중 긴급 신고(`POST /api/v1/reports` +
+     * `PATCH /api/v1/reports/call-result`)는 기사·배차와 함께 지웠다 — 그쪽은 「파티 + 내 좌표」를
+     * 보내고 사유 필드가 아예 없었다. 이쪽은 **메시지 1건**을 가리키고 `reason` 이 **필수**다.
      *
-     * 이름이 비슷해서(`reportMessage` / `report`) 다음 사람이 「신고는 하나로 합치자」로 손대기
-     * 쉬운 자리다. 그러면 사유가 붙은 본문이 `POST /api/v1/reports` 로 가거나 좌표가 메시지
-     * 신고로 가서 **둘 다 400** 이 된다. 신고 대상도 다르다 — 그쪽은 파티, 이쪽은 메시지 1건이다.
+     * 그래서 본문 타입을 여기서 못 박는다: 없어진 긴급 신고를 「신고 기능이 없어졌네」 하고 이
+     * 경로로 되살리면(좌표를 실어 보내거나 사유를 떼면) 서버가 400 `INVALID_REQUEST` 를 낸다
+     * (실측 2026-11-01). 경로도 `/api/v1/reports` 가 아니라 `/api/v1/chat-rooms/{id}/reports` 다.
      */
     @Test
-    fun `메시지 신고와 긴급 신고는 서로 다른 본문 타입을 쓴다`() {
+    fun `메시지 신고 본문은 ChatReportRequestDto 다`() {
         val chatReport = ChatApi::class.java.declaredMethods.single { it.name == "reportMessage" }
-        val emergency = ReportApi::class.java.declaredMethods.single { it.name == "report" }
 
         assertEquals(
             "메시지 신고 본문이 ChatReportRequestDto 가 아니다",
             ChatReportRequestDto::class.java,
             chatReport.bodyType(),
         )
-        assertEquals(
-            "긴급 신고 본문이 ReportRequestDto 가 아니다",
-            ReportRequestDto::class.java,
-            emergency.bodyType(),
-        )
-        assertNotEquals(chatReport.bodyType(), emergency.bodyType())
 
         // 메시지 신고는 **방 id 만** 경로에 담는다 — 신고자는 토큰이, 피신고자는 서버가 메시지에서
         // 찾는다. 경로에 사용자 id 가 끼면 「전환된 API 어디에도 memberId userId 가 없다」와 충돌한다.

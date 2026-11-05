@@ -43,13 +43,12 @@ object Routes {
     const val MATCH_WAITING = "matching/waiting"             // 21 S11
     const val RIDE_DETAIL = "ride/detail"                    // 22 S12
     const val PARTNER_PROFILE = "ride/partner-profile"       // 23 S13
-    const val DISPATCH_STATUS = "ride/dispatch"              // 25 S14
 
     // G · 채팅 · 안심
     const val CHAT = "chat"                                  // 24 S16 (+24a 메뉴 · 24b 공유 시트)
 
     /**
-     * 24 S16 — **채팅방 단독 목적지**. 21·25·26 의 「채팅 열기」가 이리로 push 한다.
+     * 24 S16 — **채팅방 단독 목적지**. 21 대기 화면의 「채팅 열기」가 이리로 push 한다.
      *
      * 채팅 탭([CHAT])으로 보내면 매칭 화면이 스택에서 빠져 뒤로가기로 돌아올 곳이 없어진다
      * (사용자 신고: "채팅방에서 매칭 진행 화면으로 돌아갈 수 없다"). 방을 **쌓아** 열면
@@ -59,11 +58,7 @@ object Routes {
 
     fun chatRoom(roomId: Long) = "chat/room/$roomId"
 
-    const val RIDE_ONGOING = "ride/ongoing"                  // 26 S15
-    const val EMERGENCY = "ride/emergency"                   // 27 S17
-
-    // I · 완료 · 마이페이지
-    const val RIDE_COMPLETE = "ride/complete"                // 33 S18
+    // I · 마이페이지
     const val MYPAGE = "mypage"                              // 35 S24
     const val PROFILE_EDIT = "mypage/profile-edit"           // 36 신규 (닉네임 수정)
 

@@ -12,6 +12,9 @@ import java.time.LocalDate
 /**
  * 이벤트 이름·프로퍼티 키를 **못 박는다**. Mixpanel 대시보드와 iOS(`Analytics.swift`)가 이 문자열을 보고 있어
  * 하나라도 바뀌면 퍼널이 끊긴다 — 바꿔야 하면 iOS·보드를 같이 바꾸고 이 테스트를 고친다.
+ *
+ * `finish_ride`·`trigger_emergency` 는 **지웠다** — 기사·배차와 긴급 화면이 사라져 기록할 자리가
+ * 없어졌다. 보드에 그 두 이벤트의 과거 데이터는 남아 있으니 퍼널에서 빼야 한다.
  */
 class AnalyticsTest {
 
@@ -31,8 +34,6 @@ class AnalyticsTest {
             AnalyticsEvent.MatchCompleted(3, 3, 42) to "complete_match",
             AnalyticsEvent.MatchCanceled(3, 1) to "cancel_match",
             AnalyticsEvent.PartyFinished(3) to "finish_party",
-            AnalyticsEvent.RideFinished to "finish_ride",
-            AnalyticsEvent.EmergencyTriggered to "trigger_emergency",
             AnalyticsEvent.AccountDeleted to "delete_account",
         )
         for ((event, name) in expected) assertEquals(name, event.name)
@@ -81,8 +82,7 @@ class AnalyticsTest {
     @Test
     fun `프로퍼티 없는 이벤트는 빈 맵이다`() {
         for (event in listOf(
-            AnalyticsEvent.LoginCompleted, AnalyticsEvent.PartyJoinClicked, AnalyticsEvent.RideFinished,
-            AnalyticsEvent.EmergencyTriggered, AnalyticsEvent.AccountDeleted,
+            AnalyticsEvent.LoginCompleted, AnalyticsEvent.PartyJoinClicked, AnalyticsEvent.AccountDeleted,
         )) {
             assertTrue(event.name, event.properties.isEmpty())
         }

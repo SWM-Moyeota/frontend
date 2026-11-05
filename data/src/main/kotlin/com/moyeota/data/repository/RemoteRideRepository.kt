@@ -1,11 +1,8 @@
 package com.moyeota.data.repository
 
 import com.moyeota.data.remote.MatchingApi
-import com.moyeota.data.remote.ReportApi
 import com.moyeota.data.remote.dto.ApiErrorDto
-import com.moyeota.data.remote.dto.CallResultRequestDto
 import com.moyeota.data.remote.dto.RealTimeMatchingRequestDto
-import com.moyeota.data.remote.dto.ReportRequestDto
 import com.moyeota.data.remote.matching.PartyEventSource
 import com.moyeota.data.remote.partyFinishException
 import com.moyeota.data.remote.realtimeMatchException
@@ -13,13 +10,11 @@ import com.moyeota.data.remote.partyJoinException
 import com.moyeota.data.remote.readApiError
 import com.moyeota.data.remote.toMatchCandidate
 import com.moyeota.data.remote.routeRequestDto
-import com.moyeota.data.remote.toAssignedDriver
 import com.moyeota.data.remote.toPartyEvent
 import com.moyeota.data.remote.toPartyStatus
 import com.moyeota.data.remote.toRequestDto
 import com.moyeota.data.remote.toRide
 import com.moyeota.data.remote.toRouteEstimate
-import com.moyeota.domain.model.AssignedDriver
 import com.moyeota.domain.model.MatchCandidate
 import com.moyeota.domain.model.NewParty
 import com.moyeota.domain.model.PartyDetail
@@ -40,24 +35,20 @@ import kotlinx.coroutines.flow.map
 import retrofit2.HttpException
 
 /**
- * 매칭·신고 도메인만 서버 연동 — 나머지는 더미로 위임한다.
+ * 매칭 도메인만 서버 연동 — 나머지는 더미로 위임한다.
  *
  * [session] 이 필요한 이유는 하나다: 방 상세의 멤버 중 **누가 나인지**는 서버가 표시해 주지 않는다.
  * `MemberInfo.publicId` 가 JWT `sub` 와 같은 값이라 앱이 직접 비교해야 하고, 비교 대상인
  * 현재 사용자 UUID 의 단일 출처가 [session] 이다. 매퍼에 세션을 들려 보내지 않으면 화면마다
  * "나 찾기"를 다시 구현하게 된다.
  *
- * [reportApi] 기본값 null: 신고 배선이 없는 생성 호출(테스트 등)을 깨지 않기 위함.
- * 배선 전 신고 호출은 한국어 IllegalStateException 으로 실패한다 (화면은 다이얼을 우선 연다).
- * [currentLocation]: 신고 시점의 실측 좌표 공급자(app 모듈이 FusedLocation 으로 주입).
- * 못 얻으면 null — 서버 ReportRequest 는 좌표 null 을 허용하므로 가짜 좌표를 지어내지 않는다.
+ * 긴급 신고 배선(`reportApi`)과 측위 공급자(`currentLocation`)는 **없어졌다** — 기사·배차와 함께
+ * 긴급 신고를 걷어냈다. 채팅 메시지 신고는 [com.moyeota.data.repository.RemoteChatRepository] 쪽이다.
  */
 class RemoteRideRepository(
     private val api: MatchingApi,
     private val session: UserSession,
     private val local: RideRepository = DummyRideRepository(),
-    private val reportApi: ReportApi? = null,
-    private val currentLocation: suspend () -> Pair<Double, Double>? = { null },
     /** 매칭방 변화 신호(SSE). null 이면 신호 없이 폴링만 한다(테스트·더미) */
     private val partyEvents: PartyEventSource? = null,
 ) : RideRepository {
@@ -217,50 +208,6 @@ class RemoteRideRepository(
             throw realtimeMatchException(failure, failure.readApiError())
         }
         return result.getOrThrow().mapNotNull { it.toMatchCandidate() }
-    }
-
-    override suspend fun getAssignedDriver(partyId: Long): AssignedDriver =
-        api.getAssignedDriver(partyId).toAssignedDriver()
-
-    override suspend fun reportEmergency(partyId: Long?): Long {
-        val report = reportApi
-            ?: throw IllegalStateException("신고 API가 아직 연결되지 않았어요 (AppContainer 배선 필요)")
-        // 실측 좌표. 측위 실패(권한 없음·타임아웃)는 신고를 막지 않는다 — 좌표만 null 로 보낸다.
-        val location = try {
-            currentLocation()
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            null
-        }
-        return runReportCall("긴급 신고 저장에 실패했어요") {
-            report.report(
-                ReportRequestDto(
-                    partyId = partyId,
-                    latitude = location?.first,
-                    longitude = location?.second,
-                ),
-            ).reportId
-        }
-    }
-
-    override suspend fun confirmEmergencyCall(called: Boolean) {
-        val report = reportApi
-            ?: throw IllegalStateException("신고 API가 아직 연결되지 않았어요 (AppContainer 배선 필요)")
-        runReportCall("112 통화 결과 저장에 실패했어요") {
-            report.confirmCallResult(CallResultRequestDto(called = called))
-        }
-    }
-
-    // 신고 흐름의 계약: 어떤 원인(HTTP 4xx/5xx, 네트워크, 직렬화)이든 한국어 메시지의
-    // IllegalStateException 하나로 전파한다. 화면은 이 실패를 "저장 실패 플래그"로만 다루고
-    // 112 다이얼은 무조건 연다 (통화 최우선). 코루틴 취소는 삼키지 않고 그대로 올린다.
-    private inline fun <T> runReportCall(message: String, block: () -> T): T = try {
-        block()
-    } catch (e: CancellationException) {
-        throw e
-    } catch (e: Exception) {
-        throw IllegalStateException(message, e)
     }
 
     // 백엔드가 POST 로 바뀌어 열린 엔드포인트. 응답 폴리라인 필드는 route 가 아니라 path 다.

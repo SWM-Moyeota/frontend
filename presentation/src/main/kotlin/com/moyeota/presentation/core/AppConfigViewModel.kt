@@ -10,11 +10,8 @@ import com.moyeota.domain.repository.AppConfigRepository
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 private const val TAG = "AppConfig"
@@ -26,38 +23,32 @@ private val RETRY_DELAYS_MS = longArrayOf(2_000L, 5_000L, 15_000L)
  * 서버 운영 설정(`GET /api/v1/config`). NavHost 바깥(액티비티 스코프)에 두어 화면들이 한 값을 공유한다
  * (profileViewModel 과 같은 이유).
  *
+ * 지금 이 설정이 정하는 것은 **강제 업데이트 게이트 하나뿐**이다
+ * ([AppConfig.minVersionCode]·[AppConfig.recommendedVersionCode] → [updateRequirement]).
+ *
  * - 시작 시 한 번 읽고, 실패하면 [RETRY_DELAYS_MS] 간격으로 몇 번 더 시도한다. 그래도 못 받으면
- *   [AppConfig.Default](동승 모드)로 간다 — 실사용자 서버가 동승 모드라 틀려도 실제 서비스와 같은 화면이다.
+ *   [AppConfig.Default] 로 간다 — 두 기준이 **null 이라 아무도 막히지 않는다.**
  * - 앱이 다시 앞으로 올 때 아직 못 받았으면 다시 시도한다([loadIfUnresolved]).
- * - 디버그 빌드는 [setDebugOverride] 로 서버 값을 덮어쓸 수 있다(35 마이페이지 개발자 옵션).
- *   메모리에만 들고 있어 프로세스가 죽으면 서버 값으로 돌아간다.
+ *
+ * **디버그 강제값(`setDebugOverride`)은 지웠다.** 그 장치는 `taxiEnabled` 하나를 뒤집어 동승/택시
+ * 화면을 골라 보기 위한 것이었는데, 기사·배차를 걷어내면서 서버가 그 값을 보내지 않게 되고
+ * 도메인에서도 필드가 사라졌다 — 덮어쓸 값이 없다. 되살릴 이유가 생긴다면(새 운영 플래그) 그때
+ * **그 플래그에 맞춰** 다시 세우는 쪽이 맞다. 「서버가 준 값」(`serverConfig`)과 「화면이 따를 값」
+ * ([config])을 갈라 두었던 것도 같은 이유로 하나로 합쳤다 — 이제 둘이 같은 값이다.
  */
 class AppConfigViewModel(
     private val repository: AppConfigRepository,
 ) : ViewModel() {
 
-    private val _serverConfig = MutableStateFlow(AppConfig.Default)
+    private val _config = MutableStateFlow(AppConfig.Default)
 
-    /** 서버가 준 그대로의 값(디버그 강제값 미적용). 개발자 옵션의 「서버 값」 표시용. */
-    val serverConfig: StateFlow<AppConfig> = _serverConfig.asStateFlow()
-
-    private val _override = MutableStateFlow<Boolean?>(null)
-
-    /** 디버그 강제값. null 이면 서버 값을 따른다. */
-    val debugOverride: StateFlow<Boolean?> = _override.asStateFlow()
+    /** 화면이 따를 설정 — 서버가 준 그대로다(덮어쓰는 장치가 없다). */
+    val config: StateFlow<AppConfig> = _config.asStateFlow()
 
     private val _resolved = MutableStateFlow(false)
 
     /** 서버 응답을 한 번이라도 받았는가. false 면 지금 값은 기본값이다. */
     val resolved: StateFlow<Boolean> = _resolved.asStateFlow()
-
-    /** 화면이 따를 설정 — 강제값이 있으면 강제값, 없으면 서버 값. */
-    val config: StateFlow<AppConfig> = combine(_serverConfig, _override) { server, override ->
-        // **copy 여야 한다.** `AppConfig(taxiEnabled = ...)` 로 새로 만들면 서버가 준 나머지 필드
-        // (minVersionCode·recommendedVersionCode)가 조용히 기본값으로 되돌아가 게이트가 영영 안 걸린다.
-        // 디버그 강제값은 택시 모드 하나만 뒤집는다.
-        server.copy(taxiEnabled = effectiveTaxiEnabled(server.taxiEnabled, override))
-    }.stateIn(viewModelScope, SharingStarted.Eagerly, AppConfig.Default)
 
     private var loading: Job? = null
 
@@ -73,14 +64,14 @@ class AppConfigViewModel(
             while (true) {
                 val result = runCatching { repository.getConfig() }
                 result.onSuccess {
-                    _serverConfig.value = it
+                    _config.value = it
                     _resolved.value = true
-                    Log.i(TAG, "서버 설정 수신 — 모드=${AppMode.of(it.taxiEnabled).label}")
+                    Log.i(TAG, "서버 설정 수신 — 최소=${it.minVersionCode} 권장=${it.recommendedVersionCode}")
                     return@launch
                 }
                 val wait = RETRY_DELAYS_MS.getOrNull(attempt++)
                 if (wait == null) {
-                    Log.w(TAG, "설정 조회 실패(재시도 소진) — 기본값(동승 모드)으로 진행: ${result.exceptionOrNull()?.message}")
+                    Log.w(TAG, "설정 조회 실패(재시도 소진) — 기본값으로 진행(게이트 없음): ${result.exceptionOrNull()?.message}")
                     return@launch
                 }
                 Log.w(TAG, "설정 조회 실패 — ${wait / 1000}초 뒤 재시도: ${result.exceptionOrNull()?.message}")
@@ -92,12 +83,6 @@ class AppConfigViewModel(
     /** 복귀(onResume)마다 부른다. 아직 서버 값을 못 받았을 때만 다시 시도한다. */
     fun loadIfUnresolved() {
         if (!_resolved.value) load()
-    }
-
-    /** 디버그 전용 — 서버 값과 무관하게 모드를 고정한다. null 이면 해제. */
-    fun setDebugOverride(taxiEnabled: Boolean?) {
-        _override.value = taxiEnabled
-        Log.i(TAG, "디버그 모드 강제: ${taxiEnabled?.let { AppMode.of(it).label } ?: "해제(서버 값)"}")
     }
 
     companion object {
