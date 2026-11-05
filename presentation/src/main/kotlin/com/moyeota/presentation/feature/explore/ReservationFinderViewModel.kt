@@ -1,0 +1,145 @@
+package com.moyeota.presentation.feature.explore
+
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
+import com.moyeota.domain.repository.RideRepository
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
+
+/**
+ * 17 탐색의 **예약 방 조회** — 「곧 출발」(`/reservations/soon`)과 「날짜로 찾기」
+ * (`/reservations/search`)를 한 ViewModel 이 받는다.
+ *
+ * 두 엔드포인트를 갈라 두지 않은 이유: 화면에서 **동시에 보이지 않는다**(모드가 하나다). 한 흐름에
+ * 두면 모드를 바꾸는 순간 [flatMapLatest] 가 앞 조회를 **취소**하므로, 늦게 끝난 「곧 출발」 응답이
+ * 「날짜로 찾기」 목록을 덮어쓰는 일이 구조적으로 불가능해진다 — 두 ViewModel 이면 그 경쟁을
+ * 화면에서 손으로 막아야 한다. 요청 모양의 차이는 [ReservationQuery] 가 들고 있다.
+ *
+ * ### 폴링하지 않는다 ★ 실시간 목록과 가장 다른 점
+ * [ExploreViewModel] 은 4초마다 다시 읽는다 — 실시간 방은 **지금 이 순간** 차고 비는 것이 전부라
+ * 낡은 목록이 곧 「사라진 방의 합류」 버튼이 된다(`STALE_NOTICE_FAILURES` 의 근거). 예약은 그렇지
+ * 않다: 사용자가 보는 값은 **몇 시에 출발하는가**이고 그건 바뀌지 않는다. 인원이 차는 일은 일어나지만
+ * 그때의 대가는 합류 확인(20)에서 받는 409 `PARTY_FULL` 한 번이고(`joinGate` 가 이미 그 길을 안다),
+ * 7일 치 목록을 4초마다 다시 읽는 비용과 바꿀 만하지 않다.
+ *
+ * 다시 읽는 때는 셋이다: **모드·날짜·도착지를 바꿀 때**(새 [ReservationQuery]), **지도를 움직일 때**
+ * (「곧 출발」의 범위가 바뀐다), 그리고 **화면에 돌아올 때**([retry] — `ExploreRoute` 가 부른다).
+ * 마지막 하나가 「탭을 다녀오면 최신이다」를 지킨다.
+ *
+ * [NearbyCandidatesViewModel][com.moyeota.presentation.feature.home.NearbyCandidatesViewModel] 과
+ * 같은 모양이다(단발 조회 + 재시도 입력 하나). 그쪽의 주의도 그대로 적용된다 — 같은 입력으로 다시
+ * 조회하려면 [MutableStateFlow] 가 같은 값을 흘리지 않으므로 [attempt] 같은 두 번째 입력이 필요하다.
+ */
+class ReservationFinderViewModel(private val repository: RideRepository) : ViewModel() {
+
+    sealed interface UiState {
+        /**
+         * **조회할 수 없다** — 실시간 모드이거나, 지도 범위·내 좌표·날짜 중 하나가 없다
+         * ([reservationQueryOrNull] 의 표). 화면은 이 상태에서 **실패를 말하지 않는다**:
+         * 아직 물어보지도 않았다.
+         */
+        data object Idle : UiState
+        data object Loading : UiState
+
+        /**
+         * 서버가 준 순서 그대로의 목록. **재정렬하지 않는다** — 도착지를 보낸 검색은
+         * `destinationNearby == true` 가 먼저이고 그 안에서 출발 시각 순이다. 앱이 다시 정렬하면
+         * 그 두 단계 규칙을 베껴야 하고, 서버가 규칙을 바꾸면 목록이 서버와 다른 순서가 된다.
+         *
+         * 빈 목록은 **성공**이다(그 날 그 범위에 예약이 없을 뿐) — 실패와 다른 문구를 쓴다.
+         */
+        data class Success(val items: List<ReservationCardUi>) : UiState
+
+        /**
+         * 조회 자체가 실패했다(네트워크·5xx·모르는 400). 「예약이 없다」와 **다른 상태**다 —
+         * 둘을 합치면 장애가 「그 날은 예약이 없네」로 위장되고 사용자는 날짜만 계속 바꾼다
+         * (16 추천의 `nearbyLoadFailed` 와 같은 근거).
+         *
+         * 400 은 사실상 앱 버그다(날짜 창·도착지 둘다/아니다·지도 범위를 전부 순수 함수가 막는다)
+         * — 그래서 사유별 문구를 두지 않고 한 문구 + 「다시 시도」로 받는다.
+         */
+        data object Failed : UiState
+    }
+
+    private val query = MutableStateFlow<ReservationQuery?>(null)
+
+    /** 같은 요청을 **다시** 보내는 유일한 수단 — [MutableStateFlow] 는 같은 값을 흘리지 않는다. */
+    private val attempt = MutableStateFlow(0)
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val uiState: StateFlow<UiState> = combine(query, attempt) { q, _ -> q }
+        .flatMapLatest { q ->
+            if (q == null) {
+                flowOf(UiState.Idle)
+            } else {
+                flow {
+                    emit(UiState.Loading)
+                    emit(UiState.Success(fetch(q)))
+                }.catch { emit(UiState.Failed) }
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState.Idle)
+
+    /**
+     * 조회할 요청을 올린다. **null 이면 비운다**(모드가 실시간으로 돌아갔거나 입력이 빠졌다) —
+     * 그때 목록을 들고 있으면 실시간 화면에 예약 카드가 한 프레임 남는다.
+     *
+     * 같은 요청으로 다시 부르는 것은 공짜다(StateFlow 가 같은 값을 흘리지 않는다) — 리컴포지션마다
+     * 불려도 서버를 두 번 때리지 않는다.
+     */
+    internal fun request(query: ReservationQuery?) {
+        // `internal` 인 이유: [ReservationQuery] 는 모듈 안의 조회 계약이라 internal 이고, 공개
+        // 멤버가 그 타입을 받으면 「public 함수가 internal 타입을 노출한다」로 컴파일이 막힌다.
+        // 공개 클래스의 internal 멤버는 허용되고, 부르는 곳은 같은 모듈의 `ExploreRoute` 하나다.
+        this.query.value = query
+    }
+
+    /**
+     * 같은 요청을 한 번 더 — 「다시 시도」와 **화면 복귀**가 함께 쓴다.
+     *
+     * 복귀에 쓰는 것이 폴링을 대신한다: 예약 목록은 초 단위로 바뀌지 않지만 몇 분 전 목록을 그대로
+     * 보여 주면 이미 꽉 찬 방의 「합류」를 누르게 된다. 돌아올 때 한 번이면 그 창이 닫힌다.
+     */
+    fun retry() {
+        attempt.update { it + 1 }
+    }
+
+    private suspend fun fetch(query: ReservationQuery): List<ReservationCardUi> = when (query) {
+        // 가시 영역보다 넓게 묻는다 — 실시간 목록과 **같은 이유·같은 함수**다([MapBounds.expanded]):
+        // 경계에 걸친 방이 카메라가 조금 움직일 때마다 빠졌다 들어오며 마커가 깜빡인다.
+        is ReservationQuery.Soon -> query.bounds.expanded().let { area ->
+            repository.getReservationsSoon(
+                swLat = area.swLat,
+                swLng = area.swLng,
+                neLat = area.neLat,
+                neLng = area.neLng,
+            )
+        }.map { ReservationCardUi(ride = it) }
+
+        // 도착지는 **둘 다 또는 둘 다 아니다** — 도메인 `ReservationDestination` 이 그 상태만
+        // 담으므로 여기서 한쪽만 보내는 길이 **타입에 없다**(400 `INCOMPLETE_DESTINATION`).
+        is ReservationQuery.ByDate -> repository.searchReservations(
+            departureLat = query.departureLat,
+            departureLng = query.departureLng,
+            date = query.date,
+            destination = query.destination,
+        ).map { ReservationCardUi(ride = it.ride, destinationNearby = it.destinationNearby) }
+    }
+
+    companion object {
+        fun factory(repository: RideRepository) = viewModelFactory {
+            initializer { ReservationFinderViewModel(repository) }
+        }
+    }
+}

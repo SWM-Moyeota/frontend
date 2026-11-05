@@ -39,6 +39,8 @@ import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.AvatarCircle
 import com.moyeota.core.designsystem.component.MoyeotaBottomBar
 import com.moyeota.core.designsystem.component.MoyeotaTab
+import com.moyeota.core.designsystem.component.NoticeBanner
+import com.moyeota.core.designsystem.component.NoticeKind
 import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.presentation.core.SupportLinkTargets
@@ -47,6 +49,8 @@ import com.moyeota.presentation.core.appVersionName
 import com.moyeota.presentation.core.openAppNotificationSettings
 import com.moyeota.presentation.core.openSupportEmail
 import com.moyeota.presentation.core.openWebPage
+import java.time.Instant
+import java.time.temporal.ChronoUnit
 
 // 와이어프레임 그레이 (core token 미정의 색 — 화면 재현용)
 private val CanvasBg = Color(0xFFF5F7FA)
@@ -60,11 +64,13 @@ private val CardShadow = Color(0x0F1B2A4A)
  *
  * 진입: 하단탭 마이페이지
  *
- * 구성: 프로필 카드 → 「설정」 카드 → 「안내」 카드 → 「계정」 카드 → 버전
+ * 구성: 프로필 카드 → (제재 배너) → 「탑승」 카드 → 「설정」 카드 → 「안내」 카드 → 「계정」 카드 → 버전
  *
  * ```
  * 프로필 카드 (사진 · 이름 / 닉네임·사진 바꾸기)  ›
+ * ▓ 노쇼 2건으로 11월 7일 오후 3:20까지 방을 만들거나 … ▓  ← 2026-11-06 추가, 제재 중에만
  * [탑승]  지난 탑승 기록                       ›   ← 2026-11-01 추가
+ *         노쇼 기록                           ›   ← 2026-11-06 추가
  * [설정]  알림 설정                          ↗
  * [안내]  개인정보 처리방침 / 이용약관 / 문의하기   ↗   ← 한 카드, 구분선
  * [계정]  로그아웃 / 탈퇴하기(빨강)            ›   ← 한 카드, 구분선
@@ -76,6 +82,7 @@ private val CardShadow = Color(0x0F1B2A4A)
  * - 하단탭 홈 / 합승 / 채팅 → 14 / 17 / 24 (onTabSelect)
  * - 프로필 카드 → 36 프로필 수정 (onEditProfile)
  * - 「지난 탑승 기록」 → 34 지난 탑승 기록 (onRideHistory)
+ * - 「노쇼 기록」 → 38 노쇼 기록·이의 신청 (onNoShowRecords)
  * - 「알림 설정」 → OS 앱 알림 설정 (앱 밖)
  * - 「개인정보 처리방침」 · 「이용약관」 → 브라우저 (앱 밖)
  * - 「문의하기」 → 메일 앱, 제목·환경 정보 자동 입력 (앱 밖)
@@ -104,6 +111,12 @@ private val CardShadow = Color(0x0F1B2A4A)
  *   사라진다(`myPageGroups` 가 판정하고 `MyPageMenuRulesTest` 가 고정한다).
  * - 앱 안에 알림 토글을 두지 않는 이유는 [openAppNotificationSettings] 의 설명과 같다
  *   (서버에 알림 설정 저장 API 가 없어 앱만의 토글은 지키지 못할 약속이 된다).
+ * - **제재 배너가 「왜 막혔나」를 말하는 유일한 자리다**(2026-11-06). 노쇼 횟수 × 24시간 동안 방
+ *   만들기·합류·예약·실시간 후보가 **전부 403 `NO_SHOW_RESTRICTED`** 로 막히는데, 그 403 을 받는
+ *   화면들은 「지금 이 동작이 막혔다」까지만 말할 수 있다 — 기한과 횟수는 프로필 조회에만 있다.
+ *   그래서 막힌 사람이 「내 계정에 무슨 문제가 있나」를 찾아 오는 이 화면에 둔다. 판정과 문구는
+ *   [noShowSanction] 이고, **제한이 없고 노쇼도 0건이면 배너 자체가 없다**(「제재 없음」 배지를
+ *   만들지 않는다 — 아무 일 없는 사용자에게 제재 어휘를 가르칠 이유가 없다).
  * - 이름과 프로필 사진이 서버 값이다(GET /local/users/info — 이름은 닉네임, 없으면 실명).
  *   둘 다 한 번의 조회에서 함께 오고, **조회 전에는 둘 다 자리만 비워 둔다**(스켈레톤·빈 원).
  *   사진을 고른 적 없는 사용자에게도 서버는 기본 이미지 주소를 주므로, 로딩 중에 그리면
@@ -116,11 +129,14 @@ private val CardShadow = Color(0x0F1B2A4A)
  */
 @Composable
 fun MyPageScreen(
-    // 로그인 사용자의 표시 이름(닉네임)과 프로필 사진 주소. 조회 전에는 Loading(이름·사진 자리를 비움),
-    // 서버에 이름이 없으면 Resolved(null). 사진을 따로 받지 않는 이유는 아바타 호출부 주석에 적어 뒀다.
+    // 로그인 사용자의 표시 이름(닉네임)·프로필 사진 주소·**노쇼 횟수와 제한 기한**. 넷 다 같은 한 번의
+    // 조회(GET /local/users/info)에서 오므로 한 상태로 받는다 — 파라미터를 쪼개면 "이름은 왔는데
+    // 제재는 아직"이라는 있을 수 없는 조합이 타입으로 표현돼 버린다(아바타 호출부 주석의 그 이유).
+    // 조회 전에는 Loading(이름·사진 자리를 비우고 제재 배너도 그리지 않는다).
     userName: UserNameState = UserNameState.Loading,
     onEditProfile: () -> Unit = {},          // → 36 프로필 수정
     onRideHistory: () -> Unit = {},          // → 34 지난 탑승 기록
+    onNoShowRecords: () -> Unit = {},        // → 38 노쇼 기록·이의 신청
     onLogout: () -> Unit = {},               // → 04a 로그인 (세션 정리 후)
     onDeleteAccount: () -> Unit = {},        // → 37 회원 탈퇴
     onTabSelect: (MoyeotaTab) -> Unit = {},  // → 14 / 17 / 24
@@ -133,6 +149,18 @@ fun MyPageScreen(
     val versionLabel = remember(context) { context.appVersionName()?.let { "v$it" } }
     val groups = remember(links) { myPageGroups(links) }
 
+    // 제재 배너. 프로필 조회가 끝나기 전(Loading)에는 그리지 않는다 — 이름·사진과 같은 이유다
+    // (조회 전에 「제한 없음」을 그리는 일도, 「제한 중」을 그리는 일도 없어야 한다).
+    //
+    // 기한이 지나는 순간을 **초 단위로 따라가지 않는다.** 키가 [userName] 뿐이라 화면을 열어 둔
+    // 채로 24시간 제한이 끝나면 배너가 잠깐 남는데, 그걸 없애려면 타이머를 돌려야 하고 그 타이머는
+    // 마이페이지에 상주하는 유일한 반복 작업이 된다. 서버가 풀린 사실은 다음 조회에서 null 로 온다.
+    val sanction = remember(userName) {
+        (userName as? UserNameState.Resolved)?.let {
+            noShowSanction(noShowCount = it.noShowCount, restrictedUntil = it.restrictedUntil)
+        }
+    }
+
     // 화면은 「무엇을 누르면 어디로 간다」만 안다. Intent 는 core/ExternalIntents 가 맡는다.
     // when 이 빠짐없이 갈라야 하므로(sealed), 행 종류가 늘면 여기서 컴파일이 막힌다.
     val onAction: (MyPageAction) -> Unit = { action ->
@@ -141,6 +169,7 @@ fun MyPageScreen(
             is MyPageAction.OpenWeb -> context.openWebPage(action.url)
             is MyPageAction.SendMail -> context.openSupportEmail(action.address)
             MyPageAction.RideHistory -> onRideHistory()
+            MyPageAction.NoShowRecords -> onNoShowRecords()
             MyPageAction.Logout -> logoutConfirming = true
             MyPageAction.DeleteAccount -> onDeleteAccount()
         }
@@ -230,6 +259,25 @@ fun MyPageScreen(
                     )
                 }
                 ChevronRightIcon()
+            }
+
+            // 제재 배너는 **프로필 카드 바로 아래**다. 「계정에 무슨 문제가 있나」를 찾아 들어온
+            // 사람이 스크롤하지 않고 보는 자리이고, 바로 다음 카드의 둘째 행이 「노쇼 기록」이라
+            // 배너가 가리키는 길이 같은 화면 안에 보인다.
+            //
+            // 디자인시스템의 NoticeBanner 를 그대로 쓴다 — 이 앱의 「화면 단위 안내」는 이 컴포넌트
+            // 하나이고(공통 규칙), 제재를 위해 새 카드 모양을 만들면 이 화면에만 있는 시각 언어가
+            // 하나 늘어난다. 색은 두 가지뿐이다: 지금 막혀 있으면 ERROR, 횟수만 남았으면 WAITING.
+            if (sanction != null) {
+                Spacer(Modifier.height(12.dp))
+                NoticeBanner(
+                    kind = when (sanction.kind) {
+                        NoShowSanctionKind.RESTRICTED -> NoticeKind.ERROR
+                        NoShowSanctionKind.COUNTED -> NoticeKind.WAITING
+                    },
+                    text = sanction.text,
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
             }
 
             Spacer(Modifier.height(24.dp))
@@ -391,6 +439,28 @@ internal fun ExternalLinkIcon(modifier: Modifier = Modifier, tint: Color = GrayA
 @Composable
 private fun MyPageScreenPreview() {
     MyPageScreen(userName = UserNameState.Resolved("성윤"))
+}
+
+// 제재 중 — 프로필 카드 아래에 빨간 배너가 서고, 「노쇼 기록」 행이 그 길이다.
+// `restrictedUntil` 을 **지금 기준으로** 만든다: 고정 문자열을 쓰면 그 날짜가 지나는 순간
+// 프리뷰가 조용히 「제한 없음」으로 바뀌어 이 상태를 더 이상 보여 주지 못한다.
+@Preview(showBackground = true, widthDp = 393, heightDp = 852, name = "노쇼 제재 중")
+@Composable
+private fun MyPageScreenRestrictedPreview() {
+    MyPageScreen(
+        userName = UserNameState.Resolved(
+            name = "성윤",
+            noShowCount = 2,
+            restrictedUntil = Instant.now().plus(20, ChronoUnit.HOURS).toString(),
+        ),
+    )
+}
+
+// 제한은 풀렸지만 횟수가 남은 상태 — 노랑 배너로 바뀌고 30일 만료를 말한다.
+@Preview(showBackground = true, widthDp = 393, heightDp = 852, name = "노쇼 횟수만 남음")
+@Composable
+private fun MyPageScreenCountedPreview() {
+    MyPageScreen(userName = UserNameState.Resolved(name = "성윤", noShowCount = 1))
 }
 
 // 주소를 전부 비웠을 때 — 「안내」 카드가 통째로 사라지고 「설정」·「계정」 만 남는다.

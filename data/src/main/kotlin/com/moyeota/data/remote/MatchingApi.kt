@@ -3,12 +3,16 @@ package com.moyeota.data.remote
 import com.moyeota.data.remote.dto.ArriveRequestDto
 import com.moyeota.data.remote.dto.ConfirmMeetingRequestDto
 import com.moyeota.data.remote.dto.MatchCandidateResponse
+import com.moyeota.data.remote.dto.MyNoShowListResponse
+import com.moyeota.data.remote.dto.NoShowObjectionRequestDto
 import com.moyeota.data.remote.dto.OpenPartyRequestDto
 import com.moyeota.data.remote.dto.OpenPartyResponse
+import com.moyeota.data.remote.dto.OpenReservationRequestDto
 import com.moyeota.data.remote.dto.PartyDetailResponse
 import com.moyeota.data.remote.dto.PartyListResponse
 import com.moyeota.data.remote.dto.PartyStatusResponse
 import com.moyeota.data.remote.dto.RealTimeMatchingRequestDto
+import com.moyeota.data.remote.dto.ReservationListResponse
 import com.moyeota.data.remote.dto.RouteEstimateResponse
 import com.moyeota.data.remote.dto.RouteRequestDto
 import retrofit2.http.Body
@@ -19,9 +23,19 @@ import retrofit2.http.Path
 import retrofit2.http.Query
 
 /**
- * 경로 기준: matching/interfaces/PartyController.java
+ * 경로 기준: `matching/party/PartyController.java`
  * (@RequestMapping("/api/v1") + 메서드별 "/matching/...").
- * 주의: backend/http/matching.http 는 v1 이 없는 옛 경로 + 옛 필드명(hostId)이라 신뢰하지 않는다.
+ * 노쇼 두 개만 **다른 컨트롤러**다: `matching/noshow/NoShowController.java`
+ * (@RequestMapping("/api/v1/matching") + 메서드별 "/no-shows"·"/rooms/{partyId}/no-show-objection").
+ * 프리픽스를 합산한 결과가 같으므로 앱에서는 한 인터페이스에 둔다.
+ *
+ * (경로 메모 수정 2026-11-06: 백엔드에는 `interfaces/` 디렉터리가 **없다** — 이 KDoc 이 오래
+ * `matching/interfaces/PartyController.java` 를 가리키고 있었다. 실제 위치는 도메인별로
+ * `matching/party/`·`matching/noshow/` 또는 `…/presentation/` 이다. 파일을 찾으러 간 사람이
+ * 「컨트롤러가 사라졌다」로 결론 내리지 않도록 고쳐 둔다.)
+ *
+ * 주의: backend/http/matching.http 의 **앞 세 요청**은 v1 이 없는 옛 경로 + 옛 필드명(hostId)이라
+ * 신뢰하지 않는다. 예약·노쇼 요청(4번 이후)은 컨트롤러와 일치한다.
  *
  * **여기 전부가 토큰 필수다.** 목록·상세 조회까지 포함해 예외가 없다
  * (Security 가 `/api/v1/auth/` 하위를 뺀 전 경로에 `anyRequest().authenticated()` 를 건다).
@@ -191,6 +205,155 @@ interface MatchingApi {
     suspend fun getRealtimeCandidates(
         @Body request: RealTimeMatchingRequestDto,
     ): List<MatchCandidateResponse>
+
+    /**
+     * **내 노쇼 기록**. 200. 기준: `matching/noshow/NoShowController.java`
+     * (`@RequestMapping("/api/v1/matching")` + `@GetMapping("/no-shows")`).
+     *
+     * 조회 주체는 토큰이 정한다(`@CurrentUser`) — 경로·쿼리에 식별자가 없다. 쿼리 파라미터가
+     * **하나도 없다**: 커서도, 개수도, 필터도 없다. 서버가 최신순 **최대 20건**으로 잘라 주고
+     * ([com.moyeota.domain.repository.NoShowRepository.HISTORY_LIMIT]) 그게 전부다 —
+     * 탑승 기록(`users/me/parties`)처럼 `size`·`cursor` 를 붙이면 **400 이 아니라 조용히 무시**된다
+     * (그쪽 KDoc 의 `status` 함정과 같다). 「더 보기」를 만들 수 없는 이유가 이것이다.
+     *
+     * **엔벨로프 키가 `noShows` 다**(예약·방 목록의 `list` 와 다르다 — [MyNoShowListResponse] KDoc).
+     *
+     * 실패는 **401 하나뿐이다.** 서버가 이 조회에 업무 에러 코드를 두지 않았고(컨트롤러의
+     * `@ApiResponses` 에 200 만 있다) 기록이 없어도 404 가 아니라 `{"noShows":[]}` 다.
+     * 그래서 저장소도 전용 예외로 좁히지 않는다.
+     */
+    @GET("api/v1/matching/no-shows")
+    suspend fun getMyNoShows(): MyNoShowListResponse
+
+    /**
+     * **노쇼 이의 신청**. 기준: `matching/noshow/NoShowController.java`
+     * (`@PostMapping("/rooms/{partyId}/no-show-objection")`).
+     *
+     * ### 이 도메인에서 **유일하게 201** 인 액션이다 ★
+     * 나머지 액션은 204(확정·도착·출발·나가기·완료)거나 200(생성)인데 이것만
+     * `ResponseEntity.status(CREATED)` 이고 **본문이 비어 있다**(`Location` 헤더도 없다).
+     * 반환 타입을 붙이면 변환기가 빈 본문에서 터지므로 **`Unit` 이다** — 성공의 증거는 상태 코드뿐이고,
+     * 접수된 내용은 [getMyNoShows] 를 다시 읽어 확인한다.
+     *
+     * 경로가 `/rooms/{partyId}/…` 라 방 액션들과 **같은 가지에 있는데 컨트롤러가 다르다.** 오타는
+     * 404 가 아니라 **401** 로 떨어져 세션 만료로 오인하기 쉬운 자리다(이 파일의 다른 KDoc 과 같은
+     * 함정) — 값은 [AuthenticatedPathContractTest] 가 못 박는다.
+     *
+     * 방마다 **한 번만** 된다(서버 유니크 제약). 실패 사유는 다섯이고 전부
+     * [com.moyeota.domain.model.NoShowObjectionException] 으로 좁혀 올린다 — 그중 둘은 409 라
+     * 상태 코드로는 갈리지 않는다.
+     */
+    @POST("api/v1/matching/rooms/{partyId}/no-show-objection")
+    suspend fun submitNoShowObjection(
+        @Path("partyId") partyId: Long,
+        @Body request: NoShowObjectionRequestDto,
+    )
+
+    /**
+     * **예약 방 생성**. `PartyController.reserve`.
+     *
+     * ### 응답이 [openParty] 와 **같은 record 이고, 201 이 아니라 200 이다**
+     * 서버가 `ResponseEntity.ok(OpenPartyResponse…)` 를 돌려주므로 생성 응답 DTO·매퍼를 그대로
+     * 재사용한다. 「생성이니 201」이라고 가정하지 말 것 — 같은 PR 의 이의 신청만 201 이다.
+     *
+     * **경로·예상 요금·예상 시간이 전부 null 로 온다**(서버 `Party.reserve` 가 `null, null, null` 을
+     * 박는다). 결함이 아니라 계약이다 — 예약 방은 서버가 경로를 추정하지 않는다. 그래서 이 액션에는
+     * `ROUTE_SEARCH_FAILED` 류 실패가 **없고**, 응답의 `roomType` 은 늘 `"RESERVED"`,
+     * `departureAt` 은 요청한 시각이다.
+     *
+     * **참여·나가기·상세·SSE 는 전용 엔드포인트가 없다** — 기존 방 API 를 그대로 쓴다
+     * ([joinParty]·[leaveParty]·[getPartyDetail], SSE). 서버 Swagger 가 그렇게 못 박았다.
+     * ⚠️ 다만 **예약 방에서 [leaveParty] 는 언제나 409 `CANNOT_LEAVE_CONFIRMED_PARTY` 다**:
+     * 예약은 합류한 순간부터 확정 상태라(`confirmed = true`) 나갈 수 없다. 화면은 예약 방에
+     * 「그만 찾기」를 **띄우면 안 된다** — 누를 수 없는 버튼이다.
+     * ⚠️ 출발 시각이 지난 예약에 합류하면 409 `PARTY_CLOSED` 다.
+     *
+     * 실패는 `PartyController.reserve` 의 `@ApiResponses` 기준으로
+     * 400 `SAME_DEPARTURE_DESTINATION`·`INVALID_CAPACITY`·`OUT_OF_SERVICE_AREA`·
+     * `INVALID_DEPARTURE_TIME`·`INVALID_REQUEST` / 403 `NO_SHOW_RESTRICTED` /
+     * 409 `ALREADY_JOINED_OTHER_PARTY`·`PARTY_TIME_CONFLICT` 다 —
+     * [com.moyeota.domain.model.PartyOpenException] 으로 좁힌다 — 방 생성과 **같은 예외**이고,
+     * 예약에만 오는 둘은 그 예외의 `isPartyTimeConflict`·`isInvalidDepartureTime` 이다.
+     */
+    @POST("api/v1/matching/reservations")
+    suspend fun createReservation(@Body request: OpenReservationRequestDto): OpenPartyResponse
+
+    /**
+     * **기간으로 보는 예약 목록**. `PartyController.listReservations`.
+     *
+     * 두 파라미터 모두 **ISO-8601 instant 문자열이고 필수다**(서버가 `@RequestParam Instant`).
+     * `from >= to` 면 400 `INVALID_TIME_RANGE`, 모양이 깨지면 400 `INVALID_REQUEST` 다.
+     *
+     * ⚠️ **둘 중 하나를 빼면 응답 본문이 `{code, message}` 가 아니다.** 서버
+     * `GlobalExceptionHandler` 에 누락 파라미터 핸들러가 없어 스프링 기본 에러 JSON 이 온다 —
+     * 즉 [com.moyeota.data.remote.readApiError] 가 code 를 못 찾고 화면은 일반 문구로 떨어진다.
+     * 그래서 Retrofit 파라미터를 **non-null 로 둔다**: null 이면 `@Query` 가 그 키를 아예 빼 버려
+     * (탑승 기록의 `cursor` 처럼) 추적하기 어려운 400 을 만든다.
+     *
+     * 뷰포트와 무관하다 — 지도 범위로 거르는 쪽은 [getReservationsSoon] 다.
+     */
+    @GET("api/v1/matching/reservations")
+    suspend fun getReservations(
+        @Query("from") from: String,
+        @Query("to") to: String,
+    ): ReservationListResponse
+
+    /**
+     * **곧 출발하는 예약** — 지도 범위 안, 지금부터 **30분 내** 출발. `PartyController.listSoonReservations`.
+     *
+     * 파라미터 이름이 방 목록의 뷰포트 조회([getPartiesWithin])와 **같다**(`swLat`·`swLng`·`neLat`·
+     * `neLng`, 전부 필수). 다른 점은 둘이다: 경로가 다르고(`/reservations/soon`), 서버가
+     * **엄격 비교**로 검사한다 — `swLat >= neLat || swLng >= neLng` 면 400 `INVALID_MAP_BOUNDS` 라
+     * **남서·북동이 같은 점인 뷰포트도 거절**된다(지도를 완전히 줌인했을 때 생길 수 있다).
+     * 방 목록 쪽은 그 검사가 없어 같은 좌표로 호출하면 빈 목록이 온다 — 두 호출의 실패 모양이 다르다.
+     *
+     * 30분은 서버 상수(`SOON_WINDOW`)이고 앱이 바꿀 수 없다. 최대 100건.
+     */
+    @GET("api/v1/matching/reservations/soon")
+    suspend fun getReservationsSoon(
+        @Query("swLat") swLat: Double,
+        @Query("swLng") swLng: Double,
+        @Query("neLat") neLat: Double,
+        @Query("neLng") neLng: Double,
+    ): ReservationListResponse
+
+    /**
+     * **예약 검색** — 출발지 1km 안에서, 고른 **하루**의 예약. `PartyController.searchReservations`.
+     *
+     * ### 파라미터 이름이 이 레포에서 가장 틀리기 쉽다 ★
+     * **출발지가 `depLat`/`depLng` 로 줄어 있는 유일한 자리다.** 예약 생성 본문은
+     * `departureLat`/`departureLng` + `destinationLat`/`destinationLng`, 실시간 후보 본문은
+     * `departureLat`/`departureLng` + `destLat`/`destLng`, 그리고 이 검색만 **네 개가 전부 줄어
+     * 있다**(`depLat`·`depLng`·`destLat`·`destLng`). 전체 표는 [OpenReservationRequestDto] KDoc 에 있다.
+     * 틀리면 필수 파라미터 누락이라 스프링 기본 400(본문 모양이 다른 400 — [getReservations] 참고)이다.
+     *
+     * ### [date] 는 **한국 달력 날짜**다 — instant 가 아니다 ★
+     * 서버가 `@DateTimeFormat(iso = DATE) LocalDate` 로 받으므로 와이어 모양은 `yyyy-MM-dd`
+     * (`date=2026-11-06`)이고, 해석은 **`Asia/Seoul` 기준**이다(서버가 `date.atStartOfDay(KST)` 로
+     * 하루를 자른다). 즉 호출부는 **KST 달력의 날짜**를 만들어 보내야 한다 — 기기 시간대가 KST 가
+     * 아닌 사용자(해외 체류·수동 설정)가 UTC 날짜를 보내면 **하루 밀린 결과**를 보게 되고, 그게
+     * 「오늘인데 왜 비어 있지」로 나타난다. ISO instant 를 그대로 넣으면 400 `INVALID_REQUEST` 다.
+     *
+     * 허용 범위는 **오늘 ~ 7일 뒤(양 끝 포함)**, 벗어나면 400 `INVALID_SEARCH_DATE`.
+     * 오늘을 고르면 **이미 출발한 방은 빠진다**(서버가 하루의 시작을 `max(지금, 자정)` 으로 잡는다).
+     *
+     * ### 도착지는 **둘 다 보내거나 둘 다 뺀다**
+     * 하나만 보내면 400 `INCOMPLETE_DESTINATION` 이다. Retrofit 의 `@Query` 는 null 을 **키째 생략**
+     * 하므로 둘을 함께 null 로 두면 올바르게 빠진다 — 그 「둘 다 또는 둘 다 아님」을 호출부에서
+     * 타입으로 보장하는 쪽은 저장소다
+     * ([com.moyeota.domain.model.ReservationDestination] 의 존재 이유).
+     *
+     * 보내면 응답 항목에 `destinationNearby` 가 붙고 **true 가 먼저** 정렬된다. 빼면 출발 시각 순이고
+     * 그 키 자체가 없다. 최대 100건.
+     */
+    @GET("api/v1/matching/reservations/search")
+    suspend fun searchReservations(
+        @Query("depLat") depLat: Double,
+        @Query("depLng") depLng: Double,
+        @Query("date") date: String,
+        @Query("destLat") destLat: Double? = null,
+        @Query("destLng") destLng: Double? = null,
+    ): ReservationListResponse
 
     // 삭제된 엔드포인트: matching/ready(POST·DELETE), matching/start(POST) —
     // 정원이 차면 서버가 스스로 마감하므로 앱이 트리거하지 않는다.

@@ -3,7 +3,10 @@ package com.moyeota.data.remote
 import com.moyeota.data.remote.dto.ArriveRequestDto
 import com.moyeota.data.remote.dto.ChatReportRequestDto
 import com.moyeota.data.remote.dto.ConfirmMeetingRequestDto
+import com.moyeota.data.remote.dto.NoShowObjectionRequestDto
+import com.moyeota.data.remote.dto.OpenReservationRequestDto
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -308,6 +311,122 @@ class AuthenticatedPathContractTest {
         assertEquals("확정 본문이 ConfirmMeetingRequestDto 가 아니다", ConfirmMeetingRequestDto::class.java, confirm.bodyType())
         assertEquals("도착 본문이 ArriveRequestDto 가 아니다", ArriveRequestDto::class.java, arrive.bodyType())
         assertNull("출발은 본문이 없는 POST 다", depart.bodyType())
+    }
+
+    /**
+     * **노쇼 두 개**(2026-11-06 신규). 서버 컨트롤러가 `PartyController` 가 **아니다**
+     * (`matching/noshow/NoShowController`, `@RequestMapping("/api/v1/matching")`) — 그런데 프리픽스
+     * 합산 결과가 같아 앱에서는 [MatchingApi] 에 함께 둔다. 즉 **경로만이 유일한 구분**이다.
+     *
+     * 이의 신청 경로가 `/rooms/{partyId}/…` 라 확정·도착·출발과 **같은 가지에 있다.** 오타는 404 가
+     * 아니라 **401** 로 떨어져 세션 만료로 오인하기 가장 쉬운 자리다(Security 가 미매핑 경로도
+     * 보호한다). 기록 조회 쪽은 `/rooms` 가 **없는** 것이 핵심이다 —
+     * `api/v1/matching/rooms/no-shows` 로 적으면 `{partyId}` 템플릿에 걸려 엉뚱한 404/400 이 된다.
+     */
+    @Test
+    fun `노쇼 기록은 rooms 없는 경로이고 이의 신청은 rooms partyId 아래다`() {
+        assertEquals("api/v1/matching/no-shows", MatchingApi::class.java.path("getMyNoShows"))
+        assertEquals(
+            "api/v1/matching/rooms/{partyId}/no-show-objection",
+            MatchingApi::class.java.path("submitNoShowObjection"),
+        )
+
+        val records = MatchingApi::class.java.declaredMethods.single { it.name == "getMyNoShows" }
+        val objection = MatchingApi::class.java.declaredMethods.single { it.name == "submitNoShowObjection" }
+
+        assertTrue("노쇼 기록 조회가 GET 이 아니다", records.isAnnotationPresent(GET::class.java))
+        assertTrue("이의 신청이 POST 가 아니다", objection.isAnnotationPresent(POST::class.java))
+
+        // 기록 조회에는 **쿼리가 하나도 없다.** 커서·개수를 붙이는 실수가 특히 위험하다 — 서버에
+        // 그 파라미터가 없는데 400 이 아니라 200 + 조용히 무시라서(탑승 기록의 `status` 와 같은
+        // 함정) 「더 보기가 동작한다」고 착각하고 지나간다. 서버가 20건에서 자르는 게 전부다.
+        assertTrue(
+            "노쇼 기록 조회에 쿼리 파라미터가 생겼다 — 서버에 없는 값이고 조용히 무시된다",
+            records.parameterAnnotations.none { annotations -> annotations.any { it is Query } },
+        )
+
+        // 이의 신청은 경로에 partyId 하나 + 본문 하나다. 주체는 Bearer 토큰이 정한다.
+        assertEquals(
+            "이의 신청 경로에 담기는 건 partyId 하나여야 한다",
+            1,
+            objection.parameterAnnotations.count { annotations -> annotations.any { it is Path } },
+        )
+        assertEquals(
+            "이의 신청 본문이 NoShowObjectionRequestDto 가 아니다",
+            NoShowObjectionRequestDto::class.java,
+            objection.bodyType(),
+        )
+    }
+
+    /**
+     * **예약 네 개**(2026-11-06 신규). 넷 다 `PartyController`(`@RequestMapping("/api/v1")`) 아래의
+     * `/matching/reservations…` 이고, **세그먼트만 다르다** — 생성·기간 목록이 같은 경로를 HTTP
+     * 메서드로 가르고, 나머지 둘은 `/soon`·`/search` 가 붙는다. 그래서 이 넷은 서로를 베끼다
+     * 어긋나기 쉽고, 틀리면 404 가 아니라 **401** 로 떨어진다.
+     *
+     * 특히 **생성과 기간 목록이 같은 문자열**인 것을 값으로 못 박는다: 둘 중 하나에 `/soon` 같은
+     * 세그먼트가 붙으면 다른 하나는 멀쩡해 보이므로 증상이 한쪽에만 나타난다.
+     */
+    @Test
+    fun `예약 네 경로는 matching reservations 아래이고 생성만 POST 다`() {
+        assertEquals("api/v1/matching/reservations", MatchingApi::class.java.path("createReservation"))
+        assertEquals("api/v1/matching/reservations", MatchingApi::class.java.path("getReservations"))
+        assertEquals("api/v1/matching/reservations/soon", MatchingApi::class.java.path("getReservationsSoon"))
+        assertEquals("api/v1/matching/reservations/search", MatchingApi::class.java.path("searchReservations"))
+
+        val create = MatchingApi::class.java.declaredMethods.single { it.name == "createReservation" }
+        assertTrue("예약 생성이 POST 가 아니다", create.isAnnotationPresent(POST::class.java))
+        assertEquals(
+            "예약 생성 본문이 OpenReservationRequestDto 가 아니다",
+            OpenReservationRequestDto::class.java,
+            create.bodyType(),
+        )
+        // 경로에 담기는 건 아무것도 없다 — 생성자는 Bearer 토큰이 정한다.
+        assertTrue(
+            "예약 생성 경로에 세그먼트 파라미터가 생겼다",
+            create.parameterAnnotations.none { annotations -> annotations.any { it is Path } },
+        )
+
+        listOf("getReservations", "getReservationsSoon", "searchReservations").forEach { name ->
+            val method = MatchingApi::class.java.declaredMethods.single { it.name == name }
+            assertTrue("$name 이 GET 이 아니다", method.isAnnotationPresent(GET::class.java))
+            assertNull("$name 은 조회라 본문이 없다", method.bodyType())
+        }
+    }
+
+    /**
+     * **예약 세 조회의 쿼리 파라미터 이름**. 이 PR 에서 가장 틀리기 쉬운 자리라 이름을 값으로 고정한다.
+     *
+     * | 자리 | 출발지 | 도착지 |
+     * |---|---|---|
+     * | 예약 **검색** 쿼리 | `depLat`·`depLng` | `destLat`·`destLng` |
+     * | 예약 **생성** 본문 | `departureLat`·`departureLng` | `destinationLat`·`destinationLng` |
+     * | 실시간 후보 본문 | `departureLat`·`departureLng` | `destLat`·`destLng` |
+     *
+     * 즉 **검색만 출발지까지 줄어 있다.** `departureLat` 으로 적으면 서버의 필수 파라미터(`depLat`)가
+     * 누락되는데, 그 400 은 `GlobalExceptionHandler` 가 받지 않아 **본문이 `{code, message}` 가
+     * 아니다** — 앱의 에러 파서가 code 를 못 찾아 화면에 일반 문구만 뜬다(원인을 찾기 가장 어려운 모양).
+     *
+     * 뷰포트 조회는 방 목록([MatchingApi.getPartiesWithin])과 **같은 이름·같은 순서**여야 한다.
+     * 순서가 섞이면 서버가 400 `INVALID_MAP_BOUNDS` 를 준다(그쪽은 검사가 없어 빈 목록이 온다 —
+     * 같은 좌표로 두 호출을 하면 한쪽만 실패한다).
+     */
+    @Test
+    fun `예약 검색만 출발지 이름이 depLat depLng 로 줄어 있다`() {
+        fun queriesOf(name: String) = MatchingApi::class.java.declaredMethods
+            .single { it.name == name }
+            .parameterAnnotations
+            .flatMap { annotations -> annotations.filterIsInstance<Query>().map { it.value } }
+
+        assertEquals(listOf("from", "to"), queriesOf("getReservations"))
+        assertEquals(listOf("swLat", "swLng", "neLat", "neLng"), queriesOf("getReservationsSoon"))
+        // 뷰포트 이름·순서는 방 목록과 같아야 한다.
+        assertEquals(queriesOf("getPartiesWithin"), queriesOf("getReservationsSoon"))
+
+        val search = queriesOf("searchReservations")
+        assertEquals(listOf("depLat", "depLng", "date", "destLat", "destLng"), search)
+        assertFalse("검색 출발지가 departureLat 으로 늘어났다 — 서버 파라미터는 depLat 이다", "departureLat" in search)
+        assertFalse("검색 도착지가 destinationLat 으로 늘어났다 — 서버 파라미터는 destLat 이다", "destinationLat" in search)
     }
 
     @Test

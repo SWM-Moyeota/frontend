@@ -3,6 +3,7 @@ package com.moyeota.presentation.feature.home
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -16,6 +17,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.IconButton
@@ -58,6 +60,7 @@ import com.moyeota.core.designsystem.component.decodePolyline
 import com.moyeota.core.designsystem.component.fitMapCamera
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.naver.maps.geometry.LatLng
+import java.time.Instant
 import kotlin.math.roundToInt
 
 private val ChipBlueBg = Color(0xFFF1F5FD)
@@ -81,7 +84,7 @@ data class RoutePreviewUi(
 )
 
 /**
- * 16 에서 고른 매칭 조건. 지금은 **정원 하나뿐**이다.
+ * 16 에서 고른 매칭 조건 — **정원과 출발 시각**.
  *
  * 「출발지 반경」·「도착지 반경」 칩은 지웠다(2026-10-14). 서버가 방 생성 요청에서 반경을 빼고
  * 고정값(500m)을 쓰기로 했다(Backend `a668aee`) — 보내도 버려진다. 그전에도 어떤 조회·판정도
@@ -93,6 +96,18 @@ data class RoutePreviewUi(
  */
 data class MatchConditions(
     val capacity: Int,
+    /**
+     * 예약 방의 출발 시각(ISO-8601 **순간** 문자열). **null 이면 실시간 방**이다.
+     *
+     * 이 한 값이 **다른 엔드포인트**를 고른다 — null 이면 `POST /matching/rooms`, 값이 있으면
+     * `POST /matching/reservations`([CreatePartyViewModel.createParty]). 불리언 플래그를 따로 두지
+     * 않는 이유: 「예약이다」와 「그 시각」이 각각 참·거짓이 될 수 있으면 **시각 없는 예약**이라는
+     * 보낼 수 없는 조합이 타입에 생긴다. 시각이 곧 예약 여부다.
+     *
+     * 문자열로 들고 다니는 것은 이 저장소의 관례다(`Ride.departureAt`·`RideRecord`·`ChatMessage`) —
+     * 만드는 자리([reservationDepartureIso])와 읽는 자리에서만 파싱한다.
+     */
+    val departureAt: String? = null,
 )
 
 /**
@@ -100,15 +115,25 @@ data class MatchConditions(
  *
  * 이동(디스크립션):
  * - 닫기·배경 탭 → 15 (onDismiss) — 공통 규칙: 모달은 배경 탭·닫기로만 종료
- * - 「같이 탈 사람 찾기」 → 방 생성(POST /matching/rooms) 성공 시 21 매칭 대기 (onFindCompanions)
- *   선택한 매칭 조건(인원)을 그대로 넘긴다.
+ * - CTA → 방 생성 성공 시 21 매칭 대기 (onFindCompanions). 고른 조건(인원·출발 시각)을 그대로 넘긴다.
+ *   **출발 시각이 CTA 가 부르는 엔드포인트를 가른다** — 「지금 출발」은 `POST /matching/rooms`,
+ *   「시간 정하기」는 `POST /matching/reservations`([MatchConditions.departureAt]).
  *
  * 선택 규칙(디스크립션):
- * - 인원(나 포함) 1~3명 → 예상 1인 요금 재계산 ([RoutePreviewUi.estimatedFare] ÷ 인원, [farePerPersonWon])
- *   기본값 3명. **고를 수 있는 조건은 이것뿐이다** — 반경 칩과 「매칭 방식」 행은 지웠다
- *   ([MatchConditions] KDoc: 서버가 반경을 고정값으로 정하고, 승차지점 개념 자체가 없다)
+ * - **출발 시각: 「지금 출발」(기본) / 「시간 정하기」.** 뒤쪽을 고르면 날짜(오늘~7일 뒤)와
+ *   30분 단위 시각 칩이 열린다 — 고를 수 있는 모든 조합이 **구성상** 서버 창(지금~7일) 안이다
+ *   ([reservationTimeSlots]). 자유 입력 피커를 두지 않는 근거는 그 함수의 KDoc 에 있다
+ * - 인원(나 포함) → 예상 1인 요금 재계산 ([RoutePreviewUi.estimatedFare] ÷ 인원, [farePerPersonWon]).
+ *   기본값 3명. **범위가 모드에 따라 다르다** — 실시간 1~3, **예약은 2~3**([capacityChoices]).
+ *   1 을 고른 채 「시간 정하기」로 바꾸면 보낼 수 없는 상태가 되므로 전송·표시 값만 2 로 접고
+ *   ([capacityFor]) 그 사실을 한 줄로 말한다([RESERVATION_CAPACITY_NOTICE])
  * - **1명을 고르면** 칩 행 아래에 「혼자 출발한다」 안내가 붙는다([soloCapacityNotice]) —
  *   정원 1 은 만든 즉시 꽉 찬 방이라 아무도 합류할 수 없다. 선택지와 전송 값은 그대로다
+ * - **예약에서는 경로 요약 칩과 예상 요금을 감춘다**([RESERVATION_NO_ESTIMATE_NOTICE]) — 서버가
+ *   예약 방에 요금·경로·소요 시간을 넣지 않아서, 추정치를 그대로 보여 주면 **방에는 없는 숫자**를
+ *   보고 동의하게 된다. 지도의 경로선은 남긴다(핀 사이의 길 모양은 예측이 아니다)
+ * - 예약에서는 「걸어서 가까운 방」 추천도 감춘다 — 그건 **지금 출발하는** 방 목록이고
+ *   (`POST /rooms/realtime`), 시간을 정하러 온 사람이 탭하면 지금 타는 방에 합류하게 된다
  *
  * 레이아웃(디스크립션):
  * - 지도가 헤더 아래를 전부 채우고, 그 위에 **드래그로 접었다 펴는 시트**가 얹힌다
@@ -154,29 +179,83 @@ fun DestinationConfirmModal(
      */
     nearbyLoadFailed: Boolean = false,
     onRetryNearby: () -> Unit = {},
+    /**
+     * 처음부터 「시간 정하기」(예약)로 열 것인가. **기본값이 지금까지의 동작**이다 — 모달을 여는
+     * 길은 15 목적지 확정 하나뿐이고 그쪽은 아무것도 넘기지 않는다.
+     *
+     * 파라미터로 둔 이유는 17 탐색의 `initialSheetState` 와 같다: 예약 상태의 미리보기를
+     * 만들 수 있어야 한다(내부 상태만으로는 Preview 에서 그 화면을 볼 수 없다).
+     *
+     * [DepartureMode] 가 아니라 **Boolean** 인 이유는 이 컴포저블이 공개 API 라는 점이다 —
+     * 그 enum 은 모듈 안의 판정 타입(internal)이고, 공개 파라미터가 internal 타입을 받으면
+     * 컴파일이 막힌다. 공개 자리에는 도메인 타입과 원시값만 둔다(이 저장소의 관례).
+     */
+    initiallyScheduled: Boolean = false,
 ) {
     // 기본값: 3인 (디스크립션 유효값 규칙)
     var peopleCount by rememberSaveable { mutableIntStateOf(3) }
+    // 기본값: 지금 출발 — **지금까지의 동작이 기본값이다**([DepartureMode])
+    var departureMode by rememberSaveable {
+        mutableStateOf(if (initiallyScheduled) DepartureMode.SCHEDULED else DepartureMode.NOW)
+    }
     // 핀 조정 화면(모달 내 확장 상태). null 이면 닫혀 있다.
     var adjustTarget by remember { mutableStateOf<PinTarget?>(null) }
     val canAdjust = destinationPosition != null || originPosition != null
 
+    // 예약 날짜·시각 계산의 기준 시각. **한 번만 읽는다** — 매 리컴포지션마다 시계를 읽으면
+    // 칩 목록이 1초마다 다시 만들어지고(지난 슬롯이 사라지며) 고른 칩이 손가락 아래에서 움직인다.
+    // 이 모달은 몇 분 안에 닫히는 화면이라 그 사이 기준이 낡아도 가장 이른 슬롯이 10분 여유를
+    // 갖고 있어([RESERVATION_MIN_LEAD_MINUTES]) 서버 창을 벗어나지 않는다.
+    val now = remember { Instant.now() }
+    val dateOptions = remember(now) { reservationDates(now) }
+    val today = dateOptions.first()
+    // 고른 날짜는 **오늘로부터의 일수**로 들고 있는다 — LocalDate 는 Parcelable 이 아니라
+    // rememberSaveable 에 그대로 담을 수 없고, 일수는 Int 라 구성 변경에도 살아남는다.
+    var dateOffset by rememberSaveable { mutableIntStateOf(0) }
+    val selectedDate = dateOptions[dateOffset.coerceIn(0, dateOptions.lastIndex)]
+    val timeSlots = remember(selectedDate, now) { reservationTimeSlots(selectedDate, now) }
+    // -1 = 아직 고르지 않았다. **기본 선택을 두지 않는다** — 날짜마다 첫 슬롯이 다른 뜻이라
+    // (오늘은 「가장 빠른 시각」, 다른 날은 자정) 자동 선택하면 아무도 원하지 않은 00:00 예약이
+    // 한 번의 탭으로 만들어진다. 고르지 않은 동안 CTA 는 잠기고 이유를 적는다.
+    var selectedMinuteOfDay by rememberSaveable { mutableIntStateOf(-1) }
+    // 날짜를 바꾸면 그 날에 없는 시각이 될 수 있다(오늘 10:00 → 7일 뒤에는 없는 슬롯).
+    // 그때는 **선택이 사라진다** — 없는 시각을 고른 것처럼 보여 주지 않는다.
+    val selectedTime = timeSlots.firstOrNull { it.hour * 60 + it.minute == selectedMinuteOfDay }
+
+    val scheduled = departureMode == DepartureMode.SCHEDULED
+    // 보낼 수 있는 정원. 모드가 바뀌어도 [peopleCount] 는 그대로 둔다 — 되돌리면 고른 값이 살아 있다
+    val capacity = capacityFor(departureMode, peopleCount)
+    val departureAt = selectedTime?.let { reservationDepartureIso(selectedDate, it) }
+
     // 1인 요금 = 미터기 추정 총액 ÷ 인원, 10원 단위 반올림 ([farePerPersonWon] — 20 합류·22 상세가 쓰는
     // 서버 값 계산식과 **같은 규칙**이다). 추정이 아직 없거나 실패했으면 null — 문구를 감추되 CTA 는 살려둔다.
-    val farePerPersonText = routePreview.estimatedFare?.let { total ->
-        "%,d".format(farePerPersonWon(total, peopleCount))
+    // **예약이면 아예 셈하지 않는다**([RESERVATION_NO_ESTIMATE_NOTICE] — 서버가 그 방에 요금을 넣지 않는다).
+    val farePerPersonText = routePreview.estimatedFare?.takeIf { !scheduled }?.let { total ->
+        "%,d".format(farePerPersonWon(total, capacity))
     }
     // 요약 칩 — 거리는 서버 응답에 없어 시간·총요금으로 대체한다(와이어프레임의 2값 구조 유지)
     val routeSummaryLabel = when {
+        // 예약 방에는 소요 시간도 요금도 없다 — 「지금」 기준 추정을 미래 출발에 붙이지 않는다
+        scheduled -> null
         routePreview.loading -> "예상 경로 계산 중"
         routePreview.estimatedMinutes != null && routePreview.estimatedFare != null ->
             "예상 ${routePreview.estimatedMinutes}분 · 총 ${"%,d".format(routePreview.estimatedFare)}원"
         else -> null // 실패 — 칩 자체를 감춘다
     }
-    // 폴리라인 디코딩은 21 대기·22 상세의 지도와 같은 decodePolyline 을 쓴다
+    // 폴리라인 디코딩은 21 대기·22 상세의 지도와 같은 decodePolyline 을 쓴다.
+    // **예약에서도 그린다** — 두 핀 사이의 길 모양은 시각·금액 예측이 아니라 기하다
+    // ([RESERVATION_NO_ESTIMATE_NOTICE] 의 마지막 단락).
     val routePath = remember(routePreview.encodedPath) {
         routePreview.encodedPath?.let(::decodePolyline).orEmpty()
     }
+
+    // 경로 카드의 시각 두 칸.
+    // - 예약: 출발 칸에 **고른 시각**을 적고(아직 안 골랐으면 비운다) 도착 칸은 **비운다** —
+    //   서버가 예약 방에 소요 시간을 주지 않아 도착 시각을 셈할 근거가 없다. 「지금」 기준 추정으로
+    //   채우면 3일 뒤 도착 시각을 오늘 교통으로 단정하는 말이 된다.
+    // - 지금 출발: 호출부가 넘긴 값 그대로(기존 동작).
+    val departureText = if (scheduled) selectedTime?.let(::reservationTimeLabel).orEmpty() else departureTimeLabel
+    val arrivalText = if (scheduled) "" else arrivalTimeLabel
 
     Box(modifier = Modifier.fillMaxSize()) {
         // Scrim 배경 — 탭 시 닫기
@@ -358,12 +437,16 @@ fun DestinationConfirmModal(
                                 )
                                 // 이름이 남는 폭을 전부 쓰므로(weight) 시각과 붙지 않게 최소 간격을 둔다
                                 Spacer(Modifier.size(8.dp))
-                                Text(
-                                    text = departureTimeLabel,
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MoyeotaColor.InkPrimary,
-                                )
+                                // 빈 문자열이면 Text 를 세우지 않는다 — 빈 글자도 폭을 먹어
+                                // 이름 말줄임 위치가 시각이 있을 때와 달라진다
+                                if (departureText.isNotEmpty()) {
+                                    Text(
+                                        text = departureText,
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MoyeotaColor.InkPrimary,
+                                    )
+                                }
                                 // 무엇을 조정하는지 애매하지 않도록 출발지·도착지 각각에 진입점을 둔다
                                 if (originPosition != null) {
                                     AdjustLink(onClick = { adjustTarget = PinTarget.ORIGIN })
@@ -388,12 +471,14 @@ fun DestinationConfirmModal(
                                     modifier = Modifier.weight(1f),
                                 )
                                 Spacer(Modifier.size(8.dp))
-                                Text(
-                                    text = arrivalTimeLabel,
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MoyeotaColor.InkPrimary,
-                                )
+                                if (arrivalText.isNotEmpty()) {
+                                    Text(
+                                        text = arrivalText,
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MoyeotaColor.InkPrimary,
+                                    )
+                                }
                                 if (destinationPosition != null) {
                                     AdjustLink(onClick = { adjustTarget = PinTarget.DESTINATION })
                                 }
@@ -419,19 +504,72 @@ fun DestinationConfirmModal(
                                 .background(MoyeotaColor.SurfaceCanvas)
                                 .padding(horizontal = 20.dp),
                         ) {
+                            // 「출발 시각」이 **맨 위**에 있는 이유: 이 선택이 아래 모든 것을 바꾼다
+                            // (정원 범위·요금 표시·CTA 가 부르는 엔드포인트). 아래에 두면 사용자가
+                            // 정원을 고른 뒤에 선택지가 줄어드는 것을 보게 된다.
+                            ConditionRow(label = "출발 시각") {
+                                DepartureMode.entries.forEach { mode ->
+                                    ConditionChip(
+                                        text = departureModeLabel(mode),
+                                        selected = departureMode == mode,
+                                        onClick = { departureMode = mode },
+                                    )
+                                }
+                            }
+
+                            if (scheduled) {
+                                // 날짜·시각은 칩이 8개·최대 48개라 [ConditionRow] 의 「라벨 + 오른쪽
+                                // 정렬 칩」에 들어가지 않는다 — 라벨을 윗줄로 올리고 가로 스크롤한다.
+                                ScrollableChipRow(label = "날짜") {
+                                    dateOptions.forEachIndexed { index, date ->
+                                        ConditionChip(
+                                            text = reservationDateLabel(date, today),
+                                            selected = dateOffset == index,
+                                            onClick = { dateOffset = index },
+                                        )
+                                    }
+                                }
+                                if (timeSlots.isEmpty()) {
+                                    // 늦은 밤(23:20 이후)의 「오늘」에만 닿는다 — 오늘의 마지막 슬롯이
+                                    // 23:30 이고 10분 여유가 필요하다([RESERVATION_NO_SLOT_NOTICE]).
+                                    ConditionNotice(RESERVATION_NO_SLOT_NOTICE)
+                                } else {
+                                    ScrollableChipRow(label = "시각") {
+                                        timeSlots.forEach { slot ->
+                                            ConditionChip(
+                                                text = reservationTimeLabel(slot),
+                                                selected = selectedTime == slot,
+                                                onClick = { selectedMinuteOfDay = slot.hour * 60 + slot.minute },
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
                             // 라벨에 「나 포함」을 박았다 — 서버 정원(`Capacity`)은 **방장을 포함한 총
                             // 인원**이라(`Party.open` 이 생성자를 멤버로 넣고 `members.size == capacity`
                             // 면 꽉 찬 것으로 본다) 「3인」만 쓰면 「나 외 3명」으로 읽힌다. 「나 포함 N명」을
                             // 칩마다 쓰지 않고 라벨로 올린 건 레이아웃 때문이다 — 칩 3개가 좁은 폰(360dp)에서
                             // 카드 밖으로 밀려 잘린 전례가 있다([ConditionRow] 주석).
+                            //
+                            // 선택지가 **모드에 따라 다르다**([capacityChoices]) — 예약에서 1 칩은
+                            // 보내도 400 이라 지운다. 선택 표시는 전송값([capacity])을 보므로 1 을
+                            // 고른 채 예약으로 넘어오면 2 가 선택된 것으로 보인다(그리고 아래 한 줄이
+                            // 그 이유를 말한다).
                             ConditionRow(label = "인원(나 포함)") {
-                                listOf(1, 2, 3).forEach { count ->
+                                capacityChoices(departureMode).forEach { count ->
                                     ConditionChip(
                                         text = "${count}명",
-                                        selected = peopleCount == count,
+                                        selected = capacity == count,
                                         onClick = { peopleCount = count },
                                     )
                                 }
+                            }
+                            // 예약에서 1 칩이 사라진 이유를 **고르는 자리에서** 말한다. 실시간의
+                            // 「혼자 출발한다」 안내와 같은 자리·같은 모양이고, 두 문구는 함께 뜨지
+                            // 않는다(예약에서는 capacity 가 1 이 될 수 없다).
+                            if (scheduled) {
+                                ConditionNotice(RESERVATION_CAPACITY_NOTICE)
                             }
                             // 「1명」을 고른 사람에게만 **고르는 자리에서** 결과를 말해 준다
                             // ([soloCapacityNotice]). 1 은 지우지 않았다 — 혼자 타기를 상품으로
@@ -453,15 +591,7 @@ fun DestinationConfirmModal(
                             // 사용자는 고를 수 있는 값을 「막힌 값」으로 본다.
                             // 줄바꿈을 막지 않는다(maxLines 없음) — 큰 글꼴 설정에서 잘린 안내보다
                             // 두 줄이 낫고, 스크롤 영역 안이라 잘릴 일도 없다.
-                            soloCapacityNotice(peopleCount)?.let { notice ->
-                                Text(
-                                    text = notice,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = GrayMute,
-                                    modifier = Modifier.padding(bottom = 11.dp),
-                                )
-                            }
+                            soloCapacityNotice(capacity)?.let { notice -> ConditionNotice(notice) }
                             // 「출발지 반경」·「도착지 반경」 행은 지웠다(2026-10-14) — 서버가 방 생성
                             // 요청에서 반경을 빼고 고정값(500m)을 쓴다(Backend `a668aee`). 고른 값이
                             // 전송조차 되지 않고, 전송됐을 때도 매칭이 읽지 않던 값이다([MatchConditions]).
@@ -477,30 +607,38 @@ fun DestinationConfirmModal(
                         // 「걸어서 가까운 방」 — 후보가 있을 때만 그린다. 없는 게 기본 상태라
                         // (서버가 출발지·도착지 **각각** 300m 안에서만 고른다) 「없음」을 강조하면
                         // 방을 만들러 온 사람에게 실패처럼 읽힌다.
-                        if (nearbyCandidates.isNotEmpty()) {
-                            Spacer(Modifier.height(16.dp))
-                            NearbyCandidateSection(
-                                candidates = nearbyCandidates,
-                                onCandidateClick = onCandidateClick,
-                            )
-                        } else if (nearbyLoadFailed) {
-                            // 후보 0건과 달리 **못 물어봤다**는 뜻이라 사실을 말하고 길을 준다.
-                            Spacer(Modifier.height(16.dp))
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = "가까운 방을 불러오지 못했어요",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = GrayAsh,
+                        //
+                        // **예약에서는 통째로 감춘다**(실패 줄까지). 이 추천은 `POST /rooms/realtime`
+                        // 의 결과 = **지금 출발하는** 방이고, 탭하면 그 방의 합류 확인(19)으로 간다.
+                        // 3일 뒤 출발을 정하러 온 사람에게 그 카드는 「지금 타는 방」이라는 사실이
+                        // 보이지 않아, 시간을 정했다고 생각하며 지금 출발하는 방에 들어가게 된다.
+                        // 조회 자체는 막지 않는다 — 모드를 되돌리면 그 결과가 그대로 보인다.
+                        if (!scheduled) {
+                            if (nearbyCandidates.isNotEmpty()) {
+                                Spacer(Modifier.height(16.dp))
+                                NearbyCandidateSection(
+                                    candidates = nearbyCandidates,
+                                    onCandidateClick = onCandidateClick,
                                 )
-                                Spacer(Modifier.width(8.dp))
-                                Text(
-                                    text = "다시 시도",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MoyeotaColor.Primary600,
-                                    modifier = Modifier.clickable { onRetryNearby() },
-                                )
+                            } else if (nearbyLoadFailed) {
+                                // 후보 0건과 달리 **못 물어봤다**는 뜻이라 사실을 말하고 길을 준다.
+                                Spacer(Modifier.height(16.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = "가까운 방을 불러오지 못했어요",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = GrayAsh,
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        text = "다시 시도",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MoyeotaColor.Primary600,
+                                        modifier = Modifier.clickable { onRetryNearby() },
+                                    )
+                                }
                             }
                         }
 
@@ -509,10 +647,36 @@ fun DestinationConfirmModal(
                     }
                 },
                 sheetFooter = {
-                    // 요금 안내 + CTA — 접힘·펼침 모두에서 보이도록 시트 하단에 고정한다.
-                    // 추정 실패 시에도 CTA 는 막지 않는다 — 방 생성 요청을 받으면 서버가 요금을 다시 계산한다.
+                    // 요금 안내(예약이면 **고른 시각**) + CTA — 접힘·펼침 모두에서 보이도록 시트 하단에
+                    // 고정한다. 추정 실패 시에도 CTA 는 막지 않는다 — 방 생성 요청을 받으면 서버가
+                    // 요금을 다시 계산한다.
+                    //
+                    // 예약은 이 자리가 **두 줄**이 된다: 고른 시각을 되읽어 주는 줄
+                    // ([reservationDepartureSummary] — 날짜 칩과 시각 칩이 떨어져 있어 둘이 합쳐져
+                    // 무엇이 되는지 확인할 마지막 기회다)과 요금·소요 시간이 **없다는 사실**
+                    // ([RESERVATION_NO_ESTIMATE_NOTICE]). 접힘 높이가 한 줄만큼 커지지만 시트 높이는
+                    // 콘텐츠가 정하므로([MapSheetScaffold]) 잘리는 것은 없다.
+                    if (scheduled) {
+                        Text(
+                            text = selectedTime
+                                ?.let { "${reservationDepartureSummary(selectedDate, it, today)} 출발" }
+                                ?: RESERVATION_NEEDS_TIME_NOTICE,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MoyeotaColor.InkPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier
+                                .align(Alignment.CenterHorizontally)
+                                .padding(horizontal = 16.dp),
+                        )
+                        Spacer(Modifier.height(2.dp))
+                    }
                     Text(
                         text = when {
+                            // 예약 방에는 요금이 없다 — 「—」로 비워 두면 로딩 실패로 읽히므로
+                            // 왜 없는지 적는다(없는 숫자를 지어내지 않는 것이 1급 규칙이다).
+                            scheduled -> RESERVATION_NO_ESTIMATE_NOTICE
                             routePreview.loading -> "예상 요금 계산 중이에요"
                             // 뒤에 붙던 설명 문구(「인원이 확정되면…」)는 뺐다 — 한 줄 안내는 금액만으로 충분하다
                             farePerPersonText != null -> "예상 요금 1인 ${farePerPersonText}원"
@@ -528,6 +692,21 @@ fun DestinationConfirmModal(
                             .align(Alignment.CenterHorizontally)
                             .padding(horizontal = 16.dp),
                     )
+                    // ★ **나갈 수 없다**는 사실은 CTA 앞에 둔다([reservationCommitmentNotice]) —
+                    // 실시간 방은 「그만 찾기」로 빠져나올 수 있어서 사용자는 방에 들어가는 일을
+                    // 되돌릴 수 있는 선택으로 배워 왔고, 예약은 **같은 모양의 버튼으로 전혀 다른
+                    // 약속**을 하게 만든다. 요금 문구와 달리 두 줄을 허용한다(잘리면 뜻이 반쪽이 된다).
+                    if (scheduled) {
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            text = reservationCommitmentNotice(joining = false),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = GraySlate,
+                            maxLines = 2,
+                            modifier = Modifier.padding(horizontal = 16.dp),
+                        )
+                    }
                     if (errorMessage != null) {
                         Spacer(Modifier.height(10.dp))
                         NoticeBanner(
@@ -538,10 +717,15 @@ fun DestinationConfirmModal(
                     }
                     Spacer(Modifier.height(12.dp))
                     PrimaryCtaButton(
-                        text = "같이 탈 사람 찾기",
+                        // 예약은 **무엇이 만들어지는지** 적는다 — 「같이 탈 사람 찾기」는 지금
+                        // 모집을 시작하는 말이라, 시간을 정해 둔 방에는 맞지 않는다.
+                        text = if (scheduled) "이 시간으로 예약 방 만들기" else "같이 탈 사람 찾기",
                         onClick = {
-                            onFindCompanions(MatchConditions(capacity = peopleCount))
+                            onFindCompanions(MatchConditions(capacity = capacity, departureAt = departureAt))
                         },
+                        // 시각을 고르지 않은 예약은 보낼 수 없다 — 비활성 버튼 위에 **왜 못 누르는지**를
+                        // 적어 둔다([RESERVATION_NEEDS_TIME_NOTICE]). 비활성 버튼만 두면 이유를 모른다.
+                        enabled = !scheduled || departureAt != null,
                         loading = creating,
                         modifier = Modifier.padding(horizontal = 16.dp),
                     )
@@ -743,6 +927,58 @@ internal fun walkMinutesLabel(walkSeconds: Int): String {
     return "걸어서 ${minutes}분"
 }
 
+/**
+ * 매칭 조건 카드의 보조 문구 한 줄 — 「혼자 출발한다」·「예약은 2명부터」·「고를 시간이 없다」가 쓴다.
+ *
+ * 세 자리가 **같은 모양**이어야 하는 이유는 세 문구가 같은 성질이기 때문이다: 정상 선택의 결과를
+ * 알려 주는 말이고, 오류가 아니다. 빨강·경고 아이콘을 쓰지 않는 근거는 [soloCapacityNotice] 위의
+ * 주석에 적어 둔 그대로다 — 오류로 읽히면 사용자는 고를 수 있는 값을 「막힌 값」으로 본다.
+ * 줄바꿈을 막지 않는다(maxLines 없음): 큰 글꼴 설정에서 잘린 안내보다 두 줄이 낫고, 이 카드는
+ * 세로 스크롤 영역 안이라 잘릴 일이 없다.
+ */
+@Composable
+private fun ConditionNotice(text: String) {
+    Text(
+        text = text,
+        fontSize = 13.sp,
+        fontWeight = FontWeight.Medium,
+        color = GrayMute,
+        modifier = Modifier.padding(bottom = 11.dp),
+    )
+}
+
+/**
+ * 라벨을 **윗줄**로 올리고 칩을 가로 스크롤하는 조건 행 — 예약의 날짜(8개)·시각(최대 48개)이 쓴다.
+ *
+ * [ConditionRow] 를 쓸 수 없는 이유는 그 레이아웃이 「라벨 + 남는 폭에 오른쪽 정렬」이라는 데 있다:
+ * 칩이 폭을 넘기면 **잘린다**(좁은 폰에서 칩 3개가 카드 밖으로 밀린 전례가 그 주석에 있다).
+ * 여기서는 칩 수가 날짜·시각에 따라 변하고 애초에 한 줄에 들어오지 않으므로, 넘치는 것을 **스크롤**로
+ * 받는다. 세로로 줄바꿈(FlowRow)하지 않는 이유는 시각 칩 48개가 카드를 화면 몇 개 분량으로 늘리기
+ * 때문이다 — 가로 스크롤이면 높이가 한 줄로 고정된다.
+ *
+ * 오늘의 시각 칩 목록은 **가장 이른 시각부터** 시작하므로([reservationTimeSlots]) 스크롤을 처음
+ * 위치에 두면 사용자가 가장 자주 고르는 값이 바로 보인다 — 자동 스크롤을 넣지 않는 근거다.
+ */
+@Composable
+private fun ScrollableChipRow(label: String, chips: @Composable () -> Unit) {
+    Column(modifier = Modifier.fillMaxWidth().padding(bottom = 11.dp)) {
+        Text(
+            text = label,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Bold,
+            color = MoyeotaColor.InkPrimary,
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            chips()
+        }
+    }
+}
+
 @Composable
 private fun ConditionRow(label: String, chips: @Composable () -> Unit) {
     Row(
@@ -842,5 +1078,22 @@ private fun DestinationConfirmModalPreview() {
         destinationName = "도착지",
         destinationAddress = "",
         originStopName = "출발지",
+    )
+}
+
+/**
+ * 예약 상태 — 날짜·시각 칩이 열리고, **요금·경로 요약이 사라진 자리에 그 이유가 적혀 있는지**를
+ * 눈으로 확인하는 미리보기다. 경로 추정은 일부러 채워 둔다(`routePreview`): 값이 있어도 예약에서는
+ * 숨겨야 하므로, 비워 두면 「없어서 안 보이는 것」과 구별되지 않는다.
+ */
+@Preview(showBackground = true, widthDp = 393, heightDp = 852)
+@Composable
+private fun DestinationConfirmModalReservationPreview() {
+    DestinationConfirmModal(
+        destinationName = "서면역",
+        destinationAddress = "부산 부산진구 중앙대로",
+        originStopName = "부산대 정문",
+        routePreview = RoutePreviewUi(estimatedMinutes = 18, estimatedFare = 9_600),
+        initiallyScheduled = true,
     )
 }

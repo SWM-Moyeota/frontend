@@ -21,6 +21,7 @@ import com.moyeota.domain.analytics.MatchRequestMethod
 import com.moyeota.domain.analytics.administrativeArea
 import com.moyeota.domain.model.MatchCandidate
 import com.moyeota.domain.model.NewParty
+import com.moyeota.domain.model.NewReservation
 import com.moyeota.domain.model.PartyOpenException
 import com.moyeota.domain.model.Place
 import com.moyeota.domain.model.RealtimeMatchException
@@ -154,29 +155,61 @@ class CreatePartyViewModel(private val repository: RideRepository) : ViewModel()
      */
     fun createParty(origin: Place, destination: Place, conditions: MatchConditions) {
         if (_uiState.value.creating) return // 중복 제출 차단
+        // **이 한 값이 엔드포인트를 가른다**([MatchConditions.departureAt]) — null 이면 실시간 방
+        // (`POST /matching/rooms`), 값이 있으면 예약 방(`POST /matching/reservations`).
+        // 정원 범위·실패 문구도 함께 갈린다(예약은 2~3, 실시간은 1~3).
+        val departureAt = conditions.departureAt
+        val mode = if (departureAt == null) DepartureMode.NOW else DepartureMode.SCHEDULED
+        // 모달이 이미 접어서 보내지만 계약을 여기서 한 번 더 못박는다 — 벗어나면 400
+        // `INVALID_CAPACITY` 이고, 값이 **빠지면** 서버가 primitive 로 풀다 500 을 낸다
+        // (사유 없는 실패 = 일반 문구). [capacityFor] 가 모드별 범위를 아는 단일 창구다.
+        val capacity = capacityFor(mode, conditions.capacity)
         viewModelScope.launch {
             _uiState.update { it.copy(creating = true, errorMessage = null) }
             // Click — 요청이 나가는 순간(서버 응답 전). iOS 와 같이 사용자가 고른 정원 그대로 싣는다.
-            Analytics.track(AnalyticsEvent.PartyCreateClicked(conditions.capacity))
+            Analytics.track(AnalyticsEvent.PartyCreateClicked(capacity))
             try {
-                val party = repository.createParty(
-                    NewParty(
-                        departureLat = origin.latitude,
-                        departureLng = origin.longitude,
-                        destinationLat = destination.latitude,
-                        destinationLng = destination.longitude,
-                        departure = origin.name,
-                        destination = destination.name,
-                        // 서버 상한 3. 16 모달 칩이 1~3 뿐이지만 계약을 여기서 한 번 더 못박는다 —
-                        // 벗어나면 400 `INVALID_CAPACITY` 이고([openFailureMessage]), 값이 **빠지면**
-                        // 서버가 primitive 로 풀다 500 을 낸다(사유 없는 실패 = 일반 문구).
-                        capacity = conditions.capacity.coerceIn(1, MAX_PARTY_CAPACITY),
-                        // 반경은 싣지 않는다 — 서버가 요청에서 빼고 고정값(500m)을 쓴다
-                        // (Backend `a668aee`). 16 의 반경 칩도 함께 내렸다([MatchConditions]).
-                    ),
-                )
+                val party = if (departureAt != null) {
+                    // 예약 방([NewReservation]). 요청 필드가 [NewParty] 와 **출발 시각 하나만**
+                    // 다르지만 모델이 둘인 이유는 정원 하한이다 — 실시간 1, 예약 2(그 KDoc 의 표).
+                    // 돌아오는 것은 같은 [Ride] 이고 경로·요금·소요 시간이 **비어 있다**
+                    // (`Ride` 의 기존 nullable 필드가 그 사실을 이미 표현한다).
+                    repository.createReservation(
+                        NewReservation(
+                            departureLat = origin.latitude,
+                            departureLng = origin.longitude,
+                            destinationLat = destination.latitude,
+                            destinationLng = destination.longitude,
+                            departure = origin.name,
+                            destination = destination.name,
+                            capacity = capacity,
+                            departureAt = departureAt,
+                        ),
+                    )
+                } else {
+                    repository.createParty(
+                        NewParty(
+                            departureLat = origin.latitude,
+                            departureLng = origin.longitude,
+                            destinationLat = destination.latitude,
+                            destinationLng = destination.longitude,
+                            departure = origin.name,
+                            destination = destination.name,
+                            capacity = capacity,
+                            // 반경은 싣지 않는다 — 서버가 요청에서 빼고 고정값(500m)을 쓴다
+                            // (Backend `a668aee`). 16 의 반경 칩도 함께 내렸다([MatchConditions]).
+                        ),
+                    )
+                }
                 _uiState.update { it.copy(creating = false, createdParty = party) }
                 // 핵심 퍼널 2단계(방 만들기 쪽). 지역은 시/구까지만 — 좌표·번지는 싣지 않는다.
+                //
+                // **예약도 `create` 로 센다.** [MatchRequestMethod] 에 `reserve` 를 더하는 일은
+                // domain 변경이고(이 작업에서 다른 사람이 쥔 모듈이다) 퍼널 이름 셋
+                // (`complete_signup`→`request_match`→`complete_match`)이 Mixpanel 보고서에 박혀
+                // 있어, 값을 늘리면 그 보고서가 갈린다. 예약을 따로 세고 싶어지면 그때 도메인에
+                // 값을 더한다 — 지금은 「방을 만들었다」가 참이고, [estimatedFare] 는 예약 방에서
+                // null 이라 **키가 빠진다**(없는 요금을 0 으로 지어내지 않는다).
                 Analytics.track(
                     AnalyticsEvent.MatchRequested(
                         method = MatchRequestMethod.CREATE,
@@ -193,25 +226,41 @@ class CreatePartyViewModel(private val repository: RideRepository) : ViewModel()
                 _uiState.update {
                     it.copy(
                         creating = false,
-                        errorMessage = openFailureMessage(e),
+                        // **같은 예외, 다른 표.** 예약에만 오는 세 코드(403 `NO_SHOW_RESTRICTED` ·
+                        // 409 `PARTY_TIME_CONFLICT` · 400 `INVALID_DEPARTURE_TIME`)가 실시간 표에
+                        // 없어서, 한 함수로 뭉개면 그 셋이 전부 「잠시 후 다시 시도해 주세요」가 된다
+                        // — 세 가지 모두 기다려서 풀리지 않는다([reservationOpenFailureMessage]).
+                        errorMessage = if (departureAt != null) {
+                            reservationOpenFailureMessage(e)
+                        } else {
+                            openFailureMessage(e)
+                        },
                         // 409 는 문구만으로 풀리지 않는다 — 홈 배너가 뜨도록 진행 중 방 조회를 되살린다.
                         needsActivePartyRefresh = it.needsActivePartyRefresh || e.isAlreadyInAnotherParty,
                     )
                 }
                 Analytics.track(AnalyticsEvent.MatchRequestFailed(MatchRequestMethod.CREATE, createFailureReason(e)))
             } catch (e: Exception) {
-                // 데이터 계층이 좁히지 못한 실패(직렬화 등). 사유를 모르므로 일반 문구다.
-                _uiState.update { it.copy(creating = false, errorMessage = OPEN_FAILED_MESSAGE) }
+                // 데이터 계층이 좁히지 못한 실패(직렬화 등). 사유를 모르므로 일반 문구다 —
+                // 「무엇을 만들려다 실패했는지」만 모드에 맞춘다.
+                val general = if (departureAt != null) RESERVATION_OPEN_FAILED_MESSAGE else OPEN_FAILED_MESSAGE
+                _uiState.update { it.copy(creating = false, errorMessage = general) }
                 Analytics.track(AnalyticsEvent.MatchRequestFailed(MatchRequestMethod.CREATE, MatchFailureReason.UNKNOWN))
             }
         }
     }
 
     companion object {
-        // 백엔드 검증 상한(서버 `Capacity` record = 1~3). 넘기면 400 `INVALID_CAPACITY` 가 오고
-        // 화면은 사유별 문구로 안내한다([openFailureMessage]) — 예전에는 모든 실패가 한 문구라
-        // 「에러 바디 없는 500」과 구별되지 않았다. 그래도 coerceIn 은 남긴다: 서버가 막아 주는 것과
-        // 앱이 보내지 않는 것은 다른 보호막이다.
+        /**
+         * 백엔드 검증 상한(서버 `Capacity` record = 1~3). 넘기면 400 `INVALID_CAPACITY` 가 오고
+         * 화면은 사유별 문구로 안내한다([openFailureMessage]) — 예전에는 모든 실패가 한 문구라
+         * 「에러 바디 없는 500」과 구별되지 않았다.
+         *
+         * 접는 일은 [capacityFor] 가 한다 — **하한이 모드에 따라 다르기 때문**이다(실시간 1,
+         * 예약 2). 상한은 둘 다 3 이라 이 상수가 그 함수의 선택지 표와 같은 값을 가리킨다
+         * ([capacityChoices]); 둘이 어긋나면 예약에서 4 가 전송될 수 있으니 한쪽을 고칠 때
+         * 다른 쪽을 함께 본다.
+         */
         const val MAX_PARTY_CAPACITY = 3
 
         fun factory(repository: RideRepository) = viewModelFactory {

@@ -12,6 +12,9 @@ import com.moyeota.domain.model.PartyStatus
 import com.moyeota.domain.model.ProfileImage
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
+import com.moyeota.domain.model.NewReservation
+import com.moyeota.domain.model.ReservationDestination
+import com.moyeota.domain.model.ReservationSearchResult
 import com.moyeota.domain.model.RouteEstimate
 import com.moyeota.domain.model.User
 import com.moyeota.domain.model.UserProfileInfo
@@ -107,6 +110,22 @@ open class FakeRideRepository : RideRepository {
         destinationLat: Double,
         destinationLng: Double,
     ): RouteEstimate = TODO()
+
+    // 예약 방 — 이 지원 클래스가 보는 분석 이벤트는 아직 없다.
+    override suspend fun createReservation(request: NewReservation): Ride = TODO()
+    override suspend fun getReservations(from: String, to: String): List<Ride> = TODO()
+    override suspend fun getReservationsSoon(
+        swLat: Double,
+        swLng: Double,
+        neLat: Double,
+        neLng: Double,
+    ): List<Ride> = TODO()
+    override suspend fun searchReservations(
+        departureLat: Double,
+        departureLng: Double,
+        date: String,
+        destination: ReservationDestination?,
+    ): List<ReservationSearchResult> = TODO()
 
     // 약속 확정·도착·출발 — 이 지원 클래스가 보는 분석 이벤트는 아직 없다. 기록 지점이 생기면
     // leave/finish 처럼 람다로 바꿔 호출을 세면 된다.

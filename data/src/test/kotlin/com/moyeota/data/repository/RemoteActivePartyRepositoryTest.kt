@@ -15,7 +15,10 @@ import com.moyeota.domain.model.ChatRoomMembership
 import com.moyeota.domain.model.ChatRoomStatus
 import com.moyeota.domain.model.MyChatRoom
 import com.moyeota.domain.model.NewParty
+import com.moyeota.domain.model.NewReservation
 import com.moyeota.domain.model.PartyStatus
+import com.moyeota.domain.model.ReservationDestination
+import com.moyeota.domain.model.ReservationSearchResult
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.model.RouteEstimate
@@ -421,6 +424,24 @@ private class FakeRideRepository(
         destinationLat: Double,
         destinationLng: Double,
     ): RouteEstimate = error("쓰이지 않는다")
+
+    // 예약 넷. 이 테스트(「지금 타고 있는 방」 복원)는 예약을 보지 않는다 — 진행 중 방의 단일 출처는
+    // 로컬 기억 + 상세 조회이고, 예약 방도 결국 **같은 상세**로 복원된다(예약 전용 상세가 없다).
+    // 그래서 생성은 끊고, 조회 셋은 빈 목록이 가장 정직한 기본값이다(추천과 같은 판단).
+    override suspend fun createReservation(request: NewReservation): Ride = error("쓰이지 않는다")
+    override suspend fun getReservations(from: String, to: String): List<Ride> = emptyList()
+    override suspend fun getReservationsSoon(
+        swLat: Double,
+        swLng: Double,
+        neLat: Double,
+        neLng: Double,
+    ): List<Ride> = emptyList()
+    override suspend fun searchReservations(
+        departureLat: Double,
+        departureLng: Double,
+        date: String,
+        destination: ReservationDestination?,
+    ): List<ReservationSearchResult> = emptyList()
 }
 
 private class FakeChatRepository(
