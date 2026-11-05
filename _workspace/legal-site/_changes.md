@@ -73,8 +73,10 @@ codingforest 4080134·같은 토큰). 「이 기능이 들어간 업데이트부
 
 `python3 _check.py .` → 실패 0 (privacy id 26·앵커 31·목차 16, account-deletion id 18·앵커 41·목차 13).
 `terms/index.html`·`index.html`·`assets/style.css` 는 `git diff` 로 무변경 확인.
-배포는 2026-11-05 에 시도했으나 이 Mac 의 AWS 자격 증명(`default`·`moyeota` 프로필 모두)이 `InvalidClientTokenId` 로 거부돼
-**아직 하지 않았다.** 자격 증명을 다시 넣은 뒤 README 의 명령으로 배포하고 무효화 id 를 여기에 적는다.
+배포 전 `aws s3 sync s3://moyeota-legal-site/ <임시폴더>/ --delete` + `diff -rq` 로 배포본과 저장소를 비교해 차이가 `privacy/index.html`·`account-deletion/index.html` 두 파일뿐임을 확인했다.
+2026-11-05 00:43 UTC(09:43 KST) 에 README 의 명령으로 배포했다(`--profile moyeota`). CloudFront 무효화 id `I817ZWVGT77W76A8FSYQ3UDLO0`, 완료 확인.
+배포 뒤 `curl` 로 `/privacy/` 에 「제9조(앱 이용 기록의 수집과 오류 진단)」과 「2026년 11월 5일」이, `/account-deletion/` 에 「Mixpanel에 삭제 요청」이 있는 것을 확인했다.
+(첫 시도는 이 Mac 의 AWS 키가 IAM 에서 삭제돼 `InvalidClientTokenId` 로 실패했고, jiwoo 사용자에 새 키를 만들어 `moyeota` 프로필에 넣은 뒤 다시 했다.)
 
 ## 2026-11-03 — iOS 앱 제공 (당일 시행)
 
