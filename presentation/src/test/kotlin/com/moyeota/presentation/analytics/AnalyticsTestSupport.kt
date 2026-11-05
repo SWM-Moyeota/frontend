@@ -107,6 +107,12 @@ open class FakeRideRepository : RideRepository {
         destinationLat: Double,
         destinationLng: Double,
     ): RouteEstimate = TODO()
+
+    // 약속 확정·도착·출발 — 이 지원 클래스가 보는 분석 이벤트는 아직 없다. 기록 지점이 생기면
+    // leave/finish 처럼 람다로 바꿔 호출을 세면 된다.
+    override suspend fun confirmMeeting(partyId: Long, departureAt: String) = TODO()
+    override suspend fun arriveAtDeparture(partyId: Long, latitude: Double, longitude: Double) = TODO()
+    override suspend fun departParty(partyId: Long) = TODO()
 }
 
 class FakeAuthRepository : AuthRepository {

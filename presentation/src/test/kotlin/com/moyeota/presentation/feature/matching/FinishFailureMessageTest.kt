@@ -89,6 +89,22 @@ class FinishFailureMessageTest {
         assertEquals(general, finishFailureMessage(failure(code = null, httpStatus = null)))
     }
 
+    /**
+     * 409 — **확정된 방이다.** 그 방을 끝내는 길은 「출발」 하나이고(노쇼가 거기서 기록된다),
+     * 화면이 확정된 방에서 이 버튼을 **숨기므로**([canFinishParty]) 평소에는 오지 않는다.
+     *
+     * 그래도 분기를 두는 이유는 `NOT_PARTY_HOST` 와 같다: 확정 사실은 SSE 로 오고 그 프레임을
+     * 놓치면 내 스냅샷이 낡은 채로 버튼을 보여 준다. 그 틈에 눌린 것을 받아 **다음에 눌러야 할
+     * 버튼 이름**을 말해 준다 — 「완료할 수 없어요」만 적으면 그 방을 끝낼 길이 없어 보인다.
+     */
+    @Test
+    fun `확정된 방이면 눌러야 할 버튼 이름을 말한다`() {
+        val message = finishFailureMessage(failure(PartyFinishException.USE_DEPART_FOR_CONFIRMED_PARTY))
+
+        assertEquals("약속 시간이 정해진 방이에요. 「출발」을 눌러 끝내 주세요", message)
+        assertTrue("화면에 있는 버튼 이름이어야 한다", message.contains("출발"))
+    }
+
     @Test
     fun `실패마다 다른 말을 한다 - 같은 문구가 두 갈래에 쓰이면 분기한 의미가 없다`() {
         val messages = listOf(
@@ -96,6 +112,7 @@ class FinishFailureMessageTest {
             failure(PartyFinishException.NOT_PARTY_MEMBER, httpStatus = 403),
             failure(PartyFinishException.PARTY_NOT_COMPLETED),
             failure(PartyFinishException.PARTY_NOT_FOUND, httpStatus = 404),
+            failure(PartyFinishException.USE_DEPART_FOR_CONFIRMED_PARTY),
             failure(code = null, httpStatus = null),
         ).map(::finishFailureMessage)
 
@@ -114,6 +131,7 @@ class FinishFailureMessageTest {
             failure(PartyFinishException.NOT_PARTY_MEMBER, httpStatus = 403),
             failure(PartyFinishException.PARTY_NOT_COMPLETED),
             failure(PartyFinishException.PARTY_NOT_FOUND, httpStatus = 404),
+            failure(PartyFinishException.USE_DEPART_FOR_CONFIRMED_PARTY),
             failure(code = null, httpStatus = null),
         ).map(::finishFailureMessage)
 

@@ -24,7 +24,11 @@ import org.junit.Test
  */
 class WaitingStageTest {
 
-    private fun ride(status: RideStatus, members: List<User> = emptyList()) = Ride(
+    private fun ride(
+        status: RideStatus,
+        members: List<User> = emptyList(),
+        isConfirmed: Boolean = false,
+    ) = Ride(
         id = "1",
         origin = "부산대",
         destination = "서면",
@@ -34,6 +38,7 @@ class WaitingStageTest {
         farePerPerson = 0,
         totalFare = 0,
         status = status,
+        isConfirmed = isConfirmed,
     )
 
     /** 방장인 나 — 권한 분기를 보려면 목록에 내가 방장으로 있어야 한다. */
@@ -57,8 +62,36 @@ class WaitingStageTest {
      */
     @Test
     fun `대기 단계에서는 모집 중이든 정원이 찼든 나갈 수 있다`() {
-        assertTrue(canLeaveParty(RideStatus.RECRUITING))
-        assertTrue(canLeaveParty(RideStatus.MATCHED))
+        assertTrue(canLeaveParty(ride(RideStatus.RECRUITING)))
+        assertTrue(canLeaveParty(ride(RideStatus.MATCHED)))
+    }
+
+    /**
+     * **약속이 확정되면 아무도 나갈 수 없다**(2026-11-06). 서버가 확정과 함께 이탈을 막는데
+     * status 는 COMPLETED 로 남아 [isWaitingForMembers] 를 통과하므로, 확정 여부를 보지 않으면
+     * 「방 나가기」가 **서버가 거절하는 버튼**으로 남는다.
+     *
+     * 이 판정이 틀렸을 때의 대가가 유독 크다: 나갈 수 있다고 믿은 사람이 약속 장소에 가지 않으면
+     * 「출발」이 그 사람을 **노쇼로 기록**한다(약속 시간부터 노쇼 횟수 × 24시간 제한). 화면의
+     * 거짓말이 실제 제재로 이어지는 자리라 값으로 못 박는다.
+     */
+    @Test
+    fun `확정된 방에서는 나갈 수 없다`() {
+        assertFalse(canLeaveParty(ride(RideStatus.MATCHED, isConfirmed = true)))
+        // 서버는 확정과 함께 ACTIVE→COMPLETED 로 옮기지만, SSE `confirmed` 는 status 를 건드리지
+        // 않으므로 확정된 RECRUITING 을 그리는 한 프레임이 있다 — 거기서도 막혀야 한다.
+        assertFalse(canLeaveParty(ride(RideStatus.RECRUITING, isConfirmed = true)))
+    }
+
+    /**
+     * **확정된 방에서는 「합승 완료」가 사라진다.** 그 방을 끝내는 길은 「출발」뿐이고(서버가 409
+     * `USE_DEPART_FOR_CONFIRMED_PARTY` 로 거절한다), 완료로 닫히면 **노쇼 기록 없이** 방이 끝나
+     * 약속을 어긴 사람이 제재를 면한다 — 성공하는 편이 오히려 더 나쁜 버튼이다.
+     */
+    @Test
+    fun `확정된 방에서는 합승 완료가 사라진다`() {
+        assertTrue(canFinishParty(ride(RideStatus.MATCHED, listOf(hostMe))))
+        assertFalse(canFinishParty(ride(RideStatus.MATCHED, listOf(hostMe), isConfirmed = true)))
     }
 
     @Test
@@ -81,7 +114,7 @@ class WaitingStageTest {
     @Test
     fun `닫힌 방에서는 나가기도 합승 완료도 안 된다`() {
         for (status in listOf(RideStatus.COMPLETED, RideStatus.CANCELED)) {
-            assertFalse("$status 에서 나가기가 열려 있다", canLeaveParty(status))
+            assertFalse("$status 에서 나가기가 열려 있다", canLeaveParty(ride(status)))
             assertFalse("$status 가 완료 단계로 읽힌다", isFinishStage(status))
             assertFalse(
                 "$status 에서 「합승 완료」가 보인다",
@@ -102,7 +135,7 @@ class WaitingStageTest {
         RideStatus.entries
             .filter { it != RideStatus.RECRUITING && it != RideStatus.MATCHED }
             .forEach { status ->
-                assertFalse("$status 에서 나가기가 열려 있다", canLeaveParty(status))
+                assertFalse("$status 에서 나가기가 열려 있다", canLeaveParty(ride(status)))
             }
     }
 }
