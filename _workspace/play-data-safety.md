@@ -24,6 +24,9 @@
    > **2026-11-01 무효.** Firebase Crashlytics 를 도입했다(`gradle/libs.versions.toml` ·
    > `app/build.gradle.kts` · `MoyeotaApplication.configureCrashReporting`). 아래 표 1 의
    > 「앱 정보 및 성능」 행을 다시 보라. 행태 분석(`firebase-analytics`)은 **여전히 없다.**
+   > **2026-11-05 추가.** 행동 이벤트 분석 SDK **Mixpanel 을 도입했다**(`mixpanel-android 8.12.0`,
+   > `app/src/main/kotlin/com/moyeota/app/MixpanelAnalyticsReporter.kt`, 계약은 `docs/ANALYTICS.md`).
+   > 「애널리틱스 SDK 는 없다」는 더 이상 참이 아니다 — 아래 「§4-3 Mixpanel」 대로 양식을 고쳐야 한다.
 
 2. **성별은 「선택」이 아니라 「필수」다.** 작업 지시서에는 "통계 목적의 선택 항목"이라고 적혀 있지만
    코드는 그렇지 않다 — `SignupDraft.toNewUser()` 가 `val genderValue = gender ?: return null`
@@ -155,6 +158,38 @@ kotlinx.serialization 파싱 실패 메시지가 응답 본문 조각을 담기 
 | 범주(콘솔 표기) | 실제 항목 | 수집 | 공유 | 필수·선택 | 목적 | 근거 |
 |---|---|---|---|---|---|---|
 | **메시지 — 기타 인앱 메시지** | 신고 사유(고른 값)와 **직접 적은 설명(최대 500자)**, 신고 대상 메시지 | **예** | 아니오 | 선택 | 사기 방지·보안 및 규정 준수 | `data/src/main/kotlin/com/moyeota/data/remote/dto/ChatReportDtos.kt` |
+
+### §4-3 Mixpanel 행동 이벤트 (2026-11-05 추가)
+
+Mixpanel 도입으로 **새 범주가 생기지는 않는다** — 아래 범주는 이미 전부 「수집함」이다. 바뀌는 것은
+**목적에 「분석(Analytics)」이 더해지는 것**과, 그 데이터가 모여타 서버가 아니라 **Mixpanel, Inc.(미국)** 로 간다는 점이다.
+콘솔에서 각 범주를 열어 목적에 「분석」을 추가로 체크한다.
+
+| 범주(콘솔 표기) | Mixpanel 로 가는 실제 항목 | 수집 | 필수·선택 | 더할 목적 | 근거 |
+|---|---|---|---|---|---|
+| **앱 활동 — 앱 상호작용** | 화면 이름(`view_screen`), 가입·로그인·방 만들기·합류·매칭 완료·취소·동승 완료·탈퇴 이벤트와 그 값(정원·인원수·예상 요금·대기 시간·실패 사유) | 예(기존) | **필수** | **분석** | `domain/src/main/kotlin/com/moyeota/domain/analytics/Analytics.kt` (sealed class 가 전부) |
+| **기기 또는 기타 ID** | Mixpanel 기기 식별자(SDK 가 `UUID.randomUUID()` 로 만든 무작위 값. `ANDROID_ID`·광고 ID 아님) | 예(기존) | **필수** | **분석** | SDK `PersistentIdentity` (바이트코드 확인, `_workspace/legal-site/_changes.md` 11-05) |
+| **개인 정보 — 사용자 ID** | 서버 공개 식별자(`publicId`) — `identify` 로만 전달. 로그인 아이디·닉네임은 보내지 않는다 | 예(기존) | **필수** | **분석** | `MixpanelAnalyticsReporter.kt` 의 `mixpanel.identify(state.userUuid)` |
+| **개인 정보 — 기타 정보** | 성별, 10년 단위 연령대(생년월일 원문은 보내지 않는다) — 가입 완료 때 이벤트와 People 프로필에 | 예(기존) | **필수** | **분석** | 같은 파일 `people.set(gender, age_band)` · `Analytics.kt` 의 `ageBand` |
+| **위치 — 대략적인 위치** | 출발지·도착지의 시/도+시/군/구(`administrativeArea`), 그리고 접속 IP 로 Mixpanel 이 추정한 국가·도시 | 예(기존) | **필수** ← 기존 답은 「선택」 | **분석** | `Analytics.kt` 의 `administrativeArea` · SDK `MPConfig.UseIpAddressForGeolocation` 기본 `true` |
+| **앱 정보 및 성능 — 진단** | SDK 가 자동으로 붙이는 앱 버전·OS 버전·기기 제조사/브랜드/모델·화면 크기·통신사 이름·와이파이 여부·블루투스 상태·NFC/전화 기능 유무 | 예(기존, Crashlytics) | **필수** | **분석** | SDK `getDefaultEventProperties` (바이트코드 확인) · 2026-11-05 에뮬레이터 실측 이벤트 |
+
+**보내지 않는 것(코드·테스트로 고정).** 실명·닉네임·휴대폰번호·이메일·로그인 아이디·비밀번호·토큰, 생년월일 원문,
+좌표·번지·장소명, 자주 가는 곳, 채팅 본문, 방 id, 동승자 식별자. 「정확한 위치」는 Mixpanel 로 가지 않는다 — 목적에 분석을 더하지 **않는다**.
+
+**끄는 설정이 없다** — 앱에 opt-out UI 가 없고(`optOutTracking` 호출 0건) 앱 시작부터 `view_screen` 이 나간다. 그래서 전부 「필수」다.
+토큰이 빈 빌드(시크릿 없는 CI·fork)에서만 꺼진다.
+
+**디버그 빌드도 보낸다**(Crashlytics 와 다르다). `build=debug` 슈퍼 프로퍼티로 구분만 한다.
+
+오너가 정해야 하는 것 두 가지:
+
+1. **「공유」 칸.** 결론 3 의 논리(서비스 제공업체로의 전송은 Play 의 「공유」가 아니다)를 따르면 Mixpanel 도 「아니오」다.
+   그런데 §4-1 은 같은 성격인 Crashlytics 를 「예(Google)」로 적었다. **둘을 같은 기준으로 맞춰야 한다** — 어느 쪽으로 맞출지는 이 문서가 정하지 않는다.
+2. **「대략적인 위치」의 필수·선택.** 기존 답 「선택」은 위치 권한 기준이다. Mixpanel 의 IP 기반 국가·도시와 시/군/구 지역은 권한과 무관하게 나가므로
+   이 범주를 「필수」로 바꾸는 것이 보수적인 답이다.
+
+처리방침은 2026-11-05 개정으로 이미 맞춰져 있고 배포됐다(`_workspace/legal-site/_changes.md`). 양식의 답이 처리방침 제1조·제7조·제9조와 어긋나지 않는지 제출 전에 한 번 대조한다.
 
 ### 보안 관행 (Security practices) — 양식 뒷부분
 
