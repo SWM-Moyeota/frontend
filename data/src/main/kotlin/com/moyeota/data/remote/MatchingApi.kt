@@ -1,5 +1,7 @@
 package com.moyeota.data.remote
 
+import com.moyeota.data.remote.dto.ArriveRequestDto
+import com.moyeota.data.remote.dto.ConfirmMeetingRequestDto
 import com.moyeota.data.remote.dto.MatchCandidateResponse
 import com.moyeota.data.remote.dto.OpenPartyRequestDto
 import com.moyeota.data.remote.dto.OpenPartyResponse
@@ -112,6 +114,57 @@ interface MatchingApi {
      */
     @POST("api/v1/matching/rooms/{partyId}/finish")
     suspend fun finishParty(@Path("partyId") partyId: Long)
+
+    /**
+     * 약속 시간 확정. 204. `PartyController.confirm`.
+     *
+     * **방을 끝내는 정식 경로의 첫 단계다.** 서버 Swagger 가 [finishParty] 를 「구버전 앱용 이전 경로」로
+     * 적어 두었고, 확정된 방에 그걸 부르면 409 `USE_DEPART_FOR_CONFIRMED_PARTY` 로 거절한다 —
+     * 확정 → `arrive` → `depart` 가 지금의 정식 경로다.
+     *
+     * 방장만, **실시간 방만**, 멤버 2명 이상, 모집 중(ACTIVE 또는 COMPLETED), 한 번만.
+     * 본문은 `{"departureAt": "<ISO-8601 instant>"}` 하나다 — 약속 장소는 **늘 방의 출발지**라
+     * 서버가 받지 않는다. 시간 형식의 함정은 [ConfirmMeetingRequestDto] 에 적어 두었다.
+     *
+     * 성공하면 모집이 끝나고(ACTIVE→COMPLETED) **아무도 나갈 수 없다**(409
+     * `CANNOT_LEAVE_CONFIRMED_PARTY`). 그 사실은 SSE `confirmed` 로 모든 멤버에게 전해진다.
+     */
+    @POST("api/v1/matching/rooms/{partyId}/confirm")
+    suspend fun confirmMeeting(
+        @Path("partyId") partyId: Long,
+        @Body request: ConfirmMeetingRequestDto,
+    )
+
+    /**
+     * 출발지 도착. 204. `PartyController.arrive`.
+     *
+     * 본문은 **지금 내 위치**(`latitude`/`longitude`)다 — 서버가 방 출발지와의 거리를 PostGIS
+     * `ST_DWithin` 으로 재서 100m 안인지 본다([ArriveRequestDto] 에 왜 방 좌표를 보내면 안 되는지 적었다).
+     *
+     * 열리는 시점은 **약속 시간 정각부터**다(「10분 전부터」가 아니다 — 서버 `Party.arrive` 의
+     * `now < departureAt` 검사는 409 `MEETING_NOT_STARTED`). **멱등이다**: 이미 도착한 사람이 다시
+     * 불러도 204 이고 시각·version·SSE 가 모두 그대로다.
+     */
+    @POST("api/v1/matching/rooms/{partyId}/arrive")
+    suspend fun arriveAtDeparture(
+        @Path("partyId") partyId: Long,
+        @Body request: ArriveRequestDto,
+    )
+
+    /**
+     * 출발 — 방을 끝낸다. 204, **요청 본문 없다**. `PartyController.depart`.
+     *
+     * **방장이 아니어도 된다**([finishParty] 와 다른 점이다) — 도착한 멤버면 누구나. 조건은 약속 시간
+     * **뒤**일 것, 멤버 2명 이상일 것, 부른 사람이 도착해 있을 것.
+     *
+     * ⚠️ 그 순간 **도착하지 않은 멤버는 전부 노쇼로 기록된다**(노쇼 횟수 × 24시간 이용 제한).
+     * 앱에는 되돌릴 길이 없다 — 본문이 없어 "실수로 호출"을 막아 주는 것도 없으므로, 화면 쪽에서
+     * 확인을 받고 부를 것.
+     *
+     * 성공 뒤 서버가 `closed` 를 보내고 **그 방의 SSE 연결을 끊는다**.
+     */
+    @POST("api/v1/matching/rooms/{partyId}/depart")
+    suspend fun departParty(@Path("partyId") partyId: Long)
 
     /**
      * 방을 만들기 전 출발·도착 좌표만으로 예상 요금·소요시간·경로를 미리 본다.

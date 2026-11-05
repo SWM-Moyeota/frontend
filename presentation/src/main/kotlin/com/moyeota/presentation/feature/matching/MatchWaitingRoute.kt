@@ -12,6 +12,9 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.moyeota.domain.analytics.Analytics
 import com.moyeota.domain.analytics.AnalyticsEvent
+import com.moyeota.domain.model.PartyArriveException
+import com.moyeota.domain.model.PartyConfirmException
+import com.moyeota.domain.model.PartyDepartException
 import com.moyeota.domain.model.PartyEvent
 import com.moyeota.domain.model.PartyFinishException
 import com.moyeota.domain.model.PartyLeaveException
@@ -25,6 +28,7 @@ import com.moyeota.presentation.core.BackStateScaffold
 import com.moyeota.presentation.core.ErrorBox
 import com.moyeota.presentation.core.LoadingBox
 import com.moyeota.presentation.core.location.rememberMyLocationState
+import java.time.Instant
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -63,6 +67,23 @@ import kotlinx.coroutines.launch
  */
 private const val PARTY_FALLBACK_POLL_INTERVAL_MS = 6_000L
 
+/**
+ * 약속 단계 판정에 쓰는 **시계 틱** 간격 — 10초.
+ *
+ * 이 틱이 필요한 이유: 약속 흐름의 두 전이는 **사용자가 아무것도 하지 않아도** 일어난다.
+ * 「약속 10분 전」이 되면 도착 버튼이 떠야 하고, 약속 시간이 지나면 출발 버튼이 떠야 한다
+ * ([meetingStage]). 재구성을 일으키는 다른 신호가 없으면 화면은 그 순간을 그냥 지나친다 —
+ * SSE 는 약속 시간이 됐다고 알려 주지 않는다(그건 서버에서 아무 일도 일어나지 않은 시점이다).
+ *
+ * 10초인 이유는 **버튼이 늦게 떠도 손해가 없고, 자주 떠도 이득이 없기** 때문이다. 경계는 분 단위
+ * (10분 전·정각)이고 서버가 같은 조건을 다시 재므로, 최악이 「버튼이 10초 늦게 뜬다」다. 반대로 1초
+ * 틱으로 두면 지도·시트가 올라간 이 화면이 분당 60번 재구성된다 — 폴백 폴링(6초)보다 잦은 갱신을
+ * 서버도 아닌 시계 때문에 걸 이유가 없다.
+ *
+ * 화면이 보이는 동안에만 돈다([MatchWaitingViewModel.visible]) — 가려진 화면의 시계는 쓸 데가 없다.
+ */
+private const val MEETING_CLOCK_TICK_MS = 10_000L
+
 class MatchWaitingViewModel(
     private val repository: RideRepository,
     private val partyId: Long,
@@ -77,7 +98,16 @@ class MatchWaitingViewModel(
     }
 
     /**
-     * 액션 결과. 「그만 찾기」(left)와 1차 배포 모드의 「합승 완료」(finished) — 둘 다 성공하면 방을 떠난다.
+     * 액션 결과.
+     *
+     * | 값 | 액션 | 성공하면 |
+     * |---|---|---|
+     * | [left] | 「그만 찾기」·「방 나가기」 | 방을 떠난다 → 홈 |
+     * | [finished] | 「합승 완료」(확정 **전** 방 전용) | 방이 닫힌다 → 홈 |
+     * | [departed] | 「출발」(확정된 방) | 방이 **모두에게** 닫힌다 → 홈 |
+     *
+     * 확정([confirmMeeting])과 도착([arriveAtDeparture])은 **화면을 떠나지 않는다** — 같은 방에
+     * 머문 채 단계만 바뀌므로 플래그를 두지 않고, 성공 시 들고 있는 방을 그 자리에서 고친다.
      * 준비/매칭 시작은 백엔드에서 삭제됐다.
      */
     data class ActionState(
@@ -85,6 +115,7 @@ class MatchWaitingViewModel(
         val errorMessage: String? = null,
         val left: Boolean = false,
         val finished: Boolean = false,
+        val departed: Boolean = false,
     )
 
     private val _uiState = MutableStateFlow<UiState>(UiState.Loading)
@@ -123,6 +154,20 @@ class MatchWaitingViewModel(
      */
     private val _membershipLost = MutableStateFlow(false)
     val membershipLost: StateFlow<Boolean> = _membershipLost.asStateFlow()
+
+    /**
+     * 화면이 약속 단계를 판정할 때 쓰는 **지금 시각**(ms). [MEETING_CLOCK_TICK_MS] 마다,
+     * **화면이 보이는 동안에만** 올라간다([observeMeetingClock]).
+     *
+     * 시계를 ViewModel 에 두는 이유: ① 가시성 스위치([visible])가 이미 여기 있어 가려진 화면의 틱을
+     * 공짜로 끊을 수 있다 ② 테스트가 [clock] 을 주입해 시각을 지배할 수 있다 ③ 화면은 받은 값을
+     * 쓸 뿐이라 Compose 안에서 `Instant.now()` 를 부르는 비멱등 재구성이 생기지 않는다.
+     *
+     * 판정 함수들은 이 값을 **인자로** 받는다 — 어느 판정도 제 안에서 시계를 읽지 않는다
+     * (그러면 경계를 테스트로 고정할 수 없다 — `MeetingFlow.kt` KDoc).
+     */
+    private val _nowMillis = MutableStateFlow(clock())
+    val nowMillis: StateFlow<Long> = _nowMillis.asStateFlow()
 
     /**
      * SSE 가 살아 있는가 — [PartyEvent.Snapshot] 을 받으면 true, [PartyEvent.Disconnected] 와
@@ -227,6 +272,27 @@ class MatchWaitingViewModel(
         refresh()
         observeEvents()
         observeFallbackPolling()
+        observeMeetingClock()
+    }
+
+    /**
+     * 약속 단계 판정용 시계를 **화면이 보이는 동안에만** 흘린다 — 근거는 [MEETING_CLOCK_TICK_MS].
+     *
+     * `collectLatest` 로 묶는 모양은 [observeFallbackPolling] 과 같다: 가려지는 순간 진행 중인
+     * `delay` 까지 함께 취소되고, 다시 보이면 **곧바로 한 번 찍고** 주기를 새로 시작한다. 복귀
+     * 즉시 찍는 것이 중요하다 — 가려진 사이에 약속 10분 전이 지났을 수 있고, 그때 다음 틱을 기다리면
+     * 돌아온 화면이 10초 동안 낡은 단계를 보여 준다.
+     */
+    private fun observeMeetingClock() {
+        viewModelScope.launch {
+            visible.collectLatest { shown ->
+                if (!shown) return@collectLatest
+                while (isActive) {
+                    _nowMillis.value = clock()
+                    delay(MEETING_CLOCK_TICK_MS)
+                }
+            }
+        }
     }
 
     /**
@@ -341,6 +407,9 @@ class MatchWaitingViewModel(
      *
      * 상세 1회 조회가 붙는 경우는 둘이다 — **누가 나갔는지 모를 때**(publicId null)와, 서버가 지목한
      * **방장이 내 목록에 없을 때**([RideDelta.needsDetail] — 서버 계약이 그렇게 하라고 적어 두었다).
+     * | [PartyEvent.Confirmed] | 약속 확정 반영 ([Ride.withMeetingConfirmed]) — **status 는 건드리지 않는다** |
+     * | [PartyEvent.MemberArrived] | 그 멤버의 도착 표시 ([Ride.withMemberArrived]) |
+     * | [PartyEvent.RecruitingClosed] | 상세를 1회 읽는다 — 프레임이 status 를 **문자열**로만 싣는다 |
      * | [PartyEvent.Closed] | 닫힘 신호만 세운다 → Route 가 홈으로 |
      * | [PartyEvent.Disconnected] | 폴백 폴링 켬. 상태는 **그대로 둔다** — 곧 올 스냅샷이 보정한다 |
      */
@@ -377,6 +446,41 @@ class MatchWaitingViewModel(
                 FrameVerdict.Apply -> {
                     heldVersion = event.version ?: heldVersion
                     applyMemberLeft(event)
+                }
+            }
+            // 약속이 확정됐다. **status 를 건드리지 않는다** — 프레임의 status 는 서버 enum 이름
+            // (문자열)이라 [RideStatus] 로 옮기려면 `PartyMappers` 의 매핑을 화면 쪽에 베껴야 하고,
+            // 그러면 서버가 값을 늘릴 때 두 곳이 어긋난다. 확정 사실만 싣고 status 는 다음 스냅샷·
+            // 폴백 상세가 맞춘다 — 화면이 이 단계에서 보는 값은 `isConfirmed` 라([meetingStage])
+            // 그 지연이 사용자에게 보이지 않는다.
+            is PartyEvent.Confirmed -> when (deltaVerdict(heldVersion, event.version)) {
+                FrameVerdict.Drop -> Unit
+                FrameVerdict.Resync -> readDetail()
+                FrameVerdict.Apply -> {
+                    heldVersion = event.version ?: heldVersion
+                    applyDelta { it.withMeetingConfirmed(event.departureAt) }
+                }
+            }
+            // 누가 출발지에 도착했다. 내 도착도 같은 길로 올 수 있지만, 그걸 기다리지 않는다 —
+            // 액션 성공 시 [arriveAtDeparture] 가 내 줄을 그 자리에서 고친다(SSE 는 at-most-once).
+            is PartyEvent.MemberArrived -> when (deltaVerdict(heldVersion, event.version)) {
+                FrameVerdict.Drop -> Unit
+                FrameVerdict.Resync -> readDetail()
+                FrameVerdict.Apply -> {
+                    heldVersion = event.version ?: heldVersion
+                    applyDelta { it.withMemberArrived(event.publicId) }
+                }
+            }
+            // 모집이 끝났다. **이 프레임만으로는 반영할 수 없다** — 서버가 싣는 status 가 문자열이라
+            // 위 [PartyEvent.Confirmed] 와 같은 이유로 옮길 수 없고, 그렇다고 버리면 모집을 끝낸
+            // 사유가 합류가 아닐 때(약속 확정이 ACTIVE→COMPLETED 로 닫는다) 내 status 가 낡은 채
+            // 남는다. 그래서 상세를 1회 읽는다 — 이 신호는 방 하나에 한 번뿐이라 비용이 1건이다.
+            is PartyEvent.RecruitingClosed -> when (deltaVerdict(heldVersion, event.version)) {
+                FrameVerdict.Drop -> Unit
+                FrameVerdict.Resync -> readDetail()
+                FrameVerdict.Apply -> {
+                    heldVersion = event.version ?: heldVersion
+                    readDetail()
                 }
             }
             PartyEvent.Closed -> {
@@ -594,6 +698,91 @@ class MatchWaitingViewModel(
         repository.finishParty(partyId)
         _actionState.update { it.copy(finished = true) }
         Analytics.track(AnalyticsEvent.PartyFinished(memberCount = memberCount))
+    }
+
+    /**
+     * 「약속 시간 정하기」 — 프리셋 하나(지금부터 [minutes] 분 뒤)를 ISO-8601 로 보낸다.
+     *
+     * ### 왜 분(minutes)만 받나
+     * 시각을 만드는 자리를 **하나로** 둔다([meetingPresetIso]). 화면이 시각을 만들어 넘기면 「화면이
+     * 본 지금」과 「서버가 받는 지금」 사이에 사용자가 다이얼로그를 들여다본 시간이 끼어들고, 그만큼
+     * 1시간 한도에 가까워진다. 여기서 누르는 순간의 [clock] 으로 만들면 그 틈이 사라진다.
+     *
+     * ### 성공하면 그 자리에서 고친다
+     * 서버가 204 를 주면 **확정은 사실**이다. SSE `confirmed` 가 보통 곧 오지만 그 스트림은
+     * at-most-once 이고 망에 따라 아예 붙지 않으므로, 기다리지 않고 들고 있는 방을 고친다
+     * ([Ride.withMeetingConfirmed]). 그러면 같은 프레임에 「약속 시간 정하기」가 사라지고 약속 시각이
+     * 뜬다 — 그리고 **나가기가 함께 막힌다**([canLeaveParty]): 서버가 확정된 방의 이탈을 막으므로
+     * 화면도 같은 순간에 막아야 거짓 버튼이 남지 않는다.
+     *
+     * 상세를 다시 읽지 않는다 — 내가 보낸 값이 그대로 확정된 것이라 서버에 물어 더 알아낼 것이 없다.
+     */
+    fun confirmMeeting(minutes: Int) = runAction(
+        failureMessage = CONFIRM_FAILED_MESSAGE,
+        messageOf = { (it as? PartyConfirmException)?.let(::confirmFailureMessage) },
+    ) {
+        val departureAt = meetingPresetIso(Instant.ofEpochMilli(clock()), minutes)
+        repository.confirmMeeting(partyId, departureAt)
+        heldRide()?.let { publish(it.withMeetingConfirmed(departureAt).ride) }
+    }
+
+    /**
+     * 「출발지 도착했어요」 — 기기의 **현재 좌표**를 보낸다.
+     *
+     * ### 거리는 서버가 잰다 ★
+     * 앱은 출발지와의 거리를 재지 않고 좌표만 보낸다. 서버가 PostGIS 로 100m 를 재고 400
+     * `TOO_FAR_FROM_DEPARTURE` 로 답한다([arriveFailureMessage] 가 그 사유를 그대로 보여 준다).
+     * 앱이 같은 거리를 다시 재면 **서버는 받아 주는데 앱이 막는** 경우가 생긴다 — 근거는
+     * [canArriveAtDeparture] KDoc.
+     *
+     * ### 멱등이다
+     * 이미 도착한 사람이 또 눌러도 서버는 204 로 받는다(도착 시각을 유지하고 version·SSE 를 올리지
+     * 않는다). 그래서 204 가 유실돼 다시 누르는 경로가 실패로 끝나지 않는다 — 나가기의 403 되돌림
+     * ([PartyLeaveException] KDoc)과 같은 성질을 서버가 제공하는 셈이다.
+     *
+     * 성공하면 내 줄을 그 자리에서 **도착으로 고친다**. `member-arrived` 를 기다리지 않는 이유는
+     * 확정과 같다(at-most-once · 망에 따라 안 붙는다). 고치지 않으면 버튼을 누른 사람이 아무 변화도
+     * 못 보고 같은 버튼을 다시 누른다.
+     */
+    fun arriveAtDeparture(latitude: Double, longitude: Double) = runAction(
+        failureMessage = ARRIVE_FAILED_MESSAGE,
+        messageOf = { (it as? PartyArriveException)?.let(::arriveFailureMessage) },
+    ) {
+        repository.arriveAtDeparture(partyId, latitude = latitude, longitude = longitude)
+        val held = heldRide()
+        val myPublicId = held?.members?.firstOrNull { it.isMe }?.id
+        // 내가 목록에 없거나 식별자가 없으면 고칠 줄이 없다 — 서버는 받았으니 다음 스냅샷·폴백이
+        // 맞춘다. 없는 줄을 만들어 끼우지는 않는다(목록의 유일한 근거는 서버다).
+        if (held != null && !myPublicId.isNullOrBlank()) {
+            // 내 줄은 목록에 있는 것이 확인됐으니 needsDetail 은 늘 false 다 — 상세를 또 읽지 않는다.
+            publish(held.withMemberArrived(myPublicId).ride)
+        }
+    }
+
+    /**
+     * 「출발」 — 방을 닫고, **그 순간 도착하지 않은 멤버를 노쇼로 기록한다.**
+     *
+     * 「합승 완료」([finishParty])와 **다른 점이 둘**이다.
+     *
+     * | | 합승 완료 | 출발 |
+     * |---|---|---|
+     * | 누를 수 있는 사람 | **방장만**(403 `NOT_PARTY_HOST`) | **도착한 멤버 누구나**(409 `NOT_ARRIVED`) |
+     * | 남기는 것 | 없음 | **노쇼 기록** — 약속 시간부터 (노쇼 횟수 × 24시간) 동안 방 생성·참여 제한 |
+     * | 쓰이는 방 | 확정 **전** | 확정된 방(확정 방에 완료를 누르면 409 `USE_DEPART_FOR_CONFIRMED_PARTY`) |
+     *
+     * 방장 조건을 베껴 오지 않은 것이 중요하다 — 서버가 일부러 열어 둔 것이고, 막으면 **방장이 늦는
+     * 방이 영원히 출발하지 못한다**.
+     *
+     * 제재를 만드는 행동이라 화면이 **누르기 전에** 숫자로 말해 준다([departConfirmMessage]).
+     * 여기서는 그 뒤처리만 한다: 서버가 방을 닫고 구독을 끊으므로 [ActionState.departed] 로 홈에 보낸다
+     * (SSE `closed` 가 오면 [_partyClosed] 로도 같은 길이다 — 둘 중 먼저 온 쪽이 이긴다).
+     */
+    fun departParty() = runAction(
+        failureMessage = DEPART_FAILED_MESSAGE,
+        messageOf = { (it as? PartyDepartException)?.let(::departFailureMessage) },
+    ) {
+        repository.departParty(partyId)
+        _actionState.update { it.copy(departed = true) }
     }
 
     private fun heldRide(): Ride? = (_uiState.value as? UiState.Success)?.ride
@@ -930,6 +1119,53 @@ internal fun Ride.withHostSuccession(hostPublicId: String?): RideDelta {
 internal data class RideDelta(val ride: Ride, val needsDetail: Boolean = false)
 
 /**
+ * [PartyEvent.Confirmed] 적용 — 약속이 정해졌다는 **사실**과 그 시각만 싣는다.
+ *
+ * ### status 를 건드리지 않는 이유 ★
+ * 서버는 확정과 함께 모집을 끝내므로(ACTIVE→COMPLETED) 「확정됐다」와 「정원 단계다」는 보통 같이
+ * 온다. 그래도 여기서 status 를 바꾸지 않는다 — 프레임이 싣는 status 는 **서버 enum 이름 문자열**
+ * ([PartyEvent.Confirmed] 의 `status`)이고, 그걸 [RideStatus] 로 옮기려면 `PartyMappers` 의 매핑을
+ * 화면 쪽에 베껴 와야 한다. 사본이 생기면 서버가 값을 늘릴 때 한쪽만 따라간다.
+ *
+ * 그래서 status 는 **[PartyEvent.RecruitingClosed] 의 상세 재조회**와 다음 스냅샷·폴백에 맡긴다.
+ * 그 사이 화면이 틀리지 않는 이유: 확정 뒤의 단계 판정은 [meetingStage] 가 **`isConfirmed` 를 먼저**
+ * 보기 때문이다 — status 가 아직 RECRUITING 으로 남아 있어도 확정 화면이 그려진다.
+ *
+ * [departureAt] 이 null·빈 값이면 들고 있던 값을 **지우지 않는다.** 서버가 시각을 말해 주지 못한
+ * 프레임(필드 누락)으로 이미 받아 둔 약속 시각을 날리면, 화면이 「약속 시간이 정해졌어요」로
+ * 떨어져 **몇 시에 만나는지를 잃는다** — 지우는 쪽이 늘 더 나쁘다.
+ */
+internal fun Ride.withMeetingConfirmed(departureAt: String?): RideDelta = RideDelta(
+    copy(
+        isConfirmed = true,
+        departureAt = departureAt?.takeIf { it.isNotBlank() } ?: this.departureAt,
+    ),
+)
+
+/**
+ * [PartyEvent.MemberArrived] 적용 — [publicId] 로 **그 한 명만** 도착 표시한다.
+ *
+ * 모르는 publicId 면 **상세를 다시 읽는다**([RideDelta.needsDetail]). 서버가 그렇게 하라고 적어
+ * 두었고(「publicId 가 null 이거나 목록에 없으면 방 상세를 다시 받는다」), 근거가 하나 더 있다 —
+ * 모르는 publicId 는 **내 멤버 목록이 낡았다**는 뜻이다(그 사람의 합류 신호를 놓쳤다).
+ *
+ * 낡은 목록을 그냥 두면 [notArrivedCount] 가 실제보다 적어지고, 그 수는 「출발」 확인 문구가
+ * **노쇼로 기록될 사람 수**를 말하는 데 쓰인다. 노쇼는 24시간 × 횟수의 실제 제재다 — 적게 말하고
+ * 누르게 하는 쪽이, 조회 1건을 더 쓰는 쪽보다 나쁘다. 그래서 여기서는 [Ride.withMemberLeft] 처럼
+ * 「다음 스냅샷에 맡긴다」로 가지 않는다.
+ *
+ * 빈 publicId 로는 아무도 표시하지 않는다 — 요약이 없는 멤버들(id 가 빈 값)을 한꺼번에 도착으로
+ * 만드는 사고를 막는다. 그쪽은 데이터 계층이 프레임째 버려(version 에 구멍이 나) 다음 프레임이
+ * 어긋나 보이고, 그 길로 상세를 다시 읽는다.
+ */
+internal fun Ride.withMemberArrived(publicId: String?): RideDelta {
+    val target = publicId?.takeIf { it.isNotBlank() } ?: return RideDelta(this)
+    if (members.none { it.id == target }) return RideDelta(this, needsDetail = true)
+    return RideDelta(copy(members = members.map { if (it.id == target) it.copy(hasArrived = true) else it }))
+}
+
+
+/**
  * 변경분을 적용한 뒤 **방 상세를 1회 읽어야 하는가** — `MatchWaitingViewModel.applyDelta` 의 판정.
  *
  * 둘 중 하나라도 참이면 읽는다. 사유는 다르지만 처방이 같다(**목록이 아니라 서버를 믿는다**):
@@ -984,8 +1220,21 @@ internal fun hasMemberDrift(ride: Ride): Boolean {
  * 그래도 함수를 남긴 이유: 닫힌 방(FINISHED·CANCELED)에서는 **거짓이어야 한다.** 서버가 방을 닫은
  * 순간과 Route 가 그걸 알아채 화면을 떠나는 순간 사이에 한 프레임이 있고, 그 프레임에서 눌린 나가기는
  * 409 로만 끝난다([leaveFailureMessage]).
+ *
+ * ### 확정된 방에서는 **아무도 나갈 수 없다** ★ (2026-11-06)
+ * 그래서 인자가 [RideStatus] 에서 [Ride] 로 바뀌었다. 서버는 약속 시간을 확정하면 모집을 끝내고
+ * (ACTIVE→COMPLETED) 그 뒤로 이탈을 막는다 — status 만 보면 COMPLETED 가 통과하므로
+ * ([isWaitingForMembers]) **확정 뒤에도 「방 나가기」가 열려 있는 것처럼 보인다.** 그 버튼은 서버가
+ * 거절하는 버튼이고, 나갈 수 있다고 믿은 사람이 약속 장소에 가지 않는 쪽으로 이어진다 — 그러면
+ * 그 사람이 노쇼로 기록된다. 화면이 거짓말을 한 대가가 **실제 제재**인 자리다.
+ *
+ * 숨기지 않고 **비활성 문구로 바꾸는** 이유: 이 자리가 비면 확정된 방에서 뒤로 갈 길이 사라진 것처럼
+ * 보인다. 버튼은 남기고 「나갈 수 없다」는 사실을 적는다(헤더의 뒤로가기는 **방을 유지한 채** 화면만
+ * 벗어나는 길로 그대로 열려 있다 — [MatchWaitingRoute] 의 `onExitKeepingParty`).
+ *
+ * @param ride 방 전체를 받는다 — status 와 확정 여부가 **같은 스냅샷**이어야 한다([canFinishParty] 와 같은 이유)
  */
-internal fun canLeaveParty(status: RideStatus): Boolean = isWaitingForMembers(status)
+internal fun canLeaveParty(ride: Ride): Boolean = isWaitingForMembers(ride.status) && !ride.isConfirmed
 
 /**
  * **방을 손으로 닫는 단계**인가 — 정원이 찼을 때(서버 COMPLETED = [RideStatus.MATCHED]).
@@ -1017,8 +1266,18 @@ internal fun isFinishStage(status: RideStatus): Boolean = status == RideStatus.M
  *
  * true 라도 **서버가 최종 판정이다.** 방장은 멤버가 들고 날 때마다 바뀌어 내 스냅샷이 낡을 수
  * 있으므로 403 경로([finishFailureMessage])는 노출을 막은 뒤에도 그대로 남는다.
+ *
+ * ### 확정된 방에서는 사라진다 ★ (2026-11-06)
+ * 약속 시간이 정해진 방을 끝내는 길은 **「출발」(`/depart`) 하나**다 — 거기서 노쇼가 기록되기
+ * 때문이다. 확정된 방에 「합승 완료」를 누르면 서버가 409 `USE_DEPART_FOR_CONFIRMED_PARTY` 로
+ * 거절한다. 그래서 확정 뒤에는 이 버튼을 **숨긴다**: 남겨 두면 ① 방장에게는 실패하는 버튼이고
+ * ② 성공한다면 더 나쁘다 — 노쇼 기록 없이 방이 닫혀 약속을 어긴 사람이 제재를 면한다.
+ *
+ * 확정 전 방에서는 **그대로 남는다.** 이미 만나서 같이 탄 사람들은 약속 시간을 정할 이유가 없고,
+ * 그쪽에는 이 버튼이 유일한 종료 경로다(작업 지시: 「동승 완료」는 확정 전 방에서만 남긴다).
  */
-internal fun canFinishParty(ride: Ride): Boolean = isFinishStage(ride.status) && ride.isHostedByMe
+internal fun canFinishParty(ride: Ride): Boolean =
+    isFinishStage(ride.status) && !ride.isConfirmed && ride.isHostedByMe
 
 /**
  * 비방장이 「합승 완료」가 있던 자리에서 읽는 안내문 — **버튼을 숨긴 자리를 비워 두지 않는다.**
@@ -1091,6 +1350,12 @@ internal fun finishFailureMessage(e: PartyFinishException): String = when {
     e.isNotMember -> "이 방의 참여자가 아니에요. 홈에서 진행 중인 방을 확인해 주세요"
     e.isNotCompleted -> "아직 정원이 다 차지 않았어요. 인원이 모두 모이면 완료할 수 있어요"
     e.isPartyNotFound -> "이미 사라진 방이에요. 홈으로 돌아가 주세요"
+    // 409 — 확정된 방이다. 그 방을 끝내는 길은 「출발」 하나다(노쇼가 거기서 기록된다).
+    // 화면이 확정된 방에서 이 버튼을 **숨기므로**([canFinishParty]) 평소에는 오지 않는다. 남겨 둔
+    // 이유는 `NOT_PARTY_HOST` 와 같다 — 확정 사실은 SSE 로 오고 그 프레임을 놓치면 내 스냅샷이 낡은
+    // 채로 버튼을 보여 준다. 그 틈에 눌린 것을 받아 **다음에 눌러야 할 버튼 이름**을 말해 준다.
+    e.isUseDepartForConfirmedParty ->
+        "약속 시간이 정해진 방이에요. 「출발」을 눌러 끝내 주세요"
     else -> FINISH_FAILED_MESSAGE
 }
 
@@ -1133,12 +1398,18 @@ internal fun leaveFailureMessage(e: PartyLeaveException): String = when {
 }
 
 /**
- * 21 매칭 대기 — SSE 변경분 구독(+끊김 폴백) · 나가기/합승 완료 진입점. partyId 없으면 오류 안내 후 되돌린다.
+ * 21 매칭 대기 — SSE 변경분 구독(+끊김 폴백) · 나가기/합승 완료 · **약속 확정 → 출발지 도착 → 출발**
+ * 진입점. partyId 없으면 오류 안내 후 되돌린다.
  *
  * 방 상태의 출처는 [MatchWaitingViewModel] 하나뿐이다 — 이 화면에서 SSE 를 두 번 수집하면 서버가 서로의
  * 연결을 끊어 무한 재연결이 되므로, 여기서 `LaunchedEffect` 로 구독을 추가하지 말 것. 아래
  * `LifecycleStartEffect` 는 **구독을 추가하지 않는다** — 그 하나의 수집을 켜고 끄는 신호만 보낸다
  * ([MatchWaitingViewModel.onScreenStart]·[MatchWaitingViewModel.onScreenStop]).
+ *
+ * **약속 흐름은 새 화면을 만들지 않는다** — 전부 이 화면 안에서 끝난다. 단계 판정은
+ * [meetingStage] 한 곳이고, 그 판정이 보는 시각은 ViewModel 의 시계
+ * ([MatchWaitingViewModel.nowMillis])다. 여기서 `Instant.now()` 를 부르지 말 것: Compose 재구성마다
+ * 다른 값이 나오면 같은 프레임의 두 판정이 어긋날 수 있고, 테스트가 경계를 고정할 수 없다.
  */
 @Composable
 fun MatchWaitingRoute(
@@ -1185,9 +1456,17 @@ fun MatchWaitingRoute(
     val action by viewModel.actionState.collectAsState()
     val closed by viewModel.partyClosed.collectAsState()
     val membershipLost by viewModel.membershipLost.collectAsState()
+    val nowMillis by viewModel.nowMillis.collectAsState()
 
-    // 지도의 파란 점. 권한을 자동 요청하지 않는다 — 대기 화면의 본질은 지도가 아니라 「기다림」이라,
-    // 여기서 다이얼로그를 띄우면 흐름을 끊는다. 이미 허용돼 있으면(14·17 에서 받았을 것) 점이 뜬다.
+    // 지도의 파란 점 **그리고 「출발지 도착했어요」가 보내는 좌표**.
+    //
+    // 권한을 자동 요청하지 않는 것은 그대로다 — 대기 화면의 본질은 지도가 아니라 「기다림」이라,
+    // 진입하자마자 다이얼로그를 띄우면 흐름을 끊는다. 이미 허용돼 있으면(14·17 에서 받았을 것) 점이 뜬다.
+    //
+    // 도착 단계가 붙은 뒤에도 자동 요청으로 바꾸지 않았다. 바꾸면 **약속과 무관하게 모든 진입에서**
+    // 다이얼로그가 뜨고(모집 중에도 뜬다) 정작 필요한 순간은 그보다 한참 뒤다. 대신 그 순간에
+    // 거부돼 있으면 비활성 버튼을 두지 않고 **왜 필요한지 + 허용 버튼**을 그 자리에 넣는다
+    // (17 탐색의 `LocationPermissionNotice` 와 같은 처방 — [ARRIVE_NEEDS_PERMISSION_NOTICE]).
     val myLocation = rememberMyLocationState(autoRequestPermission = false)
 
     // 화면이 보이는 동안만 SSE 를 구독하고 폴백 폴링을 돌린다 — 위에 22 상세·24 채팅방이 올라오거나
@@ -1208,6 +1487,12 @@ fun MatchWaitingRoute(
     }
     LaunchedEffect(action.finished) {
         if (action.finished) onPartyClosed()
+    }
+    // 「출발」이 성공했다 — 서버가 방을 **모두에게** 닫고 구독을 끊었다. 「합승 완료」와 같은 길로
+    // 보낸다(진행 중 기억을 지우고 홈). SSE `closed` 도 곧 오지만 서버가 연결을 끊는 중이라
+    // 도착하지 않을 수 있어, 액션 성공 자체를 전이 근거로 둔다.
+    LaunchedEffect(action.departed) {
+        if (action.departed) onPartyClosed()
     }
     // 서버가 방을 닫았다(SSE closed) — 다른 참여자의 「합승 완료」·30분 만료·마지막 멤버 이탈.
     // 예전에는 폴링이 FINISHED/CANCELED 를 읽어 와야 알았고, 지금은 신호 하나로 바로 떠난다.
@@ -1255,13 +1540,29 @@ fun MatchWaitingRoute(
             val ride = current.ride
             MatchWaitingScreen(
                 ride = ride,
+                // 약속 단계 판정의 시각. ViewModel 의 10초 틱이 흘려 주는 값을 **그대로** 쓴다 —
+                // 여기서 Instant.now() 를 부르면 재구성마다 값이 달라져 같은 프레임의 판정들이 어긋난다.
+                now = Instant.ofEpochMilli(nowMillis),
                 foundCount = ride.members.size,
                 conditionLabel = "${ride.capacity}인",
                 myLocation = myLocation.coordinates,
+                locationGranted = myLocation.isGranted,
+                onRequestLocationPermission = myLocation.onRequestPermission,
                 actionInProgress = action.inProgress,
                 actionErrorMessage = action.errorMessage,
                 onCancelSearch = viewModel::leaveParty, // 나가기 성공 시 14 홈
-                onFinish = viewModel::finishParty, // 합승 완료 성공 시 14 홈
+                onFinish = viewModel::finishParty, // 합승 완료 성공 시 14 홈 (확정 전 방 전용)
+                // 프리셋이 고른 **분**만 넘긴다 — 시각은 누르는 순간의 시계로 ViewModel 이 만든다
+                // (다이얼로그를 들여다본 시간이 1시간 한도를 깎지 않게 한다 — confirmMeeting KDoc).
+                onConfirmMeeting = viewModel::confirmMeeting,
+                // 좌표를 묶어서 받는다 — lat/lng 두 Double 로 받으면 전치가 컴파일을 통과한다
+                onArrive = { coordinates ->
+                    viewModel.arriveAtDeparture(
+                        latitude = coordinates.latitude,
+                        longitude = coordinates.longitude,
+                    )
+                },
+                onDepart = viewModel::departParty, // 출발 성공 시 14 홈 (방이 모두에게 닫힌다)
                 onExitKeepingParty = onExitKeepingParty,
                 onCardClick = onCardClick,
                 onOpenChat = onOpenChat,

@@ -2,8 +2,13 @@ package com.moyeota.data.repository
 
 import com.moyeota.data.remote.MatchingApi
 import com.moyeota.data.remote.dto.ApiErrorDto
+import com.moyeota.data.remote.dto.ArriveRequestDto
+import com.moyeota.data.remote.dto.ConfirmMeetingRequestDto
 import com.moyeota.data.remote.dto.RealTimeMatchingRequestDto
 import com.moyeota.data.remote.matching.PartyEventSource
+import com.moyeota.data.remote.partyArriveException
+import com.moyeota.data.remote.partyConfirmException
+import com.moyeota.data.remote.partyDepartException
 import com.moyeota.data.remote.partyFinishException
 import com.moyeota.data.remote.realtimeMatchException
 import com.moyeota.data.remote.partyJoinException
@@ -17,6 +22,9 @@ import com.moyeota.data.remote.toRide
 import com.moyeota.data.remote.toRouteEstimate
 import com.moyeota.domain.model.MatchCandidate
 import com.moyeota.domain.model.NewParty
+import com.moyeota.domain.model.PartyArriveException
+import com.moyeota.domain.model.PartyConfirmException
+import com.moyeota.domain.model.PartyDepartException
 import com.moyeota.domain.model.PartyDetail
 import com.moyeota.domain.model.PartyEvent
 import com.moyeota.domain.model.PartyFinishException
@@ -185,6 +193,60 @@ class RemoteRideRepository(
         // runCatching 은 취소까지 삼키므로 되던져 화면 이탈이 에러로 보이지 않게 한다.
         if (failure is CancellationException) throw failure
         throw partyFinishException(failure, failure.readApiError())
+    }
+
+    /**
+     * 약속 시간 확정. 실패는 전부 [PartyConfirmException] 으로 좁힌다 — **403 과 409 가 각각 여러 뜻**이라
+     * 상태 코드로는 안내 문구를 가를 수 없다(그 예외 KDoc 의 표).
+     *
+     * 성공 뒤 **아무것도 다시 읽지 않는다.** 확정 사실·약속 시간·바뀐 상태가 모두 SSE
+     * [PartyEvent.Confirmed] 에 실려 오기 때문이다([observePartyEvents]). 여기서 상세를 한 번 더 읽으면
+     * 21 대기 화면이 같은 내용을 두 경로로 받아, 어느 쪽이 최신인지 순번으로 다시 가려야 한다.
+     *
+     * [departureAt] 은 **검사하지 않고 그대로 싣는다.** 모양(ISO-8601 instant)과 범위(1시간 안)의 판정은
+     * 서버가 하고, 앱이 같은 검사를 두 벌 들면 서버가 범위를 바꿀 때 한쪽만 따라간다 — 화면은 애초에
+     * 만들 수 없는 값을 못 만들게(프리셋) 막는 쪽으로 책임을 진다.
+     */
+    override suspend fun confirmMeeting(partyId: Long, departureAt: String) {
+        val failure = runCatching { api.confirmMeeting(partyId, ConfirmMeetingRequestDto(departureAt)) }
+            .exceptionOrNull() ?: return
+        // runCatching 은 취소까지 삼키므로 되던져 화면 이탈이 에러로 보이지 않게 한다.
+        if (failure is CancellationException) throw failure
+        throw partyConfirmException(failure, failure.readApiError())
+    }
+
+    /**
+     * 출발지 도착. 좌표는 **지금 내 위치**를 그대로 보낸다 — 방 출발지와의 거리는 서버가 잰다.
+     *
+     * 실패는 전부 [PartyArriveException] 으로 좁힌다. 「멀다」(400)와 「아직 시간 전이다」(409)가
+     * 갈려 있어야 하는 게 핵심이다 — 뭉개면 이미 출발지에 서 있는 사람에게 더 가까이 가라고 말한다.
+     *
+     * **재시도를 성공으로 되돌릴 일이 없다**: 서버가 멱등이라 이미 도착한 사람의 두 번째 호출도 204 다
+     * (나가기의 403 되돌림 같은 장치가 필요 없는 유일한 액션이다).
+     */
+    override suspend fun arriveAtDeparture(partyId: Long, latitude: Double, longitude: Double) {
+        val request = ArriveRequestDto(latitude = latitude, longitude = longitude)
+        val failure = runCatching { api.arriveAtDeparture(partyId, request) }.exceptionOrNull() ?: return
+        // runCatching 은 취소까지 삼키므로 되던져 화면 이탈이 에러로 보이지 않게 한다.
+        if (failure is CancellationException) throw failure
+        throw partyArriveException(failure, failure.readApiError())
+    }
+
+    /**
+     * 출발 — 방을 끝낸다. 실패는 전부 [PartyDepartException] 으로 좁힌다.
+     *
+     * **되돌림도, 복구 조회도 없다.** 서버가 검사를 먼저 하고 상태를 바꾸므로 실패했으면 방은 그대로다
+     * ([finishParty] 와 같은 사정). 성공했을 때의 뒤처리(노쇼 기록·방 종료)는 모두 서버 쪽이고,
+     * 화면은 SSE [PartyEvent.Closed] 로 닫는다.
+     *
+     * 409 `PARTY_CLOSED` 를 성공으로 접지 **않는** 이유는 [com.moyeota.data.remote.partyDepartException]
+     * KDoc 에 적어 두었다 — 그 코드는 「남이 먼저 출발했다」와 「만료로 취소됐다」를 함께 뜻한다.
+     */
+    override suspend fun departParty(partyId: Long) {
+        val failure = runCatching { api.departParty(partyId) }.exceptionOrNull() ?: return
+        // runCatching 은 취소까지 삼키므로 되던져 화면 이탈이 에러로 보이지 않게 한다.
+        if (failure is CancellationException) throw failure
+        throw partyDepartException(failure, failure.readApiError())
     }
 
     // 빈 목록은 성공이다 — 양쪽 300m 를 동시에 만족하는 방이 없다는 사실일 뿐이라 예외로 올리지 않는다.

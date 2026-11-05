@@ -114,10 +114,34 @@ data class PartyDetailResponse(
      * 뒤따르는 모든 변경분이 "틈"으로 보여 상세를 끝없이 다시 읽는다.
      */
     val version: Long? = null,
+    /**
+     * 방의 종류 — 서버 `RoomType` 이름 문자열. **`"REALTIME"` 또는 `"RESERVED"` 둘뿐이다**
+     * (`"RESERVATION"` 이 아니다 — 도메인 쪽 이름만 그렇고 서버 enum 에는 없다).
+     * 변환은 [com.moyeota.data.remote.toRoomType] 한 곳에서만 하고, 모르는 값·누락은 실시간 방으로
+     * 떨어진다(그 선택의 근거는 [com.moyeota.domain.model.RoomType] 의 표).
+     */
+    val roomType: String? = null,
+    /**
+     * 약속 시간(ISO-8601). 실시간 방은 방장이 확정하기 전까지 **null**, 예약 방은 만들 때 정한 출발 시각.
+     *
+     * 서버 record 가 `Instant` 라 Jackson 이 `"2026-11-03T08:30:00Z"` 꼴로 직렬화한다 —
+     * [createdAt] 과 같은 모양이라 같은 방식(문자열 그대로)으로 받는다. 숫자(epoch)로 오기 시작하면
+     * 파싱이 깨지므로 그때는 서버 쪽 `WRITE_DATES_AS_TIMESTAMPS` 를 먼저 볼 것.
+     */
+    val departureAt: String? = null,
+    /**
+     * 약속이 확정된 방인가. 서버 record 는 **원시 `boolean`** 이라 운영에서는 늘 실린다.
+     *
+     * 그런데도 nullable 인 이유는 [MemberInfo.host] 와 같다 — 「서버가 말하지 않았다」(옛 배포·필드
+     * 누락)를 false 와 **갈라야** 하기 때문이다. 둘을 접으면 확정된 방을 미확정으로 그려 「약속 시간
+     * 정하기」를 다시 띄우고, 눌러 봐야 409 `ALREADY_CONFIRMED` 다. 누락일 때는 매퍼가 서버와
+     * **같은 식**([departureAt] 이 있는가)으로 셈한다 — `PartyMappers.toRide` 참고.
+     */
+    val confirmed: Boolean? = null,
 ) {
     /**
      * 서버 `PartyDetailResult.MemberInfo(UUID publicId, String nickname, String imageUrl,
-     * String badgeId, Integer rideCount, boolean host)`.
+     * String badgeId, Integer rideCount, boolean host, boolean arrived)`.
      *
      * **내부 PK 였던 `memberId` 는 사라졌다.** 식별자는 [publicId] 하나이며 JWT `sub` 와 같은 값이라
      * "이 멤버가 나인가"를 앱이 직접 판정할 수 있다([com.moyeota.data.remote.toRide] 의 currentUuid).
@@ -172,6 +196,20 @@ data class PartyDetailResponse(
          * [com.moyeota.data.remote.toRide] 가 쓰는 `toUser` 매퍼에 근거와 함께 적어 두었다.
          */
         val host: Boolean? = null,
+        /**
+         * 이 멤버가 **출발지 도착을 눌렀는가**. 서버 `PartyMember.isArrived()` 가 출처이고,
+         * 약속이 정해지기 전에는 늘 false 다.
+         *
+         * `host` 와 **같은 이유로 nullable** 이다(서버 record 는 원시 `boolean`) — 「서버가 말하지
+         * 않았다」를 false 와 갈라 두려는 것이다. 다만 **갈라 놓고 내리는 결론은 반대다**:
+         * 누락이면 false 로 떨어뜨린다(나에게도). 근거는 [com.moyeota.domain.model.User.hasArrived]
+         * 의 표에 있다 — 틀렸을 때 false 쪽은 멱등한 버튼이 한 번 더 보일 뿐이고, true 쪽은
+         * 누를 수 없는 「출발」 버튼을 열어 준다.
+         *
+         * **JSON 키는 `arrived` 다**(서버 record 컴포넌트 이름 그대로). `isArrived` 로 적으면
+         * `ignoreUnknownKeys` 가 흘려서 **조용히 늘 누락**이 된다 — [host] 와 같은 함정이다.
+         */
+        val arrived: Boolean? = null,
     )
 }
 
@@ -228,6 +266,58 @@ data class MemberLeftPayload(
      */
     val hostPublicId: String? = null,
     /** 이 변경분을 반영한 **뒤**의 방 순번. 규칙은 [MemberJoinedPayload.version] 과 같다. */
+    val version: Long? = null,
+)
+
+/**
+ * SSE `recruiting-closed` 이벤트의 data — 백엔드 `RecruitingClosed(String status, long version)`.
+ *
+ * 서버의 **모집 정리 스윕**이 시간이 다 된 방을 지금 인원(2명 이상)으로 마감할 때 보낸다.
+ * 정원이 차서 마감되는 경우는 이게 아니라 [MemberJoinedPayload.status] 에 실려 온다 —
+ * 그쪽은 마지막 자리를 채운 당사자의 신호라 같은 전이를 두 번 보내지 않는다.
+ *
+ * 두 필드 모두 서버 record 가 **원시/논-널**이지만 기본값을 둔다 — 키가 빠진 프레임 하나가
+ * 스트림을 죽이지 않게 하려는 것이고, [MemberJoinedPayload] 와 같은 정책이다.
+ */
+@Serializable
+data class RecruitingClosedPayload(
+    /** 마감 **뒤**의 방 상태. 서버는 `"COMPLETED"` 만 보낸다. */
+    val status: String = "",
+    /** 반영 **뒤**의 방 순번. 규칙은 [PartyDetailResponse.version]. */
+    val version: Long? = null,
+)
+
+/**
+ * SSE `confirmed` 이벤트의 data — 백엔드 `PartyConfirmed(String status, Instant departureAt, long version)`.
+ *
+ * [departureAt] 은 ISO-8601 문자열이다([PartyDetailResponse.departureAt] 과 같은 모양). **null 이면
+ * 서버가 약속 시간을 말하지 않은 것**이고, 그때 화면은 「확정됐다」만 알고 「언제」를 모르므로 상세를
+ * 다시 읽어야 한다 — 그 규칙은 [com.moyeota.domain.model.PartyEvent.Confirmed] KDoc 에 있다.
+ */
+@Serializable
+data class PartyConfirmedPayload(
+    /** 확정 **뒤**의 방 상태. 확정은 모집도 끝내므로 서버는 `"COMPLETED"` 를 보낸다. */
+    val status: String = "",
+    val departureAt: String? = null,
+    /** 반영 **뒤**의 방 순번. 규칙은 [PartyDetailResponse.version]. */
+    val version: Long? = null,
+)
+
+/**
+ * SSE `member-arrived` 이벤트의 data — 백엔드 `MemberArrived(UUID publicId, long version)`.
+ *
+ * [publicId] 는 **null 일 수 있다** — 서버가 유저 요약을 못 찾으면(탈퇴 등) null 을 그대로 싣고도
+ * 신호는 보낸다(`PartyService.arrive`). 논-널로 선언하면 그 프레임에서 파싱이 터진다.
+ *
+ * 그 null 프레임을 **도메인까지 올리지는 않는다** — 도착은 「누구의」 도착인지가 전부라서, 누군지
+ * 모르면 멤버 목록의 무엇도 바꿀 수 없다. `parsePartySseFrame` 이 건너뛰고, 비어 버린 version 때문에
+ * 다음 프레임이 +2 로 보여 화면이 상세를 다시 읽는다(서버 계약이 지시하는 동작이다).
+ * 그래서 도메인 [com.moyeota.domain.model.PartyEvent.MemberArrived.publicId] 는 논-널이다.
+ */
+@Serializable
+data class MemberArrivedPayload(
+    val publicId: String? = null,
+    /** 반영 **뒤**의 방 순번. 규칙은 [PartyDetailResponse.version]. */
     val version: Long? = null,
 )
 
@@ -312,10 +402,58 @@ data class OpenPartyResponse(
     val estimateTime: Int? = null,
     val route: String? = null,
     // 상세와 같은 이유로 `taxiDriverId` 가 없다([PartyDetailResponse] 참고).
+    /**
+     * 방의 종류. 생성 응답에도 **실려 온다**(서버 `OpenPartyResponse.roomType`) — 실시간 방을 만들면
+     * `"REALTIME"`, 예약 방(`POST /matching/reservations`)이면 `"RESERVED"` 다.
+     * 앱은 지금 실시간 방만 만들지만, 만든 직후 바로 21 대기 화면으로 넘어가므로 그 화면이
+     * 「약속 시간 정하기」를 띄울 근거가 **상세를 읽기 전에** 필요하다.
+     */
+    val roomType: String? = null,
+    /**
+     * 약속 시간. 실시간 방을 **막 만든 직후**라 늘 null 이다(확정은 방장이 나중에 한다).
+     * 서버 record 에 있는 값을 그대로 받아 두는 것이고, 예약 방을 만드는 경로가 앱에 생기면 그때 채워진다.
+     *
+     * 생성 응답에는 `confirmed` 가 **없다** — 상세와 달리 서버가 그 필드를 싣지 않으므로, 매퍼가
+     * 서버와 같은 식(이 값이 있는가)으로 셈한다([com.moyeota.data.remote.toRide]).
+     */
+    val departureAt: String? = null,
 )
 
 // `GET /api/v1/matching/rooms/{partyId}/driver` 의 `DriverSummaryResponse` 는 **지웠다** —
 // 그 엔드포인트가 서버에서 사라졌다(Backend #297~#302).
+
+/**
+ * `POST /api/v1/matching/rooms/{partyId}/confirm` 요청 본문 (백엔드 `ConfirmPartyRequest`).
+ *
+ * **필드가 하나뿐이고, 장소는 없다** — 약속 장소는 늘 방의 출발지라 서버가 따로 받지 않는다.
+ *
+ * [departureAt] 은 ISO-8601 **순간**이어야 한다(`"2026-11-03T08:30:00Z"`). 서버 record 가
+ * `Instant` 이고 Jackson 이 `ISO_INSTANT` 로 읽으므로, **오프셋 없는 로컬 시각
+ * (`"2026-11-03T17:30:00"`)은 역직렬화에서 터져 400 `INVALID_REQUEST`** 가 된다 —
+ * `MatchingErrorCode` 의 어느 사유도 아니어서 화면에는 일반 문구로만 보인다.
+ * `java.time.Instant.toString()` 결과를 그대로 넣으면 맞다.
+ */
+@Serializable
+data class ConfirmMeetingRequestDto(
+    val departureAt: String,
+)
+
+/**
+ * `POST /api/v1/matching/rooms/{partyId}/arrive` 요청 본문 (백엔드 `ArriveRequest`).
+ *
+ * **지금 내 위치**다(방의 출발지 좌표가 아니다) — 서버가 그 둘 사이를 PostGIS 로 재서 100m 안인지
+ * 본다. 방 좌표를 그대로 보내면 검사가 **늘 통과**해 「도착하지 않았는데 도착」이 되고, 그 상태로
+ * 누군가 「출발」을 누르면 실제로 안 온 사람이 탄 사람으로 기록된다(노쇼가 안 찍힌다).
+ *
+ * 서버 record 는 `Double`(박싱) + `@NotNull` 이라 **키가 빠지면 400 `INVALID_REQUEST`** 이고,
+ * 측위 실패를 `0.0` 으로 채워 보내면 400 `OUT_OF_SERVICE_AREA` 다 — (0,0) 은 서비스 지역 밖이다.
+ * 둘 다 「위치를 못 잡았다」와는 다른 문구로 보이므로, 좌표가 없으면 **부르지 않는** 쪽이 맞다.
+ */
+@Serializable
+data class ArriveRequestDto(
+    val latitude: Double,
+    val longitude: Double,
+)
 
 // POST /api/v1/matching/routes — 백엔드 RouteRequest / RouteEstimate
 // 컨트롤러가 도메인 record RouteEstimate 를 그대로 반환한다(RoutePreviewResponse 와 필드명 동일).

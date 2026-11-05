@@ -411,6 +411,10 @@ private class FakeRideRepository(
     override suspend fun joinParty(partyId: Long): PartyStatus = error("쓰이지 않는다")
     override suspend fun leaveParty(partyId: Long) = error("쓰이지 않는다")
     override suspend fun finishParty(partyId: Long) = error("쓰이지 않는다")
+    override suspend fun confirmMeeting(partyId: Long, departureAt: String) = error("쓰이지 않는다")
+    override suspend fun arriveAtDeparture(partyId: Long, latitude: Double, longitude: Double) =
+        error("쓰이지 않는다")
+    override suspend fun departParty(partyId: Long) = error("쓰이지 않는다")
     override suspend fun previewRoute(
         departureLat: Double,
         departureLng: Double,

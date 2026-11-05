@@ -1,8 +1,11 @@
 package com.moyeota.data.remote
 
+import com.moyeota.data.remote.dto.ArriveRequestDto
 import com.moyeota.data.remote.dto.ChatReportRequestDto
+import com.moyeota.data.remote.dto.ConfirmMeetingRequestDto
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import retrofit2.http.Body
@@ -245,6 +248,66 @@ class AuthenticatedPathContractTest {
             "MatchingApi 에 상태 조회(/status) 메서드가 되살아났다 — 서버에 없는 경로다",
             MatchingApi::class.java.methods.none { it.name == "getPartyStatus" },
         )
+    }
+
+    /**
+     * **방을 끝내는 정식 경로 셋**(2026-11-06 신규). 서버 Swagger 가 `/finish` 를 「구버전 앱용 이전
+     * 경로」로 적어 두었고, 확정된 방에 그걸 부르면 409 `USE_DEPART_FOR_CONFIRMED_PARTY` 다 —
+     * 즉 이 셋이 틀리면 **확정된 방을 끝낼 길이 앱에 없다**.
+     *
+     * 셋 다 `/matching/rooms/{partyId}/…` 아래의 POST 이고 세그먼트만 다르다. 그래서 오타가
+     * 404 가 아니라 **401** 로 떨어진다(Security 가 미매핑 경로도 보호한다) — 세션 만료로 오인하기
+     * 딱 좋은 자리다. 기준은 백엔드 `matching/party/PartyController.java`(+ `http/matching.http` §7~9)다.
+     *
+     * 경로에 담기는 건 **partyId 하나**다. 주체(방장인가·도착했는가)는 전부 Bearer 토큰이 정한다.
+     */
+    @Test
+    fun `약속 확정 도착 출발은 rooms partyId 아래 세 POST 경로다`() {
+        assertEquals("api/v1/matching/rooms/{partyId}/confirm", MatchingApi::class.java.path("confirmMeeting"))
+        assertEquals("api/v1/matching/rooms/{partyId}/arrive", MatchingApi::class.java.path("arriveAtDeparture"))
+        assertEquals("api/v1/matching/rooms/{partyId}/depart", MatchingApi::class.java.path("departParty"))
+
+        listOf("confirmMeeting", "arriveAtDeparture", "departParty").forEach { name ->
+            val method = MatchingApi::class.java.declaredMethods.single { it.name == name }
+            assertTrue(
+                "$name 이 POST 가 아니다 — 서버는 @PostMapping 만 매핑한다(아니면 405)",
+                method.isAnnotationPresent(POST::class.java),
+            )
+            assertEquals(
+                "$name 의 경로에 담기는 건 partyId 하나여야 한다",
+                1,
+                method.parameterAnnotations.count { annotations -> annotations.any { it is Path } },
+            )
+        }
+
+        // 출발은 **합승 완료와 다른 엔드포인트**다. 같은 POST 라 경로만 베끼면 조용히 옛 경로로 가고,
+        // 확정된 방에서는 409 USE_DEPART_FOR_CONFIRMED_PARTY 로 거절당한다.
+        assertNotEquals(
+            "출발이 합승 완료와 같은 경로를 탄다 — 확정된 방을 끝낼 수 없다",
+            MatchingApi::class.java.path("finishParty"),
+            MatchingApi::class.java.path("departParty"),
+        )
+    }
+
+    /**
+     * **본문의 유무와 타입까지 못박는다.** [path] 검사만으로는 셋이 전부 통과하는데, 본문이 어긋나면
+     * 실패 모양이 `MatchingErrorCode` 밖의 400 `INVALID_REQUEST` 라 **화면에 일반 문구로만** 보인다
+     * (어느 사유 프로퍼티도 참이 아니다) — 원인을 찾기 가장 어려운 실패다.
+     *
+     * - 확정: `{"departureAt": "<ISO-8601 instant>"}`. 서버 record 가 `Instant` + `@NotNull` 이다.
+     * - 도착: `{"latitude": …, "longitude": …}`. 둘 다 `@NotNull` 이라 하나만 보내도 400 이다.
+     * - 출발: **본문 없음.** `@Body` 를 붙이면 서버가 읽지 않는 값을 보내는 것이고, 이 호출은
+     *   되돌릴 수 없는 액션이라(노쇼 기록) "뭘 보냈는지"가 늘 명확해야 한다.
+     */
+    @Test
+    fun `확정과 도착은 본문을 싣고 출발은 싣지 않는다`() {
+        val confirm = MatchingApi::class.java.declaredMethods.single { it.name == "confirmMeeting" }
+        val arrive = MatchingApi::class.java.declaredMethods.single { it.name == "arriveAtDeparture" }
+        val depart = MatchingApi::class.java.declaredMethods.single { it.name == "departParty" }
+
+        assertEquals("확정 본문이 ConfirmMeetingRequestDto 가 아니다", ConfirmMeetingRequestDto::class.java, confirm.bodyType())
+        assertEquals("도착 본문이 ArriveRequestDto 가 아니다", ArriveRequestDto::class.java, arrive.bodyType())
+        assertNull("출발은 본문이 없는 POST 다", depart.bodyType())
     }
 
     @Test
