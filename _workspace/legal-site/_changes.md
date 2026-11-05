@@ -77,6 +77,8 @@ codingforest 4080134·같은 토큰). 「이 기능이 들어간 업데이트부
 2026-11-05 00:43 UTC(09:43 KST) 에 README 의 명령으로 배포했다(`--profile moyeota`). CloudFront 무효화 id `I817ZWVGT77W76A8FSYQ3UDLO0`, 완료 확인.
 배포 뒤 `curl` 로 `/privacy/` 에 「제9조(앱 이용 기록의 수집과 오류 진단)」과 「2026년 11월 5일」이, `/account-deletion/` 에 「Mixpanel에 삭제 요청」이 있는 것을 확인했다.
 (첫 시도는 이 Mac 의 AWS 키가 IAM 에서 삭제돼 `InvalidClientTokenId` 로 실패했고, jiwoo 사용자에 새 키를 만들어 `moyeota` 프로필에 넣은 뒤 다시 했다.)
+같은 시각 두 세션이 같은 내용을 각각 배포해 무효화가 하나 더 있다 — `IB1VUJ38KZ5ZCD9KFYWW5K329F`(00:43:06 UTC, 완료). 올라간 파일은 같고,
+배포 뒤 라이브 `privacy/`·`account-deletion/` 이 저장소 파일과 바이트 단위로 같으며 옛 문구 「행태 분석 도구」가 0건임을 따로 확인했다.
 
 ## 2026-11-03 — iOS 앱 제공 (당일 시행)
 
