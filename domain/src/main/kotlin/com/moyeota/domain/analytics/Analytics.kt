@@ -145,12 +145,6 @@ sealed class AnalyticsEvent {
     /** 동승 모드의 「합승 완료」가 성공했다(방을 닫음). */
     data class PartyFinished(val memberCount: Int) : AnalyticsEvent()
 
-    /** 택시 모드에서 기사가 운행을 끝낸 것을 26 운행 중이 감지했다 → 도착 완료 화면. */
-    data object RideFinished : AnalyticsEvent()
-
-    /** 27 긴급 신고의 3초 홀드가 끝나 신고가 나갔다. */
-    data object EmergencyTriggered : AnalyticsEvent()
-
     /** 회원 탈퇴가 204 를 받았다. (Android 는 아직 탈퇴 API 가 배선되지 않아 기록 지점이 없다 — 계약만 둔다.) */
     data object AccountDeleted : AnalyticsEvent()
 
@@ -167,8 +161,6 @@ sealed class AnalyticsEvent {
             is MatchCompleted -> "complete_match"
             is MatchCanceled -> "cancel_match"
             is PartyFinished -> "finish_party"
-            RideFinished -> "finish_ride"
-            EmergencyTriggered -> "trigger_emergency"
             AccountDeleted -> "delete_account"
         }
 
@@ -183,7 +175,7 @@ sealed class AnalyticsEvent {
                 "gender" to AnalyticsValue.Str(gender.analyticsValue),
                 "age_band" to AnalyticsValue.Str(ageBand),
             )
-            LoginCompleted, PartyJoinClicked, RideFinished, EmergencyTriggered, AccountDeleted -> emptyMap()
+            LoginCompleted, PartyJoinClicked, AccountDeleted -> emptyMap()
             is PartyCreateClicked -> mapOf("capacity" to AnalyticsValue.Int(capacity))
             is MatchRequested -> compact(
                 "method" to AnalyticsValue.Str(method.rawValue),

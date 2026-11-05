@@ -3,7 +3,6 @@ package com.moyeota.presentation.feature.mypage
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -61,7 +60,7 @@ private val CardShadow = Color(0x0F1B2A4A)
  *
  * 진입: 하단탭 마이페이지
  *
- * 구성: 프로필 카드 → 「설정」 카드 → 「안내」 카드 → 「계정」 카드 → 버전 → (디버그) 개발자 옵션
+ * 구성: 프로필 카드 → 「설정」 카드 → 「안내」 카드 → 「계정」 카드 → 버전
  *
  * ```
  * 프로필 카드 (사진 · 이름 / 닉네임·사진 바꾸기)  ›
@@ -71,7 +70,6 @@ private val CardShadow = Color(0x0F1B2A4A)
  * [계정]  로그아웃 / 탈퇴하기(빨강)            ›   ← 한 카드, 구분선
  *         탈퇴하면 계정과 저장한 정보가 사라지고…
  *                      v1.0                      ← 가운데
- * (디버그) 개발자 옵션
  * ```
  *
  * 이동(디스크립션):
@@ -111,7 +109,10 @@ private val CardShadow = Color(0x0F1B2A4A)
  *   사진을 고른 적 없는 사용자에게도 서버는 기본 이미지 주소를 주므로, 로딩 중에 그리면
  *   기본 이미지가 한 번 스쳐 보인다. 사진은 36 에서 서버가 주는 16장 중에 고른다.
  * - 하단 버전 표기는 설치된 패키지의 versionName 이다(읽기 실패 시 숨김).
- * - 개발자 옵션(동승/택시 모드 강제)은 [modeDebug] 가 있을 때만, 즉 디버그 빌드에서만 그린다.
+ *
+ * 개발자 옵션 절은 없다. 유일한 항목이었던 「동승/택시 모드 강제」가 모드와 함께 사라졌고
+ * (서버가 `taxiEnabled` 를 보내지 않는다), 빈 절만 남기면 디버그 빌드에 아무것도 없는 제목이 뜬다.
+ * 새 개발자 옵션이 필요해지면 그때 절을 다시 세운다.
  */
 @Composable
 fun MyPageScreen(
@@ -123,7 +124,6 @@ fun MyPageScreen(
     onLogout: () -> Unit = {},               // → 04a 로그인 (세션 정리 후)
     onDeleteAccount: () -> Unit = {},        // → 37 회원 탈퇴
     onTabSelect: (MoyeotaTab) -> Unit = {},  // → 14 / 17 / 24
-    modeDebug: ModeDebugOptions? = null,     // 디버그 빌드 전용 개발자 옵션. 릴리스는 null
     // 「안내」 카드가 여는 주소. 기본값은 운영 값이고, 프리뷰·테스트가 빈 상태를 넣어 본다.
     links: SupportLinkTargets = SupportLinkTargets(),
 ) {
@@ -247,11 +247,6 @@ fun MyPageScreen(
                     textAlign = TextAlign.Center,
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                 )
-            }
-
-            if (modeDebug != null) {
-                Spacer(Modifier.height(32.dp))
-                ModeDebugSection(options = modeDebug)
             }
 
             Spacer(Modifier.height(24.dp))
@@ -391,76 +386,6 @@ internal fun ExternalLinkIcon(modifier: Modifier = Modifier, tint: Color = GrayA
     }
 }
 
-/**
- * 디버그 빌드 전용 개발자 옵션 — 서버 모드와 무관하게 동승/택시 화면을 강제한다.
- *
- * 택시 화면(25·26)은 서버가 배차 status 를 줘야 열리므로, 동승 서버에 택시를 강제해도 21 의 문구·버튼만
- * 바뀐다. 25·26 까지 보려면 `TAXI_ENABLED=true` 로 띄운 로컬 서버가 필요하다(docs/MODE-ROUTES.md).
- */
-data class ModeDebugOptions(
-    /** 서버가 준 값(강제 미적용). */
-    val serverTaxiEnabled: Boolean,
-    /** 서버 응답을 받았는가. false 면 서버 값은 아직 기본값이다. */
-    val serverResolved: Boolean,
-    /** 강제값. null 이면 서버 값을 따른다. */
-    val override: Boolean?,
-    val onOverride: (Boolean?) -> Unit,
-)
-
-@Composable
-private fun ModeDebugSection(options: ModeDebugOptions) {
-    Column(modifier = Modifier.padding(horizontal = 16.dp)) {
-        Text(
-            text = "개발자 옵션 · 디버그 빌드에만 보여요",
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Medium,
-            color = GrayAsh,
-        )
-        Spacer(Modifier.height(8.dp))
-        val serverLabel = when {
-            !options.serverResolved -> "미수신 (기본값 동승)"
-            options.serverTaxiEnabled -> "택시"
-            else -> "동승"
-        }
-        Text(
-            text = "서버 모드: $serverLabel",
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Medium,
-            color = MoyeotaColor.InkPrimary,
-        )
-        Spacer(Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ModeChip(text = "서버 값", selected = options.override == null) { options.onOverride(null) }
-            ModeChip(text = "동승 강제", selected = options.override == false) { options.onOverride(false) }
-            ModeChip(text = "택시 강제", selected = options.override == true) { options.onOverride(true) }
-        }
-        Spacer(Modifier.height(6.dp))
-        Text(
-            text = "강제값은 앱을 완전히 종료하면 풀려요. 25 배차·26 운행 화면은 택시 모드 서버가 있어야 열려요.",
-            fontSize = 11.sp,
-            color = GrayAsh,
-        )
-    }
-}
-
-@Composable
-private fun ModeChip(text: String, selected: Boolean, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(999.dp))
-            .background(if (selected) MoyeotaColor.Primary500 else MoyeotaColor.SurfaceCanvas)
-            .clickable { onClick() }
-            .padding(horizontal = 12.dp, vertical = 7.dp),
-    ) {
-        Text(
-            text = text,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Bold,
-            color = if (selected) Color.White else GrayMute,
-        )
-    }
-}
-
 // 운영 주소가 채워진 지금 모습 — 「안내」 카드에 세 행이 선다
 @Preview(showBackground = true, widthDp = 393, heightDp = 852, name = "주소 있음(운영)")
 @Composable
@@ -483,15 +408,6 @@ private fun MyPageScreenPartialLinksPreview() {
     MyPageScreen(
         userName = UserNameState.Resolved("성윤"),
         links = SupportLinkTargets(contactEmail = null),
-    )
-}
-
-@Preview(showBackground = true, widthDp = 393, heightDp = 852, name = "개발자 옵션")
-@Composable
-private fun MyPageScreenDebugPreview() {
-    MyPageScreen(
-        userName = UserNameState.Resolved("성윤"),
-        modeDebug = ModeDebugOptions(serverTaxiEnabled = false, serverResolved = true, override = true, onOverride = {}),
     )
 }
 

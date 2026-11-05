@@ -110,12 +110,15 @@ private val waitingRideDummy = Ride(
  *   둘 다 **확인 다이얼로그를 거친다** — 뒤로가기 한 번에 방이 날아가면 사용자가 놀란다(QA O-1).
  *   [onCancelSearch] 는 사용자가 「그만 찾기」를 확인한 뒤에만 호출된다.
  *
- *   **나가기는 모집 중([RideStatus.RECRUITING] = 서버 ACTIVE)에서만 가능하다.** 서버 `Party.leave` 가
- *   `ensureRecruiting()` 으로 막아, 정원이 차 기사 매칭이 시작되면 409 `PARTY_NOT_RECRUITING` 이 온다
- *   (화면 문구는 [leaveFailureMessage] 가 「매칭이 시작돼 지금은 나갈 수 없어요」로 가른다).
- *   폴링이 MATCHING 을 감지해 25b 로 넘어가기까지 한 주기가 비는데, 그 사이에도 누를 수 있으면
- *   실패하는 버튼이 된다 — 그래서 status 를 보고 **즉시** 버튼을 비활성 문구로 바꾸고,
- *   뒤로가기는 방을 유지한 채 홈으로만 보낸다([onExitKeepingParty]).
+ *   **나가기는 대기 단계 전부에서 가능하다** — 모집 중([RideStatus.RECRUITING] = 서버 ACTIVE)이든
+ *   정원이 찬 뒤([RideStatus.MATCHED] = 서버 COMPLETED)든. 서버 `Party.leave` 의 `ensureRecruiting()`
+ *   이 그 두 값을 통과시키고, 정원이 찬 방에서 나가면 서버가 방을 ACTIVE 로 되돌려 다시 모집한다.
+ *   예전에 정원이 찬 뒤의 나가기를 막았던 것은 **기사 모드 이야기다**(곧 배차가 시작돼 409 였다) —
+ *   그 모드가 사라지면서 막을 이유도 사라졌다([canLeaveParty]).
+ *
+ *   남은 비활성 구간은 **닫힌 방 한 프레임**뿐이다: 서버가 방을 닫은 순간과 Route 가 그걸 알아채
+ *   화면을 떠나는 순간 사이. 그 틈에 눌리면 409 로만 끝나므로 status 를 보고 즉시 버튼을 비활성
+ *   문구로 바꾸고, 뒤로가기는 방을 유지한 채 홈으로만 보낸다([onExitKeepingParty]).
  *
  *   반대로 **403 `NOT_PARTY_MEMBER`(= 이미 나갔다)는 실패로 보이지 않는다** — 데이터 계층이 성공으로
  *   되돌려 나가기 성공과 같은 길로 보낸다. 204 응답이 유실된 사용자가 다시 눌러 같은 문구에 갇히지
@@ -123,7 +126,9 @@ private val waitingRideDummy = Ride(
  * - 카드 탭 → 22 탑승 상세 (onCardClick)
  * - 「채팅 열기」 → 24 채팅방(독립 목적지, 뒤로가기로 여기 복귀) — [onOpenChat] 이 null 이 아닐 때만 그린다.
  *   채팅방은 **정원이 찬 뒤에** 생기므로 모집 중에는 대개 null 이다. 눌러도 열 것이 없는 버튼을 두지 않는다.
- * - 매칭 성사(서버 status 전이) → 25 배차 현황 — 화면이 아니라 Route 가 관찰해 넘긴다
+ * - **다음 화면이 없다.** 정원이 차도 방은 이 화면에 머문다 — 기사·배차를 걷어낸 뒤로 서버가
+ *   `DISPATCHING`·`ONGOING` 을 보낼 수 없어 25 배차 현황·26 운행 중이 함께 사라졌다. 여기서 나가는
+ *   길은 「합승 완료」(방장) · 「그만 찾기」/「방 나가기」 · 방이 닫힘 — 셋 다 14 홈이다.
  * - 매칭 조건(인원)은 **읽기 전용**이다. 방을 만들 때(16) 정해진 값이고 **바꾸는 API 가 없다** —
  *   방장이 있더라도(서버 `MemberInfo.host`) 조건을 고치는 엔드포인트는 없다. 눌러도 아무 일 없는
  *   「수정」 버튼을 두는 대신 카드 아래 한 줄로 이유를 적는다.
@@ -131,9 +136,10 @@ private val waitingRideDummy = Ride(
  *   **사용자가 정한 값이 아니게 됐다.** 게다가 합류에 거리 검사가 없고 목록은 지도 뷰포트만 보므로
  *   그 숫자는 아무것도 걸러내지 않는다. 바꿀 수도 없고 효과도 없는 값을 조건으로 보여 주지 않는다.
  *
- * 도메인 변경(2026-08-30): 「전원 준비 → 방장이 출발」 흐름이 백엔드에서 사라졌다.
- * `/matching/ready`, `/matching/start` 가 삭제되고 **정원이 차면 서버가 스스로 기사 매칭을 시작**한다.
- * 그래서 이 화면에는 준비/매칭 시작 버튼이 없고, 인원 현황과 자동 매칭 안내만 남는다.
+ * 도메인 변경(2026-08-30): 「전원 준비 → 방장이 출발」 흐름이 백엔드에서 사라졌다
+ * (`/matching/ready`, `/matching/start` 삭제). 그래서 이 화면에는 준비/매칭 시작 버튼이 없다.
+ * 그 자리를 한동안 「정원이 차면 서버가 스스로 기사 매칭을 시작한다」가 메웠지만 그 흐름도 사라졌다 —
+ * 지금 정원이 찬 방이 하는 일은 **채팅으로 만날 곳을 정하고 방장이 「합승 완료」로 닫는 것**이다.
  *
  * 서버 계약(2026-09): `members[]` 가 닉네임·탑승 횟수·publicId 를 함께 주면서, 기다리는 동안
  * **누가 모였는지**를 실제로 보여줄 수 있게 됐다. 내 줄은 `isMe`(publicId == 세션 uuid)로
@@ -159,16 +165,11 @@ fun MatchWaitingScreen(
     conditionLabel: String = "3인",
     /** 내 현재 위치(파란 점). 권한이 없거나 아직 못 받았으면 null — 지도에 점을 찍지 않는다 */
     myLocation: UserCoordinates? = null,
-    /**
-     * 택시 모드(서버 설정). false = 1차 배포 — 정원이 차도 기사를 부르지 않는다.
-     * 문구(「기사님을 찾아요」 → 「채팅으로 만나요」)와 정원 찼을 때의 CTA(「합승 완료」)가 갈린다.
-     */
-    taxiEnabled: Boolean = false,
     actionInProgress: Boolean = false,
     actionErrorMessage: String? = null,
     onCancelSearch: () -> Unit = {},
     /**
-     * 1차 배포 모드 「합승 완료」 — 누르면 모두의 방이 닫힌다. 확인 다이얼로그 뒤에만 호출된다.
+     * 「합승 완료」 — 누르면 모두의 방이 닫힌다. 확인 다이얼로그 뒤에만 호출된다.
      *
      * 버튼은 **방장에게만** 보인다(서버가 방장 전용으로 좁혔다 — [canFinishParty]).
      * 비방장에게는 같은 자리에 누가 끝내는지를 말하는 안내문이 들어가고 이 콜백은 쓰이지 않는다.
@@ -185,16 +186,19 @@ fun MatchWaitingScreen(
     var cancelConfirming by remember { mutableStateOf(false) }
     var finishConfirming by remember { mutableStateOf(false) }
 
-    // 서버가 나가기를 허용하는 단계인가. 모드에 따라 다르다 — canLeaveParty KDoc 참고.
-    val canLeave = canLeaveParty(ride.status, taxiEnabled)
-    // 1차 배포 모드에서 정원이 찼다 — **방을 손으로 닫는 단계**. 방장 여부와 무관한 표시가 이걸 본다.
-    val finishStage = isFinishStage(ride.status, taxiEnabled)
+    // 서버가 나가기를 허용하는 단계인가 — 대기 단계면 참, 닫힌 방이면 거짓(canLeaveParty KDoc).
+    val canLeave = canLeaveParty(ride.status)
+    // 정원이 찼다 — **방을 손으로 닫는 단계**. 방장 여부와 무관한 표시가 이걸 본다.
+    val finishStage = isFinishStage(ride.status)
     // 그 단계에서 **내가 방장일 때만** 「합승 완료」 버튼을 보여 준다(서버가 방장 전용으로 좁혔다).
     // 비방장에게는 비활성 버튼 대신 아래 footer 의 안내문이 간다 — canFinishParty KDoc 참고.
-    val canFinish = canFinishParty(ride, taxiEnabled)
+    val canFinish = canFinishParty(ride)
 
-    // 정원 도달. 기사 모드에선 서버가 기사 매칭을 시작하는 시점이고, 1차 배포 모드에선 채팅으로 만나는 시점이다.
-    // 문구·진행바가 이 경계로 갈린다.
+    // 정원 도달 — 채팅으로 만날 곳을 정하는 시점이다. 문구·진행바가 이 경계로 갈린다.
+    //
+    // [finishStage] 와 거의 같은 사실을 가리키지만 근거가 다르다: 이쪽은 **멤버 목록 길이**([foundCount]),
+    // 저쪽은 **서버 status**. 변경분이 유실돼 둘이 어긋날 수 있어([hasMemberDrift] 가 그걸 잡아 상세를
+    // 다시 읽는다) 각자의 자리에서 각자를 본다 — 진행바·인원 문구는 목록을, 단계 표시는 서버를 따른다.
     val isFull = foundCount >= ride.capacity
     // 나를 뺀 인원 — **내가 목록에 있을 때만** 센다([otherMemberCount] KDoc).
     val otherCount = otherMemberCount(ride)
@@ -225,7 +229,7 @@ fun MatchWaitingScreen(
                 onClick = { if (canLeave) cancelConfirming = true else onExitKeepingParty() },
             ) { BackArrowIcon() }
             Text(
-                // 1차 배포 모드에서 정원이 찼으면 더는 「찾는 중」이 아니다 — 만나는 단계다.
+                // 정원이 찼으면 더는 「찾는 중」이 아니다 — 만나는 단계다.
                 // **방장 여부가 아니라 단계**를 본다: 비방장도 같은 방을 보고 있다.
                 text = if (finishStage) "같이 탈 사람이 모였어요" else "같이 탈 사람 찾는 중",
                 fontSize = 18.sp,
@@ -290,18 +294,18 @@ fun MatchWaitingScreen(
                 // 레이더 애니메이션을 대신하는 상태 배지. 지도가 배경이 된 이상 큰 레이더는
                 // 지도를 가리기만 해서 「찾는 중」이라는 사실만 남긴다.
                 MapOverlayPill(modifier = Modifier.align(Alignment.TopStart).padding(16.dp)) {
-                    SearchingBadgeContent(isFull = isFull, taxiEnabled = taxiEnabled)
+                    SearchingBadgeContent(isFull = isFull)
                 }
             },
             sheetTop = {
                 Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp)) {
                     Text(
-                        text = when {
-                            isFull && !taxiEnabled -> "같이 탈 사람이 다 모였어요"
-                            isFull -> "정원이 다 찼어요"
+                        text = if (isFull) {
+                            "같이 탈 사람이 다 모였어요"
+                        } else {
                             // 「보통 2분 안에 모여요」는 지웠다 — 근거가 될 매칭 소요 통계가 없다.
                             // 기다리는 사람에게 지킬 수 없는 시각을 약속하는 자리다(2026-10-13).
-                            else -> "같이 탈 사람을 찾고 있어요"
+                            "같이 탈 사람을 찾고 있어요"
                         },
                         fontSize = 22.sp,
                         fontWeight = FontWeight.Bold,
@@ -342,9 +346,9 @@ fun MatchWaitingScreen(
             },
             sheetDetail = {
                 Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-                    // 정원이 찬 뒤 무슨 일이 일어나는지 알려주는 유일한 지점 — 모드에 따라 다르다.
-                    // 기사 모드: 서버가 스스로 기사 매칭을 시작한다(앱이 트리거하지 않는다).
-                    // 1차 배포 모드: 기사가 없다. 채팅으로 만날 곳을 정하고, 다 탔으면 「합승 완료」로 닫는다.
+                    // 정원이 찬 뒤 무슨 일이 일어나는지 알려주는 유일한 지점.
+                    // 기사가 없으므로 할 일은 하나다 — 채팅으로 만날 곳을 정하고, 다 탔으면
+                    // 방장이 「합승 완료」로 닫는다.
                     NoticeBanner(
                         kind = if (isFull) NoticeKind.WAITING else NoticeKind.INFO,
                         text = when {
@@ -352,10 +356,8 @@ fun MatchWaitingScreen(
                             // 비방장에게 하면 없는 버튼을 누르라고 시키는 셈이다.
                             canFinish -> "채팅으로 만날 곳을 정해요. 다 타면 「합승 완료」를 눌러 주세요"
                             // 비방장: 누가 끝내는지는 footer 안내문이 이름까지 말한다 — 여기서 겹쳐 쓰지 않는다.
-                            isFull && !taxiEnabled -> "채팅으로 만날 곳을 정해요"
-                            isFull -> "곧 기사님을 찾기 시작해요"
-                            !taxiEnabled -> "정원이 차면 채팅으로 만날 곳을 정해요"
-                            else -> "정원이 차면 기사님을 자동으로 찾아요"
+                            isFull -> "채팅으로 만날 곳을 정해요"
+                            else -> "정원이 차면 채팅으로 만날 곳을 정해요"
                         },
                     )
                     Spacer(Modifier.height(16.dp))
@@ -425,7 +427,7 @@ fun MatchWaitingScreen(
                     Spacer(Modifier.height(8.dp))
                 }
 
-                // 1차 배포 모드 · 정원이 찼을 때 — 기사 없이 합승을 끝내는 자리. 접힘 상태에서도 보이게 시트 하단.
+                // 정원이 찼을 때 — 합승을 끝내는 자리(방을 닫는 유일한 길). 접힘 상태에서도 보이게 시트 하단.
                 //
                 // **방장에게만 버튼**을 준다(서버가 방장 전용으로 좁혔다 — canFinishParty KDoc).
                 // 비방장에게는 **비활성 버튼을 두지 않는다**: 누를 수 없는 버튼은 왜 못 누르는지
@@ -449,10 +451,13 @@ fun MatchWaitingScreen(
                 }
 
                 // 나가기 — 매칭 시작·준비 버튼은 도메인에서 사라졌다. 접힘 상태에서도 보이도록 시트 하단에 고정한다.
-                // 기사 모드에서 정원이 차 매칭이 시작되면 서버가 나가기를 막으므로 버튼을 비활성 문구로 바꾼다.
+                //
+                // 비활성은 **닫힌 방 한 프레임**뿐이다([canLeaveParty]) — 서버가 방을 닫았는데 Route 가
+                // 아직 화면을 떠나지 않은 순간. 거기서 눌리면 409 로만 끝나므로 누를 수 없게 하고,
+                // 예전의 「기사님을 찾는 중…」 대신 **실제로 일어난 일**을 적는다.
                 GrayActionButton(
                     text = when {
-                        !canLeave -> "기사님을 찾는 중…"
+                        !canLeave -> "이미 끝난 방이에요"
                         actionInProgress -> "나가는 중…"
                         // 「그만 찾기」가 아닌 건 **단계** 때문이다 — 더는 찾는 중이 아니다.
                         finishStage -> "방 나가기"
@@ -588,7 +593,7 @@ private fun ConditionRow(label: String, value: String) {
  * 점 하나의 펄스로 줄였다.
  */
 @Composable
-private fun SearchingBadgeContent(isFull: Boolean, taxiEnabled: Boolean) {
+private fun SearchingBadgeContent(isFull: Boolean) {
     val transition = rememberInfiniteTransition(label = "searching")
     val pulse by transition.animateFloat(
         initialValue = 0.25f,
@@ -611,11 +616,7 @@ private fun SearchingBadgeContent(isFull: Boolean, taxiEnabled: Boolean) {
         )
         Spacer(Modifier.width(8.dp))
         Text(
-            text = when {
-                isFull && !taxiEnabled -> "채팅으로 만나요"
-                isFull -> "정원이 다 찼어요"
-                else -> "같이 탈 사람 찾는 중"
-            },
+            text = if (isFull) "채팅으로 만나요" else "같이 탈 사람 찾는 중",
             fontSize = 13.sp,
             fontWeight = FontWeight.Bold,
             color = MoyeotaColor.InkPrimary,

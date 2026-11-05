@@ -3,7 +3,6 @@ package com.moyeota.data.repository
 import com.moyeota.data.remote.MatchingApi
 import com.moyeota.data.remote.dto.RealTimeMatchingRequestDto
 import com.moyeota.data.remote.dto.MatchCandidateResponse
-import com.moyeota.data.remote.dto.DriverSummaryResponse
 import com.moyeota.data.remote.dto.OpenPartyRequestDto
 import com.moyeota.data.remote.dto.OpenPartyResponse
 import com.moyeota.data.remote.dto.PartyDetailResponse
@@ -198,15 +197,6 @@ class RemoteRideRepositoryTest {
     }
 
     @Test
-    fun `배정된 기사 요약을 도메인 모델로 돌려준다`() = runBlocking {
-        val driver = RemoteRideRepository(FakeMatchingApi(), session()).getAssignedDriver(partyId = 7)
-
-        assertEquals(4, driver.seats)
-        assertEquals("12가 3456", driver.plateNumber)
-        assertEquals("쏘나타", driver.vehicleType)
-    }
-
-    @Test
     fun `경로 미리보기는 좌표 4개를 본문으로 보내고 path 를 encodedPath 로 돌려준다`() = runBlocking {
         val api = FakeMatchingApi()
 
@@ -308,9 +298,16 @@ class RemoteRideRepositoryTest {
         assertFalse(error.isNotHost)
     }
 
-    /** 409 도 두 가지다 — 정원 미달과 기사 배정은 사용자가 할 일이 정반대다(기다리기 / 기다릴 일 없음). */
+    /**
+     * 409 는 이제 **정원 미달 하나뿐**이다. `DRIVER_ALREADY_ASSIGNED` 는 서버가 기사·배차를 걷어내며
+     * **에러 코드째 지웠다**(서버 `MatchingErrorCode` 에 없다).
+     *
+     * 그래도 그 코드가 오는 경우를 함께 고정한다 — 옛 서버나 되돌린 배포가 보낼 수 있고, 그때 앱은
+     * **사유를 추측하지 않고** 코드만 들고 와 일반 문구로 떨어져야 한다. 삭제한 분기가 「어느 사유도
+     * 아님」으로 떨어지는 것까지가 이 삭제의 안전함이다.
+     */
     @Test
-    fun `합승 완료 409 두 가지를 코드로 가른다`() = runBlocking {
+    fun `합승 완료 409 는 정원 미달뿐이고 사라진 기사 코드는 사유가 되지 않는다`() = runBlocking {
         val notCompleted = runCatching {
             RemoteRideRepository(
                 FakeMatchingApi(finishFailure = conflict("PARTY_NOT_COMPLETED", "정원이 다 차지 않은 방입니다.")),
@@ -318,7 +315,7 @@ class RemoteRideRepositoryTest {
             ).finishParty(partyId = 7)
         }.exceptionOrNull() as PartyFinishException
 
-        val driverAssigned = runCatching {
+        val removedDriverCode = runCatching {
             RemoteRideRepository(
                 FakeMatchingApi(finishFailure = conflict("DRIVER_ALREADY_ASSIGNED", "이미 기사가 배정된 방입니다.")),
                 session(),
@@ -326,9 +323,11 @@ class RemoteRideRepositoryTest {
         }.exceptionOrNull() as PartyFinishException
 
         assertTrue(notCompleted.isNotCompleted)
-        assertFalse(notCompleted.isDriverAssigned)
-        assertTrue(driverAssigned.isDriverAssigned)
-        assertFalse(driverAssigned.isNotCompleted)
+
+        assertEquals("DRIVER_ALREADY_ASSIGNED", removedDriverCode.code)
+        assertFalse(removedDriverCode.isNotCompleted)
+        assertFalse(removedDriverCode.isNotHost)
+        assertFalse(removedDriverCode.isNotMember)
     }
 
     /**
@@ -352,7 +351,8 @@ class RemoteRideRepositoryTest {
         // 모르는 코드는 그대로 들고 오지만 어느 사유도 아니다.
         assertEquals("PARTY_SOMETHING_NEW", unknownCode.code)
         assertFalse(unknownCode.isNotCompleted)
-        assertFalse(unknownCode.isDriverAssigned)
+        assertFalse(unknownCode.isNotHost)
+        assertFalse(unknownCode.isNotMember)
 
         assertNull(bodyless.code)
         assertFalse(bodyless.isNotHost)
@@ -761,9 +761,6 @@ class RemoteRideRepositoryTest {
             leaveCall = partyId
             leaveFailure?.let { throw it }
         }
-
-        override suspend fun getAssignedDriver(partyId: Long) =
-            DriverSummaryResponse(seats = 4, plateNumber = "12가 3456", type = "쏘나타")
 
         // 실서버(localhost:8080) 응답을 축약한 값 — 폴리라인 필드명이 path 다.
         override suspend fun previewRoute(request: RouteRequestDto): RouteEstimateResponse {

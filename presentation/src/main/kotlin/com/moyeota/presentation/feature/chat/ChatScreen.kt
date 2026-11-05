@@ -354,7 +354,7 @@ private val PreviewMessages = listOf(
  * 이동(디스크립션):
  * - 뒤로 → 22 탑승 상세 (onBack)
  * - 「⋮」 → 24a 메뉴 열림 (내부 상태)
- * - 상단 「매칭 화면으로 →」 배너 탭 → 21/25/26 진행 단계 (onOpenMatching — 진행 중인 방의 채팅방일 때만 보인다)
+ * - 상단 「매칭 화면으로 →」 배너 탭 → 21 매칭 대기 (onOpenMatching — 진행 중인 방의 채팅방일 때만 보인다)
  * - 24a 「채팅방 알림 끄기/켜기」 → 24 (서버 음소거 토글 — onToggleMute, 부제에 「알림 꺼짐」)
  * - 24a 「채팅방 나가기」 → **항상 재확인 다이얼로그** → 14 홈 (onLeaveChat)
  * - **상대 말풍선 롱프레스** → 신고 액션 시트 → 사유 시트 → 24 (onReportMessage).
@@ -394,13 +394,11 @@ fun ChatScreen(
     onInputChange: (String) -> Unit = {},
     onSend: () -> Unit = {},
     onBack: () -> Unit = {},
-    /** 현재 화면에 이 진입 요소가 없다 — 진행 중 방은 [onOpenMatching] 배너가 21/25/26 으로 보낸다. 호출부 시그니처만 유지한다 */
-    @Suppress("UNUSED_PARAMETER") onOpenRideOngoing: () -> Unit = {},
     /**
      * 이 방의 파티가 아직 진행 중일 때 매칭 단계 화면으로 되돌아가는 길. **null 이면 그리지 않는다** —
      * 끝난 방의 채팅에서 「매칭 화면으로」를 눌러 봐야 갈 곳이 없다.
      *
-     * 21·25·26 에서 「채팅 열기」로 들어온 사용자에게는 뒤로가기가 이미 복귀 경로지만,
+     * 21 에서 「채팅 열기」로 들어온 사용자에게는 뒤로가기가 이미 복귀 경로지만,
      * 채팅 **탭 목록**에서 들어온 사용자에게는 이 버튼이 유일한 길이다.
      */
     onOpenMatching: (() -> Unit)? = null,

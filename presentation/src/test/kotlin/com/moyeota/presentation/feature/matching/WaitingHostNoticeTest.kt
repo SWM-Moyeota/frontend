@@ -77,7 +77,7 @@ class WaitingHostNoticeTest {
     fun `방장에게는 합승 완료 버튼이 보인다`() {
         val ride = fullParty(listOf(member("me", isMe = true, isHost = true), member("u2")))
 
-        assertTrue(canFinishParty(ride, taxiEnabled = false))
+        assertTrue(canFinishParty(ride))
     }
 
     /**
@@ -88,9 +88,9 @@ class WaitingHostNoticeTest {
     fun `비방장에게는 합승 완료 버튼을 보이지 않는다`() {
         val ride = fullParty(listOf(member("me", isMe = true), member("u2", isHost = true)))
 
-        assertFalse(canFinishParty(ride, taxiEnabled = false))
+        assertFalse(canFinishParty(ride))
         // 단계 자체는 그대로다 — 헤드라인·나가기 문구는 비방장에게도 「정원이 찼다」로 보여야 한다.
-        assertTrue(isFinishStage(ride.status, taxiEnabled = false))
+        assertTrue(isFinishStage(ride.status))
     }
 
     /**
@@ -101,7 +101,7 @@ class WaitingHostNoticeTest {
     fun `내가 목록에 없으면 버튼을 주지 않는다`() {
         val ride = fullParty(listOf(member("u1", isHost = true), member("u2")))
 
-        assertFalse(canFinishParty(ride, taxiEnabled = false))
+        assertFalse(canFinishParty(ride))
     }
 
     /**
@@ -114,7 +114,7 @@ class WaitingHostNoticeTest {
         // 폴백 결과와 같은 모양: 내 줄만 isHost = true
         val ride = fullParty(listOf(member("me", isMe = true, isHost = true), member("u2"), member("u3")))
 
-        assertTrue(canFinishParty(ride, taxiEnabled = false))
+        assertTrue(canFinishParty(ride))
     }
 
     // ─── 안내문 ──────────────────────────────────────────────────────────────

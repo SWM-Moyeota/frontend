@@ -156,7 +156,8 @@ class WaitingMembershipTest {
      */
     @Test
     fun `단계와 무관하게 판정한다`() {
-        for (status in listOf(RideStatus.RECRUITING, RideStatus.MATCHED, RideStatus.DISPATCHING)) {
+        // 열거형 전체를 훑는다 — 「status 를 보지 않는다」가 요점이므로 목록을 손으로 적을 이유가 없다.
+        for (status in RideStatus.entries) {
             assertTrue(
                 "status=$status 에서 상실을 놓쳤다",
                 hasLostMembership(sawMyself = true, ride = ride(listOf(user("u1")), status)),

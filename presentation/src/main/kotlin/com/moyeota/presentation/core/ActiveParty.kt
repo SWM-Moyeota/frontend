@@ -43,45 +43,31 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
- * 진행 중인 방이 지금 어느 단계인가. 서버 status 하나로는 갈리지 않는다 —
- * `DISPATCHING` 은 「기사 찾는 중」과 「배정돼 오는 중」을 함께 담고, 둘은 [Ride.driverId] 로 갈린다
- * (55 리포트의 25b/25c 판정 규칙과 같은 기준을 쓴다).
+ * 진행 중인 방이 지금 어느 단계인가.
+ *
+ * 기사·배차를 걷어낸 뒤로 단계는 **둘뿐**이다. 예전에는 `DISPATCHING`·`ONGOING` 에서
+ * 25b 기사 찾는 중 · 25c 택시 오는 중 · 26 운행 중이 갈라졌지만, 서버가 그 status 를
+ * 보낼 수 없게 되어 그릴 화면도 함께 사라졌다.
  */
 enum class ActiveStage {
-    /** 21 매칭 대기 — 아직 사람을 모으는 중 */
+    /** 21 매칭 대기 — 사람을 모으는 중이거나, 다 모여 채팅으로 만날 곳을 정하는 중 */
     WAITING,
-
-    /** 25b 기사 찾는 중 */
-    DRIVER_SEARCH,
-
-    /** 25c·25 택시 오는 중 */
-    DRIVER_COMING,
-
-    /** 26 운행 중 */
-    ONGOING,
 
     /** 끝났거나(COMPLETED·CANCELED) 단계로 옮길 수 없는 상태 */
     NONE,
 }
 
 val Ride.activeStage: ActiveStage
-    get() = when {
-        status == RideStatus.RECRUITING || status == RideStatus.MATCHED -> ActiveStage.WAITING
-        status == RideStatus.DISPATCHING && driverId == null -> ActiveStage.DRIVER_SEARCH
-        status == RideStatus.DISPATCHING -> ActiveStage.DRIVER_COMING
-        status == RideStatus.ONGOING -> ActiveStage.ONGOING
-        else -> ActiveStage.NONE
+    get() = when (status) {
+        RideStatus.RECRUITING, RideStatus.MATCHED -> ActiveStage.WAITING
+        RideStatus.COMPLETED, RideStatus.CANCELED -> ActiveStage.NONE
     }
 
-/** 배너·카드에 쓰는 단계 문구. 각 단계 화면의 헤더 제목과 같은 말을 쓴다. */
+/** 배너·카드에 쓰는 단계 문구. 21 대기 화면의 헤더 제목과 같은 말을 쓴다. */
 val Ride.activeStageLabel: String
     get() = when (activeStage) {
-        // 정원이 찬 방(COMPLETED)은 「찾는 중」이 아니다. 기사 모드에선 순간이라 거의 안 보이고,
-        // 1차 배포 모드에선 채팅으로 만나는 동안 계속 이 문구다.
+        // 정원이 찬 방(MATCHED)은 「찾는 중」이 아니다 — 채팅으로 만날 곳을 정하는 동안 계속 이 문구다.
         ActiveStage.WAITING -> if (status == RideStatus.MATCHED) "같이 탈 사람이 모였어요" else "같이 탈 사람 찾는 중"
-        ActiveStage.DRIVER_SEARCH -> "기사님 찾는 중"
-        ActiveStage.DRIVER_COMING -> "택시 오는 중"
-        ActiveStage.ONGOING -> "운행 중"
         ActiveStage.NONE -> "진행 중 탑승"
     }
 
@@ -93,8 +79,8 @@ private const val CHAT_ROOM_POLL_INTERVAL_MS = 10_000L
  * 부르는 것만 흡수하면 되므로 **짧게** 잡는다 — QA 가 잰 중복은 25ms 간격이었고(119 D-2), 전이
  * 애니메이션을 타고 들어오는 재구성도 수백 ms 안이다.
  *
- * 길게 잡으면 그만큼 배너·단계가 늦게 바뀐다. 특히 정원이 차는 순간 21 이 거는 재조회
- * (`MainNavGraph` 의 `onMatchingStarted`)까지 삼키면 채팅방 id 가 한 박자 늦는다 — 그래서 0.5초다.
+ * 길게 잡으면 그만큼 배너·단계가 늦게 바뀐다. 특히 정원이 차는 순간 21 이 거는 재조회까지
+ * 삼키면 채팅방 id 가 한 박자 늦는다 — 그래서 0.5초다.
  */
 private const val RESOLVE_DEDUP_WINDOW_MS = 500L
 
@@ -190,7 +176,7 @@ class ActivePartyViewModel(
     val resolvedOnce: StateFlow<Boolean> = _resolvedOnce.asStateFlow()
 
     /**
-     * 진행 중인 방에 딸린 채팅방 id. 정원이 차기 전에는 방이 없어 null 이고, 그때 21·25 의
+     * 진행 중인 방에 딸린 채팅방 id. 정원이 차기 전에는 방이 없어 null 이고, 그때 21 의
      * 「채팅 열기」는 아예 그리지 않는다 — 눌러도 열 것이 없는 버튼을 두지 않는다.
      */
     private val _chatRoomId = MutableStateFlow<Long?>(null)
@@ -425,8 +411,8 @@ class ActivePartyViewModel(
 /**
  * 14 홈 · 17 합승 상단의 「진행 중 탑승 · 보기」 배너.
  *
- * 문구는 단계별로 갈린다 — 「진행 중 탑승」 한마디로는 지금 눌러야 하는지(택시가 오는 중)와
- * 그냥 기다리면 되는지(사람 찾는 중)를 구분할 수 없다.
+ * 문구는 [Ride.activeStageLabel] 을 그대로 쓴다 — 사람을 더 찾는 중인지 다 모였는지가
+ * 배너만 보고도 갈려야 한다.
  */
 @Composable
 fun ActiveRideBanner(
@@ -475,11 +461,7 @@ fun ActiveRideBanner(
     }
 }
 
-/**
- * 21·25 의 「채팅 열기」. **채팅방이 실제로 있을 때만** 그린다(호출부가 null 검사로 가른다).
- *
- * 26 운행 중에는 같은 이름의 버튼이 화면 레이아웃 안에 이미 박혀 있어 여기서 쓰지 않는다.
- */
+/** 21 대기 화면의 「채팅 열기」. **채팅방이 실제로 있을 때만** 그린다(호출부가 null 검사로 가른다). */
 @Composable
 fun OpenChatButton(
     onClick: () -> Unit,

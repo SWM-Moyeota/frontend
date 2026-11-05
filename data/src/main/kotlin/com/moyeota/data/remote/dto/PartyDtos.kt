@@ -74,9 +74,9 @@ data class PartyDetailResponse(
      *
      * 그래도 nullable 인 이유는 **명시적 `null` 하나가 방 화면을 못 열게 만들지 않기 위해서**다.
      * 서버 `PartyDetailResult.currentMembers` 는 `party.getMembers().size()` 라 운영에서는 늘 실리지만,
-     * non-null 로 선언하면 null 이 오는 순간 파싱이 터져 상세가 **통째로** 실패한다 — 25·26 의 주기
-     * 조회가 이 상세 하나에 걸려 있어 그 실패는 배차·운행 전이를 영영 못 잡는 것으로 번진다.
-     * (같은 판단: [MemberInfo] 의 문자열 필드들, [version].)
+     * non-null 로 선언하면 null 이 오는 순간 파싱이 터져 상세가 **통째로** 실패한다 — 방 화면이
+     * 읽는 유일한 조회이고 SSE 스냅샷도 같은 모양이라, 그 실패는 방 화면이 아예 열리지 않는 것으로
+     * 번진다. (같은 판단: [MemberInfo] 의 문자열 필드들, [version].)
      */
     val currentMembers: Int? = null,
     /**
@@ -97,10 +97,12 @@ data class PartyDetailResponse(
     val estimateTime: Int? = null,
     /** Google Encoded Polyline. 서버가 방 생성 시 네이버 경로 API 로 산출해 저장해 둔 값. */
     val route: String? = null,
-    val taxiDriverId: Long? = null,
+    // `taxiDriverId` 는 **없다.** 기사·배차가 서버에서 사라졌다(Backend #297~#302). 서버는 출시된
+    // 앱 호환을 위해 응답에 키를 남겨 두지만(늘 null) 받지 않는다 — `Json { ignoreUnknownKeys = true }`
+    // (`NetworkModule`)가 조용히 흘린다. 되살리면 아무도 읽지 않는 항상-null 필드가 된다.
     /**
      * 이 상세가 찍힌 시점의 방 순번(Backend V18, `Party.version`). 들고 남이 있을 때마다 1씩 오른다
-     * (서버에서 올리는 곳은 join·leave·finish·expire 네 군데뿐 — 배차·운행 전이는 올리지 않는다).
+     * (서버에서 올리는 곳은 join·leave·finish·expire 네 군데뿐이다).
      *
      * **쓰는 이유는 하나다 — 프레임 순서가 뒤집히기 때문이다.** 서버는 구독을 레지스트리에 먼저
      * 등록한 뒤 DB 를 읽어 `connected` 를 보내므로, 그 사이에 커밋된 변경분이 `connected` 보다
@@ -245,7 +247,10 @@ data class MemberLeftPayload(
  */
 @Serializable
 data class PartyStatusResponse(
-    /** 서버 `PartyStatus` enum 이름(ACTIVE/COMPLETED/MATCHING/DRIVER_ASSIGNED/IN_RIDE/FINISHED/CANCELED). */
+    /**
+     * 서버 `PartyStatus` enum 이름 — **ACTIVE/COMPLETED/FINISHED/CANCELED 넷뿐**이다.
+     * `MATCHING`·`DRIVER_ASSIGNED`·`IN_RIDE` 는 서버 enum 에서 삭제됐다(Backend #297~#302).
+     */
     val status: String = "",
     /**
      * 합류 **직후**의 인원. 서버 record 가 `Integer` 이고 값은 `party.getMembers().size()` 라 운영에서는
@@ -306,18 +311,11 @@ data class OpenPartyResponse(
     val estimateFare: Int? = null,
     val estimateTime: Int? = null,
     val route: String? = null,
-    val taxiDriverId: Long? = null,
+    // 상세와 같은 이유로 `taxiDriverId` 가 없다([PartyDetailResponse] 참고).
 )
 
-// GET /api/v1/matching/rooms/{partyId}/driver — 백엔드 driver/api/DriverSummary
-// 기사 이름·별점 필드는 서버에 없다.
-@Serializable
-data class DriverSummaryResponse(
-    val seats: Int? = null,
-    val plateNumber: String = "",
-    /** 차종. 서버 필드명이 type 이다. */
-    val type: String = "",
-)
+// `GET /api/v1/matching/rooms/{partyId}/driver` 의 `DriverSummaryResponse` 는 **지웠다** —
+// 그 엔드포인트가 서버에서 사라졌다(Backend #297~#302).
 
 // POST /api/v1/matching/routes — 백엔드 RouteRequest / RouteEstimate
 // 컨트롤러가 도메인 record RouteEstimate 를 그대로 반환한다(RoutePreviewResponse 와 필드명 동일).

@@ -352,9 +352,7 @@ internal data class JoinStatusBadge(val kind: NoticeKind, val text: String)
 internal fun joinStatusBadge(status: RideStatus): JoinStatusBadge = when (status) {
     RideStatus.RECRUITING -> JoinStatusBadge(NoticeKind.SUCCESS, "모집 중")
     RideStatus.MATCHED -> JoinStatusBadge(NoticeKind.WAITING, "모집 마감된 방")
-    RideStatus.DISPATCHING -> JoinStatusBadge(NoticeKind.WAITING, "기사님 찾는 방")
-    RideStatus.ONGOING -> JoinStatusBadge(NoticeKind.INFO, "운행 중인 방")
-    RideStatus.COMPLETED -> JoinStatusBadge(NoticeKind.INFO, "운행이 끝난 방")
+    RideStatus.COMPLETED -> JoinStatusBadge(NoticeKind.INFO, "합승이 끝난 방")
     RideStatus.CANCELED -> JoinStatusBadge(NoticeKind.ERROR, "취소된 방")
 }
 
@@ -366,7 +364,7 @@ internal enum class JoinGate {
     /** 이미 내가 이 방의 멤버다 — 합류가 아니라 돌아갈 자리다 */
     ALREADY_JOINED,
 
-    /** 모집 중이 아닌 방(마감·배차·운행·취소) */
+    /** 모집 중이 아닌 방(모집 마감·종료·취소) */
     NOT_RECRUITING,
 
     /** 상태는 모집 중인데 자리가 없다 */

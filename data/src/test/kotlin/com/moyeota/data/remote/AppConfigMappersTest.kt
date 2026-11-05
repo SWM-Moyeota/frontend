@@ -3,38 +3,41 @@ package com.moyeota.data.remote
 import com.moyeota.data.remote.dto.AppConfigResponse
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** `GET /api/v1/config` — 서버 `AppConfigResponse(boolean taxiEnabled)` 기준 */
+/**
+ * `GET /api/v1/config`.
+ *
+ * 서버 응답은 아직 `{"taxiEnabled":false}` 하나지만 **앱은 그 키를 받지 않는다** — 기사·배차가
+ * 사라져 갈릴 모드가 없어졌고, 서버는 출시된 앱 호환으로 키만 남겨 두었다. 그래서 아래 JSON 들은
+ * 일부러 `taxiEnabled` 를 싣는다: 「모르는 키를 조용히 흘린다」가 이 매퍼의 남은 계약이다.
+ */
 class AppConfigMappersTest {
 
     private val json = Json { ignoreUnknownKeys = true }
 
+    /**
+     * 모르는 필드가 늘어나도 깨지지 않는다 — 서버가 `taxiEnabled` 를 계속 보내도, 다른 키를 더해도
+     * 역직렬화가 살아 있어야 한다. 여기서 터지면 **앱 시작이 막힌다**(설정은 시작 때 한 번 읽는다).
+     */
     @Test
-    fun `taxiEnabled false 를 그대로 옮긴다`() {
-        val response = json.decodeFromString<AppConfigResponse>("""{"taxiEnabled":false}""")
-        assertFalse(response.toAppConfig().taxiEnabled)
+    fun `모르는 필드가 늘어나도 깨지지 않고 앱으로 새지 않는다`() {
+        val config = json
+            .decodeFromString<AppConfigResponse>("""{"taxiEnabled":true,"minVersion":"1.2.0"}""")
+            .toAppConfig()
+
+        // 모르는 키는 아무것도 채우지 않는다 — 버전 기준만 읽는 DTO 다.
+        assertNull(config.minVersionCode)
+        assertNull(config.recommendedVersionCode)
     }
 
     @Test
-    fun `taxiEnabled true 를 그대로 옮긴다`() {
-        val response = json.decodeFromString<AppConfigResponse>("""{"taxiEnabled":true}""")
-        assertTrue(response.toAppConfig().taxiEnabled)
-    }
+    fun `응답이 비어도 기본값으로 떨어진다`() {
+        val config = json.decodeFromString<AppConfigResponse>("""{}""").toAppConfig()
 
-    @Test
-    fun `필드가 빠지면 동승 모드(false) 다 — 모를 땐 실배포 모드`() {
-        val response = json.decodeFromString<AppConfigResponse>("""{}""")
-        assertFalse(response.toAppConfig().taxiEnabled)
-    }
-
-    @Test
-    fun `모르는 필드가 늘어나도 깨지지 않는다`() {
-        val response = json.decodeFromString<AppConfigResponse>("""{"taxiEnabled":true,"minVersion":"1.2.0"}""")
-        assertTrue(response.toAppConfig().taxiEnabled)
+        assertNull(config.minVersionCode)
+        assertNull(config.recommendedVersionCode)
     }
 
     // ─────────────── 강제 업데이트 기준 (서버가 아직 주지 않는 필드) ───────────────

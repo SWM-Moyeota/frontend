@@ -2,7 +2,6 @@ package com.moyeota.presentation.analytics
 
 import com.moyeota.domain.analytics.Analytics
 import com.moyeota.domain.analytics.AnalyticsEvent
-import com.moyeota.domain.model.AssignedDriver
 import com.moyeota.domain.model.AuthState
 import com.moyeota.domain.model.MatchCandidate
 import com.moyeota.domain.model.NewParty
@@ -102,9 +101,6 @@ open class FakeRideRepository : RideRepository {
         destinationLat: Double,
         destinationLng: Double,
     ): List<MatchCandidate> = TODO()
-    override suspend fun getAssignedDriver(partyId: Long): AssignedDriver = TODO()
-    override suspend fun reportEmergency(partyId: Long?): Long = TODO()
-    override suspend fun confirmEmergencyCall(called: Boolean) = TODO()
     override suspend fun previewRoute(
         departureLat: Double,
         departureLng: Double,

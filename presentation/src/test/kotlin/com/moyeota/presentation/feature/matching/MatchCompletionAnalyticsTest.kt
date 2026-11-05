@@ -58,13 +58,18 @@ class MatchCompletionAnalyticsTest {
         assertEquals(emptyList<String>(), rule.names())
     }
 
+    /**
+     * 「다음 단계로 가도 1번」을 보던 세 번째 스냅샷(`DISPATCHING`)이 빠졌다 — 서버가 그 status 를
+     * 보낼 수 없다. 정원이 찬 방이 머무는 곳은 MATCHED 하나이므로, 못 박을 것은 **같은 상태가
+     * 몇 번 와도 한 번**이다(스냅샷은 재연결마다 다시 온다).
+     */
     @Test
-    fun `정원 충족을 처음 보면 1번 - 같은 상태가 다시 와도, 다음 단계로 가도 여전히 1번`() {
+    fun `정원 충족을 처음 보면 1번 - 같은 상태가 다시 와도 여전히 1번`() {
         enter()
         now += 42_700
         snapshot(testRide(RideStatus.MATCHED, capacity = 3, members = 3))
         snapshot(testRide(RideStatus.MATCHED, capacity = 3, members = 3))
-        snapshot(testRide(RideStatus.DISPATCHING, capacity = 3, members = 3))
+        snapshot(testRide(RideStatus.MATCHED, capacity = 3, members = 3))
 
         assertEquals(listOf(AnalyticsEvent.MatchCompleted(capacity = 3, memberCount = 3, waitedSeconds = 42)), rule.recorded)
     }
@@ -124,13 +129,18 @@ class MatchCompletionAnalyticsTest {
         assertEquals(AnalyticsEvent.PartyFinished(memberCount = 3), rule.recorded.last())
     }
 
+    /**
+     * 예전에는 `DISPATCHING`·`ONGOING` 도 참이었다(정원이 찬 뒤의 단계라서) — 서버가 그 두
+     * status 를 보낼 수 없게 되면서 참인 값이 하나로 줄었다.
+     *
+     * **거짓인 쪽을 열거형 전체로 훑는다.** 퍼널이 거짓을 말하는 길은 「아직 안 찬 방·닫힌 방을
+     * 매칭 완료로 센다」 하나이고, 단계가 늘면 그 새 값이 기본적으로 거짓이어야 한다.
+     */
     @Test
-    fun `isMatchFull 은 status 로만 판정한다`() {
+    fun `isMatchFull 은 정원이 찬 status 하나만 참이다`() {
         assertTrue(isMatchFull(RideStatus.MATCHED))
-        assertTrue(isMatchFull(RideStatus.DISPATCHING))
-        assertTrue(isMatchFull(RideStatus.ONGOING))
-        assertFalse(isMatchFull(RideStatus.RECRUITING))
-        assertFalse(isMatchFull(RideStatus.COMPLETED))
-        assertFalse(isMatchFull(RideStatus.CANCELED))
+        RideStatus.entries.filter { it != RideStatus.MATCHED }.forEach { status ->
+            assertFalse("$status 가 매칭 완료로 셈된다", isMatchFull(status))
+        }
     }
 }

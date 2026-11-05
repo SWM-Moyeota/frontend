@@ -858,7 +858,7 @@ class ChatRoomViewModel(
 /**
  * 24 채팅 **탭** — 방 목록에서 고르면 같은 라우트 안에서 방으로 전환한다.
  *
- * 21·25·26 의 「채팅 열기」는 이 경로로 오지 않는다 — 탭으로 보내면 매칭 화면이 스택에서 빠진다.
+ * 21 의 「채팅 열기」는 이 경로로 오지 않는다 — 탭으로 보내면 매칭 화면이 스택에서 빠진다.
  * 그쪽은 [ChatRoomDestinationRoute] 를 독립 목적지로 쌓아 뒤로가기가 원래 화면으로 돌아가게 한다.
  *
  * @param activeChatRoomId 진행 중인 방의 **채팅방 id**(`ActivePartyViewModel.chatRoomId`). 열린 채팅방이
@@ -873,7 +873,6 @@ fun ChatRoute(
     activeChatRoomId: Long? = null,
     activePartyId: String? = null,
     onOpenMatching: () -> Unit = {},
-    onOpenRideOngoing: () -> Unit = {},
     onLeaveChat: () -> Unit = {},
     onTabSelect: (MoyeotaTab) -> Unit = {},
     /** 열린 방에서 403(참여자 아님) — 진행 화면의 채팅방 id 캐시를 버리게 한다 */
@@ -902,7 +901,6 @@ fun ChatRoute(
             knownMuted = openedMuted,
             onBack = { openedRoom = null },
             onOpenMatching = onOpenMatching.takeIf { room.isActiveParty(activeChatRoomId, activePartyId) },
-            onOpenRideOngoing = onOpenRideOngoing,
             // 나간 방을 열어둔 채로 홈에 보내면, 채팅 탭에 돌아왔을 때 참여자가 아닌 방을 다시 연다.
             onLeaveChat = {
                 openedRoom = null
@@ -950,7 +948,6 @@ private fun ChatRoomRoute(
     knownMuted: Boolean? = null,
     onBack: () -> Unit,
     onOpenMatching: (() -> Unit)?,
-    onOpenRideOngoing: () -> Unit,
     onLeaveChat: () -> Unit,
     onTabSelect: (MoyeotaTab) -> Unit,
     /** 서버가 「참여자 아님」(403)을 답했다 — 호출자는 이 방 id 캐시를 버려야 한다 */
@@ -1040,7 +1037,6 @@ private fun ChatRoomRoute(
             onSearchRetry = viewModel::retrySearch,
             onSearchLoadMore = viewModel::loadMoreSearch,
             onOpenMatching = onOpenMatching,
-            onOpenRideOngoing = onOpenRideOngoing,
             onLeaveChat = viewModel::leaveRoom, // 서버에서 빠진 뒤 14 홈으로
             onTabSelect = onTabSelect,
             reportSubmitting = report.submitting,
@@ -1051,7 +1047,7 @@ private fun ChatRoomRoute(
 }
 
 /**
- * 24 채팅방 — **독립 목적지**(`Routes.CHAT_ROOM`). 21·25·26 의 「채팅 열기」가 이걸 스택에 쌓는다.
+ * 24 채팅방 — **독립 목적지**(`Routes.CHAT_ROOM`). 21 의 「채팅 열기」가 이걸 스택에 쌓는다.
  *
  * 대화 자체는 탭 안의 방 화면과 **완전히 같은 것**을 쓴다([ChatRoomRoute]) — 방 하나에 화면이 둘이면
  * 폴링·읽음 처리·나가기 규칙이 두 벌이 된다. 여기서 더 하는 일은 하나뿐이다: 라우트 인자로 받은
@@ -1073,7 +1069,6 @@ fun ChatRoomDestinationRoute(
     activePartyId: String? = null,
     onBack: () -> Unit = {},
     onOpenMatching: () -> Unit = {},
-    onOpenRideOngoing: () -> Unit = {},
     onLeaveChat: () -> Unit = {},
     onTabSelect: (MoyeotaTab) -> Unit = {},
     /** 이 방에 참여자가 아니라는 403 — 진행 화면이 들고 있던 채팅방 id 캐시를 버리게 한다 */
@@ -1100,7 +1095,6 @@ fun ChatRoomDestinationRoute(
             onBack = onBack,
             onOpenMatching = onOpenMatching.takeIf { current.isActiveParty(activeChatRoomId, activePartyId) },
             onNotParticipant = onNotParticipant,
-            onOpenRideOngoing = onOpenRideOngoing,
             onLeaveChat = onLeaveChat,
             onTabSelect = onTabSelect,
         )
