@@ -701,12 +701,21 @@ class MatchWaitingViewModel(
     }
 
     /**
-     * 「약속 시간 정하기」 — 프리셋 하나(지금부터 [minutes] 분 뒤)를 ISO-8601 로 보낸다.
+     * 「약속 시간 정하기」 — 사용자가 **다이얼로그에서 본 그 시각**([departureAt], ISO-8601)을 보낸다.
      *
-     * ### 왜 분(minutes)만 받나
-     * 시각을 만드는 자리를 **하나로** 둔다([meetingPresetIso]). 화면이 시각을 만들어 넘기면 「화면이
-     * 본 지금」과 「서버가 받는 지금」 사이에 사용자가 다이얼로그를 들여다본 시간이 끼어들고, 그만큼
-     * 1시간 한도에 가까워진다. 여기서 누르는 순간의 [clock] 으로 만들면 그 틈이 사라진다.
+     * ### 왜 분(minutes)이 아니라 시각을 받나 ★
+     * 예전에는 분만 받아 여기서 [clock] 으로 다시 만들었다. 그러면 시계를 **두 번** 읽게 되고,
+     * 다이얼로그를 띄운 뒤 분이 바뀌면 **사용자가 동의한 시각과 저장되는 시각이 달라진다**
+     * (실측 2026-11-06: 「오전 10:59에 만날까요?」로 묻고 11:00 으로 확정됐다). 확정은 되돌릴 수
+     * 없고 어기면 노쇼가 되므로, 동의한 값과 보내는 값이 갈리면 안 된다.
+     *
+     * 예전 주석은 「화면이 만들면 1시간 한도에 가까워진다」고 적었는데 **반대다.** 캡처한 값은
+     * `고른시각 + 60분` 이라 제출 시점의 `지금 + 60분` 보다 늘 **앞**이다 — 오히려 한도에서 멀어진다.
+     * 재계산 쪽이 한도에 정확히 걸터앉아 앱·서버 시계 오차에 취약했다.
+     *
+     * 다이얼로그를 **10분 넘게** 열어 두면 캡처한 값이 과거가 되어 서버가 400
+     * `INVALID_MEETING_TIME` 으로 거절한다 — [confirmFailureMessage] 가 「더 가까운 시간으로 골라
+     * 주세요」로 답하므로 사용자가 할 일이 분명하다. 조용히 다른 시각을 보내는 쪽보다 낫다.
      *
      * ### 성공하면 그 자리에서 고친다
      * 서버가 204 를 주면 **확정은 사실**이다. SSE `confirmed` 가 보통 곧 오지만 그 스트림은
@@ -717,11 +726,10 @@ class MatchWaitingViewModel(
      *
      * 상세를 다시 읽지 않는다 — 내가 보낸 값이 그대로 확정된 것이라 서버에 물어 더 알아낼 것이 없다.
      */
-    fun confirmMeeting(minutes: Int) = runAction(
+    fun confirmMeeting(departureAt: String) = runAction(
         failureMessage = CONFIRM_FAILED_MESSAGE,
         messageOf = { (it as? PartyConfirmException)?.let(::confirmFailureMessage) },
     ) {
-        val departureAt = meetingPresetIso(Instant.ofEpochMilli(clock()), minutes)
         repository.confirmMeeting(partyId, departureAt)
         heldRide()?.let { publish(it.withMeetingConfirmed(departureAt).ride) }
     }
@@ -1553,7 +1561,7 @@ fun MatchWaitingRoute(
                 onCancelSearch = viewModel::leaveParty, // 나가기 성공 시 14 홈
                 onFinish = viewModel::finishParty, // 합승 완료 성공 시 14 홈 (확정 전 방 전용)
                 // 프리셋이 고른 **분**만 넘긴다 — 시각은 누르는 순간의 시계로 ViewModel 이 만든다
-                // (다이얼로그를 들여다본 시간이 1시간 한도를 깎지 않게 한다 — confirmMeeting KDoc).
+                // 화면이 **보여 준 그 시각**을 그대로 넘긴다 — 동의한 값과 보내는 값이 같아야 한다.
                 onConfirmMeeting = viewModel::confirmMeeting,
                 // 좌표를 묶어서 받는다 — lat/lng 두 Double 로 받으면 전치가 컴파일을 통과한다
                 onArrive = { coordinates ->
