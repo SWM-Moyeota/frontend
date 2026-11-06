@@ -31,6 +31,26 @@ import kotlinx.coroutines.launch
 // (검색으로 고른 장소명은 사용자가 고른 정답이라 건드리지 않는다). 그래서 internal.
 internal const val CurrentLocationName = "현재 위치"
 
+/**
+ * 즐겨찾기 요청이 **응답을 못 받았을 때**의 문구(`FavoritePlaceException.isNetwork`).
+ *
+ * 노쇼·확정 같은 액션은 이 구분을 일부러 두지 않는다 — 「응답을 못 받았다」와 「모르는 코드」의
+ * 대응이 둘 다 재시도로 같기 때문이다(`NoShowMappers` KDoc). 즐겨찾기가 다르게 가는 이유는
+ * **일반 문구가 재시도를 말하지 않기** 때문이다: 비행기모드인 사용자에게 「담지 못했어요」만
+ * 띄우면 왜인지 모른 채 ★ 를 계속 누른다. 고칠 것이 있는 실패라 그것을 말해 준다.
+ *
+ * 문구는 합류 쪽과 같은 것을 쓴다(`JoinConfirmRoute` 의 `isNetwork` 분기) — 같은 사실에 앱이
+ * 두 가지 말을 하지 않게 한다. 담기·빼기·홈의 지우기가 이 하나를 공유하는 이유도 같다:
+ * 같은 비행기모드에서 화면마다 다른 말을 하면 사용자가 원인을 자기 조작에서 찾는다.
+ */
+internal const val FavoriteNetworkFailureMessage = "네트워크가 불안정해요. 연결을 확인하고 다시 시도해 주세요"
+
+/** 사유를 가릴 수 없는 담기 실패. [DestinationViewModel.addFavorite] 의 두 catch 가 함께 쓴다. */
+private const val AddFailedMessage = "자주 가는 곳에 담지 못했어요"
+
+/** 사유를 가릴 수 없는 빼기 실패. [DestinationViewModel.removeFavorite] 의 두 catch 가 함께 쓴다. */
+private const val RemoveFailedMessage = "자주 가는 곳에서 빼지 못했어요"
+
 /** 기기 실좌표 → 출발지 Place. 좌표만 실값이고 이름·주소는 고정 문구다 */
 private fun currentLocationPlace(coordinates: UserCoordinates) = Place(
     name = CurrentLocationName,
@@ -189,7 +209,7 @@ class DestinationViewModel(
             } catch (e: FavoritePlaceException) {
                 _uiState.update { it.copy(favoriteActionMessage = addFailureMessage(e)) }
             } catch (e: Exception) {
-                _uiState.update { it.copy(favoriteActionMessage = "자주 가는 곳에 담지 못했어요") }
+                _uiState.update { it.copy(favoriteActionMessage = AddFailedMessage) }
             } finally {
                 _uiState.update { it.copy(favoriteActionLoading = false) }
             }
@@ -206,7 +226,16 @@ class DestinationViewModel(
         e.isLimitExceeded ->
             "자주 가는 곳은 ${FavoritePlacePolicy.MAX_COUNT}개까지만 담을 수 있어요. 하나를 빼고 다시 담아 주세요"
         e.isDuplicated -> "이미 담아 둔 곳이에요"
-        else -> "자주 가는 곳에 담지 못했어요"
+        // 담기가 이 경계를 쓰게 되면서 비로소 닿는 경우다 — 그 전에는 raw IOException 이라 못 가렸다
+        e.isNetwork -> FavoriteNetworkFailureMessage
+        else -> AddFailedMessage
+    }
+
+    /** 빼기 실패 문구. [addFailureMessage] 와 대칭이다 — 같은 예외를 쓰지만 사유 구성이 다르다. */
+    private fun removeFailureMessage(e: FavoritePlaceException): String = when {
+        e.isNotFound -> "이미 지워졌거나 없는 곳이에요"
+        e.isNetwork -> FavoriteNetworkFailureMessage
+        else -> RemoveFailedMessage
     }
 
     /**
@@ -233,17 +262,9 @@ class DestinationViewModel(
                 // 취소는 실패가 아니다 — 화면을 떠난 것이라 문구를 세울 자리가 없다(runSearch 와 같은 규칙).
                 throw e
             } catch (e: FavoritePlaceException) {
-                _uiState.update {
-                    it.copy(
-                        favoriteActionMessage = if (e.isNotFound) {
-                            "이미 지워졌거나 없는 곳이에요"
-                        } else {
-                            "자주 가는 곳에서 빼지 못했어요"
-                        },
-                    )
-                }
+                _uiState.update { it.copy(favoriteActionMessage = removeFailureMessage(e)) }
             } catch (e: Exception) {
-                _uiState.update { it.copy(favoriteActionMessage = "자주 가는 곳에서 빼지 못했어요") }
+                _uiState.update { it.copy(favoriteActionMessage = RemoveFailedMessage) }
             } finally {
                 // 성공이든 실패든 목록을 다시 받는다 — 실패가 「목록이 낡았다」는 뜻일 수 있다
                 loadFavorites()

@@ -105,8 +105,33 @@ class FavoriteAddFailureTest {
     }
 
     /**
-     * 모르는 코드·네트워크 실패는 일반 문구다 — 서버가 `PlaceErrorCode` 를 늘려도 앱이 틀린 말을
-     * 하지 않는다(409 라고 「10개를 넘었어요」로 **추측하지 않는다**).
+     * 못 박는 것: **응답을 못 받은 실패는 할 일을 말한다.**
+     *
+     * 담기가 `favoritePlaceCall` 경계를 쓰게 되면서 비로소 닿는 경우다 — 그 전에는 raw
+     * `IOException` 이라 화면이 가릴 수 없었다. 일반 문구(「담지 못했어요」)는 재시도를 말하지
+     * 않으므로, 비행기모드인 사용자는 왜인지 모른 채 ★ 를 계속 누른다.
+     */
+    @Test
+    fun `네트워크 실패는 연결을 확인하라고 말한다`() = runTest(mainDispatcher) {
+        val offline = FavoritePlaceException(code = null, serverMessage = null, isNetwork = true)
+        val repository = FakePlaceRepository(addError = offline)
+        val viewModel = DestinationViewModel(repository)
+        advanceUntilIdle()
+
+        viewModel.addFavorite(place("판교역"))
+        advanceUntilIdle()
+
+        assertEquals(FavoriteNetworkFailureMessage, viewModel.uiState.value.favoriteActionMessage)
+        assertNotEquals(
+            "네트워크 실패가 일반 문구로 떨어졌다 — 할 일을 말하지 않는다",
+            "자주 가는 곳에 담지 못했어요",
+            viewModel.uiState.value.favoriteActionMessage,
+        )
+    }
+
+    /**
+     * 모르는 코드는 일반 문구다 — 서버가 `PlaceErrorCode` 를 늘려도 앱이 틀린 말을 하지 않는다
+     * (409 라고 「10개를 넘었어요」로 **추측하지 않는다**).
      */
     @Test
     fun `모르는 실패는 사유를 지어내지 않는다`() = runTest(mainDispatcher) {
