@@ -405,30 +405,28 @@ class ReservationFinderTest {
     // ───────────────── 「＋ 새 동승 방 만들기」가 어떤 모달을 여는가 ─────────────────
 
     /**
-     * 못 박는 것: **예약 탭에서 만들면 시간 정하기로 열린다.**
+     * 못 박는 것 둘을 한 표로 본다.
      *
-     * 예약 방을 찾다가 없어서 만들러 가는 사람인데 「지금 출발」로 열리면, 화면이 방금까지 한 일을
-     * 잊은 꼴이고 사용자는 모달에서 「시간 정하기」를 한 번 더 눌러야 한다. 그 한 번을 없앤다.
+     * 1. **예약 탭에서 만들면 시간 정하기로 열린다.** 예약 방을 찾다가 없어서 만들러 가는 사람인데
+     *    「지금 출발」로 열리면, 화면이 방금까지 한 일을 잊은 꼴이고 사용자는 모달에서 「시간
+     *    정하기」를 한 번 더 눌러야 한다. 그 한 번을 없앤다.
+     * 2. **실시간 탭은 지금까지와 같다.** 이 변경이 기존 흐름을 건드리지 않는다는 쪽이 더 중요하다.
+     *
+     * 표로 적은 이유: 모드가 늘면 **첫 단언에서 걸린다**(`entries` 와 표의 키가 어긋난다). 컴파일은
+     * `when` 이 비포괄이라 이미 막아 주지만, 그건 「분기를 적었는가」까지다 — 어느 쪽으로 적었는지는
+     * 이 표가 지킨다.
      */
     @Test
-    fun `예약 탭에서 만들면 시간 정하기로 열린다`() {
-        assertTrue(createOpensScheduled(ExploreMode.SOON))
-        assertTrue(createOpensScheduled(ExploreMode.BY_DATE))
-    }
+    fun `탭마다 여는 모달이 정해져 있다`() {
+        val expected = mapOf(
+            ExploreMode.REALTIME to false,
+            ExploreMode.SOON to true,
+            ExploreMode.BY_DATE to true,
+        )
 
-    /** 실시간 탭은 지금까지와 같다 — 이 변경이 기존 흐름을 건드리지 않는다는 쪽이 더 중요하다. */
-    @Test
-    fun `실시간 탭에서 만들면 지금 출발 그대로다`() {
-        assertFalse(createOpensScheduled(ExploreMode.REALTIME))
-    }
-
-    /**
-     * 모드가 늘어나도 **아무도 기본값에 조용히 쓸려 가지 않는다.** `when` 이 비포괄이면 컴파일이
-     * 깨지므로, 이 테스트가 지키는 것은 「지금 세 모드가 각자 답을 갖고 있다」는 사실이다.
-     */
-    @Test
-    fun `모든 탭이 답을 갖고 있다`() {
-        ExploreMode.entries.forEach { createOpensScheduled(it) }
-        assertEquals(3, ExploreMode.entries.size)
+        assertEquals("새 탭이 생겼는데 이 표에 없다", ExploreMode.entries.toSet(), expected.keys)
+        expected.forEach { (mode, scheduled) ->
+            assertEquals(mode.name, scheduled, createOpensScheduled(mode))
+        }
     }
 }
