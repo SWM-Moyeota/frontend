@@ -77,6 +77,15 @@ internal fun meetingPresetAt(now: Instant, minutes: Int): Instant =
  */
 internal fun meetingPresetIso(now: Instant, minutes: Int): String = meetingPresetAt(now, minutes).toString()
 
+/**
+ * 확정 다이얼로그가 들고 있는 선택 — 고른 프리셋([minutes])과 **그때 만든 약속 시각**([departureAt]).
+ *
+ * 둘을 함께 드는 이유가 이 타입의 전부다. [minutes] 는 어느 칩이 눌려 있는지 보여 주는 데만 쓰고,
+ * **서버로 가는 값은 [departureAt]** 이다. 분만 들고 다니면 다이얼로그 제목과 실제 요청이 시계를
+ * 따로 읽어, 그 사이 분이 바뀌면 **사용자가 동의한 시각과 확정되는 시각이 갈린다.**
+ */
+internal data class ConfirmingPreset(val minutes: Int, val departureAt: String)
+
 // ─────────────────────────── 단계 판정 ───────────────────────────
 
 /**
