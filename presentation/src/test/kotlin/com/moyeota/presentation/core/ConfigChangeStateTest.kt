@@ -54,13 +54,16 @@ class ConfigChangeStateTest {
     // ───────────────────────── 1. 방 id 는 살아남는다 ─────────────────────────
 
     /**
-     * 21·22·25·26·27 이 「어느 방인가」를 묻는 값. 셋 다 `Long?` 이라 Bundle 이 그대로 담는다 —
+     * 20·21·22 가 「어느 방인가」를 묻는 값. 둘 다 `Long?` 이라 Bundle 이 그대로 담는다 —
      * 저장 비용이 없고 [android.os.TransactionTooLargeException] 위험도 없다.
+     *
+     * 셋이었다. `activePartyId`(25·26·27 이 읽던 「지금 배차·운행 중인 방」)는 그 세 화면이
+     * 사라지면서 독자를 잃어 함께 지웠다 — 여기 남겨 두면 없는 선언을 찾다 실패한다.
      */
     @Test
     fun `화면 사이로 넘기는 방 id 는 구성 변경에서 살아남는다`() {
         val navGraph = source("core/MainNavGraph.kt")
-        listOf("createdPartyId", "activePartyId", "selectedPartyId").forEach { name ->
+        listOf("createdPartyId", "selectedPartyId").forEach { name ->
             assertTrue(
                 "$name 이 rememberSaveable 이 아니다 — 회전하면 방 id 가 날아가고 21·25 가 어느 방인지 모르게 된다",
                 Regex("""var\s+$name\s+by\s+rememberSaveable""").containsMatchIn(navGraph),
@@ -85,9 +88,11 @@ class ConfigChangeStateTest {
     }
 
     /**
-     * `finishedRide`([com.moyeota.domain.model.Ride])·`selectedPartner`
-     * ([com.moyeota.domain.model.User])는 **일부러** `remember` 로 남겼다. Bundle 에 담을 타입이
-     * 아니고, 두 값이 없을 때 33·23 은 거짓을 말하지 않는다(요약 줄을 숨기거나 안내로 되돌린다).
+     * `selectedPartner`([com.moyeota.domain.model.User])는 **일부러** `remember` 로 남겼다.
+     * Bundle 에 담을 타입이 아니고, 없을 때 23 은 거짓을 말하지 않는다(안내로 되돌린다).
+     *
+     * 짝이었던 `finishedRide`([com.moyeota.domain.model.Ride])는 선언째 사라졌다 — 그 값의 독자가
+     * 33 도착 완료 하나였고, 그 화면이 26 운행 중과 함께 삭제됐다.
      *
      * 이 테스트는 그 결정을 **기록**한다 — 누군가 "일관성" 때문에 기계적으로 saveable 로 바꾸면
      * 큰 객체가 저장 상태에 들어간다. 바꿀 이유가 생기면 Saver 를 두고 이 테스트를 고쳐라.
@@ -95,7 +100,7 @@ class ConfigChangeStateTest {
     @Test
     fun `큰 도메인 객체는 저장 상태에 담지 않는다`() {
         val navGraph = source("core/MainNavGraph.kt")
-        listOf("finishedRide", "selectedPartner").forEach { name ->
+        listOf("selectedPartner").forEach { name ->
             assertTrue(
                 "$name 이 저장 상태로 바뀌었다 — Ride·User 는 Bundle 에 담을 크기가 아니다(근거는 선언부 주석)",
                 Regex("""var\s+$name\s+by\s+remember\s*\{""").containsMatchIn(navGraph),
@@ -106,17 +111,19 @@ class ConfigChangeStateTest {
     // ──────────────── 2. 방을 모를 때 예시 방을 그리지 않는다 ────────────────
 
     /**
-     * 21·25 의 `partyId == null` 분기. 20·22·23 과 같은 방식 — 사실대로 말하고 되돌린다.
+     * 21 의 `partyId == null` 분기. 20·22·23 과 같은 방식 — 사실대로 말하고 되돌린다.
      *
-     * 분기 **안**을 본다: 화면 호출(`MatchWaitingScreen(`·`DispatchStatusScreen(`)이 아니라
-     * [ErrorBox] 가 있어야 한다. 「잠시 후 다시 시도」류 문구도 함께 막는다 — 되돌아가는 것
-     * 말고는 사용자가 할 수 있는 게 없는 자리다.
+     * 분기 **안**을 본다: 화면 호출(`MatchWaitingScreen(`)이 아니라 [ErrorBox] 가 있어야 한다.
+     * 「잠시 후 다시 시도」류 문구도 함께 막는다 — 되돌아가는 것 말고는 사용자가 할 수 있는 게
+     * 없는 자리다.
+     *
+     * 짝이었던 25 배차 현황(`DispatchStatusRoute`)은 사라졌다. 같은 트랩이 새 화면에 생기는 것은
+     * 아래 「화면 기본 인자」 테스트가 presentation 전체를 훑어 막는다.
      */
     @Test
-    fun `방 id 가 없으면 21 과 25 는 예시 방 대신 사실을 말한다`() {
+    fun `방 id 가 없으면 21 은 예시 방 대신 사실을 말한다`() {
         mapOf(
             "feature/matching/MatchWaitingRoute.kt" to "MatchWaitingScreen(",
-            "feature/matching/DispatchStatusRoute.kt" to "DispatchStatusScreen(",
         ).forEach { (path, screenCall) ->
             val body = source(path)
                 .substringAfter("if (partyId == null) {")
@@ -140,14 +147,17 @@ class ConfigChangeStateTest {
      * 컴파일을 통과하면서 가짜 방을 그린다. 기본값을 걷어낸 지금은 같은 사고가 나려면 컴파일이
      * 먼저 깨진다. 예시 방 자체는 `@Preview` 가 명시적으로 넘겨 쓰므로 남겨 뒀다.
      *
-     * 범위를 21·25 로 좁히지 않고 presentation 전체를 본다 — 같은 트랩이 25b·25c·17 에도 있었고
+     * 범위를 21 로 좁히지 않고 presentation 전체를 본다 — 같은 트랩이 25b·25c·17 에도 있었고
      * (2026-10-15 함께 제거), 새 화면에 다시 생기는 것을 여기서 막는다.
+     *
+     * 타입 목록에서 `AssignedDriver` 를 뺐다 — 기사·배차와 함께 **도메인에서 사라진 타입**이라
+     * 그 이름의 파라미터는 더 이상 존재할 수 없다(남겨 두면 영영 아무것도 걸러내지 않는 이름이 된다).
      */
     @Test
     fun `화면 기본 인자로 도메인 데이터를 지어내지 않는다`() {
         // "들여쓴 파라미터: 도메인타입 = null·빈값이 아닌 무엇" 을 찾는다.
         val fabricated = Regex(
-            """^\s+\w+: (?:List<)?(?:Ride|User|ChatRoom|ChatMessage|Place|FavoritePlace|AssignedDriver)>?\??\s*=\s*(?!null|emptyList\(\)|emptyMap\(\))\S""",
+            """^\s+\w+: (?:List<)?(?:Ride|User|ChatRoom|ChatMessage|Place|FavoritePlace)>?\??\s*=\s*(?!null|emptyList\(\)|emptyMap\(\))\S""",
             RegexOption.MULTILINE,
         )
         val offenders = sourceRoot.walkTopDown()

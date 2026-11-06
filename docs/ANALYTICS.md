@@ -27,8 +27,6 @@ Mixpanel 퍼널이 플랫폼별로 갈라진다. 바꿔야 하면 iOS·보드를
 | `click_create_party` · `request_match(create)` · `fail(create)` | `presentation/.../feature/home/DestinationConfirmRoute.kt` (`createFailureReason`) |
 | `click_join_party` · `request_match(join)` · `fail(join)` | `presentation/.../feature/explore/JoinConfirmRoute.kt` (`joinFailureReason`) |
 | `complete_match` · `cancel_match` · `finish_party` | `presentation/.../feature/matching/MatchWaitingRoute.kt` (`publish` → `trackMatchCompletionIfNeeded`, `isMatchFull`) |
-| `finish_ride` | `presentation/.../feature/chat/RideOngoingRoute.kt` |
-| `trigger_emergency` | `presentation/.../feature/chat/EmergencyScreen.kt` |
 | `delete_account` | `presentation/.../feature/mypage/AccountDeleteRoute.kt` (탈퇴 API 204 직후) |
 
 테스트: `domain/src/test/.../analytics/AnalyticsTest.kt`(이름 고정·area·ageBand), `presentation/src/test/...` 의
@@ -47,7 +45,8 @@ Mixpanel 퍼널이 플랫폼별로 갈라진다. 바꿔야 하면 iOS·보드를
 | 2 | `request_match` | 방 만들기 또는 합류가 서버에 **받아들여졌을 때** | `method`: `create`/`join`, `capacity`, `origin_area`, `destination_area`(시/구, create 만), `estimated_fare`(원) |
 | 3 | `complete_match` | 매칭 대기 화면이 status 를 **MATCHED 이상으로 처음 봤을 때, 1회** | `capacity`, `member_count`, `waited_seconds`(대기 화면 진입 기준) |
 
-`complete_match` 정원 판정은 **status 로만** 한다: `MATCHED`·`DISPATCHING`·`ONGOING` 충족, `RECRUITING`·`COMPLETED`·`CANCELED` 아님.
+`complete_match` 정원 판정은 **status 로만** 한다: `MATCHED` 충족, `RECRUITING`·`COMPLETED`·`CANCELED` 아님.
+(예전에는 `DISPATCHING`·`ONGOING` 도 충족에 들어갔다. 둘은 기사·배차와 함께 지웠다 — **iOS 와 대시보드의 같은 판정도 함께 맞춰야 한다.**)
 스냅샷·SSE·폴링 어느 길로 알게 되든 ViewModel 인스턴스당 한 번.
 
 ### 나머지
@@ -61,9 +60,11 @@ Mixpanel 퍼널이 플랫폼별로 갈라진다. 바꿔야 하면 iOS·보드를
 | Action | `fail_match_request` | 생성·합류 거절 | `method`, `reason` |
 | Action | `cancel_match` | 「그만 찾기」 성공 | `capacity`, `member_count` |
 | Action | `finish_party` | 동승 모드 「합승 완료」 성공 | `member_count` |
-| Action | `finish_ride` | 택시 모드 운행 종료 감지 | 없음 |
-| Action | `trigger_emergency` | 긴급 신고 3초 홀드 완료 | 없음 |
 | Action | `delete_account` | 탈퇴 API 가 204 | 없음 |
+
+**은퇴한 이름 — `finish_ride` · `trigger_emergency`.** 유일한 기록 지점이던 26 운행 중·27 긴급 신고를
+택시 제거(2026-11-04)로 지워 보내는 곳이 없어졌다. 보드에 옛 데이터가 남아 있으니 **다른 뜻으로
+되살려 쓰지 않는다** — 이름이 같고 뜻이 다른 두 시기가 한 퍼널에 섞인다.
 
 `fail_match_request.reason` (`MatchFailureReason` 상수 — 서버 코드가 아니라 도메인 예외의 프로퍼티 판정을 옮긴 것, iOS `openFailureReason`/`joinFailureReason` 과 동일):
 

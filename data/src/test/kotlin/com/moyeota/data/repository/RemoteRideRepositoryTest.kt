@@ -1,20 +1,32 @@
 package com.moyeota.data.repository
 
 import com.moyeota.data.remote.MatchingApi
+import com.moyeota.data.remote.dto.ArriveRequestDto
+import com.moyeota.data.remote.dto.ConfirmMeetingRequestDto
 import com.moyeota.data.remote.dto.RealTimeMatchingRequestDto
 import com.moyeota.data.remote.dto.MatchCandidateResponse
-import com.moyeota.data.remote.dto.DriverSummaryResponse
 import com.moyeota.data.remote.dto.OpenPartyRequestDto
+import com.moyeota.data.remote.dto.MyNoShowListResponse
+import com.moyeota.data.remote.dto.NoShowObjectionRequestDto
 import com.moyeota.data.remote.dto.OpenPartyResponse
 import com.moyeota.data.remote.dto.PartyDetailResponse
 import com.moyeota.data.remote.dto.PartyListResponse
+import com.moyeota.data.remote.dto.OpenReservationRequestDto
 import com.moyeota.data.remote.dto.PartyStatusResponse
+import com.moyeota.data.remote.dto.ReservationItemDto
+import com.moyeota.data.remote.dto.ReservationListResponse
 import com.moyeota.data.remote.dto.RouteEstimateResponse
 import com.moyeota.data.remote.dto.RouteRequestDto
 import com.moyeota.domain.model.RealtimeMatchException
 import com.moyeota.domain.model.AuthState
 import com.moyeota.domain.model.NewParty
+import com.moyeota.domain.model.NewReservation
+import com.moyeota.domain.model.ReservationDestination
+import com.moyeota.domain.model.RoomType
 import com.moyeota.data.remote.matching.reconnectDelayMs
+import com.moyeota.domain.model.PartyArriveException
+import com.moyeota.domain.model.PartyConfirmException
+import com.moyeota.domain.model.PartyDepartException
 import com.moyeota.domain.model.PartyFinishException
 import com.moyeota.domain.model.PartyJoinException
 import com.moyeota.domain.model.PartyLeaveException
@@ -198,15 +210,6 @@ class RemoteRideRepositoryTest {
     }
 
     @Test
-    fun `배정된 기사 요약을 도메인 모델로 돌려준다`() = runBlocking {
-        val driver = RemoteRideRepository(FakeMatchingApi(), session()).getAssignedDriver(partyId = 7)
-
-        assertEquals(4, driver.seats)
-        assertEquals("12가 3456", driver.plateNumber)
-        assertEquals("쏘나타", driver.vehicleType)
-    }
-
-    @Test
     fun `경로 미리보기는 좌표 4개를 본문으로 보내고 path 를 encodedPath 로 돌려준다`() = runBlocking {
         val api = FakeMatchingApi()
 
@@ -308,9 +311,16 @@ class RemoteRideRepositoryTest {
         assertFalse(error.isNotHost)
     }
 
-    /** 409 도 두 가지다 — 정원 미달과 기사 배정은 사용자가 할 일이 정반대다(기다리기 / 기다릴 일 없음). */
+    /**
+     * 409 는 이제 **정원 미달 하나뿐**이다. `DRIVER_ALREADY_ASSIGNED` 는 서버가 기사·배차를 걷어내며
+     * **에러 코드째 지웠다**(서버 `MatchingErrorCode` 에 없다).
+     *
+     * 그래도 그 코드가 오는 경우를 함께 고정한다 — 옛 서버나 되돌린 배포가 보낼 수 있고, 그때 앱은
+     * **사유를 추측하지 않고** 코드만 들고 와 일반 문구로 떨어져야 한다. 삭제한 분기가 「어느 사유도
+     * 아님」으로 떨어지는 것까지가 이 삭제의 안전함이다.
+     */
     @Test
-    fun `합승 완료 409 두 가지를 코드로 가른다`() = runBlocking {
+    fun `합승 완료 409 는 정원 미달뿐이고 사라진 기사 코드는 사유가 되지 않는다`() = runBlocking {
         val notCompleted = runCatching {
             RemoteRideRepository(
                 FakeMatchingApi(finishFailure = conflict("PARTY_NOT_COMPLETED", "정원이 다 차지 않은 방입니다.")),
@@ -318,7 +328,7 @@ class RemoteRideRepositoryTest {
             ).finishParty(partyId = 7)
         }.exceptionOrNull() as PartyFinishException
 
-        val driverAssigned = runCatching {
+        val removedDriverCode = runCatching {
             RemoteRideRepository(
                 FakeMatchingApi(finishFailure = conflict("DRIVER_ALREADY_ASSIGNED", "이미 기사가 배정된 방입니다.")),
                 session(),
@@ -326,9 +336,11 @@ class RemoteRideRepositoryTest {
         }.exceptionOrNull() as PartyFinishException
 
         assertTrue(notCompleted.isNotCompleted)
-        assertFalse(notCompleted.isDriverAssigned)
-        assertTrue(driverAssigned.isDriverAssigned)
-        assertFalse(driverAssigned.isNotCompleted)
+
+        assertEquals("DRIVER_ALREADY_ASSIGNED", removedDriverCode.code)
+        assertFalse(removedDriverCode.isNotCompleted)
+        assertFalse(removedDriverCode.isNotHost)
+        assertFalse(removedDriverCode.isNotMember)
     }
 
     /**
@@ -352,7 +364,8 @@ class RemoteRideRepositoryTest {
         // 모르는 코드는 그대로 들고 오지만 어느 사유도 아니다.
         assertEquals("PARTY_SOMETHING_NEW", unknownCode.code)
         assertFalse(unknownCode.isNotCompleted)
-        assertFalse(unknownCode.isDriverAssigned)
+        assertFalse(unknownCode.isNotHost)
+        assertFalse(unknownCode.isNotMember)
 
         assertNull(bodyless.code)
         assertFalse(bodyless.isNotHost)
@@ -507,6 +520,306 @@ class RemoteRideRepositoryTest {
         assertFalse(error.isPartyNotFound)
     }
 
+    // ───────────── 약속 확정 (방을 끝내는 정식 경로의 첫 단계) ─────────────
+    //
+    // 실패 사유가 일곱 가지인데 **상태 코드로는 셋으로밖에 안 갈린다**(400·403·409). 그래서 코드로
+    // 갈라 두고, 액션마다 예외 타입을 따로 둔다 — 같은 코드가 도착·출발에서는 다른 문장을 요구한다
+    // (`PartyConfirmException` KDoc 의 표).
+
+    /**
+     * 본문은 **약속 시간 하나**다. 장소를 싣지 않는 게 계약이다 — 약속 장소는 늘 방의 출발지다.
+     * 좌표를 같이 보내고 싶어지는 자리라, 보내는 것이 그 하나뿐임을 값으로 못박는다.
+     */
+    @Test
+    fun `약속 확정은 partyId 와 약속 시간만 보낸다`() = runBlocking {
+        val api = FakeMatchingApi()
+
+        RemoteRideRepository(api, session()).confirmMeeting(partyId = 7, departureAt = "2026-11-03T08:30:00Z")
+
+        assertEquals(7L, api.confirmCall)
+        assertEquals(ConfirmMeetingRequestDto(departureAt = "2026-11-03T08:30:00Z"), api.confirmRequest)
+        // 성공 뒤 상세를 다시 읽지 않는다 — 확정 사실·시간·상태가 모두 SSE `confirmed` 에 실려 온다.
+        assertEquals(0, api.detailCallCount)
+    }
+
+    /** 앱은 시간을 **검사하지 않고 그대로 싣는다** — 범위 판정은 서버 것이고, 두 벌 들면 한쪽만 낡는다. */
+    @Test
+    fun `약속 시간 문자열을 앱이 고치지 않고 그대로 싣는다`() = runBlocking {
+        val api = FakeMatchingApi()
+
+        // 오프셋이 +09:00 인 모양도 서버가 받는다(ISO-8601 instant). 앱이 Z 로 바꿔 쓰지 않는다.
+        RemoteRideRepository(api, session()).confirmMeeting(partyId = 7, departureAt = "2026-11-03T17:30:00+09:00")
+
+        assertEquals("2026-11-03T17:30:00+09:00", api.confirmRequest?.departureAt)
+    }
+
+    /** 같은 403 이지만 뜻이 다르다 — 멤버가 아닌 사람에게 「방장을 기다려 주세요」라고 말하면 안 된다. */
+    @Test
+    fun `약속 확정 403 은 방장 아님과 멤버 아님으로 갈린다`() = runBlocking {
+        val notHost = confirmError(httpError(403, "NOT_PARTY_HOST", "방장만 수행할 수 있습니다."))
+        val notMember = confirmError(httpError(403, "NOT_PARTY_MEMBER", "해당 방에 참여하고 있지 않습니다."))
+
+        assertTrue(notHost.isNotHost)
+        assertFalse(notHost.isNotMember)
+        assertTrue(notMember.isNotMember)
+        assertFalse(notMember.isNotHost)
+        assertEquals("방장만 수행할 수 있습니다.", notHost.serverMessage)
+        assertEquals(403, notHost.httpStatus)
+    }
+
+    /**
+     * **409 가 네 가지다.** 섞이면 「2명 이상 모여야 해요」를 이미 확정한 방에, 「이미 정했어요」를
+     * 예약 방에 말하게 된다 — 네 사유의 다음 행동이 전부 다르다(기다린다 / 상세를 다시 읽는다 /
+     * 아무것도 못 한다 / 홈으로 간다).
+     */
+    @Test
+    fun `약속 확정 409 네 가지가 각 code 로 갈린다`() = runBlocking {
+        val reserved = confirmError(conflict("NOT_REALTIME_PARTY", "실시간 방에서만 할 수 있습니다."))
+        val already = confirmError(conflict("ALREADY_CONFIRMED", "이미 약속 시간을 확정한 방입니다."))
+        val notRecruiting = confirmError(conflict("PARTY_NOT_RECRUITING", "모집 중인 방이 아닙니다."))
+        val alone = confirmError(conflict("NOT_ENOUGH_MEMBERS", "함께 탈 인원이 부족합니다."))
+
+        assertTrue(reserved.isNotRealtimeParty)
+        assertTrue(already.isAlreadyConfirmed)
+        assertTrue(notRecruiting.isNotRecruiting)
+        assertTrue(alone.isNotEnoughMembers)
+        // 서로 섞이지 않는다 — 한 사유가 다른 사유로도 참이면 화면이 두 문구를 동시에 띄운다.
+        assertFalse(reserved.isAlreadyConfirmed)
+        assertFalse(already.isNotRecruiting)
+        assertFalse(notRecruiting.isNotEnoughMembers)
+        assertFalse(alone.isNotRealtimeParty)
+    }
+
+    /**
+     * 400 `INVALID_MEETING_TIME` — 지금부터 1시간 밖이다. 화면이 프리셋으로만 고르게 하므로 거의
+     * 오지 않지만 **60분 프리셋이 경계에 붙어 있어** 고르고 누르는 사이 밀리면 떨어진다.
+     */
+    @Test
+    fun `약속 확정 400 은 약속 시간 범위로 갈린다`() = runBlocking {
+        val error = confirmError(httpError(400, "INVALID_MEETING_TIME", "약속 시간은 지금부터 1시간 이내여야 합니다."))
+
+        assertTrue(error.isInvalidMeetingTime)
+        assertFalse(error.isNotHost)
+        assertEquals(400, error.httpStatus)
+    }
+
+    /** 404 는 방이 사라진 것. **코드가 없는 404 는 사유로 쓰지 않는다** — 상태 코드로 사유를 지어내지 않는다. */
+    @Test
+    fun `약속 확정 404 는 코드가 있을 때만 방 없음이다`() = runBlocking {
+        assertTrue(confirmError(httpError(404, "PARTY_NOT_FOUND", "존재하지 않는 방입니다.")).isPartyNotFound)
+
+        val bodyless = confirmError(bodylessError(404))
+        assertNull(bodyless.code)
+        assertFalse(bodyless.isPartyNotFound)
+        assertEquals(404, bodyless.httpStatus)
+    }
+
+    // ───────────── 출발지 도착 ─────────────
+
+    /**
+     * 본문은 **지금 내 위치**다. 방 출발지 좌표를 그대로 보내면 서버의 100m 검사가 **늘 통과**해
+     * 「오지 않은 사람이 도착」이 되고, 그 상태로 누가 출발을 누르면 실제로 안 온 사람에게 노쇼가
+     * 안 찍힌다 — 즉 이 테스트가 깨지면 **노쇼 기록이 조용히 틀린다**.
+     */
+    @Test
+    fun `도착은 지금 내 위치를 본문에 싣는다`() = runBlocking {
+        val api = FakeMatchingApi()
+
+        RemoteRideRepository(api, session()).arriveAtDeparture(partyId = 7, latitude = 37.4979, longitude = 127.0276)
+
+        assertEquals(7L, api.arriveCall)
+        assertEquals(ArriveRequestDto(latitude = 37.4979, longitude = 127.0276), api.arriveRequest)
+        // 위도·경도가 뒤바뀌면 (127, 37) 은 서비스 지역 밖이라 400 OUT_OF_SERVICE_AREA 다.
+        assertEquals(37.4979, api.arriveRequest!!.latitude, 1e-9)
+        assertEquals(127.0276, api.arriveRequest!!.longitude, 1e-9)
+    }
+
+    /**
+     * 400 이 두 가지다. 「멀다」와 「서비스 지역 밖」은 사용자가 할 일이 다르고(걸어간다 / 좌표를
+     * 의심한다), 뒤쪽은 **측위 실패를 0.0 으로 채워 보냈을 때**도 온다.
+     */
+    @Test
+    fun `도착 400 은 거리와 서비스 지역으로 갈린다`() = runBlocking {
+        val tooFar = arriveError(httpError(400, "TOO_FAR_FROM_DEPARTURE", "출발지에서 100m 안에 있어야 합니다."))
+        val outside = arriveError(httpError(400, "OUT_OF_SERVICE_AREA", "서비스 지역을 벗어난 좌표입니다."))
+
+        assertTrue(tooFar.isTooFarFromDeparture)
+        assertFalse(tooFar.isOutOfServiceArea)
+        assertTrue(outside.isOutOfServiceArea)
+        assertFalse(outside.isTooFarFromDeparture)
+    }
+
+    /**
+     * 409 가 셋이다. **「도착 창이 아직 안 열렸다」를 「멀다」와 뭉개면 이미 출발지에 서 있는 사람에게
+     * 더 가까이 가라고 말한다** — 이 액션에서 가장 쉽게 나는 오안내다.
+     */
+    @Test
+    fun `도착 409 는 닫힘 미확정 창안열림으로 갈린다`() = runBlocking {
+        val closed = arriveError(conflict("PARTY_CLOSED", "마감된 방입니다."))
+        val notConfirmed = arriveError(conflict("PARTY_NOT_CONFIRMED", "약속 시간이 확정되지 않은 방입니다."))
+        val notOpen = arriveError(conflict("ARRIVAL_NOT_OPEN", "도착은 약속 시간 10분 전부터 누를 수 있습니다."))
+
+        assertTrue(closed.isPartyClosed)
+        assertTrue(notConfirmed.isNotConfirmed)
+        assertTrue(notOpen.isArrivalNotOpen)
+        assertFalse(notOpen.isTooFarFromDeparture)
+        assertFalse(notOpen.isNotConfirmed)
+    }
+
+    /**
+     * **도착과 출발은 시간 코드가 다르다.** 도착이 안 열린 것은 `ARRIVAL_NOT_OPEN`(약속 10분 전 경계,
+     * 백엔드 PR #307)이고 `MEETING_NOT_STARTED` 는 **출발**의 코드다(약속 시간 경계).
+     *
+     * 둘을 한 속성으로 묶으면 화면이 틀린 시각을 말한다 — 도착은 10분 전부터, 출발은 약속 시간
+     * 뒤부터다. 그래서 도착 예외에 `MEETING_NOT_STARTED` 가 와도 **사유가 되지 않는** 것까지 고정한다.
+     */
+    @Test
+    fun `도착에 출발의 시간 코드가 오면 사유가 되지 않는다`() = runBlocking {
+        val error = arriveError(conflict("MEETING_NOT_STARTED", "아직 약속 시간이 되지 않았습니다."))
+
+        assertEquals("MEETING_NOT_STARTED", error.code)
+        assertFalse(error.isArrivalNotOpen)
+        assertFalse(error.isNotConfirmed)
+        assertFalse(error.isPartyClosed)
+        assertFalse(error.isTooFarFromDeparture)
+    }
+
+    // ───────────── 출발 (되돌릴 수 없고 남에게 제재를 남긴다) ─────────────
+
+    /** 본문이 **없다**. 주체는 Bearer 토큰이고, 방장이 아니어도 된다 — 도착한 멤버면 누구나. */
+    @Test
+    fun `출발은 본문 없이 partyId 만 보낸다`() = runBlocking {
+        val api = FakeMatchingApi()
+
+        RemoteRideRepository(api, session()).departParty(partyId = 7)
+
+        assertEquals(7L, api.departCall)
+        // 합승 완료(finish)와 **다른 엔드포인트**다 — 확정된 방에 finish 를 부르면 409 다.
+        assertNull(api.finishCall)
+        assertEquals(0, api.detailCallCount)
+    }
+
+    /**
+     * 409 가 다섯이다. 그중 `NOT_ARRIVED` 는 **다음 행동이 명확한 유일한 사유**다 — 「출발지 도착했어요」를
+     * 먼저 누르면 된다. 「다시 시도」로 뭉개면 같은 409 를 영원히 맞는다.
+     */
+    @Test
+    fun `출발 409 는 다섯 가지로 갈린다`() = runBlocking {
+        val notArrived = departError(conflict("NOT_ARRIVED", "출발지에 도착한 사람만 출발할 수 있습니다."))
+        val notStarted = departError(conflict("MEETING_NOT_STARTED", "아직 약속 시간이 되지 않았습니다."))
+        val alone = departError(conflict("NOT_ENOUGH_MEMBERS", "함께 탈 인원이 부족합니다."))
+        val notConfirmed = departError(conflict("PARTY_NOT_CONFIRMED", "약속 시간이 확정되지 않은 방입니다."))
+        val closed = departError(conflict("PARTY_CLOSED", "마감된 방입니다."))
+
+        assertTrue(notArrived.isNotArrived)
+        assertTrue(notStarted.isMeetingNotStarted)
+        assertTrue(alone.isNotEnoughMembers)
+        assertTrue(notConfirmed.isNotConfirmed)
+        assertTrue(closed.isPartyClosed)
+        assertFalse(notArrived.isMeetingNotStarted)
+        assertFalse(closed.isNotArrived)
+    }
+
+    /**
+     * **출발은 방장 전용이 아니다** — 그래서 `NOT_PARTY_HOST` 를 사유로 두지 않았다. 옛 서버나
+     * 되돌린 배포가 그 코드를 보내도 **사유가 되지 않고** 일반 문구로 떨어져야 한다
+     * (「방장만 할 수 있어요」라고 말하면 도착한 멤버가 출발을 포기한다).
+     */
+    @Test
+    fun `출발에 방장 전용 코드가 와도 사유가 되지 않는다`() = runBlocking {
+        val error = departError(httpError(403, "NOT_PARTY_HOST", "방장만 수행할 수 있습니다."))
+
+        assertEquals("NOT_PARTY_HOST", error.code)
+        assertFalse(error.isNotMember)
+        assertFalse(error.isNotArrived)
+        assertEquals(403, error.httpStatus)
+    }
+
+    /**
+     * 세 액션 모두 **모르는 코드·빈 본문·HTML 본문·네트워크 실패**에서 사유를 지어내지 않는다 —
+     * code = null 이면 화면이 일반 문구로 떨어진다(서버가 코드를 늘려도 앱이 틀린 말을 하지 않는다).
+     */
+    @Test
+    fun `세 액션의 모르는 코드와 본문 없는 실패는 사유를 추측하지 않는다`() = runBlocking {
+        val unknownConfirm = confirmError(conflict("PARTY_SOMETHING_NEW", "새 규칙입니다."))
+        assertEquals("PARTY_SOMETHING_NEW", unknownConfirm.code)
+        assertFalse(unknownConfirm.isAlreadyConfirmed)
+        assertFalse(unknownConfirm.isNotRecruiting)
+
+        // 게이트웨이가 가로챈 응답(HTML)·본문 없는 응답은 code 가 없다.
+        val html = arriveError(htmlError(503))
+        assertNull(html.code)
+        assertNull(html.serverMessage)
+        assertFalse(html.isTooFarFromDeparture)
+        assertEquals(503, html.httpStatus)
+
+        val bodyless = departError(bodylessError(409))
+        assertNull(bodyless.code)
+        assertFalse(bodyless.isNotArrived)
+        assertFalse(bodyless.isPartyClosed)
+
+        // 응답 자체를 못 받은 실패도 같은 예외로 좁힌다 — httpStatus 조차 없다.
+        val network = confirmError(java.io.IOException("connection reset"))
+        assertNull(network.code)
+        assertNull(network.httpStatus)
+        assertFalse(network.isNotHost)
+    }
+
+    /**
+     * 도착·출발이 함께 쓰는 나머지 두 사유. **멤버 아님(403)과 방 없음(404)은 「다시 시도」가 아니라
+     * 「홈으로」**이고, 두 액션에서 뜻이 같아 같은 자리에서 본다.
+     *
+     * 404 는 **코드가 있을 때만** 방 없음이다(본문 없는 404 는 경로 오타·게이트웨이일 수 있어
+     * 사유로 삼지 않는다 — 확정 쪽 테스트와 같은 정책).
+     */
+    @Test
+    fun `도착과 출발의 멤버 아님과 방 없음도 사유로 갈린다`() = runBlocking {
+        val arriveNotMember = arriveError(httpError(403, "NOT_PARTY_MEMBER", "해당 방에 참여하고 있지 않습니다."))
+        val departNotMember = departError(httpError(403, "NOT_PARTY_MEMBER", "해당 방에 참여하고 있지 않습니다."))
+        val arriveGone = arriveError(httpError(404, "PARTY_NOT_FOUND", "존재하지 않는 방입니다."))
+        val departGone = departError(httpError(404, "PARTY_NOT_FOUND", "존재하지 않는 방입니다."))
+
+        assertTrue(arriveNotMember.isNotMember)
+        assertFalse(arriveNotMember.isPartyNotFound)
+        assertTrue(departNotMember.isNotMember)
+        assertTrue(arriveGone.isPartyNotFound)
+        assertTrue(departGone.isPartyNotFound)
+
+        // 본문 없는 404 는 사유가 아니다 — 상태 코드로 「방이 사라졌어요」를 지어내지 않는다.
+        assertFalse(arriveError(bodylessError(404)).isPartyNotFound)
+        assertFalse(departError(bodylessError(404)).isPartyNotFound)
+    }
+
+    /** 더미 저장소도 세 액션을 구현한다 — 디버그/프리뷰 빌드가 버튼을 눌러도 터지지 않아야 한다. */
+    @Test
+    fun `더미 저장소의 세 액션은 성공한 척한다`() = runBlocking {
+        val repository = DummyRideRepository()
+
+        repository.confirmMeeting(partyId = 1, departureAt = "2026-11-03T08:30:00Z")
+        repository.arriveAtDeparture(partyId = 1, latitude = 37.4979, longitude = 127.0276)
+        repository.departParty(partyId = 1)
+    }
+
+    private fun confirmError(failure: Throwable): PartyConfirmException = runBlocking {
+        runCatching {
+            RemoteRideRepository(FakeMatchingApi(confirmFailure = failure), session())
+                .confirmMeeting(partyId = 7, departureAt = "2026-11-03T08:30:00Z")
+        }.exceptionOrNull() as PartyConfirmException
+    }
+
+    private fun arriveError(failure: Throwable): PartyArriveException = runBlocking {
+        runCatching {
+            RemoteRideRepository(FakeMatchingApi(arriveFailure = failure), session())
+                .arriveAtDeparture(partyId = 7, latitude = 37.4979, longitude = 127.0276)
+        }.exceptionOrNull() as PartyArriveException
+    }
+
+    private fun departError(failure: Throwable): PartyDepartException = runBlocking {
+        runCatching {
+            RemoteRideRepository(FakeMatchingApi(departFailure = failure), session()).departParty(partyId = 7)
+        }.exceptionOrNull() as PartyDepartException
+    }
+
     // ───────────── SSE 재연결 백오프 ─────────────
     //
     // 이 두 테스트가 **여기 있는 건 파일 소유 때문**이다(제자리는 `remote/matching/PartySseEventTest`
@@ -649,6 +962,274 @@ class RemoteRideRepositoryTest {
         assertFalse(realtime.isRouteUnavailable)
     }
 
+    /**
+     * 예약 생성이 **같은 [com.moyeota.domain.model.Ride] 로 돌아오고**, 서버가 주는 두 사실이
+     * 그대로 실린다: 예약 방이고([RoomType.RESERVATION]) **처음부터 확정**이다.
+     *
+     * 확정은 「나갈 수 없다」는 뜻이라(409 `CANNOT_LEAVE_CONFIRMED_PARTY`) 이 값이 false 로 새면
+     * 화면이 누를 수 없는 「그만 찾기」를 띄운다. 그리고 요금·경로가 **비어 있는 것이 정상**이다 —
+     * 서버가 예약 방의 경로를 추정하지 않는다(공짜라서가 아니다).
+     */
+    @Test
+    fun `예약 생성은 확정된 예약 방을 돌려주고 요금 경로가 비어 있다`() = runBlocking {
+        val api = FakeMatchingApi()
+
+        val ride = RemoteRideRepository(api, session()).createReservation(
+            NewReservation(
+                departureLat = 37.4979,
+                departureLng = 127.0276,
+                destinationLat = 37.3948,
+                destinationLng = 127.1112,
+                departure = "강남역",
+                destination = "판교역",
+                capacity = 3,
+                departureAt = "2026-11-13T08:00:00Z",
+            ),
+        )
+
+        assertEquals("31", ride.id)
+        assertEquals(RoomType.RESERVATION, ride.roomType)
+        assertTrue("예약 방은 처음부터 확정이다", ride.isConfirmed)
+        assertEquals("2026-11-13T08:00:00Z", ride.departureAt)
+        assertEquals(1, ride.members.size)
+        // 서버가 추정하지 않으므로 비어 있다 — 0 을 「공짜」로 그리면 안 된다.
+        assertNull(ride.estimatedFare)
+        assertNull(ride.estimatedMinutes)
+        assertNull(ride.routePolyline)
+        assertEquals(0, ride.farePerPerson)
+    }
+
+    /**
+     * 요청 본문에 실리는 것은 **여덟 개뿐**이고 도착지 이름이 **전체 이름**이다 —
+     * 실시간 후보 본문(`destLat`)·검색 쿼리(`depLat`/`destLat`)와 **셋이 다르다**.
+     * 앱이 정원을 접지도, 시각을 고치지도 않는다(판정은 서버 몫 — 400 이 나야 앱 버그가 드러난다).
+     */
+    @Test
+    fun `예약 생성 요청은 좌표 이름 정원 출발시각을 그대로 싣는다`() = runBlocking {
+        val api = FakeMatchingApi()
+
+        RemoteRideRepository(api, session()).createReservation(
+            NewReservation(
+                departureLat = 37.4979,
+                departureLng = 127.0276,
+                destinationLat = 37.3948,
+                destinationLng = 127.1112,
+                departure = "강남역",
+                destination = "판교역",
+                // 서버가 거절할 값. 앱이 2 로 끌어올리면 안 된다.
+                capacity = 1,
+                departureAt = "2026-11-13T08:00:00Z",
+            ),
+        )
+
+        val sent = api.reserveRequest!!
+        assertEquals(37.3948, sent.destinationLat, 1e-9)
+        assertEquals(127.1112, sent.destinationLng, 1e-9)
+        assertEquals("강남역", sent.departure)
+        assertEquals(1, sent.capacity)
+        assertEquals("2026-11-13T08:00:00Z", sent.departureAt)
+    }
+
+    /**
+     * 예약 생성 실패는 **방 생성과 같은 [PartyOpenException]** 으로 좁혀진다 — 서버가 두 액션에
+     * 같은 record 로 응답하고 코드도 다섯이 겹치기 때문이다(예외를 하나로 둔 근거는 그 KDoc 에 있다).
+     *
+     * 예약에만 오는 둘이 사유로 갈리는지가 핵심이다. 특히 403 `NO_SHOW_RESTRICTED` 와
+     * 409 `PARTY_TIME_CONFLICT` 를 뭉개면 둘 다 「잠시 후 다시 시도」가 되는데 **둘 다 영구히
+     * 거짓**이다(제재는 시각이 지나야, 충돌은 시간을 옮겨야 풀린다).
+     */
+    @Test
+    fun `예약 생성 실패는 예약 전용 사유까지 갈린다`() = runBlocking {
+        val restricted = reserveError(httpError(403, "NO_SHOW_RESTRICTED", "노쇼로 이용이 제한된 상태입니다."))
+        assertTrue(restricted.isNoShowRestricted)
+        assertFalse(restricted.isAlreadyInAnotherParty)
+        assertFalse("제재는 경로 실패가 아니다", restricted.isRouteUnavailable)
+        assertEquals(403, restricted.httpStatus)
+        assertEquals("노쇼로 이용이 제한된 상태입니다.", restricted.serverMessage)
+
+        // 「다른 방에 있다」와 「그 시간대가 찼다」는 사용자가 할 일이 다르다 —
+        // 전자는 그 방을 정리해야 하고, 후자는 **시간을 옮기면 된다**(예약은 여러 건 가질 수 있다).
+        val conflict = reserveError(httpError(409, "PARTY_TIME_CONFLICT", "해당 시간대에 이미 예약이 있습니다."))
+        assertTrue(conflict.isPartyTimeConflict)
+        assertFalse(conflict.isAlreadyInAnotherParty)
+
+        val joined = reserveError(httpError(409, "ALREADY_JOINED_OTHER_PARTY", "이미 참여 중인 방이 있습니다."))
+        assertTrue(joined.isAlreadyInAnotherParty)
+        assertFalse(joined.isPartyTimeConflict)
+
+        val badTime = reserveError(httpError(400, "INVALID_DEPARTURE_TIME", "출발 시각이 올바르지 않습니다."))
+        assertTrue(badTime.isInvalidDepartureTime)
+        assertFalse(badTime.isInvalidCapacity)
+
+        // 겹치는 코드들도 그대로 갈린다(방 생성과 같은 표).
+        assertTrue(reserveError(httpError(400, "SAME_DEPARTURE_DESTINATION", "x")).isSameDepartureDestination)
+        assertTrue(reserveError(httpError(400, "OUT_OF_SERVICE_AREA", "x")).isOutOfServiceArea)
+        assertTrue(reserveError(httpError(400, "INVALID_CAPACITY", "x")).isInvalidCapacity)
+
+        // 모르는 코드·본문 없음은 사유를 추측하지 않는다 — 화면이 일반 문구로 떨어진다.
+        val unknown = reserveError(httpError(409, "SOMETHING_NEW", "x"))
+        assertFalse(unknown.isPartyTimeConflict)
+        assertFalse(unknown.isAlreadyInAnotherParty)
+        assertNull(reserveError(bodylessError(409)).code)
+    }
+
+    /** 예약에도 **방 생성과 같은 사유 표**가 적용되지만, 경로 실패는 **올 수 없다**(서버가 추정하지 않는다). */
+    @Test
+    fun `예약 생성에는 경로 실패가 사유로 오지 않는다`() = runBlocking {
+        // 서버가 이 코드를 예약에서 던지지는 않는다. 와도 같은 갈래로 떨어지는 것까지만 확인한다 —
+        // 분기를 지우지 않는 이유는 502 를 상태 코드로도 받기 때문이다(게이트웨이 응답).
+        assertTrue(reserveError(bodylessError(502)).isRouteUnavailable)
+    }
+
+    /**
+     * **예약 정원 1 은 `INVALID_CAPACITY` 로 오지 않는다** — 서버 Bean Validation(`@Min(2)`)이
+     * 도메인 `Capacity`(1~3 허용)보다 먼저 돌아 400 `INVALID_REQUEST` 로 떨어진다.
+     *
+     * 그 범용 코드를 [PartyOpenException.isInvalidCapacity] 에 넣지 **않았다**는 것을 못 박는다:
+     * 넣으면 실시간 쪽에서 본문이 깨진 실패에까지 「인원을 다시 고르세요」라고 말하게 된다.
+     * 즉 이 경우는 **사유를 알 수 없는 400** 이 맞고, 화면이 칩을 2·3 으로 묶어 막는다.
+     */
+    @Test
+    fun `예약 정원 하한 위반은 사유 없는 400 으로 떨어진다`() = runBlocking {
+        val error = reserveError(httpError(400, "INVALID_REQUEST", "정원은 2명 이상이어야 합니다."))
+
+        assertEquals("INVALID_REQUEST", error.code)
+        assertFalse("범용 400 을 정원 사유로 읽으면 본문 오류까지 「인원을 고치세요」가 된다", error.isInvalidCapacity)
+        assertFalse(error.isInvalidDepartureTime)
+        assertFalse(error.isSameDepartureDestination)
+    }
+
+    /** 기간 목록은 두 문자열을 **그대로** 넘기고, 예약 방으로 매핑해 돌려준다. */
+    @Test
+    fun `기간 목록은 from to 를 그대로 넘기고 예약 방으로 돌려준다`() = runBlocking {
+        val api = FakeMatchingApi(reservations = listOf(reservationItem()))
+
+        val rides = RemoteRideRepository(api, session())
+            .getReservations(from = "2026-11-13T00:00:00Z", to = "2026-11-14T00:00:00Z")
+
+        assertEquals("2026-11-13T00:00:00Z" to "2026-11-14T00:00:00Z", api.reservationRange)
+        assertEquals("12", rides.single().id)
+        assertEquals(RoomType.RESERVATION, rides.single().roomType)
+        assertTrue(rides.single().isConfirmed)
+    }
+
+    /**
+     * 「곧 출발」은 좌표를 **남서 → 북동 순서 그대로** 넘긴다([getPartiesWithin] 과 같은 순서).
+     * 섞이면 서버가 400 `INVALID_MAP_BOUNDS` 를 준다 — 방 목록 쪽은 그 검사가 없어 같은 실수가
+     * 한쪽에만 증상을 낸다.
+     *
+     * 돌려주는 것은 **[com.moyeota.domain.model.Ride] 그대로**다 — 이 응답에는 `destinationNearby`
+     * 가 없으므로 검색 결과로 감싸지 않는다.
+     */
+    @Test
+    fun `곧 출발은 남서 북동 순서 그대로 넘긴다`() = runBlocking {
+        val api = FakeMatchingApi(reservations = listOf(reservationItem()))
+
+        val rides = RemoteRideRepository(api, session()).getReservationsSoon(35.20, 129.05, 35.26, 129.12)
+
+        assertEquals(listOf(35.20, 129.05, 35.26, 129.12), api.reservationSoonCall)
+        assertEquals("12", rides.single().id)
+    }
+
+    /**
+     * ### 도착지는 **둘 다 또는 둘 다 아니다** ★
+     * 하나만 가면 서버가 400 `INCOMPLETE_DESTINATION` 이다. 저장소가 한 값([ReservationDestination])
+     * 에서 두 쿼리를 만들기 때문에 **쌍이 깨질 길이 없다** — 그 보장을 값으로 확인한다.
+     * (실제 URL 에서 두 키가 함께 빠지는지는 `ReservationSearchQueryTest` 가 본다.)
+     *
+     * [date] 도 **그대로** 넘긴다 — KST 달력 날짜를 만드는 일은 호출부 책임이고, 저장소가 기기
+     * 시간대로 다시 만들면 화면이 고른 날짜와 서버가 보는 날짜가 두 군데서 계산되어 어긋난다.
+     */
+    @Test
+    fun `검색은 도착지를 둘 다 넘기거나 둘 다 빼고 날짜를 고치지 않는다`() = runBlocking {
+        val withDestination = FakeMatchingApi(reservations = listOf(reservationItem(destinationNearby = true)))
+        val results = RemoteRideRepository(withDestination, session()).searchReservations(
+            departureLat = 37.4979,
+            departureLng = 127.0276,
+            date = "2026-11-13",
+            destination = ReservationDestination(latitude = 37.3948, longitude = 127.1112),
+        )
+
+        assertEquals(
+            listOf<Any?>(37.4979, 127.0276, "2026-11-13", 37.3948, 127.1112),
+            withDestination.reservationSearchCall,
+        )
+        assertEquals(true, results.single().destinationNearby)
+
+        val withoutDestination = FakeMatchingApi(reservations = listOf(reservationItem()))
+        val plain = RemoteRideRepository(withoutDestination, session()).searchReservations(
+            departureLat = 37.4979,
+            departureLng = 127.0276,
+            date = "2026-11-13",
+        )
+
+        // 둘 다 null — 하나만 null 인 상태를 만들 길이 없다.
+        assertEquals(
+            listOf<Any?>(37.4979, 127.0276, "2026-11-13", null, null),
+            withoutDestination.reservationSearchCall,
+        )
+        // **null 은 false 가 아니라 「물어보지 않았다」다.**
+        assertNull("도착지를 안 물었는데 false 로 접혔다", plain.single().destinationNearby)
+    }
+
+    /** 세 조회 모두 빈 목록이 정상이다 — 그 날 그 범위에 예약이 없을 뿐이다. */
+    @Test
+    fun `예약 조회 셋 모두 빈 목록이 정상이다`() = runBlocking {
+        val repository = RemoteRideRepository(FakeMatchingApi(), session())
+
+        assertTrue(repository.getReservations("2026-11-13T00:00:00Z", "2026-11-14T00:00:00Z").isEmpty())
+        assertTrue(repository.getReservationsSoon(1.0, 2.0, 3.0, 4.0).isEmpty())
+        assertTrue(repository.searchReservations(1.0, 2.0, "2026-11-13").isEmpty())
+    }
+
+    /** 더미 저장소는 예약을 **지어내지 않는다** — 없는 약속 시간을 그리면 프리뷰가 거짓이 된다. */
+    @Test
+    fun `더미 저장소의 예약 조회는 빈 목록이다`() = runBlocking {
+        val dummy = DummyRideRepository()
+
+        assertTrue(dummy.getReservations("2026-11-13T00:00:00Z", "2026-11-14T00:00:00Z").isEmpty())
+        assertTrue(dummy.getReservationsSoon(1.0, 2.0, 3.0, 4.0).isEmpty())
+        assertTrue(dummy.searchReservations(1.0, 2.0, "2026-11-13").isEmpty())
+        // 생성은 성공한 척하되 **예약 방의 성질**은 서버와 같게 맞춘다.
+        val created = dummy.createReservation(newReservation())
+        assertEquals(RoomType.RESERVATION, created.roomType)
+        assertTrue(created.isConfirmed)
+    }
+
+    // 예약 생성 실패만 바꿔 끼우는 호출 — [openError] 와 같은 모양이다(요청 값은 어느 테스트에서도 같다).
+    private fun reserveError(failure: Throwable): PartyOpenException = runBlocking {
+        runCatching {
+            RemoteRideRepository(FakeMatchingApi(reserveFailure = failure), session())
+                .createReservation(newReservation())
+        }.exceptionOrNull() as PartyOpenException
+    }
+
+    private fun newReservation() = NewReservation(
+        departureLat = 37.4979,
+        departureLng = 127.0276,
+        destinationLat = 37.3948,
+        destinationLng = 127.1112,
+        departure = "강남역",
+        destination = "판교역",
+        capacity = 3,
+        departureAt = "2026-11-13T08:00:00Z",
+    )
+
+    private fun reservationItem(destinationNearby: Boolean? = null) = ReservationItemDto(
+        partyId = 12,
+        departure = "강남역",
+        destination = "판교역",
+        currentMembers = 2,
+        capacity = 3,
+        status = "ACTIVE",
+        departureLat = 37.4979,
+        departureLng = 127.0276,
+        destinationLat = 37.3948,
+        destinationLng = 127.1112,
+        departureAt = "2026-11-13T08:00:00Z",
+        destinationNearby = destinationNearby,
+    )
+
     private fun error502() = HttpException(
         Response.error<Unit>(
             502,
@@ -677,11 +1258,25 @@ class RemoteRideRepositoryTest {
         private val realtimeFailure: Throwable? = null,
         private val openFailure: Throwable? = null,
         private val leaveFailure: Throwable? = null,
+        private val confirmFailure: Throwable? = null,
+        private val arriveFailure: Throwable? = null,
+        private val departFailure: Throwable? = null,
+        private val reserveFailure: Throwable? = null,
+        private val reservations: List<ReservationItemDto> = emptyList(),
     ) : MatchingApi {
+        var reserveRequest: OpenReservationRequestDto? = null
+        var reservationRange: Pair<String, String>? = null
+        var reservationSoonCall: List<Double>? = null
+        var reservationSearchCall: List<Any?>? = null
         var realtimeRequest: RealTimeMatchingRequestDto? = null
         var joinCall: Long? = null
         var finishCall: Long? = null
         var leaveCall: Long? = null
+        var confirmCall: Long? = null
+        var confirmRequest: ConfirmMeetingRequestDto? = null
+        var arriveCall: Long? = null
+        var arriveRequest: ArriveRequestDto? = null
+        var departCall: Long? = null
         var openRequest: OpenPartyRequestDto? = null
         var detailCallCount = 0
         var withinCall: List<Double>? = null
@@ -762,8 +1357,73 @@ class RemoteRideRepositoryTest {
             leaveFailure?.let { throw it }
         }
 
-        override suspend fun getAssignedDriver(partyId: Long) =
-            DriverSummaryResponse(seats = 4, plateNumber = "12가 3456", type = "쏘나타")
+        // 셋 다 204 라 돌려줄 값이 없다 — 확인할 것은 **무엇을 보냈는가** 뿐이다.
+        override suspend fun confirmMeeting(partyId: Long, request: ConfirmMeetingRequestDto) {
+            confirmCall = partyId
+            confirmRequest = request
+            confirmFailure?.let { throw it }
+        }
+
+        override suspend fun arriveAtDeparture(partyId: Long, request: ArriveRequestDto) {
+            arriveCall = partyId
+            arriveRequest = request
+            arriveFailure?.let { throw it }
+        }
+
+        override suspend fun departParty(partyId: Long) {
+            departCall = partyId
+            departFailure?.let { throw it }
+        }
+
+        /**
+         * 예약 생성. **응답이 방 생성과 같은 record** 이고(`OpenPartyResponse`) 다른 점은 서버가
+         * 실제로 그렇게 주는 세 가지다: `roomType = "RESERVED"`, `departureAt` 이 요청 값,
+         * 그리고 **경로·요금·시간이 null**(서버가 예약 방의 경로를 추정하지 않는다).
+         */
+        override suspend fun createReservation(request: OpenReservationRequestDto): OpenPartyResponse {
+            reserveRequest = request
+            reserveFailure?.let { throw it }
+            return OpenPartyResponse(
+                id = 31,
+                departureLat = request.departureLat,
+                departureLng = request.departureLng,
+                destinationLat = request.destinationLat,
+                destinationLng = request.destinationLng,
+                departure = request.departure,
+                destination = request.destination,
+                capacity = request.capacity,
+                currentMembers = 1,
+                status = "ACTIVE",
+                roomType = "RESERVED",
+                departureAt = request.departureAt,
+            )
+        }
+
+        override suspend fun getReservations(from: String, to: String): ReservationListResponse {
+            reservationRange = from to to
+            return ReservationListResponse(list = reservations)
+        }
+
+        override suspend fun getReservationsSoon(
+            swLat: Double,
+            swLng: Double,
+            neLat: Double,
+            neLng: Double,
+        ): ReservationListResponse {
+            reservationSoonCall = listOf(swLat, swLng, neLat, neLng)
+            return ReservationListResponse(list = reservations)
+        }
+
+        override suspend fun searchReservations(
+            depLat: Double,
+            depLng: Double,
+            date: String,
+            destLat: Double?,
+            destLng: Double?,
+        ): ReservationListResponse {
+            reservationSearchCall = listOf(depLat, depLng, date, destLat, destLng)
+            return ReservationListResponse(list = reservations)
+        }
 
         // 실서버(localhost:8080) 응답을 축약한 값 — 폴리라인 필드명이 path 다.
         override suspend fun previewRoute(request: RouteRequestDto): RouteEstimateResponse {
@@ -774,6 +1434,15 @@ class RemoteRideRepositoryTest {
                 path = "ub`vEwtzrW?BQxA",
             )
         }
+
+        // 노쇼 두 경로는 같은 MatchingApi 에 얹혀 있지만(서버가 /api/v1/matching 아래에 두었다)
+        // 이 파일이 보는 것은 RemoteRideRepository 다 — 부를 일이 없으므로 불리면 실패로 드러낸다.
+        // 노쇼 쪽 검증은 RemoteNoShowRepositoryTest 가 자기 가짜로 한다.
+        override suspend fun getMyNoShows(): MyNoShowListResponse =
+            error("RemoteRideRepository 는 노쇼를 조회하지 않는다")
+
+        override suspend fun submitNoShowObjection(partyId: Long, request: NoShowObjectionRequestDto): Unit =
+            error("RemoteRideRepository 는 이의를 신청하지 않는다")
 
         // 정원이 차서 서버가 COMPLETED 로 마감한 방 — 앱이 매칭 시작을 트리거하지 않는다.
         private fun detail(partyId: Long) = PartyDetailResponse(

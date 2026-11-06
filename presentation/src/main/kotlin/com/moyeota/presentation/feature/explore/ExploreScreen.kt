@@ -6,6 +6,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,6 +21,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
@@ -65,6 +67,7 @@ import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.AvatarCircle
 import com.moyeota.core.designsystem.component.MoyeotaBottomBar
+import com.moyeota.core.designsystem.component.MoyeotaChip
 import com.moyeota.core.designsystem.component.MoyeotaDefaultCamera
 import com.moyeota.core.designsystem.component.MoyeotaTab
 import com.moyeota.core.designsystem.component.MyLocationOverlay
@@ -75,14 +78,20 @@ import com.moyeota.core.designsystem.component.latLngOrNull
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
+import com.moyeota.domain.model.RoomType
 import com.moyeota.domain.model.User
 import com.moyeota.presentation.core.ActiveRideBanner
+import com.moyeota.presentation.core.LoadingBox
 import com.moyeota.presentation.feature.home.headcountLabel
+import com.moyeota.presentation.feature.home.reservationDateLabel
+import com.moyeota.presentation.feature.home.reservationDates
 import com.naver.maps.geometry.LatLng
 import com.naver.maps.geometry.LatLngBounds
 import com.naver.maps.map.NaverMap
 import com.naver.maps.map.overlay.Marker
 import com.naver.maps.map.util.MarkerIcons
+import java.time.Instant
+import java.time.LocalDate
 
 // 와이어프레임 그레이 (core token 미정의 색 — 화면 재현용)
 private val CanvasBg = Color(0xFFF5F7FA)
@@ -149,6 +158,45 @@ data class MapBounds(
     val neLat: Double,
     val neLng: Double,
 )
+
+/**
+ * 예약 모드가 그릴 것 전부 — 모드·날짜 선택지·목록·상태.
+ *
+ * 파라미터 10개를 [ExploreScreen] 에 늘어놓지 않고 한 덩어리로 묶는다. 묶을 수 있는 근거는 이
+ * 값들이 **함께만 뜻이 있다**는 것이다: 모드가 [ExploreMode.REALTIME] 이면 나머지는 쓰이지 않고,
+ * [ExploreMode.BY_DATE] 가 아니면 날짜 선택지도 쓰이지 않는다.
+ *
+ * **기본값이 「예약 기능 전」의 화면**이다 — 아무것도 넘기지 않으면 지금까지와 똑같이 실시간 목록만
+ * 그린다(예시 방이 새지 않도록 목록에 기본값을 두지 않는 `parties` 와 같은 조심).
+ *
+ * @param items 서버가 준 **순서 그대로**. 화면도 ViewModel 도 재정렬하지 않는다
+ *   ([ReservationFinderViewModel.UiState.Success])
+ * @param locating 「날짜로 찾기」인데 아직 내 좌표가 없다 — 조회를 **못 한 것**이지 실패가 아니다
+ * @param destinationName 검색에 **실어 보낸** 도착지의 이름. null 이면 도착지 없이 검색했다
+ *   (그때 서버는 `destinationNearby` 를 주지 않는다)
+ * @param now 「오늘」·「내일」·출발 시각 표기의 기준 시각. 순수 판정 함수들은 시계를 읽지 않으므로
+ *   (`ReservationRules.kt` KDoc) **화면도 호출부가 넘긴 이 값만** 쓴다 — 리컴포지션마다 시계를
+ *   읽으면 같은 목록이 프레임마다 다른 글자를 갖는다
+ */
+@Immutable
+data class ReservationPaneUi(
+    val mode: ExploreMode = ExploreMode.REALTIME,
+    val dates: List<LocalDate> = emptyList(),
+    val selectedDate: LocalDate? = null,
+    val items: List<ReservationCardUi> = emptyList(),
+    val loading: Boolean = false,
+    val failed: Boolean = false,
+    val locating: Boolean = false,
+    val destinationName: String? = null,
+    val now: Instant = Instant.EPOCH,
+) {
+    /** 날짜 칩·빈 상태 문구가 함께 쓰는 「오늘」·「11월 9일 (일)」. 날짜가 없으면 null. */
+    val selectedDateLabel: String?
+        get() = selectedDate?.let { reservationDateLabel(it, dates.firstOrNull() ?: it) }
+
+    /** 도착지를 실어 보냈는가 — 정렬 설명과 배지 노출이 이 값으로 갈린다. */
+    val destinationSent: Boolean get() = destinationName != null
+}
 
 /** 지도 카메라 1건 (중심 + 줌) */
 @Immutable
@@ -285,12 +333,30 @@ fun ExploreScreen(
     // 기기 실위치. null = 권한 없음 · 아직 fix 없음 → 지도는 기본 카메라 위치에서 시작한다
     myLocation: MyLocationFix? = null,
     initialSheetState: ExploreSheetState = ExploreSheetState.PEEK,
+    /**
+     * 예약 모드의 상태 전부. 기본값이 **예약 기능 전의 화면**이다([ReservationPaneUi]).
+     *
+     * 목록·마커·헤더의 N 은 모드에 따라 [parties] 또는 `reservations.items` 에서 나오는데,
+     * **한 번에 하나다** — 두 목록을 섞지 않는 근거는 둘이 서로 다른 영역을 본다는 것이다
+     * (`ReservationFinder.kt` 의 1급 사실 표).
+     */
+    reservations: ReservationPaneUi = ReservationPaneUi(),
     onJoinParty: (Ride) -> Unit = {},
     onOngoingRideClick: () -> Unit = {},
     onCreateRoomClick: () -> Unit = {},
     onRequestLocationPermission: () -> Unit = {},
     // 지도 카메라가 멈출 때마다 보이는 영역을 올려보낸다 → 그 범위의 방 목록으로 갱신
     onVisibleBoundsChange: (MapBounds) -> Unit = {},
+    onModeSelect: (ExploreMode) -> Unit = {},
+    onDateSelect: (LocalDate) -> Unit = {},
+    onRetryReservations: () -> Unit = {},
+    /**
+     * 「날짜로 찾기」의 도착지를 고르러 간다(15 목적지). **null 이면 칩을 그리지 않는다** —
+     * 배선되지 않은 버튼을 보여 주지 않기 위해서다. 도착지 없이도 검색은 정상이고
+     * (서버 계약: 둘 다 또는 둘 다 아니다) 그때는 정렬이 출발 시각 순이다.
+     */
+    onPickSearchDestination: (() -> Unit)? = null,
+    onClearSearchDestination: () -> Unit = {},
     onTabSelect: (MoyeotaTab) -> Unit = {},
 ) {
     var sheetState by rememberSaveable { mutableStateOf(initialSheetState) }
@@ -298,6 +364,12 @@ fun ExploreScreen(
     val cameraState = rememberSaveable(saver = ExploreCameraStateSaver) {
         ExploreCameraState(initialCamera = null, initialCenteredOnMyLocation = false)
     }
+    val mode = reservations.mode
+    // **마커·카드·헤더의 N 이 나오는 단 하나의 목록.** 모드가 그 출처를 고르고, 아래 어디에서도
+    // 두 목록을 합치지 않는다 — 실시간 목록은 지도 범위, 예약은 모드마다 다른 영역이라
+    // (`ReservationFinder.kt` 표) 섞이면 「지도에 보이는데 목록에 없는 방」이 생긴다.
+    val shownRides = if (mode.isReservation) reservations.items.map { it.ride } else parties
+    val shownCount = shownRides.size
     Column(modifier = Modifier.fillMaxSize().background(CanvasBg)) {
         StatusBarSpacer()
 
@@ -315,10 +387,19 @@ fun ExploreScreen(
             // 낡은 목록 표시는 **고정 높이인 이 줄**에 둔다 — 지도 위에 띄우면 시트를 끝까지 올린
             // 상태(FULL, 지도가 통째로 가려짐)에서 보이지 않고, 시트 안에 두면 접힘(PEEK) 높이가
             // 흔들린다. 이 자리면 세 단계 모두에서 같은 자리에 보이고 레이아웃도 밀리지 않는다.
-            if (stale) {
+            //
+            // **예약 모드에서는 그리지 않는다.** [stale] 은 실시간 주기 조회의 연속 실패 표시인데
+            // (`ExploreViewModel`) 예약 모드에서는 그 조회가 멈춰 있어서, 남아 있던 true 를 그리면
+            // 지금 보고 있는 예약 목록이 낡았다는 **거짓 경고**가 된다.
+            if (stale && !mode.isReservation) {
                 StaleListNotice(modifier = Modifier.align(Alignment.CenterEnd))
             }
         }
+
+        // 모드 칩 — **지도 위가 아니라 지도 밖**에 둔다. 시트를 끝까지 올린 상태(FULL)에서도
+        // 보여야 모드를 되돌릴 수 있고, 시트 안에 두면 접힘 높이가 모드에 따라 흔들린다
+        // (낡은 목록 표시를 타이틀 줄에 둔 것과 같은 근거).
+        ExploreModeRow(selected = mode, onSelect = onModeSelect)
 
         BoxWithConstraints(modifier = Modifier.weight(1f).fillMaxWidth()) {
             val density = LocalDensity.current
@@ -357,7 +438,11 @@ fun ExploreScreen(
             val mapBottomInset = minOf(anchorDp(sheetState), anchorDp(ExploreSheetState.HALF))
             if (locationGranted) {
                 ExploreMap(
-                    rides = parties,
+                    rides = shownRides,
+                    // 예약 마커는 캡션에 **시각을 먼저** 적는다 — 「곧 출발」에서 고르는 기준이
+                    // 인원이 아니라 몇 시냐다([reservationMarkerCaption]). 실시간은 그대로 인원만.
+                    reservationCaptions = mode.isReservation,
+                    now = reservations.now,
                     myLocation = myLocation,
                     cameraState = cameraState,
                     onMarkerClick = onJoinParty,
@@ -421,13 +506,29 @@ fun ExploreScreen(
                     }
                     if (sheetState == ExploreSheetState.PEEK) {
                         PeekSummaryRow(
-                            count = parties.size,
+                            mode = mode,
+                            count = shownCount,
+                            dateLabel = reservations.selectedDateLabel,
                             myPartyHidden = myPartyHidden,
+                            // 접힘 요약은 **개수만** 보므로 실패·대기 중에도 0건이다 — 그 상태에서
+                            // 「없어요」라고 적지 않도록 이유를 받아 둔다([reservationStatusTitle]).
+                            statusText = if (mode.isReservation) {
+                                reservationStatusTitle(
+                                    loading = reservations.loading,
+                                    locating = reservations.locating,
+                                    failed = reservations.failed,
+                                )
+                            } else {
+                                null
+                            },
                             onRaise = { sheetState = ExploreSheetState.HALF },
                         )
                     } else {
                         ListHeaderRow(
-                            count = parties.size,
+                            mode = mode,
+                            count = shownCount,
+                            dateLabel = reservations.selectedDateLabel,
+                            destinationSent = reservations.destinationSent,
                             mapShown = sheetState == ExploreSheetState.HALF,
                             onToggleMap = {
                                 sheetState = if (sheetState == ExploreSheetState.HALF) ExploreSheetState.FULL else ExploreSheetState.HALF
@@ -442,13 +543,51 @@ fun ExploreScreen(
                         HorizontalDivider(color = ChipBorder)
                         Spacer(Modifier.height(ListHeaderGap))
                     }
-                    PartyList(
-                        parties = parties,
-                        myPartyHidden = myPartyHidden,
-                        onJoinParty = onJoinParty,
-                        showEndOfList = sheetState == ExploreSheetState.FULL,
-                        modifier = Modifier.weight(1f),
-                    )
+                    // **이 목록이 무엇을 기준으로 찾은 것인가.** 예약 모드에서만 한 줄 붙는다 —
+                    // 「곧 출발」은 지도 범위, 「날짜로 찾기」는 내 위치 1km 라서 적어 두지 않으면
+                    // 지도를 옮겨 둔 사람이 결과를 잘못 읽는다([exploreAreaNote]).
+                    exploreAreaNote(mode, reservations.destinationSent)?.let { note ->
+                        Text(
+                            text = note,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = GrayAsh,
+                            modifier = Modifier.padding(horizontal = 24.dp),
+                        )
+                        Spacer(Modifier.height(ListHeaderGap))
+                    }
+                    // 날짜·도착지 선택은 「날짜로 찾기」에서만 뜻이 있다(「곧 출발」은 30분 고정이다)
+                    if (mode == ExploreMode.BY_DATE) {
+                        ReservationDateRow(
+                            dates = reservations.dates,
+                            selected = reservations.selectedDate,
+                            destinationName = reservations.destinationName,
+                            onDateSelect = onDateSelect,
+                            onPickDestination = onPickSearchDestination,
+                            onClearDestination = onClearSearchDestination,
+                        )
+                        Spacer(Modifier.height(ListHeaderGap))
+                    }
+                    if (mode.isReservation) {
+                        ReservationList(
+                            pane = reservations,
+                            myPartyHidden = myPartyHidden,
+                            onJoin = onJoinParty,
+                            onRetry = onRetryReservations,
+                            modifier = Modifier.weight(1f),
+                        )
+                    } else {
+                        PartyList(
+                            parties = parties,
+                            myPartyHidden = myPartyHidden,
+                            onJoinParty = onJoinParty,
+                            showEndOfList = sheetState == ExploreSheetState.FULL,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    // 문구는 모드와 무관하게 그대로 둔다 — 누르면 15 목적지로 가고, 예약 방을
+                    // 만드는 길도 그 뒤의 16 모달 안에 있다(「예약 방 만들기」로 바꾸면 16 이
+                    // 기본값 「지금 출발」로 열리는 것과 어긋난다).
                     CreateRoomButton(
                         onClick = onCreateRoomClick,
                         modifier = Modifier.padding(horizontal = 24.dp, vertical = 10.dp),
@@ -496,11 +635,25 @@ private fun emptyListCopy(myPartyHidden: Boolean): Pair<String, String> =
     if (myPartyHidden) "지금은 내 방뿐이에요" to "지도를 움직여 다른 방을 찾아보세요"
     else "이 근처엔 동승이 없어요" to "지도를 움직여 보세요"
 
-/** 17 접힘 요약 — 「주변 합승 N개」. N 은 헤더·마커와 같은 목록(지도 범위)의 방 수다 */
+/**
+ * 17 접힘 요약 — 「주변 합승 N개」. N 은 헤더·마커와 같은 목록의 방 수다.
+ *
+ * 제목·빈 상태 문구는 **모드가 정한다**([explorePeekTitle]·[reservationEmptyCopy]) — 실시간 쪽
+ * 문구는 한 글자도 바뀌지 않았다.
+ */
 @Composable
-private fun PeekSummaryRow(count: Int, myPartyHidden: Boolean, onRaise: () -> Unit) {
+private fun PeekSummaryRow(
+    mode: ExploreMode,
+    count: Int,
+    dateLabel: String?,
+    myPartyHidden: Boolean,
+    statusText: String?,
+    onRaise: () -> Unit,
+) {
     val isEmpty = count == 0
-    val (emptyTitle, emptySubtitle) = emptyListCopy(myPartyHidden)
+    val (emptyTitle, emptySubtitle) =
+        if (mode.isReservation) reservationEmptyCopy(mode, dateLabel, myPartyHidden)
+        else emptyListCopy(myPartyHidden)
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -511,19 +664,38 @@ private fun PeekSummaryRow(count: Int, myPartyHidden: Boolean, onRaise: () -> Un
         }
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = if (isEmpty) emptyTitle else "주변 동승 ${count}개 모집 중",
+                // 0건일 때 **왜 0건인지**가 있으면 그것부터 — 실패·대기를 「없어요」로 말하지 않는다
+                text = when {
+                    isEmpty && statusText != null -> statusText
+                    isEmpty -> emptyTitle
+                    else -> explorePeekTitle(mode, count, dateLabel)
+                },
                 fontSize = 19.sp,
                 fontWeight = FontWeight.Bold,
                 color = MoyeotaColor.InkPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             Text(
                 // 「목적지 정하면 바로 자동 매칭」은 지웠다 — 목적지를 정하면 **새 방이 만들어지고**
                 // (16 「같이 탈 사람 찾기」 → `POST /matching/rooms`) 사람이 합류하기를 기다린다.
                 // 목적지로 기존 방에 자동으로 넣어 주는 기능은 없다(2026-10-13).
-                text = if (isEmpty) emptySubtitle else "위로 올리면 리스트, 목적지를 정하면 새 방을 만들어요",
+                //
+                // 예약 모드에서는 **무엇을 기준으로 찾았는지**를 그 자리에 적는다([exploreAreaNote]) —
+                // 접힘 상태에서는 목록 위의 같은 줄이 보이지 않아 여기가 유일한 자리다.
+                // 예약 모드에서는 **도착지 정렬 설명을 빼고** 영역 기준만 적는다(destinationSent = false) —
+                // 접힘 한 줄에 두 문장을 넣으면 잘린다. 그 설명은 목록 위의 같은 줄이 맡는다.
+                text = when {
+                    isEmpty && statusText == null -> emptySubtitle
+                    mode.isReservation -> exploreAreaNote(mode, destinationSent = false).orEmpty()
+                    isEmpty -> emptySubtitle
+                    else -> "위로 올리면 리스트, 목적지를 정하면 새 방을 만들어요"
+                },
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Medium,
                 color = GrayMute,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
             )
         }
         ChevronUpIcon(
@@ -533,27 +705,126 @@ private fun PeekSummaryRow(count: Int, myPartyHidden: Boolean, onRaise: () -> Un
     }
 }
 
-/** 18·19 목록 헤더 — 「주변 합승 N개 · 가까운 순」 + 지도 접기/펼치기 **단일** 토글 */
+/**
+ * 18·19 목록 헤더 — 「주변 합승 N개 · 가까운 순」 + 지도 접기/펼치기 **단일** 토글.
+ *
+ * 정렬을 말하는 조건이 모드마다 다르다([exploreListTitle]) — 서버가 보장하는 것만 적는다.
+ */
 @Composable
-private fun ListHeaderRow(count: Int, mapShown: Boolean, onToggleMap: () -> Unit) {
+private fun ListHeaderRow(
+    mode: ExploreMode,
+    count: Int,
+    dateLabel: String?,
+    destinationSent: Boolean,
+    mapShown: Boolean,
+    onToggleMap: () -> Unit,
+) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            text = "주변 동승 ${count}개 · 가까운 순",
+            text = exploreListTitle(mode, count, dateLabel, destinationSent),
             fontSize = 17.sp,
             fontWeight = FontWeight.Bold,
             color = MoyeotaColor.InkPrimary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
+        Spacer(Modifier.width(8.dp))
         Text(
             text = if (mapShown) "지도 접기 ⌄" else "지도 펼치기 ⌃",
             fontSize = 13.sp,
             fontWeight = FontWeight.Medium,
             color = MoyeotaColor.Primary500,
+            maxLines = 1,
+            softWrap = false,
             modifier = Modifier.clickable { onToggleMap() },
         )
+    }
+}
+
+/**
+ * 「실시간 / 곧 출발 / 날짜로 찾기」 칩 한 줄.
+ *
+ * 하단탭([MoyeotaBottomBar])처럼 보이지 않게 **칩**으로 둔다 — 이건 화면 이동이 아니라 같은 화면의
+ * 필터이고, 지도 카메라·시트 단계는 모드를 바꿔도 그대로다. 디자인시스템의 [MoyeotaChip] 을 쓴다
+ * (16 의 `ConditionChip` 은 그 모달의 관습이고, 새 자리는 공용 컴포넌트가 먼저다).
+ *
+ * 세 칩이 393dp 폭에 들어오지만 큰 글꼴 설정에서는 넘칠 수 있어 가로 스크롤을 둔다.
+ */
+@Composable
+private fun ExploreModeRow(selected: ExploreMode, onSelect: (ExploreMode) -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 24.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        ExploreMode.entries.forEach { mode ->
+            MoyeotaChip(
+                text = exploreModeLabel(mode),
+                selected = mode == selected,
+                onClick = { onSelect(mode) },
+            )
+        }
+    }
+}
+
+/**
+ * 「날짜로 찾기」의 날짜 칩(오늘~7일 뒤)과 **도착지 칩**.
+ *
+ * 날짜와 도착지를 한 줄에 두는 이유: 둘 다 같은 검색 요청의 입력이고, 도착지는 **있어도 되고 없어도
+ * 되는 값**이라 날짜와 떨어뜨리면 왜 거기 있는지 알기 어렵다. 가로 스크롤인 근거는 16 모달의
+ * `ScrollableChipRow` 와 같다 — 칩이 8개 + 1개라 좁은 폰의 한 줄에 들어오지 않는다.
+ *
+ * 도착지 칩은 [onPickDestination] 이 null 이면 **그리지 않는다**: 도착지를 고르는 길(15 목적지)이
+ * 아직 배선되지 않았을 수 있고, 그때 칩을 보여 주면 눌러도 아무 일도 일어나지 않는다. 도착지 없이
+ * 검색하는 것은 서버가 인정하는 정상 경로다(둘 다 또는 둘 다 아니다).
+ */
+@Composable
+private fun ReservationDateRow(
+    dates: List<LocalDate>,
+    selected: LocalDate?,
+    destinationName: String?,
+    onDateSelect: (LocalDate) -> Unit,
+    onPickDestination: (() -> Unit)?,
+    onClearDestination: () -> Unit,
+) {
+    val today = dates.firstOrNull()
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 24.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        dates.forEach { date ->
+            MoyeotaChip(
+                text = reservationDateLabel(date, today ?: date),
+                selected = date == selected,
+                onClick = { onDateSelect(date) },
+            )
+        }
+        if (destinationName != null) {
+            // 고른 도착지는 **이름으로** 보여 준다 — 「도착지 1곳」 같은 말로는 어디를 보냈는지
+            // 알 수 없고, 그 좌표가 결과 순서를 바꾼다(가까운 방이 먼저).
+            MoyeotaChip(
+                text = "$destinationName $RESERVATION_CLEAR_DESTINATION_LABEL",
+                selected = true,
+                onClick = onClearDestination,
+            )
+        } else if (onPickDestination != null) {
+            MoyeotaChip(
+                text = RESERVATION_ADD_DESTINATION_LABEL,
+                selected = false,
+                onClick = onPickDestination,
+            )
+        }
     }
 }
 
@@ -589,6 +860,155 @@ private fun PartyList(
                 )
             }
         }
+    }
+}
+
+/**
+ * 예약 목록 — [PartyList] 와 같은 모양이고 **카드와 빈 상태만 다르다**.
+ *
+ * 「목록의 끝」 줄([PartyList] 의 `showEndOfList`)을 두지 않는다: 서버가 검색을 **최대 100개**로
+ * 자르는데 그게 「이 날은 여기까지」인지 「100개에서 잘렸는지」를 앱이 알 수 없어, 끝을 단정하면
+ * 거짓이 될 수 있다. 실시간 쪽은 뷰포트 전부를 받아 그 말이 참이었다.
+ */
+@Composable
+private fun ReservationList(
+    pane: ReservationPaneUi,
+    myPartyHidden: Boolean,
+    onJoin: (Ride) -> Unit,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    LazyColumn(
+        modifier = modifier.fillMaxWidth().padding(horizontal = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        items(pane.items.size) { index ->
+            ReservationCard(item = pane.items[index], now = pane.now, onJoin = onJoin)
+        }
+        if (pane.items.isEmpty()) {
+            item { ReservationEmptyState(pane = pane, myPartyHidden = myPartyHidden, onRetry = onRetry) }
+        }
+    }
+}
+
+/**
+ * 예약 목록이 비었을 때의 **네 가지 상태** — 섞으면 안 되는 것들이다.
+ *
+ * | 상태 | 뜻 | 사용자가 할 일 |
+ * |---|---|---|
+ * | 조회 중 | 아직 모른다 | 기다린다 |
+ * | 내 위치 확인 중 | **아직 묻지도 못했다**(1km 의 중심이 없다) | 기다린다 |
+ * | 실패 | 못 물어봤다 | 다시 시도 |
+ * | 0건 | 물어봤고 **없다** | 날짜를 바꾸거나 지도를 옮긴다 |
+ *
+ * 아래 둘을 합치면 장애가 「그 날은 예약이 없네」로 위장되고 사용자는 날짜만 계속 바꾼다
+ * (16 추천의 `nearbyLoadFailed` 가 같은 이유로 갈라져 있다).
+ */
+@Composable
+private fun ReservationEmptyState(pane: ReservationPaneUi, myPartyHidden: Boolean, onRetry: () -> Unit) {
+    when {
+        pane.loading -> LoadingBox(modifier = Modifier.fillMaxWidth().height(120.dp))
+        pane.locating -> ReservationNotice(text = RESERVATION_LOCATING_TEXT)
+        pane.failed -> ReservationNotice(text = RESERVATION_LOAD_FAILED_TEXT, onRetry = onRetry)
+        else -> {
+            val (title, subtitle) = reservationEmptyCopy(pane.mode, pane.selectedDateLabel, myPartyHidden)
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(text = title, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = MoyeotaColor.InkPrimary)
+                Text(text = subtitle, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = GrayMute)
+            }
+        }
+    }
+}
+
+/** 한 줄 안내(+ 선택적 재시도). 화면을 통째로 덮지 않는다 — 지도·모드 칩은 그대로 둔다. */
+@Composable
+private fun ReservationNotice(text: String, onRetry: (() -> Unit)? = null) {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(text = text, fontSize = 14.sp, fontWeight = FontWeight.Medium, color = GrayMute)
+        if (onRetry != null) {
+            Text(
+                text = "다시 시도",
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                color = MoyeotaColor.Primary600,
+                modifier = Modifier.clickable { onRetry() },
+            )
+        }
+    }
+}
+
+/**
+ * 예약 방 카드 한 장 — [PartyCard] 와 **같은 조각으로 짜되 출발 시각이 맨 위**다.
+ *
+ * 실시간 카드는 `departureLabel`(서버가 만든 「3분 후 출발 예정 · 6.2km」)을 장소 아래에 둔다.
+ * 예약에서 그 자리에 시각을 두면 가장 중요한 값이 세 번째 줄로 내려간다 — 이 목록에서 고르는
+ * 기준은 **몇 시에 출발하는가**이고(오늘 오후 6:30 과 내일 오전 9:00 은 전혀 다른 방이다) 장소는
+ * 그다음이다. 시각을 읽을 수 없으면 줄을 **그리지 않는다**([reservationDepartureLabel] 이 null) —
+ * 「시간 미정」 같은 자리값을 두면 약속 시간이 정해진 방을 미정으로 보여 주는 거짓이 된다.
+ *
+ * 「도착지도 1km 안」 배지는 서버가 true 라고 말했을 때만 붙는다([destinationNearbyBadge]).
+ */
+@Composable
+private fun ReservationCard(
+    item: ReservationCardUi,
+    now: Instant,
+    onJoin: (Ride) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val ride = item.ride
+    // 정원을 모르면(0) 「마감」이라고 단정하지 않는다 — [PartyCard] 와 같은 규칙이다.
+    val full = ride.capacity > 0 && ride.members.size >= ride.capacity
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(MoyeotaColor.SurfaceCanvas, RoundedCornerShape(16.dp))
+            .border(1.dp, ChipBorder, RoundedCornerShape(16.dp))
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            reservationDepartureLabel(ride.departureAt, now)?.let { departure ->
+                Text(
+                    text = departure,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MoyeotaColor.Primary600,
+                    maxLines = 1,
+                )
+            }
+            PlaceLine(label = "출발지", place = ride.origin)
+            PlaceLine(label = "목적지", place = ride.destination)
+            val headcount = headcountLabel(joined = ride.members.size, capacity = ride.capacity)
+            val nearby = destinationNearbyBadge(item.destinationNearby)
+            if (headcount.isNotEmpty() || nearby != null) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (headcount.isNotEmpty()) CapacityBadge(text = headcount)
+                    if (nearby != null) NearbyBadge(text = nearby)
+                }
+            }
+        }
+        Spacer(Modifier.width(8.dp))
+        JoinButton(full = full, onClick = { onJoin(ride) })
+    }
+}
+
+/** 「도착지도 1km 안」 — 인원 배지와 **다른 색**이어야 다른 종류의 사실로 읽힌다. */
+@Composable
+private fun NearbyBadge(text: String) {
+    Box(
+        modifier = Modifier
+            .background(MoyeotaColor.Success50, CircleShape)
+            .padding(horizontal = 10.dp, vertical = 3.dp),
+    ) {
+        Text(text = text, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MoyeotaColor.Success600)
     }
 }
 
@@ -887,6 +1307,10 @@ private fun ExploreMap(
     onVisibleBoundsChange: (MapBounds) -> Unit,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(),
+    /** 캡션에 출발 시각을 먼저 적는가(예약 모드) — [reservationMarkerCaption] */
+    reservationCaptions: Boolean = false,
+    /** 「오늘 오후 6:30」을 셈하는 기준 시각. 예약 모드에서만 쓰인다 */
+    now: Instant = Instant.EPOCH,
 ) {
     var map by remember { mutableStateOf<NaverMap?>(null) }
     val myPosition = myLocation?.position
@@ -948,7 +1372,19 @@ private fun ExploreMap(
                 // 캡션도 카드 배지와 **같은 함수**다([headcountLabel]) — 리터럴로 쓰던 동안 인원을
                 // 모르는 방의 마커가 「0명」이라고 적혀 있었고, 같은 방의 카드는 「최대 3명」이었다.
                 // 둘 다 모르면 빈 문자열이 오고, 그때는 캡션을 아예 달지 않는다([ExploreMarker]).
-                caption = headcountLabel(joined = ride.members.size, capacity = ride.capacity),
+                //
+                // 예약 모드는 **시각 · 인원**이다([reservationMarkerCaption]) — 그 함수도 둘 다
+                // 모를 때 빈 문자열을 돌려주므로 위 계약이 그대로 유지된다.
+                caption = if (reservationCaptions) {
+                    reservationMarkerCaption(
+                        departureAt = ride.departureAt,
+                        joined = ride.members.size,
+                        capacity = ride.capacity,
+                        now = now,
+                    )
+                } else {
+                    headcountLabel(joined = ride.members.size, capacity = ride.capacity)
+                },
                 onClick = { onMarkerClick(ride) }, // 마커 탭 → 20 합류 확인
             )
         }
@@ -1077,4 +1513,92 @@ private fun ExploreScreenHalfPreview() {
 @Composable
 private fun ExploreScreenFullPreview() {
     ExploreScreen(parties = DefaultParties, initialSheetState = ExploreSheetState.FULL)
+}
+
+// 미리보기 **전용** 예약 방 — `DefaultParties` 와 같은 조심이 붙는다(기본 인자 자리에 두지 않는다).
+// 출발 시각은 고정 기준 시각(`PreviewNow`)에서 떨어진 값이라 미리보기가 날마다 달라지지 않는다.
+private val PreviewNow: Instant = Instant.parse("2026-11-09T04:00:00Z") // KST 13:00
+
+private fun previewReservation(
+    id: String,
+    origin: String,
+    destination: String,
+    departureAt: String,
+    members: Int,
+    capacity: Int = 3,
+    destinationNearby: Boolean? = null,
+) = ReservationCardUi(
+    ride = Ride(
+        id = id,
+        origin = origin,
+        destination = destination,
+        departureLabel = "",
+        capacity = capacity,
+        members = List(members) { dummyUser("p$id$it", "김OO") },
+        farePerPerson = 0,
+        totalFare = 0,
+        status = RideStatus.RECRUITING,
+        departureAt = departureAt,
+        isConfirmed = true,
+        roomType = RoomType.RESERVATION,
+    ),
+    destinationNearby = destinationNearby,
+)
+
+/** 「곧 출발」 — 지도 범위 기준이라는 안내가 보이는지, 마커·카드의 시각 표기가 맞는지 확인한다. */
+@Preview(showBackground = true, widthDp = 393, heightDp = 852)
+@Composable
+private fun ExploreScreenSoonPreview() {
+    ExploreScreen(
+        parties = emptyList(),
+        initialSheetState = ExploreSheetState.HALF,
+        reservations = ReservationPaneUi(
+            mode = ExploreMode.SOON,
+            now = PreviewNow,
+            items = listOf(
+                previewReservation("r1", "부산대 정문", "서면역", "2026-11-09T04:20:00Z", members = 2),
+                previewReservation("r2", "장전역", "부산역", "2026-11-09T04:25:00Z", members = 1),
+            ),
+        ),
+    )
+}
+
+/** 「날짜로 찾기」 — 날짜 칩·도착지 칩과 「도착지도 1km 안」 배지가 보이는 상태. */
+@Preview(showBackground = true, widthDp = 393, heightDp = 852)
+@Composable
+private fun ExploreScreenByDatePreview() {
+    val dates = reservationDates(PreviewNow)
+    ExploreScreen(
+        parties = emptyList(),
+        initialSheetState = ExploreSheetState.FULL,
+        reservations = ReservationPaneUi(
+            mode = ExploreMode.BY_DATE,
+            now = PreviewNow,
+            dates = dates,
+            selectedDate = dates[1],
+            destinationName = "서면역",
+            items = listOf(
+                previewReservation("r3", "부산대 정문", "서면역", "2026-11-10T00:30:00Z", members = 2, destinationNearby = true),
+                previewReservation("r4", "온천장역", "사상역", "2026-11-10T09:00:00Z", members = 1, destinationNearby = false),
+            ),
+        ),
+        onPickSearchDestination = {},
+    )
+}
+
+/** 「날짜로 찾기」 0건 — 실패와 **다른 문구**인지 눈으로 확인하는 자리. */
+@Preview(showBackground = true, widthDp = 393, heightDp = 852)
+@Composable
+private fun ExploreScreenByDateEmptyPreview() {
+    val dates = reservationDates(PreviewNow)
+    ExploreScreen(
+        parties = emptyList(),
+        initialSheetState = ExploreSheetState.FULL,
+        reservations = ReservationPaneUi(
+            mode = ExploreMode.BY_DATE,
+            now = PreviewNow,
+            dates = dates,
+            selectedDate = dates[3],
+        ),
+    )
 }

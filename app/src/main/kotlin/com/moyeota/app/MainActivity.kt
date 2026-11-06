@@ -68,9 +68,9 @@ class MainActivity : ComponentActivity() {
                     rideRepository = container.rideRepository,
                     placeRepository = container.placeRepository,
                     chatRepository = container.chatRepository,
-                    dispatchRepository = container.dispatchRepository,
                     activePartyRepository = container.activePartyRepository,
                     rideRecordRepository = container.rideRecordRepository,
+                    noShowRepository = container.noShowRepository,
                     pendingChatRoomId = pendingChatRoomId.value,
                     onPendingChatRoomHandled = { pendingChatRoomId.value = null },
                 )

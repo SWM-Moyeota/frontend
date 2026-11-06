@@ -1,16 +1,47 @@
 package com.moyeota.domain.model
 
 /**
- * 방의 진행 단계.
+ * 방의 진행 단계. 서버 `PartyStatus` 의 네 값과 하나씩 짝이다 —
+ * `ACTIVE`→[RECRUITING] · `COMPLETED`→[MATCHED] · `FINISHED`→[COMPLETED] · `CANCELED`→[CANCELED].
  *
- * [CANCELED] 는 [COMPLETED] 와 갈라 둔다 — 서버는 **기사 매칭 3분 타임아웃**에도 방을 CANCELED 로
- * 바꾸는데, 그걸 「완료」와 같은 값으로 접으면 앱이 「기사님을 찾지 못했어요」를 정상 종료와
- * 구분할 수 없다. 정상 종료는 FINISHED 뿐이다.
+ * [CANCELED] 를 [COMPLETED] 와 갈라 두는 이유: 서버는 아무도 출발지에 도착하지 않은 방을 자동
+ * 정리할 때 CANCELED 로 닫는다. 그걸 「완료」와 같은 값으로 접으면 **탄 적 없이 닫힌 방**을
+ * 정상 종료와 구분할 수 없다. 정상 종료는 FINISHED 뿐이다.
  *
- * [DISPATCHING] 은 서버의 MATCHING(기사 찾는 중)과 DRIVER_ASSIGNED(배정 완료)를 함께 담는다 —
- * 둘의 구분은 [Ride.driverId] 유무로 한다(배정되면 taxiDriverId 가 채워진다).
+ * 택시 시절의 `DISPATCHING`·`ONGOING` 은 지웠다 — 기사·배차를 걷어내면서 서버가
+ * `MATCHING`·`DRIVER_ASSIGNED`·`IN_RIDE` 를 **보낼 수 없게** 됐다(서버 `PartyStatus` 에서 삭제).
+ * 모르는 문자열은 매퍼가 [RECRUITING] 으로 떨어뜨리므로 옛 값이 와도 파싱은 깨지지 않는다.
  */
-enum class RideStatus { RECRUITING, MATCHED, DISPATCHING, ONGOING, COMPLETED, CANCELED }
+enum class RideStatus { RECRUITING, MATCHED, COMPLETED, CANCELED }
+
+/**
+ * 방의 종류. 서버 `RoomType` 과 짝이지만 **이름이 한쪽만 다르다** — 서버는 `REALTIME`·`RESERVED` 이고
+ * 여기는 [REALTIME]·[RESERVATION] 이다. 그 간극을 메우는 곳은 매퍼 하나뿐이다
+ * (`PartyMappers.toRoomType` 이 `"RESERVED"` 를 [RESERVATION] 으로 읽는다).
+ * **서버가 `"RESERVATION"` 을 보낸다고 가정하지 말 것** — 서버 enum 에 그 이름은 없다.
+ * 매퍼는 혹시 모를 개명까지 받아 두지만, 지금 실제로 오는 문자열은 `RESERVED` 다.
+ *
+ * 모르는 문자열은 [REALTIME] 로 떨어진다. 반대 방향으로 기울이면 안 되는 이유는 **틀렸을 때의 대가가
+ * 비대칭**이기 때문이다:
+ *
+ * | 모르는 값을 무엇으로 읽나 | 실시간 방을 틀리게 읽으면 | 예약 방을 틀리게 읽으면 |
+ * |---|---|---|
+ * | [REALTIME] | — | 방장에게 「약속 시간 정하기」가 뜨고, 누르면 서버가 409 `NOT_REALTIME_PARTY` 로 막는다(복구됨) |
+ * | [RESERVATION] | 「약속 시간 정하기」가 **사라져** 실시간 방을 끝낼 길이 없어진다(복구 불가) | — |
+ */
+enum class RoomType {
+    /**
+     * 지금 모여서 타는 방. 약속 시간은 방장이 나중에 확정한다
+     * ([com.moyeota.domain.repository.RideRepository.confirmMeeting]) — 확정 전에는 [Ride.departureAt] 이 null 이다.
+     */
+    REALTIME,
+
+    /**
+     * 만들 때 출발 시각을 정해 둔 예약 방(서버 `RESERVED`). **처음부터 확정 상태**라
+     * ([Ride.isConfirmed] 가 늘 true) 약속 시간을 다시 정할 수 없다 — 서버가 409 `NOT_REALTIME_PARTY` 로 막는다.
+     */
+    RESERVATION,
+}
 
 data class Ride(
     val id: String,
@@ -41,8 +72,39 @@ data class Ride(
     val estimatedMinutes: Int? = null,
     /** Google Encoded Polyline (정밀도 1e5, lat→lng 순). 서버 route. 지도 경로 그리기에 쓴다. */
     val routePolyline: String? = null,
-    /** 배정된 기사 id. 미배정이면 null. 서버 taxiDriverId. */
-    val driverId: Long? = null,
+    /**
+     * 약속 시간 — 서버 `PartyDetailResult.departureAt` 을 **ISO-8601 문자열 그대로** 들고 온다.
+     * 실시간 방은 방장이 확정하기 전까지 null 이고, 예약 방은 만들 때 정한 출발 시각이 처음부터 들어 있다.
+     *
+     * **파싱해서 보관하지 않는다** — `RideRecord.createdAt`·`ChatMessage.sentAt` 과 같은 관례다. 도메인에서
+     * `Instant` 로 바꾸면 ① data 와 domain 이 같은 파싱을 각자 들고 어긋날 수 있고 ② 「바뀌었나」를
+     * [Ride] 끼리의 `==` 로 보는 주기 조회가 파싱 결과의 동등성에 묶인다. 사람이 읽을 모양
+     * (「오후 6:30」)으로 바꾸는 일은 화면이 한다.
+     *
+     * 장소는 싣지 않는다 — 약속 장소는 **늘 방의 출발지**다(서버가 따로 담지 않는다).
+     */
+    val departureAt: String? = null,
+    /**
+     * 약속이 확정된 방인가(서버 `PartyDetailResult.confirmed`).
+     *
+     * 지금은 **[departureAt] 이 null 이 아닌 것과 같은 뜻**이다 — 서버도 저장하지 않고
+     * `isReservation() || departureAt != null` 로 **셈해서** 내려 준다. 그래도 서버 값을 따로 받는 이유는
+     * 그 식이 **서버 것**이기 때문이다: 확정 취소 같은 게 생겨 서버가 판정을 바꾸면 앱이 베낀 식만 뒤처진다.
+     * (서버가 말해 주지 않은 옛 배포에서만 매퍼가 같은 식으로 셈해 채운다 — `PartyMappers.toRide`.)
+     *
+     * 확정되면 방이 **닫히는 방식이 바뀐다**: 모집이 끝나고(ACTIVE→COMPLETED) 아무도 나갈 수 없으며
+     * (409 `CANNOT_LEAVE_CONFIRMED_PARTY`), 「합승 완료」도 막힌다(409 `USE_DEPART_FOR_CONFIRMED_PARTY`).
+     * 끝내는 길은 「출발」 하나뿐이다([com.moyeota.domain.repository.RideRepository.departParty]).
+     */
+    val isConfirmed: Boolean = false,
+    /**
+     * 실시간 방인가 예약 방인가. 「약속 시간 정하기」는 **실시간 방에서만** 되고
+     * ([com.moyeota.domain.repository.RideRepository.confirmMeeting]), 예약 방은 처음부터 확정이다.
+     *
+     * 목록·추천 응답에는 이 값이 없어 기본값 [RoomType.REALTIME] 으로 남는다 — 그쪽 화면은 방을
+     * 끝내는 동작을 띄우지 않으므로 읽는 쪽이 없다.
+     */
+    val roomType: RoomType = RoomType.REALTIME,
 )
 
 /**
@@ -84,7 +146,7 @@ val Ride.isHostedByMe: Boolean
  * 그 엔드포인트는 사라졌다(Backend `04f6be7`). 그래서 지문 필드도, 상세와 비교하던 `isSameAs` 도 없다.
  */
 data class PartyStatus(
-    /** 합류 **직후**의 상태. 내가 마지막 자리를 채웠으면 COMPLETED(기사 모드면 MATCHING)로 온다. */
+    /** 합류 **직후**의 상태. 내가 마지막 자리를 채웠으면 [RideStatus.MATCHED] 로 온다. */
     val status: RideStatus,
     val currentMembers: Int,
 )

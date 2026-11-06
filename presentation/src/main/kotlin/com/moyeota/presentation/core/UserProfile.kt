@@ -35,8 +35,29 @@ sealed interface UserNameState {
      * [imageUrl] 은 **서버가 비워 보내지 않는다** — 고른 적 없는 사용자에게도 기본 이미지의 전체
      * 주소를 준다. 그래서 여기가 null 이면 "사진이 없다"가 아니라 조회 실패거나 구버전 서버다.
      * 기본값이 있는 이유는 Preview 호출부가 `Resolved("성윤")` 한 인자로 쓰기 때문이다.
+     *
+     * ### 노쇼 제재 두 값이 여기 함께 실리는 이유 (2026-11-06)
+     * 넷 다 **같은 한 번의 조회**(`GET /local/users/info`)에서 온다. 35 마이페이지에 파라미터를
+     * 따로 두면 "이름은 왔는데 제재는 아직"이라는 **있을 수 없는 조합이 타입으로 표현돼 버린다**
+     * — 사진을 이 상태에 함께 담은 것과 똑같은 이유다([MyPageScreen] 의 아바타 호출부 주석).
      */
-    data class Resolved(val name: String?, val imageUrl: String? = null) : UserNameState
+    data class Resolved(
+        val name: String?,
+        val imageUrl: String? = null,
+        /**
+         * 지금 노쇼 횟수. 건마다 그 방 **약속 시간부터 30일**이 지나면 빠지고, 이의가 인정돼
+         * 무효가 된 노쇼는 세지 않는다. 조회에 실패하면 0 이다 — 그래서 이 값이 0 인 것은
+         * 「노쇼가 없다」가 아니라 **「없거나 모른다」**이고, 35 가 이 값으로 「노쇼 기록」 행을
+         * 숨기지 않는 이유 중 하나다(`MyPageMenu.kt` 의 그 행 주석).
+         */
+        val noShowCount: Int = 0,
+        /**
+         * 이 시각까지 방 만들기·합류·예약·실시간 후보가 **전부 403 `NO_SHOW_RESTRICTED`** 다.
+         * 제한이 없으면 null. 서버 관례대로 ISO-8601 문자열이고, 표기·만료 판정은 화면 쪽
+         * (`noShowSanction`)이 기기 시간대로 한다 — 문자열을 자르면 KST 오후가 오전으로 보인다.
+         */
+        val restrictedUntil: String? = null,
+    ) : UserNameState
 }
 
 /**
@@ -112,7 +133,15 @@ class UserProfileViewModel(
             // 이름만 null** 인 사용자(닉네임·실명이 둘 다 없다)는 앞 조건에서는 갱신이 건너뛰어져,
             // 사진은 있는데 재조회 때마다 아바타를 잃는다. 실패는 `info == null` 하나로 판정된다.
             if (info != null || showLoading) {
-                _userName.value = UserNameState.Resolved(info?.name, info?.imageUrl)
+                _userName.value = UserNameState.Resolved(
+                    name = info?.name,
+                    imageUrl = info?.imageUrl,
+                    // 조회 실패면 0·null 로 떨어진다 — 35 는 그때 제재 배너를 그리지 않는다.
+                    // 없는 근거로 「제한 중」을 말하지 않는 쪽이 맞다: 실제로 막혀 있다면 방
+                    // 만들기·합류가 403 으로 거절하며 그 자리에서 말해 준다.
+                    noShowCount = info?.noShowCount ?: 0,
+                    restrictedUntil = info?.restrictedUntil,
+                )
             }
         }
     }

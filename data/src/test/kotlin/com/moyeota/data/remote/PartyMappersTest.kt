@@ -1,6 +1,5 @@
 package com.moyeota.data.remote
 
-import com.moyeota.data.remote.dto.DriverSummaryResponse
 import com.moyeota.data.remote.dto.OpenPartyRequestDto
 import com.moyeota.data.remote.dto.OpenPartyResponse
 import com.moyeota.data.remote.dto.PartyDetailResponse
@@ -10,6 +9,7 @@ import com.moyeota.data.remote.dto.RouteEstimateResponse
 import com.moyeota.data.remote.dto.RouteRequestDto
 import com.moyeota.domain.model.NewParty
 import com.moyeota.domain.model.RideStatus
+import com.moyeota.domain.model.RoomType
 import com.moyeota.domain.model.isHostedByMe
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.json.Json
@@ -24,20 +24,29 @@ class PartyMappersTest {
 
     private val json = Json { ignoreUnknownKeys = true }
 
+    /** 서버 `PartyStatus` 가 보낼 수 있는 값은 **이 넷뿐**이다(기사·배차 상태 셋은 삭제됐다). */
     @Test
     fun `백엔드 PartyStatus 를 RideStatus 로 매핑한다`() {
         assertEquals(RideStatus.RECRUITING, partyStatusToRideStatus("ACTIVE"))
         assertEquals(RideStatus.MATCHED, partyStatusToRideStatus("COMPLETED"))
-        assertEquals(RideStatus.DISPATCHING, partyStatusToRideStatus("MATCHING"))
-        assertEquals(RideStatus.DISPATCHING, partyStatusToRideStatus("DRIVER_ASSIGNED"))
-        assertEquals(RideStatus.ONGOING, partyStatusToRideStatus("IN_RIDE"))
         assertEquals(RideStatus.COMPLETED, partyStatusToRideStatus("FINISHED"))
         assertEquals(RideStatus.CANCELED, partyStatusToRideStatus("CANCELED"))
     }
 
+    /**
+     * **모르는 문자열이 RECRUITING 으로 떨어지는 것**이 옛 서버와 앱 사이의 유일한 안전장치다.
+     *
+     * 지워진 세 값(`MATCHING`·`DRIVER_ASSIGNED`·`IN_RIDE`)을 여기서 함께 못 박는다 — 아직 배포되지
+     * 않은 서버는 그 값을 계속 보낼 수 있고, 그때 `else` 가 없으면(혹은 `error(...)` 로 바뀌면)
+     * 방 상세 파싱이 터져 21 대기 화면이 통째로 죽는다. 되살려 매핑하는 것도 안 된다 —
+     * 짝이 될 [RideStatus] 가 없다.
+     */
     @Test
-    fun `알 수 없는 상태는 RECRUITING 으로 처리한다`() {
+    fun `알 수 없는 상태와 삭제된 기사 배차 상태는 RECRUITING 으로 떨어진다`() {
         assertEquals(RideStatus.RECRUITING, partyStatusToRideStatus("SOMETHING_NEW"))
+        for (gone in listOf("MATCHING", "DRIVER_ASSIGNED", "IN_RIDE")) {
+            assertEquals(gone, RideStatus.RECRUITING, partyStatusToRideStatus(gone))
+        }
     }
 
     @Test
@@ -120,7 +129,7 @@ class PartyMappersTest {
     }
 
     @Test
-    fun `상세 응답을 Ride 로 매핑하고 요금 경로 기사 id 를 채운다`() {
+    fun `상세 응답을 Ride 로 매핑하고 요금과 경로를 채운다`() {
         val detail = detailResponse()
 
         val ride = detail.toRide()
@@ -128,14 +137,13 @@ class PartyMappersTest {
         assertEquals("7", ride.id)
         assertEquals("서울시청", ride.origin)
         assertEquals("강남역", ride.destination)
-        assertEquals(RideStatus.DISPATCHING, ride.status)
+        assertEquals(RideStatus.MATCHED, ride.status)
         assertEquals(2, ride.members.size)
         assertEquals(37.5665, ride.originLat!!, 0.0001)
         assertEquals(127.0276, ride.destinationLng!!, 0.0001)
         assertEquals(9600, ride.estimatedFare)
         assertEquals(14, ride.estimatedMinutes)
         assertEquals("_p~iF~ps|U", ride.routePolyline)
-        assertEquals(42L, ride.driverId)
         // 전체 요금은 정원으로 나눠 1인당 요금을 만든다(9600 / 3).
         assertEquals(9600, ride.totalFare)
         assertEquals(3200, ride.farePerPerson)
@@ -499,7 +507,6 @@ class PartyMappersTest {
             estimateFare = 9600,
             estimateTime = 14,
             route = "_p~iF~ps|U",
-            taxiDriverId = null,
         )
 
         val ride = response.toRide()
@@ -509,7 +516,6 @@ class PartyMappersTest {
         assertEquals(1, ride.members.size)
         assertEquals("멤버 1", ride.members[0].nickname)
         assertEquals("_p~iF~ps|U", ride.routePolyline)
-        assertNull(ride.driverId)
     }
 
     /**
@@ -593,21 +599,24 @@ class PartyMappersTest {
         assertNull(ride.originLat)
         assertNull(ride.estimatedFare)
         assertNull(ride.routePolyline)
-        assertNull(ride.driverId)
         assertTrue(ride.members.isEmpty())
         assertEquals(RideStatus.RECRUITING, ride.status)
     }
 
     @Test
     fun `상세 응답 JSON 을 실제 서버 shape 그대로 역직렬화한다`() {
-        // PartyDetailResult(… members, estimateFare, estimateTime, route, taxiDriverId) 기준.
+        // PartyDetailResult(… members, estimateFare, estimateTime, route) 기준.
         // members 는 MemberInfo(publicId, nickname, imageUrl, badgeId, rideCount) —
         // 내부 PK memberId 와 joinedAt 은 사라졌고, 둘째 멤버는 요약이 없는(탈퇴) 경우다.
         // badgeId 는 서버 TODO 라 항상 null.
+        //
+        // `taxiDriverId` 를 **일부러 남겨 둔다**: 서버가 출시된 앱 호환으로 이 키를 계속 실어 보내고,
+        // DTO 에는 받는 자리가 없다(기사·배차 삭제). 즉 이 줄은 `Json { ignoreUnknownKeys = true }`
+        // (`NetworkModule`)가 그 키를 조용히 흘린다는 계약을 지키는 자리다 — 지우면 그 보장이 사라진다.
         val body = """
             {"id":7,"departureLat":37.5665,"departureLng":126.978,"destinationLat":37.4979,
              "destinationLng":127.0276,"departure":"서울시청","destination":"강남역","capacity":3,
-             "currentMembers":2,"departureRadius":500,"destinationRadius":500,"status":"DRIVER_ASSIGNED",
+             "currentMembers":2,"departureRadius":500,"destinationRadius":500,"status":"COMPLETED",
              "createdAt":"2026-08-30T09:00:00Z",
              "members":[{"publicId":"$UUID_ME","nickname":"성윤","imageUrl":null,"badgeId":null,
                          "rideCount":4},
@@ -623,12 +632,11 @@ class PartyMappersTest {
         assertEquals(500, decoded.departureRadius)
         assertEquals(500, decoded.destinationRadius)
         assertEquals("7", ride.id)
-        assertEquals(RideStatus.DISPATCHING, ride.status)
+        assertEquals(RideStatus.MATCHED, ride.status)
         assertEquals(listOf(UUID_ME, ""), ride.members.map { it.id })
         assertEquals(listOf("성윤", "탈퇴한 회원"), ride.members.map { it.nickname })
         assertEquals(listOf(4, 0), ride.members.map { it.rideCount })
         assertEquals(listOf(true, false), ride.members.map { it.isMe })
-        assertEquals(42L, ride.driverId)
         assertEquals(9600, ride.estimatedFare)
     }
 
@@ -660,29 +668,6 @@ class PartyMappersTest {
 
         assertEquals(1, decoded.list.size)
         assertEquals("7", decoded.list[0].toRide().id)
-    }
-
-    @Test
-    fun `기사 요약 응답을 도메인 모델로 매핑한다`() {
-        // 서버 DriverSummary(seats, plateNumber, type) — 이름/별점 필드가 없다.
-        val decoded = json.decodeFromString<DriverSummaryResponse>(
-            """{"seats":4,"plateNumber":"12가 3456","type":"쏘나타"}""",
-        )
-
-        val driver = decoded.toAssignedDriver()
-
-        assertEquals(4, driver.seats)
-        assertEquals("12가 3456", driver.plateNumber)
-        assertEquals("쏘나타", driver.vehicleType)
-    }
-
-    @Test
-    fun `기사 요약에 좌석 수가 없어도 매핑이 깨지지 않는다`() {
-        val driver = json.decodeFromString<DriverSummaryResponse>("""{"plateNumber":"99하 1111"}""")
-            .toAssignedDriver()
-
-        assertNull(driver.seats)
-        assertEquals("", driver.vehicleType)
     }
 
     @Test
@@ -734,15 +719,18 @@ class PartyMappersTest {
     /**
      * 합류 응답은 상세와 **같은 상태 변환표**를 써야 한다([partyStatusToRideStatus]) —
      * 갈리면 합류 직후 상태와 방 상세가 같은 방을 서로 다른 단계로 보여 준다.
+     *
+     * 그래서 **실제 합류 응답에는 올 수 없는 값**(`CANCELED`)을 일부러 넣는다. 매퍼가 변환표를
+     * 공유하지 않고 「합류니까 ACTIVE 아니면 COMPLETED」로 좁혀 두면 여기서 걸린다.
      */
     @Test
     fun `합류 응답을 도메인 PartyStatus 로 매핑한다`() {
         val status = PartyStatusResponse(
-            status = "DRIVER_ASSIGNED",
+            status = "CANCELED",
             currentMembers = 3,
         ).toPartyStatus()
 
-        assertEquals(RideStatus.DISPATCHING, status.status)
+        assertEquals(RideStatus.CANCELED, status.status)
         assertEquals(3, status.currentMembers)
     }
 
@@ -818,13 +806,13 @@ class PartyMappersTest {
     fun `옛 서버가 지문을 실어 보내도 상세 매핑이 깨지지 않는다`() {
         val body = """
             {"id":7,"departure":"서울시청","destination":"강남역","capacity":3,"currentMembers":3,
-             "status":"MATCHING","fingerprint":"9f3c1a7b4e2d0586"}
+             "status":"COMPLETED","fingerprint":"9f3c1a7b4e2d0586"}
         """.trimIndent()
 
         val ride = json.decodeFromString<PartyDetailResponse>(body).toRide()
 
         assertEquals("7", ride.id)
-        assertEquals(RideStatus.DISPATCHING, ride.status)
+        assertEquals(RideStatus.MATCHED, ride.status)
     }
 
     /**
@@ -833,12 +821,15 @@ class PartyMappersTest {
      * (「지문이 없으면 매 주기 상세를 읽는다」 같은 예외 조건).
      */
     @Test
-    fun `상세 응답 DTO 에 지문 필드가 없다`() {
+    fun `상세 응답 DTO 에 지문도 기사 id 도 없다`() {
         val fields = PartyDetailResponse.serializer().fieldNames()
 
         assertFalse("PartyDetailResponse 에 fingerprint 가 되살아났다", fields.contains("fingerprint"))
-        // 폴링이 읽는 값들은 그대로 있어야 한다 — 상세가 25·26 의 유일한 전이 근거다.
-        assertTrue(fields.containsAll(listOf("status", "members", "taxiDriverId", "route")))
+        // 서버는 출시된 앱 호환으로 `taxiDriverId` 를 계속 실어 보내지만 앱은 받지 않는다 —
+        // 되살리면 아무도 읽지 않는 항상-null 필드가 된다(기사·배차 삭제).
+        assertFalse("PartyDetailResponse 에 taxiDriverId 가 되살아났다", fields.contains("taxiDriverId"))
+        // 화면이 읽는 값들은 그대로 있어야 한다.
+        assertTrue(fields.containsAll(listOf("status", "members", "route")))
     }
 
     /** DTO 의 **직렬화 계약**(JSON 키 이름·순서)을 읽는다 — JVM 필드 목록과 달리 Companion 이 섞이지 않는다. */
@@ -869,11 +860,208 @@ class PartyMappersTest {
         assertFalse(held == swapped)
     }
 
+    // ───────────── 약속 확정·출발지 도착 (상세의 네 필드) ─────────────
+    //
+    // 앱의 상세 DTO 에는 roomType·departureAt·confirmed·members[].arrived 가 **아예 없었다** —
+    // 서버는 보내는데 받는 자리가 없어 `ignoreUnknownKeys` 가 전부 흘렸다. 그래서 앱은 방이
+    // 확정됐는지, 누가 도착했는지 **읽을 수 없었고** 21 대기 화면은 영원히 모집 중이었다.
+    // 아래 테스트들이 그 네 값이 도메인까지 닿는지와, 없을 때 무엇으로 떨어지는지를 못박는다.
+
+    @Test
+    fun `상세의 약속 정보와 도착 표시를 도메인으로 옮긴다`() {
+        val ride = detailResponse(
+            members = listOf(
+                member(publicId = UUID_ME, nickname = "성윤", arrived = true),
+                member(publicId = UUID_OTHER, nickname = "다른사람", arrived = false),
+            ),
+            roomType = "REALTIME",
+            departureAt = "2026-11-03T08:30:00Z",
+            confirmed = true,
+        ).toRide(currentUuid = UUID_ME)
+
+        // 약속 시간은 ISO-8601 **문자열 그대로** 옮긴다 — 파싱은 화면이 한다(기기 시간대에 묶이지 않게).
+        assertEquals("2026-11-03T08:30:00Z", ride.departureAt)
+        assertTrue(ride.isConfirmed)
+        assertEquals(RoomType.REALTIME, ride.roomType)
+        assertEquals(listOf(true, false), ride.members.map { it.hasArrived })
+    }
+
+    /**
+     * **키 이름이 계약이다.** 네 키(`roomType`·`departureAt`·`confirmed`·멤버의 `arrived`)를 서버
+     * 응답 모양 그대로 넣어, 하나라도 이름이 어긋나면 `ignoreUnknownKeys` 가 **조용히 흘려** 기본값으로
+     * 떨어지는 것을 잡는다 — 그 실패는 화면에서 "확정했는데 아무 일도 안 일어남"으로만 보인다.
+     *
+     * 기준은 백엔드 `PartyDetailResult`(+ `MemberInfo`) record 소스다 — Jackson 이 record 컴포넌트
+     * 이름을 그대로 쓰므로 `isConfirmed`·`isArrived` 가 아니다.
+     */
+    @Test
+    fun `약속 정보가 실린 상세 JSON 을 실제 서버 shape 그대로 역직렬화한다`() {
+        val body = """
+            {"id":7,"departureLat":37.5665,"departureLng":126.978,"destinationLat":37.4979,
+             "destinationLng":127.0276,"departure":"서울시청","destination":"강남역","capacity":3,
+             "currentMembers":2,"departureRadius":500,"destinationRadius":500,"status":"COMPLETED",
+             "createdAt":"2026-11-03T08:00:00Z",
+             "members":[{"publicId":"$UUID_ME","nickname":"성윤","imageUrl":null,"badgeId":null,
+                         "rideCount":4,"host":true,"arrived":true},
+                        {"publicId":"$UUID_OTHER","nickname":"철수","imageUrl":null,"badgeId":null,
+                         "rideCount":3,"host":false,"arrived":false}],
+             "estimateFare":9600,"estimateTime":14,"route":"_p~iF~ps|U","taxiDriverId":null,
+             "version":13,"roomType":"REALTIME","departureAt":"2026-11-03T08:30:00Z","confirmed":true}
+        """.trimIndent()
+
+        val decoded = json.decodeFromString<PartyDetailResponse>(body)
+        val ride = decoded.toRide(currentUuid = UUID_ME)
+
+        assertEquals("REALTIME", decoded.roomType)
+        assertEquals("2026-11-03T08:30:00Z", decoded.departureAt)
+        assertEquals(true, decoded.confirmed)
+        assertEquals(listOf(true, false), decoded.members.map { it.arrived })
+        assertEquals("2026-11-03T08:30:00Z", ride.departureAt)
+        assertTrue(ride.isConfirmed)
+        assertEquals(RoomType.REALTIME, ride.roomType)
+        assertEquals(listOf(true, false), ride.members.map { it.hasArrived })
+    }
+
+    /**
+     * **네 필드가 없는 응답도 열려야 한다** — 약속 기능 전 배포를 보고 있거나 서버가 필드를 뺀 경우다.
+     * 그때는 「미확정 실시간 방, 아무도 도착 안 함」으로 떨어진다: 그 조합이 21 화면에서
+     * 「방장이 약속 시간을 정하는 중」 또는 「약속 시간 정하기」를 띄우는, **되돌릴 수 있는** 상태다.
+     */
+    @Test
+    fun `약속 필드가 없는 옛 상세 응답은 미확정 실시간 방으로 떨어진다`() {
+        val body = """
+            {"id":9,"departure":"성결대 정문","destination":"안양역","capacity":3,"status":"ACTIVE",
+             "members":[{"publicId":"$UUID_ME","nickname":"성윤","rideCount":0}]}
+        """.trimIndent()
+
+        val ride = json.decodeFromString<PartyDetailResponse>(body).toRide(currentUuid = UUID_ME)
+
+        assertNull(ride.departureAt)
+        assertFalse(ride.isConfirmed)
+        assertEquals(RoomType.REALTIME, ride.roomType)
+        assertFalse(ride.members.single().hasArrived)
+    }
+
+    /**
+     * `confirmed` 를 서버가 말하지 않으면 **서버와 같은 식으로 셈한다**(`isReservation() ||
+     * departureAt != null`). 그냥 false 로 접으면 확정된 방에 「약속 시간 정하기」를 다시 띄워
+     * 409 `ALREADY_CONFIRMED` 를 사용자 손으로 만들게 된다.
+     *
+     * 명시적 `null` 도 같은 길이다 — 서버 record 는 원시 `boolean` 이라 오지 않지만, 그 하나로
+     * 방 화면이 안 열리면 안 되므로 nullable 로 받는다([PartyDetailResponse.confirmed]).
+     */
+    @Test
+    fun `confirmed 가 없으면 약속 시간 유무로 셈한다`() {
+        val missing = detailResponse(departureAt = "2026-11-03T08:30:00Z")
+            .toRide(currentUuid = UUID_ME)
+        assertTrue(missing.isConfirmed)
+
+        val explicitNull = json.decodeFromString<PartyDetailResponse>(
+            """{"id":7,"status":"COMPLETED","departureAt":"2026-11-03T08:30:00Z","confirmed":null}""",
+        ).toRide(currentUuid = UUID_ME)
+        assertTrue(explicitNull.isConfirmed)
+
+        // 약속 시간도 없으면 미확정이다 — 두 값이 함께 비는 게 확정 전 실시간 방의 모양이다.
+        assertFalse(detailResponse().toRide(currentUuid = UUID_ME).isConfirmed)
+    }
+
+    /**
+     * **서버 예약 방은 `RESERVED` 다 — `RESERVATION` 이 아니다.** 도메인 이름만 RESERVATION 이고,
+     * 서버 문자열을 그대로 `enumValueOf` 하면 예약 방이 **조용히 실시간 방으로** 읽혀 「약속 시간
+     * 정하기」가 뜬다(눌러도 409 `NOT_REALTIME_PARTY`).
+     *
+     * 모르는 값·누락이 실시간 방으로 떨어지는 것도 함께 못박는다 — 반대로 기울이면 실시간 방을
+     * 끝낼 길이 사라진다([RoomType] KDoc 의 표).
+     */
+    @Test
+    fun `서버 RESERVED 를 예약 방으로 읽고 모르는 값은 실시간 방으로 떨어진다`() {
+        assertEquals(RoomType.REALTIME, toRoomType("REALTIME"))
+        assertEquals(RoomType.RESERVATION, toRoomType("RESERVED"))
+        // 서버가 나중에 enum 이름을 도메인 쪽에 맞춰도 맞게 돈다.
+        assertEquals(RoomType.RESERVATION, toRoomType("RESERVATION"))
+        assertEquals(RoomType.REALTIME, toRoomType("SOMETHING_NEW"))
+        assertEquals(RoomType.REALTIME, toRoomType(null))
+
+        val reserved = detailResponse(roomType = "RESERVED", departureAt = "2026-11-03T08:30:00Z")
+            .toRide(currentUuid = UUID_ME)
+        assertEquals(RoomType.RESERVATION, reserved.roomType)
+        // 예약 방은 만들 때 출발 시각을 정했으므로 처음부터 확정이다.
+        assertTrue(reserved.isConfirmed)
+    }
+
+    /**
+     * **키 이름은 `arrived` 다**(서버 record 컴포넌트 이름 그대로). `isArrived` 로 적으면
+     * `ignoreUnknownKeys` 가 흘려서 **조용히 늘 누락**이 되므로, 틀린 이름이 먹히지 않음을 못박는다 —
+     * `host`/`isHost` 와 **같은 함정**이다.
+     */
+    @Test
+    fun `isArrived 라는 키는 도착으로 읽히지 않는다 — 계약 키는 arrived 다`() {
+        val body = """
+            {"id":7,"status":"COMPLETED","departureAt":"2026-11-03T08:30:00Z","confirmed":true,
+             "members":[{"publicId":"$UUID_ME","nickname":"성윤","rideCount":0,"isArrived":true}]}
+        """.trimIndent()
+
+        val ride = json.decodeFromString<PartyDetailResponse>(body).toRide(currentUuid = UUID_ME)
+
+        // isArrived 키를 읽었다면 true 가 됐을 것이다.
+        assertFalse(ride.members.single().hasArrived)
+    }
+
+    /**
+     * 도착 표시가 없을 때는 **나에게도 false** 다 — 방장(`host`)과 **반대 방향**의 폴백이고,
+     * 그게 이 두 필드의 유일한 비대칭이다.
+     *
+     * 근거: true 로 기울면 「출발」 버튼이 열리는데 서버가 409 `NOT_ARRIVED` 로 막아 **누를 수 없는
+     * 버튼**이 되고, false 로 기울면 멱등한 「출발지 도착했어요」가 한 번 더 보일 뿐이다.
+     */
+    @Test
+    fun `도착 표시가 없으면 나에게도 false 다 — host 폴백과 반대다`() {
+        val ride = detailResponse(
+            members = listOf(member(publicId = UUID_ME, nickname = "성윤")),
+            departureAt = "2026-11-03T08:30:00Z",
+            confirmed = true,
+        ).toRide(currentUuid = UUID_ME)
+
+        val me = ride.members.single()
+        assertTrue("host 누락은 나에게 true 로 떨어진다(기존 계약)", me.isHost)
+        assertFalse("arrived 누락은 나에게도 false 여야 한다", me.hasArrived)
+    }
+
+    /**
+     * 생성 응답에도 `roomType`·`departureAt` 이 실려 온다(서버 `OpenPartyResponse`). 방을 만든 직후
+     * 21 대기 화면으로 바로 넘어가므로, 그 화면이 「약속 시간 정하기」를 띄울 근거가 **상세를 읽기 전에**
+     * 필요하다. `confirmed` 는 생성 응답에 **없어서** 약속 시간 유무로 셈한다.
+     */
+    @Test
+    fun `생성 응답의 roomType 과 약속 시간을 옮긴다`() {
+        val body = """
+            {"id":12,"departureLat":37.5665,"departureLng":126.978,"destinationLat":37.4979,
+             "destinationLng":127.0276,"departure":"서울시청","destination":"강남역","capacity":3,
+             "currentMembers":1,"departureRadius":500,"destinationRadius":500,"status":"ACTIVE",
+             "createdAt":"2026-11-03T08:00:00Z","estimateFare":9600,"estimateTime":14,
+             "route":"_p~iF~ps|U","taxiDriverId":null,"roomType":"REALTIME","departureAt":null}
+        """.trimIndent()
+
+        val ride = json.decodeFromString<OpenPartyResponse>(body).toRide()
+
+        assertEquals(RoomType.REALTIME, ride.roomType)
+        assertNull(ride.departureAt)
+        // 막 만든 실시간 방은 미확정이다 — 방장이 약속 시간을 정해야 한다.
+        assertFalse(ride.isConfirmed)
+    }
+
     private fun detailResponse(
         members: List<PartyDetailResponse.MemberInfo> = listOf(
             member(publicId = UUID_ME, nickname = "성윤"),
             member(publicId = UUID_OTHER, nickname = "다른사람"),
         ),
+        /**
+         * 약속 셋의 기본값이 null 인 건 **옛 테스트들이 쓰던 모양 그대로**를 뜻한다(약속 기능 전의 응답).
+         * 약속을 보는 테스트만 명시적으로 넘긴다.
+         */
+        roomType: String? = null,
+        departureAt: String? = null,
+        confirmed: Boolean? = null,
     ) = PartyDetailResponse(
         id = 7,
         departureLat = 37.5665,
@@ -886,13 +1074,15 @@ class PartyMappersTest {
         currentMembers = members.size,
         departureRadius = 500,
         destinationRadius = 500,
-        status = "MATCHING",
+        status = "COMPLETED",
         createdAt = "2026-08-17T09:00:00Z",
         members = members,
         estimateFare = 9600,
         estimateTime = 14,
         route = "_p~iF~ps|U",
-        taxiDriverId = 42,
+        roomType = roomType,
+        departureAt = departureAt,
+        confirmed = confirmed,
     )
 
     /**
@@ -905,6 +1095,7 @@ class PartyMappersTest {
         imageUrl: String? = null,
         rideCount: Int = 0,
         host: Boolean? = null,
+        arrived: Boolean? = null,
     ) = PartyDetailResponse.MemberInfo(
         publicId = publicId,
         nickname = nickname,
@@ -912,6 +1103,7 @@ class PartyMappersTest {
         badgeId = null,
         rideCount = rideCount,
         host = host,
+        arrived = arrived,
     )
 
     private companion object {

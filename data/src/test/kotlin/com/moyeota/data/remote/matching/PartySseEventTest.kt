@@ -3,6 +3,7 @@ package com.moyeota.data.remote.matching
 import com.moyeota.data.remote.toPartyEvent
 import com.moyeota.domain.model.PartyEvent
 import com.moyeota.domain.model.RideStatus
+import com.moyeota.domain.model.RoomType
 import com.moyeota.domain.model.isHostedByMe
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -20,7 +21,14 @@ import org.junit.Test
  */
 class PartySseEventTest {
 
-    /** 구독 직후 `connected` 의 data — 방 상세(`PartyDetailResult`)를 Jackson 이 직렬화한 모양 그대로. */
+    /**
+     * 구독 직후 `connected` 의 data — 방 상세(`PartyDetailResult`)를 Jackson 이 직렬화한 모양 그대로.
+     *
+     * 끝의 `taxiDriverId` 는 **일부러 남겨 둔 모르는 키**다. 기사·배차가 사라져 DTO 에는 받는 자리가
+     * 없는데 서버는 출시된 앱 호환으로 이 키를 계속 실어 보낸다 — 즉 이 줄은
+     * `Json { ignoreUnknownKeys = true }`(`NetworkModule`)가 그걸 조용히 흘린다는 계약을 지킨다.
+     * 지우면 그 보장이 사라지고, SSE 파싱 실패는 **화면에서 "아무 일도 안 일어남"으로만 보인다**.
+     */
     private val connectedData = """
         {"id":7,"departureLat":37.5665,"departureLng":126.978,"destinationLat":37.4979,
          "destinationLng":127.0276,"departure":"서울시청","destination":"강남역","capacity":3,
@@ -385,6 +393,142 @@ class PartySseEventTest {
     fun `closed 는 본문 모양과 상관없이 종결 신호다`() {
         assertEquals(PartyEvent.Closed, parse(EVENT_CLOSED, """{"partyId":7,"status":"CANCELED","version":9}""").toPartyEvent())
         assertEquals(PartyEvent.Closed, parse(EVENT_CLOSED, "7").toPartyEvent())
+    }
+
+    // ─── 방을 끝내는 길의 세 이벤트(모집 마감·약속 확정·출발지 도착) ──────────────
+    //
+    // 서버는 일곱 종을 보내는데 앱은 넷만 읽고 있었다. 모르는 이름은 조용히 건너뛰므로
+    // (`모르는 이벤트 이름은 건너뛴다`) 빠진 셋은 **화면에서 "아무 일도 안 일어남"** 으로만 보였다 —
+    // 방장이 약속을 확정해도 남들 화면은 모집 중이었다. 그래서 이름 문자열부터 못박는다.
+
+    /**
+     * `recruiting-closed` — 모집 **시간**이 끝나 지금 인원으로 마감된 경우다(정원이 차서 마감되는 쪽은
+     * `member-joined` 의 status 에 실려 온다 — 같은 전이를 두 번 보내지 않는다).
+     *
+     * status 는 **서버 enum 이름 문자열 그대로** 올라간다(도메인 계약이 String 이다) —
+     * `member-joined`·`member-left` 가 [RideStatus] 로 올라가는 것과 모양이 다르니 주의.
+     */
+    @Test
+    fun `recruiting-closed 는 마감 뒤 상태와 순번을 올린다`() {
+        val closed = parse(EVENT_RECRUITING_CLOSED, """{"status":"COMPLETED","version":12}""")
+            .toPartyEvent() as PartyEvent.RecruitingClosed
+
+        assertEquals("COMPLETED", closed.status)
+        assertEquals(12L, closed.version)
+    }
+
+    /**
+     * `confirmed` — 이 프레임이 **방의 성질을 바꾼다**: 모집이 끝나고 아무도 나갈 수 없게 된다.
+     * departureAt 은 ISO-8601 문자열 **그대로** 올린다(파싱은 화면이 한다 — 기기 시간대에 묶이지 않게).
+     */
+    @Test
+    fun `confirmed 는 약속 시간과 순번을 올린다`() {
+        val data = """{"status":"COMPLETED","departureAt":"2026-11-03T08:30:00Z","version":13}"""
+
+        val confirmed = parse(EVENT_CONFIRMED, data).toPartyEvent() as PartyEvent.Confirmed
+
+        assertEquals("COMPLETED", confirmed.status)
+        assertEquals("2026-11-03T08:30:00Z", confirmed.departureAt)
+        assertEquals(13L, confirmed.version)
+    }
+
+    /**
+     * **약속 시간이 없는 `confirmed` 는 그 자체로 쓸 수 없다** — 「확정됐다」만 알고 「언제」를 모르면
+     * 21 대기 화면이 「약속 시간 ?」을 그린다. 그래서 null 을 그대로 올려 호출부가 상세를 다시 읽게 한다
+     * (빈 문자열도 같은 모양으로 접는다 — "모름"이 두 가지면 거르는 쪽이 하나를 놓친다).
+     */
+    @Test
+    fun `confirmed 의 약속 시간이 없거나 비면 null 로 접는다`() {
+        val missing = parse(EVENT_CONFIRMED, """{"status":"COMPLETED","version":13}""")
+            .toPartyEvent() as PartyEvent.Confirmed
+        assertNull(missing.departureAt)
+
+        val explicitNull = parse(EVENT_CONFIRMED, """{"status":"COMPLETED","departureAt":null}""")
+            .toPartyEvent() as PartyEvent.Confirmed
+        assertNull(explicitNull.departureAt)
+
+        val blank = parse(EVENT_CONFIRMED, """{"status":"COMPLETED","departureAt":""}""")
+            .toPartyEvent() as PartyEvent.Confirmed
+        assertNull(blank.departureAt)
+    }
+
+    /** `member-arrived` — 그 한 명의 도착만 알려 준다(상태값은 없다. 도착은 방의 단계를 바꾸지 않는다). */
+    @Test
+    fun `member-arrived 는 도착한 사람과 순번을 올린다`() {
+        val arrived = parse(EVENT_MEMBER_ARRIVED, """{"publicId":"$UUID_OTHER","version":14}""")
+            .toPartyEvent(currentUuid = UUID_ME) as PartyEvent.MemberArrived
+
+        assertEquals(UUID_OTHER, arrived.publicId)
+        assertEquals(14L, arrived.version)
+    }
+
+    /**
+     * **누가 도착했는지 서버도 모르는 프레임은 버린다.** 서버는 유저 요약을 못 찾으면 publicId 를
+     * null 로 싣고도 신호는 보내는데(`PartyService.arrive`), 그 프레임으로는 멤버 목록의 무엇도
+     * 바꿀 수 없다 — `member-left` 처럼 함께 실려 오는 status 도 없다.
+     *
+     * 버리면 version 이 하나 비어 **다음 프레임이 +2 로 보이고** 화면이 상세를 다시 읽는다 —
+     * 서버 계약("publicId 가 null 이거나 목록에 없으면 방 상세를 다시 받는다")이 지시하는 그 동작이다.
+     * 즉 여기서의 건너뛰기는 유실이 아니라 **재조회 신호**다.
+     */
+    @Test
+    fun `도착한 사람을 모르는 member-arrived 는 버린다`() {
+        val nullId = parsePartySseFrame(EVENT_MEMBER_ARRIVED, """{"publicId":null,"version":14}""")
+        val blankId = parsePartySseFrame(EVENT_MEMBER_ARRIVED, """{"publicId":"","version":14}""")
+        val missingId = parsePartySseFrame(EVENT_MEMBER_ARRIVED, """{"version":14}""")
+
+        assertTrue(nullId is PartySseFrame.Skipped)
+        assertTrue(blankId is PartySseFrame.Skipped)
+        assertTrue(missingId is PartySseFrame.Skipped)
+        assertTrue((nullId as PartySseFrame.Skipped).reason.contains(EVENT_MEMBER_ARRIVED))
+    }
+
+    /**
+     * 순번 없는 옛 서버에서도 **새 셋이 파싱을 깨면 안 된다.** 서버 record 는 원시 `long` 이라 운영에서는
+     * 늘 실리지만, 논-널로 선언하면 그 배포를 보는 순간 모든 프레임이 Skipped 로 떨어진다
+     * (기존 셋에 대해 「순번 없는 프레임은 null 로 읽는다」가 지키는 그 계약과 같다).
+     */
+    @Test
+    fun `새 세 이벤트도 순번이 없으면 null 로 읽는다`() {
+        val closed = parse(EVENT_RECRUITING_CLOSED, """{"status":"COMPLETED"}""")
+            .toPartyEvent() as PartyEvent.RecruitingClosed
+        assertNull(closed.version)
+
+        val confirmed = parse(EVENT_CONFIRMED, """{"status":"COMPLETED","departureAt":"2026-11-03T08:30:00Z"}""")
+            .toPartyEvent() as PartyEvent.Confirmed
+        assertNull(confirmed.version)
+
+        val arrived = parse(EVENT_MEMBER_ARRIVED, """{"publicId":"$UUID_OTHER"}""")
+            .toPartyEvent() as PartyEvent.MemberArrived
+        assertNull(arrived.version)
+    }
+
+    /** 깨진 프레임 하나로 스트림을 죽이지 않는다 — 새 셋도 같은 길로 흘려보낸다. */
+    @Test
+    fun `새 세 이벤트의 깨진 JSON 도 건너뜀으로 떨어진다`() {
+        assertTrue(parsePartySseFrame(EVENT_RECRUITING_CLOSED, "not json") is PartySseFrame.Skipped)
+        assertTrue(parsePartySseFrame(EVENT_CONFIRMED, """{"status":}""") is PartySseFrame.Skipped)
+        assertTrue(parsePartySseFrame(EVENT_MEMBER_ARRIVED, """{"publicId":}""") is PartySseFrame.Skipped)
+    }
+
+    /**
+     * `connected` 스냅샷은 방 상세와 **같은 모양**이라 약속 정보(roomType·departureAt·confirmed)와
+     * 멤버의 도착 표시(arrived)까지 함께 온다 — 재연결 때 전체를 보정하는 자리가 여기다.
+     * 이 네 값이 여기서 안 넘어오면 재연결한 화면이 확정된 방을 **모집 중으로** 되돌려 그린다.
+     */
+    @Test
+    fun `connected 스냅샷이 약속 정보와 도착 표시를 함께 올린다`() {
+        val data = """{"id":7,"departure":"서울시청","destination":"강남역","capacity":3,"status":"COMPLETED",
+            "roomType":"REALTIME","departureAt":"2026-11-03T08:30:00Z","confirmed":true,"version":13,
+            "members":[{"publicId":"$UUID_ME","nickname":"성윤","rideCount":4,"host":true,"arrived":true},
+                       {"publicId":"$UUID_OTHER","nickname":"철수","rideCount":3,"host":false,"arrived":false}]}"""
+
+        val snapshot = parse(EVENT_CONNECTED, data).toPartyEvent(currentUuid = UUID_ME) as PartyEvent.Snapshot
+
+        assertEquals("2026-11-03T08:30:00Z", snapshot.ride.departureAt)
+        assertTrue(snapshot.ride.isConfirmed)
+        assertEquals(RoomType.REALTIME, snapshot.ride.roomType)
+        assertEquals(listOf(true, false), snapshot.ride.members.map { it.hasArrived })
     }
 
     private fun parse(type: String, data: String): PartySseEvent =

@@ -71,7 +71,7 @@ class MyPageMenuRulesTest {
 
         assertNull("안내 카드가 빈 채로 남았다", groups.group(MyPageGroupLabel.INFO))
         // 주소와 무관한 세 그룹은 그대로 있어야 한다 — 로그아웃·탈퇴가 사라지면 갇힌다.
-        assertEquals(listOf("지난 탑승 기록"), groups.rowTexts(MyPageGroupLabel.RIDES))
+        assertEquals(listOf("지난 탑승 기록", "노쇼 기록"), groups.rowTexts(MyPageGroupLabel.RIDES))
         assertEquals(listOf("알림 설정"), groups.rowTexts(MyPageGroupLabel.SETTINGS))
         assertEquals(listOf("로그아웃", "탈퇴하기"), groups.rowTexts(MyPageGroupLabel.ACCOUNT))
     }
@@ -155,7 +155,11 @@ class MyPageMenuRulesTest {
                 is MyPageAction.OpenWeb,
                 is MyPageAction.SendMail,
                 -> true
-                MyPageAction.RideHistory, MyPageAction.Logout, MyPageAction.DeleteAccount -> false
+                MyPageAction.RideHistory,
+                MyPageAction.NoShowRecords,
+                MyPageAction.Logout,
+                MyPageAction.DeleteAccount,
+                -> false
             }
             val expected = if (leavesApp) MyPageRowMark.EXTERNAL else MyPageRowMark.CHEVRON
             assertEquals(row.text, expected, row.mark)
@@ -248,12 +252,48 @@ class MyPageMenuRulesTest {
      */
     @Test
     fun `지난 탑승 기록 행이 마이페이지에 있다`() {
+        val row = myPageGroups(allLinks).group(MyPageGroupLabel.RIDES)!!.rows.first()
+
+        assertEquals("지난 탑승 기록", row.text)
+        assertEquals(MyPageAction.RideHistory, row.action)
+        assertEquals(MyPageRowMark.CHEVRON, row.mark)
+        assertFalse("기록 보기는 되돌릴 수 없는 동작이 아니다", row.danger)
+    }
+
+    // ─────────────────────────── 노쇼 기록 (2026-11-06) ───────────────────────────
+
+    /**
+     * 38 로 들어가는 입구가 **있어야** 한다. 이 행이 없으면 노쇼로 찍힌 사용자가 **이의를 낼 길이
+     * 앱 안에 하나도 없다** — 제재는 방 만들기·합류를 403 `NO_SHOW_RESTRICTED` 로 막기만 하고,
+     * 그 403 을 받는 화면들은 기록도 이의 경로도 모른다.
+     *
+     * 「지난 탑승 기록」 **다음**이어야 한다: 같은 「탑승」 카드 안에서 평소에 보는 것이 위고,
+     * 사고가 났을 때 보는 것이 아래다(계정 카드가 로그아웃 → 탈퇴 순인 것과 같은 기준).
+     */
+    @Test
+    fun `노쇼 기록 행이 지난 탑승 기록 다음에 있다`() {
         val rows = myPageGroups(allLinks).group(MyPageGroupLabel.RIDES)!!.rows
 
-        assertEquals(listOf("지난 탑승 기록"), rows.map { it.text })
-        assertEquals(MyPageAction.RideHistory, rows.single().action)
-        assertEquals(MyPageRowMark.CHEVRON, rows.single().mark)
-        assertFalse("기록 보기는 되돌릴 수 없는 동작이 아니다", rows.single().danger)
+        assertEquals(listOf("지난 탑승 기록", "노쇼 기록"), rows.map { it.text })
+        assertEquals(MyPageAction.NoShowRecords, rows[1].action)
+        // › (앱 안)이어야 한다. ↗ 로 달면 사용자는 브라우저가 열릴 줄 알고 누른다.
+        assertEquals(MyPageRowMark.CHEVRON, rows[1].mark)
+        assertFalse("기록 보기는 되돌릴 수 없는 동작이 아니다", rows[1].danger)
+    }
+
+    /**
+     * **행 이름이 제재를 단정하지 않는다.** 「이용 제한」·「제재 내역」으로 적으면 제한이 걸린 적
+     * 없는 사용자(절대다수)가 자기 계정에 제재가 있다고 읽는다. 이 행이 여는 화면은 기록 목록이고,
+     * 지금 제한 여부는 **배너**가 서버 `restrictedUntil` 로만 말한다.
+     */
+    @Test
+    fun `노쇼 기록 행 이름이 제재를 단정하지 않는다`() {
+        val text = myPageGroups(allLinks).group(MyPageGroupLabel.RIDES)!!.rows[1].text
+
+        assertEquals("노쇼 기록", text)
+        listOf("제재", "이용 제한", "정지").forEach { forbidden ->
+            assertFalse("제재를 단정하는 행 이름이다: $text", text.contains(forbidden))
+        }
     }
 
     /**
@@ -266,7 +306,7 @@ class MyPageMenuRulesTest {
      */
     @Test
     fun `행 이름이 진행 중인 방까지 보여 줄 것처럼 읽히지 않는다`() {
-        val text = myPageGroups(allLinks).group(MyPageGroupLabel.RIDES)!!.rows.single().text
+        val text = myPageGroups(allLinks).group(MyPageGroupLabel.RIDES)!!.rows.first().text
 
         assertTrue(text, text.startsWith("지난"))
         assertFalse("「예정」은 서버에 없는 개념이다: $text", text.contains("예정"))

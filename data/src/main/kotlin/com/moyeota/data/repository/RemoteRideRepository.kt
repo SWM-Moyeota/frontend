@@ -1,27 +1,32 @@
 package com.moyeota.data.repository
 
 import com.moyeota.data.remote.MatchingApi
-import com.moyeota.data.remote.ReportApi
 import com.moyeota.data.remote.dto.ApiErrorDto
-import com.moyeota.data.remote.dto.CallResultRequestDto
+import com.moyeota.data.remote.dto.ArriveRequestDto
+import com.moyeota.data.remote.dto.ConfirmMeetingRequestDto
 import com.moyeota.data.remote.dto.RealTimeMatchingRequestDto
-import com.moyeota.data.remote.dto.ReportRequestDto
 import com.moyeota.data.remote.matching.PartyEventSource
+import com.moyeota.data.remote.partyArriveException
+import com.moyeota.data.remote.partyConfirmException
+import com.moyeota.data.remote.partyDepartException
 import com.moyeota.data.remote.partyFinishException
 import com.moyeota.data.remote.realtimeMatchException
 import com.moyeota.data.remote.partyJoinException
 import com.moyeota.data.remote.readApiError
 import com.moyeota.data.remote.toMatchCandidate
+import com.moyeota.data.remote.toReservationSearchResult
 import com.moyeota.data.remote.routeRequestDto
-import com.moyeota.data.remote.toAssignedDriver
 import com.moyeota.data.remote.toPartyEvent
 import com.moyeota.data.remote.toPartyStatus
 import com.moyeota.data.remote.toRequestDto
 import com.moyeota.data.remote.toRide
 import com.moyeota.data.remote.toRouteEstimate
-import com.moyeota.domain.model.AssignedDriver
 import com.moyeota.domain.model.MatchCandidate
 import com.moyeota.domain.model.NewParty
+import com.moyeota.domain.model.NewReservation
+import com.moyeota.domain.model.PartyArriveException
+import com.moyeota.domain.model.PartyConfirmException
+import com.moyeota.domain.model.PartyDepartException
 import com.moyeota.domain.model.PartyDetail
 import com.moyeota.domain.model.PartyEvent
 import com.moyeota.domain.model.PartyFinishException
@@ -29,6 +34,8 @@ import com.moyeota.domain.model.PartyJoinException
 import com.moyeota.domain.model.PartyLeaveException
 import com.moyeota.domain.model.PartyOpenException
 import com.moyeota.domain.model.PartyStatus
+import com.moyeota.domain.model.ReservationDestination
+import com.moyeota.domain.model.ReservationSearchResult
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RouteEstimate
 import com.moyeota.domain.repository.RideRepository
@@ -40,24 +47,20 @@ import kotlinx.coroutines.flow.map
 import retrofit2.HttpException
 
 /**
- * 매칭·신고 도메인만 서버 연동 — 나머지는 더미로 위임한다.
+ * 매칭 도메인만 서버 연동 — 나머지는 더미로 위임한다.
  *
  * [session] 이 필요한 이유는 하나다: 방 상세의 멤버 중 **누가 나인지**는 서버가 표시해 주지 않는다.
  * `MemberInfo.publicId` 가 JWT `sub` 와 같은 값이라 앱이 직접 비교해야 하고, 비교 대상인
  * 현재 사용자 UUID 의 단일 출처가 [session] 이다. 매퍼에 세션을 들려 보내지 않으면 화면마다
  * "나 찾기"를 다시 구현하게 된다.
  *
- * [reportApi] 기본값 null: 신고 배선이 없는 생성 호출(테스트 등)을 깨지 않기 위함.
- * 배선 전 신고 호출은 한국어 IllegalStateException 으로 실패한다 (화면은 다이얼을 우선 연다).
- * [currentLocation]: 신고 시점의 실측 좌표 공급자(app 모듈이 FusedLocation 으로 주입).
- * 못 얻으면 null — 서버 ReportRequest 는 좌표 null 을 허용하므로 가짜 좌표를 지어내지 않는다.
+ * 긴급 신고 배선(`reportApi`)과 측위 공급자(`currentLocation`)는 **없어졌다** — 기사·배차와 함께
+ * 긴급 신고를 걷어냈다. 채팅 메시지 신고는 [com.moyeota.data.repository.RemoteChatRepository] 쪽이다.
  */
 class RemoteRideRepository(
     private val api: MatchingApi,
     private val session: UserSession,
     private val local: RideRepository = DummyRideRepository(),
-    private val reportApi: ReportApi? = null,
-    private val currentLocation: suspend () -> Pair<Double, Double>? = { null },
     /** 매칭방 변화 신호(SSE). null 이면 신호 없이 폴링만 한다(테스트·더미) */
     private val partyEvents: PartyEventSource? = null,
 ) : RideRepository {
@@ -196,6 +199,60 @@ class RemoteRideRepository(
         throw partyFinishException(failure, failure.readApiError())
     }
 
+    /**
+     * 약속 시간 확정. 실패는 전부 [PartyConfirmException] 으로 좁힌다 — **403 과 409 가 각각 여러 뜻**이라
+     * 상태 코드로는 안내 문구를 가를 수 없다(그 예외 KDoc 의 표).
+     *
+     * 성공 뒤 **아무것도 다시 읽지 않는다.** 확정 사실·약속 시간·바뀐 상태가 모두 SSE
+     * [PartyEvent.Confirmed] 에 실려 오기 때문이다([observePartyEvents]). 여기서 상세를 한 번 더 읽으면
+     * 21 대기 화면이 같은 내용을 두 경로로 받아, 어느 쪽이 최신인지 순번으로 다시 가려야 한다.
+     *
+     * [departureAt] 은 **검사하지 않고 그대로 싣는다.** 모양(ISO-8601 instant)과 범위(1시간 안)의 판정은
+     * 서버가 하고, 앱이 같은 검사를 두 벌 들면 서버가 범위를 바꿀 때 한쪽만 따라간다 — 화면은 애초에
+     * 만들 수 없는 값을 못 만들게(프리셋) 막는 쪽으로 책임을 진다.
+     */
+    override suspend fun confirmMeeting(partyId: Long, departureAt: String) {
+        val failure = runCatching { api.confirmMeeting(partyId, ConfirmMeetingRequestDto(departureAt)) }
+            .exceptionOrNull() ?: return
+        // runCatching 은 취소까지 삼키므로 되던져 화면 이탈이 에러로 보이지 않게 한다.
+        if (failure is CancellationException) throw failure
+        throw partyConfirmException(failure, failure.readApiError())
+    }
+
+    /**
+     * 출발지 도착. 좌표는 **지금 내 위치**를 그대로 보낸다 — 방 출발지와의 거리는 서버가 잰다.
+     *
+     * 실패는 전부 [PartyArriveException] 으로 좁힌다. 「멀다」(400)와 「아직 시간 전이다」(409)가
+     * 갈려 있어야 하는 게 핵심이다 — 뭉개면 이미 출발지에 서 있는 사람에게 더 가까이 가라고 말한다.
+     *
+     * **재시도를 성공으로 되돌릴 일이 없다**: 서버가 멱등이라 이미 도착한 사람의 두 번째 호출도 204 다
+     * (나가기의 403 되돌림 같은 장치가 필요 없는 유일한 액션이다).
+     */
+    override suspend fun arriveAtDeparture(partyId: Long, latitude: Double, longitude: Double) {
+        val request = ArriveRequestDto(latitude = latitude, longitude = longitude)
+        val failure = runCatching { api.arriveAtDeparture(partyId, request) }.exceptionOrNull() ?: return
+        // runCatching 은 취소까지 삼키므로 되던져 화면 이탈이 에러로 보이지 않게 한다.
+        if (failure is CancellationException) throw failure
+        throw partyArriveException(failure, failure.readApiError())
+    }
+
+    /**
+     * 출발 — 방을 끝낸다. 실패는 전부 [PartyDepartException] 으로 좁힌다.
+     *
+     * **되돌림도, 복구 조회도 없다.** 서버가 검사를 먼저 하고 상태를 바꾸므로 실패했으면 방은 그대로다
+     * ([finishParty] 와 같은 사정). 성공했을 때의 뒤처리(노쇼 기록·방 종료)는 모두 서버 쪽이고,
+     * 화면은 SSE [PartyEvent.Closed] 로 닫는다.
+     *
+     * 409 `PARTY_CLOSED` 를 성공으로 접지 **않는** 이유는 [com.moyeota.data.remote.partyDepartException]
+     * KDoc 에 적어 두었다 — 그 코드는 「남이 먼저 출발했다」와 「만료로 취소됐다」를 함께 뜻한다.
+     */
+    override suspend fun departParty(partyId: Long) {
+        val failure = runCatching { api.departParty(partyId) }.exceptionOrNull() ?: return
+        // runCatching 은 취소까지 삼키므로 되던져 화면 이탈이 에러로 보이지 않게 한다.
+        if (failure is CancellationException) throw failure
+        throw partyDepartException(failure, failure.readApiError())
+    }
+
     // 빈 목록은 성공이다 — 양쪽 300m 를 동시에 만족하는 방이 없다는 사실일 뿐이라 예외로 올리지 않는다.
     // summary 가 없는 항목만 버린다(방 id 가 없으면 탭해도 갈 곳이 없다).
     override suspend fun findRealtimeCandidates(
@@ -219,49 +276,67 @@ class RemoteRideRepository(
         return result.getOrThrow().mapNotNull { it.toMatchCandidate() }
     }
 
-    override suspend fun getAssignedDriver(partyId: Long): AssignedDriver =
-        api.getAssignedDriver(partyId).toAssignedDriver()
-
-    override suspend fun reportEmergency(partyId: Long?): Long {
-        val report = reportApi
-            ?: throw IllegalStateException("신고 API가 아직 연결되지 않았어요 (AppContainer 배선 필요)")
-        // 실측 좌표. 측위 실패(권한 없음·타임아웃)는 신고를 막지 않는다 — 좌표만 null 로 보낸다.
-        val location = try {
-            currentLocation()
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            null
-        }
-        return runReportCall("긴급 신고 저장에 실패했어요") {
-            report.report(
-                ReportRequestDto(
-                    partyId = partyId,
-                    latitude = location?.first,
-                    longitude = location?.second,
-                ),
-            ).reportId
-        }
+    /**
+     * 예약 방 생성. 응답이 방 생성과 **같은 record** 라 같은 매퍼([toRide])를 그대로 쓴다 —
+     * 경로·요금·시간은 서버가 null 로 주므로 그 매퍼가 알아서 빈 자리로 옮긴다.
+     *
+     * 실패는 [createParty] 와 **같은 [PartyOpenException]** 으로 좁히고 **같은 변환 함수**를 쓴다
+     * ([partyOpenException]). 예외를 하나로 둔 근거는 그 클래스 KDoc 에 있고, 여기서 중요한 것은
+     * **변환도 하나**라는 점이다 — 두 벌이면 겹치는 다섯 코드의 매핑이 갈려, 한쪽만 서버 변경을
+     * 따라가는 자리가 다섯 개 생긴다.
+     *
+     * 복구 조회는 없다: 서버는 검사를 **먼저** 하고 방을 만들므로 실패했으면 만들어진 방이 없다.
+     *
+     * 요청 값을 **검사하지 않는다**(정원 2~3, 시각 범위) — 판정은 서버가 하고 화면은 애초에
+     * 만들 수 없는 값을 못 만들게 막는다([NewReservation] KDoc).
+     */
+    override suspend fun createReservation(request: NewReservation): Ride {
+        val response = runCatching { api.createReservation(request.toRequestDto()) }
+        val failure = response.exceptionOrNull()
+            ?: return response.getOrThrow().toRide()
+        // runCatching 은 취소까지 삼키므로 되던져 화면 이탈이 에러로 보이지 않게 한다.
+        if (failure is CancellationException) throw failure
+        // 에러 본문은 스트림이라 한 번만 읽을 수 있다 — 읽어서 들고 넘긴다.
+        throw partyOpenException(failure, failure.readApiError())
     }
 
-    override suspend fun confirmEmergencyCall(called: Boolean) {
-        val report = reportApi
-            ?: throw IllegalStateException("신고 API가 아직 연결되지 않았어요 (AppContainer 배선 필요)")
-        runReportCall("112 통화 결과 저장에 실패했어요") {
-            report.confirmCallResult(CallResultRequestDto(called = called))
-        }
-    }
+    // 조회 셋은 실패를 감싸지 않는다(이 저장소의 조회 관례 — getParties·getPartyDetail 과 같다).
+    // 세 호출 모두 **재정렬하지 않는다**: 받은 순서가 서버의 정렬이다.
+    override suspend fun getReservations(from: String, to: String): List<Ride> =
+        api.getReservations(from = from, to = to).list.map { it.toRide() }
 
-    // 신고 흐름의 계약: 어떤 원인(HTTP 4xx/5xx, 네트워크, 직렬화)이든 한국어 메시지의
-    // IllegalStateException 하나로 전파한다. 화면은 이 실패를 "저장 실패 플래그"로만 다루고
-    // 112 다이얼은 무조건 연다 (통화 최우선). 코루틴 취소는 삼키지 않고 그대로 올린다.
-    private inline fun <T> runReportCall(message: String, block: () -> T): T = try {
-        block()
-    } catch (e: CancellationException) {
-        throw e
-    } catch (e: Exception) {
-        throw IllegalStateException(message, e)
-    }
+    // 파라미터 순서가 getPartiesWithin 과 같다(남서 → 북동) — 섞이면 서버가 400 INVALID_MAP_BOUNDS 다.
+    override suspend fun getReservationsSoon(
+        swLat: Double,
+        swLng: Double,
+        neLat: Double,
+        neLng: Double,
+    ): List<Ride> = api.getReservationsSoon(swLat, swLng, neLat, neLng).list.map { it.toRide() }
+
+    /**
+     * 예약 검색. [destination] 이 null 이면 **두 쿼리가 함께 빠진다** — Retrofit 의 `@Query` 가
+     * null 을 키째 생략하기 때문이고, 그게 서버의 「둘 다 또는 둘 다 아님」 계약과 정확히 맞는다.
+     *
+     * **좌표를 하나만 싣는 경로가 이 함수에 없다**는 게 핵심이다. 파라미터가 `Double?` 두 개였다면
+     * 호출부의 실수로 400 `INCOMPLETE_DESTINATION` 이 났을 자리를 타입이 막는다
+     * ([ReservationDestination] KDoc).
+     *
+     * [date] 는 **손대지 않고 그대로 싣는다.** `yyyy-MM-dd` 모양인지, KST 달력의 날짜인지,
+     * 오늘~7일 안인지는 전부 호출부의 책임이다 — 여기서 기기 시간대로 다시 만들면 화면이 고른
+     * 날짜와 서버가 보는 날짜가 두 군데서 계산되어 어긋난다.
+     */
+    override suspend fun searchReservations(
+        departureLat: Double,
+        departureLng: Double,
+        date: String,
+        destination: ReservationDestination?,
+    ): List<ReservationSearchResult> = api.searchReservations(
+        depLat = departureLat,
+        depLng = departureLng,
+        date = date,
+        destLat = destination?.latitude,
+        destLng = destination?.longitude,
+    ).list.map { it.toReservationSearchResult() }
 
     // 백엔드가 POST 로 바뀌어 열린 엔드포인트. 응답 폴리라인 필드는 route 가 아니라 path 다.
     override suspend fun previewRoute(
@@ -276,6 +351,11 @@ class RemoteRideRepository(
 
 /**
  * 방 생성 실패 → [PartyOpenException]. presentation 이 HTTP 를 알 필요가 없게 하는 경계다.
+ *
+ * **실시간([RemoteRideRepository.createParty])과 예약([RemoteRideRepository.createReservation])이
+ * 둘 다 이 함수를 쓴다.** 서버가 두 액션에 같은 record 로 응답하고 코드도 다섯이 겹치므로 변환을
+ * 두 벌 두면 그 다섯 자리에서 한쪽만 서버 변경을 따라간다 — 예외를 하나로 둔 근거와 같다
+ * ([PartyOpenException] KDoc 의 「두 액션을 한 예외에 둔 이유」).
  *
  * `PartyMappers.kt` 의 [com.moyeota.data.remote.partyJoinException]·
  * [com.moyeota.data.remote.partyFinishException] 과 **같은 모양**이지만 그 파일이 아니라 여기 있다 —

@@ -4,7 +4,6 @@ import com.moyeota.data.local.ActivePartyStorage
 import com.moyeota.data.local.RememberedParty
 import com.moyeota.domain.model.MatchCandidate
 import com.moyeota.domain.model.PartyDetail
-import com.moyeota.domain.model.AssignedDriver
 import com.moyeota.domain.model.AuthState
 import com.moyeota.domain.model.ChatMember
 import com.moyeota.domain.model.ChatMessage
@@ -16,7 +15,10 @@ import com.moyeota.domain.model.ChatRoomMembership
 import com.moyeota.domain.model.ChatRoomStatus
 import com.moyeota.domain.model.MyChatRoom
 import com.moyeota.domain.model.NewParty
+import com.moyeota.domain.model.NewReservation
 import com.moyeota.domain.model.PartyStatus
+import com.moyeota.domain.model.ReservationDestination
+import com.moyeota.domain.model.ReservationSearchResult
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.model.RouteEstimate
@@ -97,7 +99,7 @@ class RemoteActivePartyRepositoryTest {
 
     @Test
     fun `내가 멤버가 아닌 방이면 기억을 지운다`() = runBlocking {
-        val notMine = ride(id = 10, status = RideStatus.ONGOING, memberUuid = "someone-else")
+        val notMine = ride(id = 10, status = RideStatus.MATCHED, memberUuid = "someone-else")
         val rides = FakeRideRepository(details = mapOf(10L to notMine))
         val storage = FakeActivePartyStorage(RememberedParty("10", MY_UUID))
 
@@ -112,7 +114,7 @@ class RemoteActivePartyRepositoryTest {
         val rides = FakeRideRepository(
             details = mapOf(
                 7L to ride(id = 7, status = RideStatus.COMPLETED),
-                8L to ride(id = 8, status = RideStatus.ONGOING),
+                8L to ride(id = 8, status = RideStatus.MATCHED),
             ),
         )
         val chats = FakeChatRepository(
@@ -146,7 +148,7 @@ class RemoteActivePartyRepositoryTest {
      */
     @Test
     fun `계정이 바뀌면 이전 계정의 기억을 무시하고 지운다`() = runBlocking {
-        val rides = FakeRideRepository(details = mapOf(99L to ride(id = 99, status = RideStatus.ONGOING)))
+        val rides = FakeRideRepository(details = mapOf(99L to ride(id = 99, status = RideStatus.MATCHED)))
         val storage = FakeActivePartyStorage(RememberedParty("99", "previous-user-uuid"))
 
         val resolved = repository(rides, FakeChatRepository(), storage).resolve()
@@ -204,7 +206,7 @@ class RemoteActivePartyRepositoryTest {
      */
     @Test
     fun `목록이 partyId 를 주면 채팅방 상세를 읽지 않는다`() = runBlocking {
-        val rides = FakeRideRepository(details = mapOf(8L to ride(id = 8, status = RideStatus.ONGOING)))
+        val rides = FakeRideRepository(details = mapOf(8L to ride(id = 8, status = RideStatus.MATCHED)))
         val chats = FakeChatRepository(rooms = listOf(myChatRoom(roomId = 1, partyId = 8)))
 
         val resolved = repository(rides, chats, FakeActivePartyStorage(null)).resolve()
@@ -223,7 +225,7 @@ class RemoteActivePartyRepositoryTest {
      */
     @Test
     fun `목록에 partyId 가 없으면 채팅방 상세로 건져 온다`() = runBlocking {
-        val rides = FakeRideRepository(details = mapOf(8L to ride(id = 8, status = RideStatus.ONGOING)))
+        val rides = FakeRideRepository(details = mapOf(8L to ride(id = 8, status = RideStatus.MATCHED)))
         val chats = FakeChatRepository(
             rooms = listOf(myChatRoom(roomId = 2, partyId = 0)),
             partyIdsByRoom = mapOf(2L to 8L),
@@ -254,7 +256,7 @@ class RemoteActivePartyRepositoryTest {
     /** 채팅방 상세가 실패해도 다음 후보로 넘어간다 — 한 방의 네트워크 실패가 복구 경로 전체를 막으면 안 된다. */
     @Test
     fun `채팅방 상세가 실패해도 다른 후보를 계속 본다`() = runBlocking {
-        val rides = FakeRideRepository(details = mapOf(8L to ride(id = 8, status = RideStatus.ONGOING)))
+        val rides = FakeRideRepository(details = mapOf(8L to ride(id = 8, status = RideStatus.MATCHED)))
         val chats = FakeChatRepository(
             rooms = listOf(myChatRoom(roomId = 2, partyId = 0), myChatRoom(roomId = 1, partyId = 0)),
             partyIdsByRoom = mapOf(1L to 8L),
@@ -412,15 +414,34 @@ private class FakeRideRepository(
     override suspend fun joinParty(partyId: Long): PartyStatus = error("쓰이지 않는다")
     override suspend fun leaveParty(partyId: Long) = error("쓰이지 않는다")
     override suspend fun finishParty(partyId: Long) = error("쓰이지 않는다")
-    override suspend fun getAssignedDriver(partyId: Long): AssignedDriver = error("쓰이지 않는다")
-    override suspend fun reportEmergency(partyId: Long?): Long = error("쓰이지 않는다")
-    override suspend fun confirmEmergencyCall(called: Boolean) = error("쓰이지 않는다")
+    override suspend fun confirmMeeting(partyId: Long, departureAt: String) = error("쓰이지 않는다")
+    override suspend fun arriveAtDeparture(partyId: Long, latitude: Double, longitude: Double) =
+        error("쓰이지 않는다")
+    override suspend fun departParty(partyId: Long) = error("쓰이지 않는다")
     override suspend fun previewRoute(
         departureLat: Double,
         departureLng: Double,
         destinationLat: Double,
         destinationLng: Double,
     ): RouteEstimate = error("쓰이지 않는다")
+
+    // 예약 넷. 이 테스트(「지금 타고 있는 방」 복원)는 예약을 보지 않는다 — 진행 중 방의 단일 출처는
+    // 로컬 기억 + 상세 조회이고, 예약 방도 결국 **같은 상세**로 복원된다(예약 전용 상세가 없다).
+    // 그래서 생성은 끊고, 조회 셋은 빈 목록이 가장 정직한 기본값이다(추천과 같은 판단).
+    override suspend fun createReservation(request: NewReservation): Ride = error("쓰이지 않는다")
+    override suspend fun getReservations(from: String, to: String): List<Ride> = emptyList()
+    override suspend fun getReservationsSoon(
+        swLat: Double,
+        swLng: Double,
+        neLat: Double,
+        neLng: Double,
+    ): List<Ride> = emptyList()
+    override suspend fun searchReservations(
+        departureLat: Double,
+        departureLng: Double,
+        date: String,
+        destination: ReservationDestination?,
+    ): List<ReservationSearchResult> = emptyList()
 }
 
 private class FakeChatRepository(

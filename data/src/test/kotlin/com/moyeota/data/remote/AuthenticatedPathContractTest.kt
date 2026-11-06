@@ -1,9 +1,14 @@
 package com.moyeota.data.remote
 
+import com.moyeota.data.remote.dto.ArriveRequestDto
 import com.moyeota.data.remote.dto.ChatReportRequestDto
-import com.moyeota.data.remote.dto.ReportRequestDto
+import com.moyeota.data.remote.dto.ConfirmMeetingRequestDto
+import com.moyeota.data.remote.dto.NoShowObjectionRequestDto
+import com.moyeota.data.remote.dto.OpenReservationRequestDto
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import retrofit2.http.Body
@@ -235,8 +240,8 @@ class AuthenticatedPathContractTest {
      * **삭제했으므로**(`04f6be7` — 매칭방 변화가 SSE 전용이 되어 폴링용 조회가 쓰이지 않게 됐다)
      * 지금은 상세 하나만 남는다. `/status` 를 되살리면 **404** 다.
      *
-     * 25·26 의 주기 조회가 이 경로로 옮겨와 **폴링이 이 한 경로에 걸려 있다** — 틀리면 두 화면이
-     * 배차·운행 전이를 영영 못 잡는다(그 전이에는 SSE 도 FCM 도 없다).
+     * 상세는 방을 읽는 **유일한 경로**다 — 목록 응답에는 멤버·요금·경로가 없고, SSE 스냅샷도 이
+     * 상세와 같은 모양을 쓴다. 틀리면 방 화면이 통째로 열리지 않는다.
      */
     @Test
     fun `방 상세 조회 경로에는 뒤에 붙는 세그먼트가 없다`() {
@@ -248,9 +253,180 @@ class AuthenticatedPathContractTest {
         )
     }
 
+    /**
+     * **방을 끝내는 정식 경로 셋**(2026-11-06 신규). 서버 Swagger 가 `/finish` 를 「구버전 앱용 이전
+     * 경로」로 적어 두었고, 확정된 방에 그걸 부르면 409 `USE_DEPART_FOR_CONFIRMED_PARTY` 다 —
+     * 즉 이 셋이 틀리면 **확정된 방을 끝낼 길이 앱에 없다**.
+     *
+     * 셋 다 `/matching/rooms/{partyId}/…` 아래의 POST 이고 세그먼트만 다르다. 그래서 오타가
+     * 404 가 아니라 **401** 로 떨어진다(Security 가 미매핑 경로도 보호한다) — 세션 만료로 오인하기
+     * 딱 좋은 자리다. 기준은 백엔드 `matching/party/PartyController.java`(+ `http/matching.http` §7~9)다.
+     *
+     * 경로에 담기는 건 **partyId 하나**다. 주체(방장인가·도착했는가)는 전부 Bearer 토큰이 정한다.
+     */
     @Test
-    fun `기사 위치 조회는 partyId 만 담은 경로를 쓴다`() {
-        assertEquals("api/v1/dispatch/rides/{partyId}", DispatchApi::class.java.path("getDriverLocation"))
+    fun `약속 확정 도착 출발은 rooms partyId 아래 세 POST 경로다`() {
+        assertEquals("api/v1/matching/rooms/{partyId}/confirm", MatchingApi::class.java.path("confirmMeeting"))
+        assertEquals("api/v1/matching/rooms/{partyId}/arrive", MatchingApi::class.java.path("arriveAtDeparture"))
+        assertEquals("api/v1/matching/rooms/{partyId}/depart", MatchingApi::class.java.path("departParty"))
+
+        listOf("confirmMeeting", "arriveAtDeparture", "departParty").forEach { name ->
+            val method = MatchingApi::class.java.declaredMethods.single { it.name == name }
+            assertTrue(
+                "$name 이 POST 가 아니다 — 서버는 @PostMapping 만 매핑한다(아니면 405)",
+                method.isAnnotationPresent(POST::class.java),
+            )
+            assertEquals(
+                "$name 의 경로에 담기는 건 partyId 하나여야 한다",
+                1,
+                method.parameterAnnotations.count { annotations -> annotations.any { it is Path } },
+            )
+        }
+
+        // 출발은 **합승 완료와 다른 엔드포인트**다. 같은 POST 라 경로만 베끼면 조용히 옛 경로로 가고,
+        // 확정된 방에서는 409 USE_DEPART_FOR_CONFIRMED_PARTY 로 거절당한다.
+        assertNotEquals(
+            "출발이 합승 완료와 같은 경로를 탄다 — 확정된 방을 끝낼 수 없다",
+            MatchingApi::class.java.path("finishParty"),
+            MatchingApi::class.java.path("departParty"),
+        )
+    }
+
+    /**
+     * **본문의 유무와 타입까지 못박는다.** [path] 검사만으로는 셋이 전부 통과하는데, 본문이 어긋나면
+     * 실패 모양이 `MatchingErrorCode` 밖의 400 `INVALID_REQUEST` 라 **화면에 일반 문구로만** 보인다
+     * (어느 사유 프로퍼티도 참이 아니다) — 원인을 찾기 가장 어려운 실패다.
+     *
+     * - 확정: `{"departureAt": "<ISO-8601 instant>"}`. 서버 record 가 `Instant` + `@NotNull` 이다.
+     * - 도착: `{"latitude": …, "longitude": …}`. 둘 다 `@NotNull` 이라 하나만 보내도 400 이다.
+     * - 출발: **본문 없음.** `@Body` 를 붙이면 서버가 읽지 않는 값을 보내는 것이고, 이 호출은
+     *   되돌릴 수 없는 액션이라(노쇼 기록) "뭘 보냈는지"가 늘 명확해야 한다.
+     */
+    @Test
+    fun `확정과 도착은 본문을 싣고 출발은 싣지 않는다`() {
+        val confirm = MatchingApi::class.java.declaredMethods.single { it.name == "confirmMeeting" }
+        val arrive = MatchingApi::class.java.declaredMethods.single { it.name == "arriveAtDeparture" }
+        val depart = MatchingApi::class.java.declaredMethods.single { it.name == "departParty" }
+
+        assertEquals("확정 본문이 ConfirmMeetingRequestDto 가 아니다", ConfirmMeetingRequestDto::class.java, confirm.bodyType())
+        assertEquals("도착 본문이 ArriveRequestDto 가 아니다", ArriveRequestDto::class.java, arrive.bodyType())
+        assertNull("출발은 본문이 없는 POST 다", depart.bodyType())
+    }
+
+    /**
+     * **노쇼 두 개**(2026-11-06 신규). 서버 컨트롤러가 `PartyController` 가 **아니다**
+     * (`matching/noshow/NoShowController`, `@RequestMapping("/api/v1/matching")`) — 그런데 프리픽스
+     * 합산 결과가 같아 앱에서는 [MatchingApi] 에 함께 둔다. 즉 **경로만이 유일한 구분**이다.
+     *
+     * 이의 신청 경로가 `/rooms/{partyId}/…` 라 확정·도착·출발과 **같은 가지에 있다.** 오타는 404 가
+     * 아니라 **401** 로 떨어져 세션 만료로 오인하기 가장 쉬운 자리다(Security 가 미매핑 경로도
+     * 보호한다). 기록 조회 쪽은 `/rooms` 가 **없는** 것이 핵심이다 —
+     * `api/v1/matching/rooms/no-shows` 로 적으면 `{partyId}` 템플릿에 걸려 엉뚱한 404/400 이 된다.
+     */
+    @Test
+    fun `노쇼 기록은 rooms 없는 경로이고 이의 신청은 rooms partyId 아래다`() {
+        assertEquals("api/v1/matching/no-shows", MatchingApi::class.java.path("getMyNoShows"))
+        assertEquals(
+            "api/v1/matching/rooms/{partyId}/no-show-objection",
+            MatchingApi::class.java.path("submitNoShowObjection"),
+        )
+
+        val records = MatchingApi::class.java.declaredMethods.single { it.name == "getMyNoShows" }
+        val objection = MatchingApi::class.java.declaredMethods.single { it.name == "submitNoShowObjection" }
+
+        assertTrue("노쇼 기록 조회가 GET 이 아니다", records.isAnnotationPresent(GET::class.java))
+        assertTrue("이의 신청이 POST 가 아니다", objection.isAnnotationPresent(POST::class.java))
+
+        // 기록 조회에는 **쿼리가 하나도 없다.** 커서·개수를 붙이는 실수가 특히 위험하다 — 서버에
+        // 그 파라미터가 없는데 400 이 아니라 200 + 조용히 무시라서(탑승 기록의 `status` 와 같은
+        // 함정) 「더 보기가 동작한다」고 착각하고 지나간다. 서버가 20건에서 자르는 게 전부다.
+        assertTrue(
+            "노쇼 기록 조회에 쿼리 파라미터가 생겼다 — 서버에 없는 값이고 조용히 무시된다",
+            records.parameterAnnotations.none { annotations -> annotations.any { it is Query } },
+        )
+
+        // 이의 신청은 경로에 partyId 하나 + 본문 하나다. 주체는 Bearer 토큰이 정한다.
+        assertEquals(
+            "이의 신청 경로에 담기는 건 partyId 하나여야 한다",
+            1,
+            objection.parameterAnnotations.count { annotations -> annotations.any { it is Path } },
+        )
+        assertEquals(
+            "이의 신청 본문이 NoShowObjectionRequestDto 가 아니다",
+            NoShowObjectionRequestDto::class.java,
+            objection.bodyType(),
+        )
+    }
+
+    /**
+     * **예약 네 개**(2026-11-06 신규). 넷 다 `PartyController`(`@RequestMapping("/api/v1")`) 아래의
+     * `/matching/reservations…` 이고, **세그먼트만 다르다** — 생성·기간 목록이 같은 경로를 HTTP
+     * 메서드로 가르고, 나머지 둘은 `/soon`·`/search` 가 붙는다. 그래서 이 넷은 서로를 베끼다
+     * 어긋나기 쉽고, 틀리면 404 가 아니라 **401** 로 떨어진다.
+     *
+     * 특히 **생성과 기간 목록이 같은 문자열**인 것을 값으로 못 박는다: 둘 중 하나에 `/soon` 같은
+     * 세그먼트가 붙으면 다른 하나는 멀쩡해 보이므로 증상이 한쪽에만 나타난다.
+     */
+    @Test
+    fun `예약 네 경로는 matching reservations 아래이고 생성만 POST 다`() {
+        assertEquals("api/v1/matching/reservations", MatchingApi::class.java.path("createReservation"))
+        assertEquals("api/v1/matching/reservations", MatchingApi::class.java.path("getReservations"))
+        assertEquals("api/v1/matching/reservations/soon", MatchingApi::class.java.path("getReservationsSoon"))
+        assertEquals("api/v1/matching/reservations/search", MatchingApi::class.java.path("searchReservations"))
+
+        val create = MatchingApi::class.java.declaredMethods.single { it.name == "createReservation" }
+        assertTrue("예약 생성이 POST 가 아니다", create.isAnnotationPresent(POST::class.java))
+        assertEquals(
+            "예약 생성 본문이 OpenReservationRequestDto 가 아니다",
+            OpenReservationRequestDto::class.java,
+            create.bodyType(),
+        )
+        // 경로에 담기는 건 아무것도 없다 — 생성자는 Bearer 토큰이 정한다.
+        assertTrue(
+            "예약 생성 경로에 세그먼트 파라미터가 생겼다",
+            create.parameterAnnotations.none { annotations -> annotations.any { it is Path } },
+        )
+
+        listOf("getReservations", "getReservationsSoon", "searchReservations").forEach { name ->
+            val method = MatchingApi::class.java.declaredMethods.single { it.name == name }
+            assertTrue("$name 이 GET 이 아니다", method.isAnnotationPresent(GET::class.java))
+            assertNull("$name 은 조회라 본문이 없다", method.bodyType())
+        }
+    }
+
+    /**
+     * **예약 세 조회의 쿼리 파라미터 이름**. 이 PR 에서 가장 틀리기 쉬운 자리라 이름을 값으로 고정한다.
+     *
+     * | 자리 | 출발지 | 도착지 |
+     * |---|---|---|
+     * | 예약 **검색** 쿼리 | `depLat`·`depLng` | `destLat`·`destLng` |
+     * | 예약 **생성** 본문 | `departureLat`·`departureLng` | `destinationLat`·`destinationLng` |
+     * | 실시간 후보 본문 | `departureLat`·`departureLng` | `destLat`·`destLng` |
+     *
+     * 즉 **검색만 출발지까지 줄어 있다.** `departureLat` 으로 적으면 서버의 필수 파라미터(`depLat`)가
+     * 누락되는데, 그 400 은 `GlobalExceptionHandler` 가 받지 않아 **본문이 `{code, message}` 가
+     * 아니다** — 앱의 에러 파서가 code 를 못 찾아 화면에 일반 문구만 뜬다(원인을 찾기 가장 어려운 모양).
+     *
+     * 뷰포트 조회는 방 목록([MatchingApi.getPartiesWithin])과 **같은 이름·같은 순서**여야 한다.
+     * 순서가 섞이면 서버가 400 `INVALID_MAP_BOUNDS` 를 준다(그쪽은 검사가 없어 빈 목록이 온다 —
+     * 같은 좌표로 두 호출을 하면 한쪽만 실패한다).
+     */
+    @Test
+    fun `예약 검색만 출발지 이름이 depLat depLng 로 줄어 있다`() {
+        fun queriesOf(name: String) = MatchingApi::class.java.declaredMethods
+            .single { it.name == name }
+            .parameterAnnotations
+            .flatMap { annotations -> annotations.filterIsInstance<Query>().map { it.value } }
+
+        assertEquals(listOf("from", "to"), queriesOf("getReservations"))
+        assertEquals(listOf("swLat", "swLng", "neLat", "neLng"), queriesOf("getReservationsSoon"))
+        // 뷰포트 이름·순서는 방 목록과 같아야 한다.
+        assertEquals(queriesOf("getPartiesWithin"), queriesOf("getReservationsSoon"))
+
+        val search = queriesOf("searchReservations")
+        assertEquals(listOf("depLat", "depLng", "date", "destLat", "destLng"), search)
+        assertFalse("검색 출발지가 departureLat 으로 늘어났다 — 서버 파라미터는 depLat 이다", "departureLat" in search)
+        assertFalse("검색 도착지가 destinationLat 으로 늘어났다 — 서버 파라미터는 destLat 이다", "destinationLat" in search)
     }
 
     @Test
@@ -293,14 +469,6 @@ class AuthenticatedPathContractTest {
         )
     }
 
-    // 백엔드가 이 경로를 `{reportId}` 유무로 오간 이력이 있다. 현행 컨트롤러
-    // (report/interfaces/ReportController.java)는 reportId 없이 @CurrentUser 의 신고에 기록한다 —
-    // 컨트롤러 소스 기준(실서버 미검증)이며, 다시 바뀌면 이 테스트부터 깨지는 게 정상이다.
-    @Test
-    fun `통화 결과 확정은 reportId 없는 경로를 쓴다`() {
-        assertEquals("api/v1/reports/call-result", ReportApi::class.java.path("confirmCallResult"))
-    }
-
     /**
      * 전환된 엔드포인트에 memberId/userId 가 되살아나는 걸 막는다.
      * 채팅이 마지막 예외였는데 백엔드가 `@CurrentUser` 로 넘기면서 **전 도메인이 대상이 됐다**
@@ -311,9 +479,7 @@ class AuthenticatedPathContractTest {
     fun `전환된 API 어디에도 memberId userId 파라미터가 남아 있지 않다`() {
         val leftovers = listOf(
             MatchingApi::class.java,
-            DispatchApi::class.java,
             PlaceApi::class.java,
-            ReportApi::class.java,
             UserApi::class.java,
             ChatApi::class.java,
         )
@@ -381,31 +547,23 @@ class AuthenticatedPathContractTest {
     }
 
     /**
-     * 채팅 메시지 신고와 긴급 신고는 **다른 엔드포인트·다른 본문**이다. 둘을 한 DTO 로 합치려는
-     * 시도를 막는다 — 긴급 신고에는 사유 필드가 없고(`ReportDtos.kt` KDoc: 「사유(reason) 필드는
-     * 서버에 없다 — 임의로 추가하지 말 것」) 메시지 신고에는 `reason` 이 **필수**다. 섞으면
-     * 서버가 400 `INVALID_REQUEST` 를 낸다(실측 2026-11-01).
+     * **앱에 남은 신고는 채팅 메시지 신고 하나다.** 운행 중 긴급 신고(`POST /api/v1/reports` +
+     * `PATCH /api/v1/reports/call-result`)는 기사·배차와 함께 지웠다 — 그쪽은 「파티 + 내 좌표」를
+     * 보내고 사유 필드가 아예 없었다. 이쪽은 **메시지 1건**을 가리키고 `reason` 이 **필수**다.
      *
-     * 이름이 비슷해서(`reportMessage` / `report`) 다음 사람이 「신고는 하나로 합치자」로 손대기
-     * 쉬운 자리다. 그러면 사유가 붙은 본문이 `POST /api/v1/reports` 로 가거나 좌표가 메시지
-     * 신고로 가서 **둘 다 400** 이 된다. 신고 대상도 다르다 — 그쪽은 파티, 이쪽은 메시지 1건이다.
+     * 그래서 본문 타입을 여기서 못 박는다: 없어진 긴급 신고를 「신고 기능이 없어졌네」 하고 이
+     * 경로로 되살리면(좌표를 실어 보내거나 사유를 떼면) 서버가 400 `INVALID_REQUEST` 를 낸다
+     * (실측 2026-11-01). 경로도 `/api/v1/reports` 가 아니라 `/api/v1/chat-rooms/{id}/reports` 다.
      */
     @Test
-    fun `메시지 신고와 긴급 신고는 서로 다른 본문 타입을 쓴다`() {
+    fun `메시지 신고 본문은 ChatReportRequestDto 다`() {
         val chatReport = ChatApi::class.java.declaredMethods.single { it.name == "reportMessage" }
-        val emergency = ReportApi::class.java.declaredMethods.single { it.name == "report" }
 
         assertEquals(
             "메시지 신고 본문이 ChatReportRequestDto 가 아니다",
             ChatReportRequestDto::class.java,
             chatReport.bodyType(),
         )
-        assertEquals(
-            "긴급 신고 본문이 ReportRequestDto 가 아니다",
-            ReportRequestDto::class.java,
-            emergency.bodyType(),
-        )
-        assertNotEquals(chatReport.bodyType(), emergency.bodyType())
 
         // 메시지 신고는 **방 id 만** 경로에 담는다 — 신고자는 토큰이, 피신고자는 서버가 메시지에서
         // 찾는다. 경로에 사용자 id 가 끼면 「전환된 API 어디에도 memberId userId 가 없다」와 충돌한다.

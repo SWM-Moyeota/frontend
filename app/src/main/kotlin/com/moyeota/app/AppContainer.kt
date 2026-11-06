@@ -11,8 +11,8 @@ import com.moyeota.data.repository.RemoteAppConfigRepository
 import com.moyeota.data.repository.RemoteAuthRepository
 import com.moyeota.data.remote.chat.ChatSocket
 import com.moyeota.data.repository.RemoteChatRepository
-import com.moyeota.data.repository.RemoteDispatchRepository
 import com.moyeota.data.repository.RemotePlaceRepository
+import com.moyeota.data.repository.RemoteNoShowRepository
 import com.moyeota.data.repository.RemoteRideRecordRepository
 import com.moyeota.data.repository.RemoteRideRepository
 import com.moyeota.data.session.DataStoreTokenStorage
@@ -21,8 +21,8 @@ import com.moyeota.domain.repository.ActivePartyRepository
 import com.moyeota.domain.repository.AppConfigRepository
 import com.moyeota.domain.repository.AuthRepository
 import com.moyeota.domain.repository.ChatRepository
-import com.moyeota.domain.repository.DispatchRepository
 import com.moyeota.domain.repository.PlaceRepository
+import com.moyeota.domain.repository.NoShowRepository
 import com.moyeota.domain.repository.RideRecordRepository
 import com.moyeota.domain.repository.RideRepository
 import com.moyeota.domain.session.UserSession
@@ -79,9 +79,6 @@ class AppContainer(context: Context, debugLogging: Boolean) {
      */
     val imageClient: OkHttpClient = apis.imageClient
 
-    // 긴급 신고에 싣는 실측 좌표 — 권한 없음/타임아웃이면 null 을 돌려주고 신고는 계속된다.
-    private val reportLocationProvider = ReportLocationProvider(context.applicationContext)
-
     /**
      * FCM 기기 토큰 ↔ 서버 등록 상태를 맞추는 창구.
      *
@@ -102,14 +99,16 @@ class AppContainer(context: Context, debugLogging: Boolean) {
 
     val authRepository: AuthRepository =
         RemoteAuthRepository(apis.auth, apis.user, sessionManager, fcmTokenRegistrar, activePartyStorage)
-    /** 택시 모드 등 서버 운영 설정. 앱 시작 시 한 번 읽고([AppConfigViewModel]), 실패하면 기본값(기사 모드) */
+    /**
+     * 서버 운영 설정(`GET /api/v1/config`). 앱 시작 시 한 번 읽는다([AppConfigViewModel]).
+     * 택시 플래그를 걷어낸 뒤로 남은 것은 버전 게이트뿐이고, 조회가 실패하면
+     * **아무도 막지 않는** 기본값으로 간다([com.moyeota.domain.model.AppConfig.Default]).
+     */
     val appConfigRepository: AppConfigRepository = RemoteAppConfigRepository(apis.config)
     // 세션을 넘기는 건 방 상세 멤버 중 "나"를 매퍼가 판정하기 위해서다(RemoteRideRepository KDoc).
     val rideRepository: RideRepository = RemoteRideRepository(
         apis.matching,
         sessionManager,
-        reportApi = apis.report,
-        currentLocation = reportLocationProvider::current,
         partyEvents = PartyEventSource(BuildConfig.BASE_URL, apis.streamClient),
     )
     val placeRepository: PlaceRepository = RemotePlaceRepository(apis.place)
@@ -124,6 +123,15 @@ class AppContainer(context: Context, debugLogging: Boolean) {
      */
     val rideRecordRepository: RideRecordRepository =
         RemoteRideRecordRepository(apis.user, sessionManager)
+
+    /**
+     * 38 노쇼 기록·이의 신청. 매칭 API 를 그대로 쓴다 — 서버가 두 경로를 `/api/v1/matching` 아래에
+     * 두었다(`NoShowController`). 따로 Retrofit 인터페이스를 만들면 같은 프리픽스가 두 곳에 생긴다.
+     *
+     * [rideRecordRepository] 와 가르는 이유: 그쪽은 **탄** 방(커서 페이징·읽기 전용), 이쪽은 **안 탄
+     * 것으로 기록된** 방이고 이의 신청이라는 **쓰기**까지 있다.
+     */
+    val noShowRepository: NoShowRepository = RemoteNoShowRepository(apis.matching)
     // 세션을 넘기는 건 메시지의 "내 것" 판정 때문이다(RemoteChatRepository KDoc).
     // 채팅은 실시간(STOMP) + 폴링을 함께 쓴다 — 소켓이 앞서고, 끊긴 구간은 폴링이 메운다.
     val chatRepository: ChatRepository = RemoteChatRepository(
@@ -131,7 +139,6 @@ class AppContainer(context: Context, debugLogging: Boolean) {
         sessionManager,
         ChatSocket(BuildConfig.BASE_URL, apis.socketClient, sessionManager),
     )
-    val dispatchRepository: DispatchRepository = RemoteDispatchRepository(apis.dispatch)
 
     /**
      * "지금 내가 타고 있는 방"의 단일 출처. 서버에 `GET /matching/rooms/me` 가 없어
