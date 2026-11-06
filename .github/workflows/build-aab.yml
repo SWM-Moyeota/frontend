@@ -1,0 +1,156 @@
+name: Build Store AAB
+
+# Play 스토어에 올릴 서명된 AAB 를 수동으로 만든다. 업로드는 Play Console 에서 사람이 한다.
+#
+# 실행: gh workflow run build-aab.yml -f ref=main -f sequence=1
+#
+# 수동 실행 워크플로는 기본 브랜치(develop)에 파일이 있어야 하고, 실행될 때는 --ref 브랜치의 파일을 쓴다.
+# main 에 이 파일이 없어도 main 을 빌드할 수 있도록 빌드 대상은 입력값으로 받는다.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 빌드할 브랜치·태그·커밋
+        required: true
+        default: main
+      sequence:
+        description: 오늘(KST)의 스토어 업로드 순번 1~99. 같은 번호는 Play 가 거부하므로 다시 올릴 때 올린다
+        required: true
+        default: '1'
+
+permissions:
+  contents: read
+
+jobs:
+  build-aab:
+    runs-on: ubuntu-latest
+
+    env:
+      KEYSTORE_NAME: moyeota-upload.jks
+
+    steps:
+      - name: Repository 접근
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      # versionCode 는 release.yml 과 같은 YYMMDD*100+N 체계다.
+      # 값을 잘못 넣어 1 이 박히면 그 번호는 영영 재사용할 수 없으므로 빌드 전에 막는다.
+      - name: 버전 계산
+        id: version
+        env:
+          SEQUENCE: ${{ inputs.sequence }}
+        run: |
+          if ! [[ "${SEQUENCE}" =~ ^[1-9][0-9]?$ ]]; then
+            echo "::error::sequence 는 1~99 여야 한다: '${SEQUENCE}'"
+            exit 1
+          fi
+          date_part=$(TZ=Asia/Seoul date +"%y%m%d")
+          version_name="$(TZ=Asia/Seoul date +"%Y.%m%d").${SEQUENCE}"
+          version_code=$((10#${date_part} * 100 + SEQUENCE))
+          echo "name=${version_name}" >> "$GITHUB_OUTPUT"
+          echo "code=${version_code}" >> "$GITHUB_OUTPUT"
+          echo "### ${version_name} (versionCode ${version_code}) — $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: JDK 25 셋팅
+        uses: actions/setup-java@v6
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: 서명 키스토어 복원
+        env:
+          MOYEOTA_KEYSTORE_BASE64: ${{ secrets.MOYEOTA_KEYSTORE_BASE64 }}
+          MOYEOTA_KEYSTORE_PASSWORD: ${{ secrets.MOYEOTA_KEYSTORE_PASSWORD }}
+          MOYEOTA_KEY_ALIAS: ${{ secrets.MOYEOTA_KEY_ALIAS }}
+          MOYEOTA_KEY_PASSWORD: ${{ secrets.MOYEOTA_KEY_PASSWORD }}
+        run: |
+          missing=""
+          for name in MOYEOTA_KEYSTORE_BASE64 MOYEOTA_KEYSTORE_PASSWORD MOYEOTA_KEY_ALIAS MOYEOTA_KEY_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              missing="${missing} ${name}"
+            fi
+          done
+          if [ -n "${missing}" ]; then
+            echo "::error::서명 시크릿이 비어 있다:${missing}"
+            exit 1
+          fi
+
+          keystore="${RUNNER_TEMP}/${KEYSTORE_NAME}"
+          printf '%s' "${MOYEOTA_KEYSTORE_BASE64}" | base64 --decode > "${keystore}"
+          chmod 600 "${keystore}"
+          if ! keytool -list \
+                 -keystore "${keystore}" \
+                 -storepass "${MOYEOTA_KEYSTORE_PASSWORD}" \
+                 -alias "${MOYEOTA_KEY_ALIAS}" > /dev/null 2>&1; then
+            echo "::error::키스토어를 열지 못했다 — 시크릿 값을 확인해야 한다."
+            exit 1
+          fi
+
+      # MOYEOTA_BASE_URL 은 release.yml 과 같은 이유로 일부러 주입하지 않는다 — 기본값이 운영 서버다.
+      - name: AAB 빌드
+        env:
+          NAVER_MAPS_CLIENT_ID: ${{ secrets.NAVER_MAPS_CLIENT_ID }}
+          MIXPANEL_TOKEN: ${{ secrets.MIXPANEL_TOKEN }}
+          MOYEOTA_KEYSTORE_PATH: ${{ runner.temp }}/${{ env.KEYSTORE_NAME }}
+          MOYEOTA_KEYSTORE_PASSWORD: ${{ secrets.MOYEOTA_KEYSTORE_PASSWORD }}
+          MOYEOTA_KEY_ALIAS: ${{ secrets.MOYEOTA_KEY_ALIAS }}
+          MOYEOTA_KEY_PASSWORD: ${{ secrets.MOYEOTA_KEY_PASSWORD }}
+          MOYEOTA_VERSION_CODE: ${{ steps.version.outputs.code }}
+          MOYEOTA_VERSION_NAME: ${{ steps.version.outputs.name }}
+        run: ./gradlew :app:bundleRelease --no-daemon --build-cache
+
+      # 지도·이벤트가 조용히 꺼진 AAB 나 서명 없는 AAB 가 스토어로 나가지 않게 막는다.
+      # jarsigner 는 서명이 없어도 종료 코드 0 을 반환하므로 출력의 「jar verified.」 로 판단한다.
+      - name: 산출물 검증
+        run: |
+          aab="app/build/outputs/bundle/release/app-release.aab"
+          if ! jarsigner -verify "${aab}" | grep -q '^jar verified'; then
+            echo "::error::AAB 서명을 확인하지 못했다."
+            exit 1
+          fi
+
+          buildconfig="app/build/generated/source/buildConfig/release/com/moyeota/app/BuildConfig.java"
+          if [ ! -f "${buildconfig}" ]; then
+            echo "::error::${buildconfig} 가 없다 — AGP 가 생성 경로를 바꿨을 수 있다."
+            exit 1
+          fi
+          base_url=$(sed -n 's/.*BASE_URL = "\(.*\)".*/\1/p' "${buildconfig}")
+          echo "BASE_URL: ${base_url}"
+          case "${base_url}" in
+            https://*) ;;
+            *)
+              echo "::error::릴리스 BASE_URL 이 https 가 아니다: '${base_url}'"
+              exit 1
+              ;;
+          esac
+          if ! grep -Eq 'MIXPANEL_TOKEN = "[^"]+"' "${buildconfig}"; then
+            echo "::error::MIXPANEL_TOKEN 이 비어 있다 — 스토어 빌드의 이벤트가 꺼진다."
+            exit 1
+          fi
+
+          # Play Console 「앱 서명」 의 업로드 키 인증서와 대조할 지문을 남긴다.
+          {
+            echo '```'
+            keytool -printcert -jarfile "${aab}" | grep -E 'SHA-?(1|256):'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 키스토어 삭제
+        if: always()
+        run: rm -f "${RUNNER_TEMP}/${KEYSTORE_NAME}"
+
+      - name: AAB 이름 정리
+        run: mv app/build/outputs/bundle/release/app-release.aab "moyeota-v${{ steps.version.outputs.name }}.aab"
+
+      - name: AAB 업로드
+        uses: actions/upload-artifact@v7
+        with:
+          name: moyeota-v${{ steps.version.outputs.name }}-aab
+          path: moyeota-v${{ steps.version.outputs.name }}.aab
+          if-no-files-found: error
+          retention-days: 7
