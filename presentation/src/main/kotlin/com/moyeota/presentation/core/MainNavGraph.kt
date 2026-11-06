@@ -786,6 +786,9 @@ private fun MainNavHost(
         composable(Routes.JOIN_CONFIRM) {
             JoinConfirmRoute(
                 repository = rideRepository,
+                // 합류가 「다른 방에 참여 중」으로 막혔을 때 그 방이 확정된 방인지 알아내는 데 쓴다 —
+                // 확정된 방은 나갈 수가 없어서 안내할 행동이 달라진다(JoinConfirmRoute.alreadyInPartyMessage)
+                activePartyRepository = activePartyRepository,
                 partyId = selectedPartyId,
                 onDismiss = ::back,
                 // 합류가 끝나면 **방 id 만** 받아 21 매칭 대기로 넘긴다 — 합류 응답은 더 이상 방 상세가
