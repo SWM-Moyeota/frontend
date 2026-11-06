@@ -228,7 +228,7 @@ fun MatchWaitingScreen(
      * 시각을 만들지 않는 이유: 누르는 순간의 시계로 ViewModel 이 만들어야 사용자가 다이얼로그를
      * 들여다본 시간이 서버의 「1시간 안」 한도를 깎지 않는다([MatchWaitingViewModel.confirmMeeting]).
      */
-    onConfirmMeeting: (minutes: Int) -> Unit = {},
+    onConfirmMeeting: (departureAt: String) -> Unit = {},
     /**
      * 「출발지 도착했어요」 — 기기의 현재 좌표를 넘긴다.
      *
@@ -255,7 +255,15 @@ fun MatchWaitingScreen(
     var departConfirming by remember { mutableStateOf(false) }
     // 약속 확정 확인 — **어느 프리셋을 눌렀는지**를 함께 들고 있어야 다이얼로그가 그 시각을
     // 되읽어 줄 수 있다(칩에는 「10분」만 적혀 있다). null 이면 다이얼로그가 닫힌 상태다.
-    var confirmingPresetMinutes by remember { mutableStateOf<Int?>(null) }
+    /**
+     * 확정 다이얼로그가 들고 있는 선택. null 이면 닫혀 있다.
+     *
+     * **시각을 함께 들고 있는 게 요점이다** — 칩을 누르는 그 순간 한 번 만들어, 다이얼로그 제목과
+     * 서버로 보내는 값이 **같은 값**을 쓴다. 분만 들고 있으면 제목과 요청이 시계를 따로 읽어,
+     * 그 사이 분이 바뀌면 본 것과 다른 시각이 확정된다
+     * (`MatchWaitingViewModel.confirmMeeting` KDoc, 실측 2026-11-06).
+     */
+    var confirmingPreset by remember { mutableStateOf<ConfirmingPreset?>(null) }
 
     // 약속 흐름의 **단일 판정**. 화면 어디서도 조건을 다시 세우지 않는다 — meetingStage KDoc 의 표가
     // 리더가 정한 화면 상태표 그대로이고, 아래 `when` 이 빠진 가지를 컴파일에서 잡아 준다.
@@ -588,8 +596,10 @@ fun MatchWaitingScreen(
                     MeetingStage.CONFIRM_BY_ME -> {
                         MeetingPresetBlock(
                             enabled = !actionInProgress,
-                            selectedMinutes = confirmingPresetMinutes,
-                            onPick = { minutes -> confirmingPresetMinutes = minutes },
+                            selectedMinutes = confirmingPreset?.minutes,
+                            onPick = { minutes ->
+                                confirmingPreset = ConfirmingPreset(minutes, meetingPresetIso(now, minutes))
+                            },
                             modifier = Modifier.padding(horizontal = 16.dp),
                         )
                         Spacer(Modifier.height(10.dp))
@@ -740,27 +750,26 @@ fun MatchWaitingScreen(
     // (409 ALREADY_CONFIRMED). 그중 ②가 사용자에게 가장 무겁다 — 약속을 지키지 못하면 노쇼가 된다.
     //
     // 제목이 고른 **시각을 숫자로 되읽어 준다.** 칩에는 「10분」만 적혀 있어서, 그게 몇 시인지
-    // 확인할 기회가 여기 한 번뿐이다. 시각은 **다이얼로그를 띄우는 그 순간의 now** 로 만든다 —
-    // 실제로 보내는 값은 누르는 순간 ViewModel 이 다시 만들므로 1초 안쪽에서 다를 수 있지만,
-    // 분으로 내림한 값이라([meetingPresetAt]) 표시가 어긋나는 경우는 분이 바뀌는 찰나뿐이다.
-    confirmingPresetMinutes?.let { minutes ->
-        val timeLabel = meetingTimeLabel(meetingPresetAt(now, minutes).toString())
+    // 확인할 기회가 여기 한 번뿐이다. 그래서 **여기 적힌 시각이 그대로 서버로 간다** —
+    // 칩을 누른 순간 만든 값([confirmingPresetAt])을 제목도 요청도 함께 쓴다.
+    confirmingPreset?.let { preset ->
+        val timeLabel = meetingTimeLabel(preset.departureAt)
         AlertDialog(
-            onDismissRequest = { confirmingPresetMinutes = null },
+            onDismissRequest = { confirmingPreset = null },
             title = {
                 Text(text = meetingConfirmTitle(timeLabel), fontSize = 17.sp, fontWeight = FontWeight.Bold)
             },
             text = { Text(text = MEETING_CONFIRM_DIALOG_BODY, fontSize = 14.sp) },
             confirmButton = {
                 TextButton(onClick = {
-                    confirmingPresetMinutes = null
-                    onConfirmMeeting(minutes)
+                    confirmingPreset = null
+                    onConfirmMeeting(preset.departureAt)
                 }) {
                     Text(text = "약속 정하기", fontWeight = FontWeight.Bold, color = MoyeotaColor.Primary600)
                 }
             },
             dismissButton = {
-                TextButton(onClick = { confirmingPresetMinutes = null }) {
+                TextButton(onClick = { confirmingPreset = null }) {
                     Text(text = "아직이요", color = MoyeotaColor.TextMute)
                 }
             },

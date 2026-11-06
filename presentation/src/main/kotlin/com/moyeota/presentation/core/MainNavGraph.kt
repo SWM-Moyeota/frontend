@@ -333,6 +333,20 @@ private fun MainNavHost(
     var selectedPartner by remember { mutableStateOf<User?>(null) }
     // 16 에서 만든 방 — 21 매칭 대기가 이 방을 조회한다. 위 selectedPartyId 와 같은 이유로 saveable
     var createdPartyId by rememberSaveable { mutableStateOf<Long?>(null) }
+
+    /**
+     * 16 도착지 확인을 **시간 정하기로 열까.** 17 탐색의 예약 탭에서 「＋ 새 동승 방 만들기」를 누른
+     * 경우에만 참이다.
+     *
+     * 깃발을 쓰는 이유: 15 → 16 은 두 걸음이고 그 사이에 출발지·도착지가 정해진다. 경로 인자로
+     * 실어 나르면 두 라우트의 주소가 모두 바뀌는데, 이 값은 **어디서 눌렀는지**일 뿐 화면의
+     * 정체성이 아니다. `selectedPartyId`·`createdPartyId` 와 같은 자리에 같은 이유로 둔다
+     * (구성 변경에서 살아남아야 하므로 saveable).
+     *
+     * **16 에 들어가지 않는 길에서는 반드시 내린다** — 홈 검색으로 들어온 사람이 직전에 예약 탭을
+     * 봤다는 이유로 시간 정하기 화면을 받으면 안 된다.
+     */
+    var createScheduled by rememberSaveable { mutableStateOf(false) }
     // 탐색용 selectedPartyId 와 진행용 createdPartyId 는 **일부러 둘이다** — 탐색 중 다른 방을 눌러도
     // 내가 들어 있는 방이 바뀌면 안 된다.
     //
@@ -691,10 +705,12 @@ private fun MainNavHost(
                 onActiveRideClick = { activeRide?.let(::navigateToStage) },
                 onSearchClick = {
                     searchInitialQuery = ""
+                    createScheduled = false
                     navController.navigate(Routes.DESTINATION)
                 },
                 onPlaceQuery = { query ->
                     searchInitialQuery = query
+                    createScheduled = false
                     navController.navigate(Routes.DESTINATION)
                 },
                 onTabSelect = ::navigateTab,
@@ -738,6 +754,8 @@ private fun MainNavHost(
                 onActivePartyRefresh = { activePartyViewModel.refresh() },
                 origin = confirmedOrigin,
                 destination = confirmedDestination,
+                // 17 예약 탭에서 눌러 온 길이면 시간 정하기로 연다 — 위 createScheduled 참고
+                initiallyScheduled = createScheduled,
                 onDismiss = ::back,
                 // 추천 방을 고르면 19 합류 확인으로 — 모달은 닫고 뒤로 눌러 돌아오지 않게 한다.
                 // 방을 만들지 않았으므로 createdPartyId 는 건드리지 않는다.
@@ -771,12 +789,17 @@ private fun MainNavHost(
                 },
                 // 배너는 **지금 단계 화면**으로 바로 간다
                 onOngoingRideClick = { activeRide?.let(::navigateToStage) },
-                onCreateRoomClick = { navController.navigate(Routes.DESTINATION) },
+                onCreateRoomClick = { scheduled ->
+                    createScheduled = scheduled
+                    navController.navigate(Routes.DESTINATION)
+                },
                 // 예약 날짜 검색의 도착지 필터 — 15 를 **고르기 전용**으로 열었다가 돌아온다.
                 searchDestination = reservationSearchDestination,
                 onPickSearchDestination = {
                     pickingSearchDestination = true
                     searchInitialQuery = ""
+                    // 필터만 고르러 가는 길이라 16 을 열지 않는다 — 깃발도 남기지 않는다
+                    createScheduled = false
                     navController.navigate(Routes.DESTINATION)
                 },
                 onClearSearchDestination = { reservationSearchDestination = null },
@@ -786,6 +809,9 @@ private fun MainNavHost(
         composable(Routes.JOIN_CONFIRM) {
             JoinConfirmRoute(
                 repository = rideRepository,
+                // 합류가 「다른 방에 참여 중」으로 막혔을 때 그 방이 확정된 방인지 알아내는 데 쓴다 —
+                // 확정된 방은 나갈 수가 없어서 안내할 행동이 달라진다(JoinConfirmRoute.alreadyInPartyMessage)
+                activePartyRepository = activePartyRepository,
                 partyId = selectedPartyId,
                 onDismiss = ::back,
                 // 합류가 끝나면 **방 id 만** 받아 21 매칭 대기로 넘긴다 — 합류 응답은 더 이상 방 상세가
