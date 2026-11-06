@@ -401,4 +401,34 @@ class ReservationFinderTest {
             assertFalse(feed.myPartyHidden)
         }
     }
+
+    // ───────────────── 「＋ 새 동승 방 만들기」가 어떤 모달을 여는가 ─────────────────
+
+    /**
+     * 못 박는 것: **예약 탭에서 만들면 시간 정하기로 열린다.**
+     *
+     * 예약 방을 찾다가 없어서 만들러 가는 사람인데 「지금 출발」로 열리면, 화면이 방금까지 한 일을
+     * 잊은 꼴이고 사용자는 모달에서 「시간 정하기」를 한 번 더 눌러야 한다. 그 한 번을 없앤다.
+     */
+    @Test
+    fun `예약 탭에서 만들면 시간 정하기로 열린다`() {
+        assertTrue(createOpensScheduled(ExploreMode.SOON))
+        assertTrue(createOpensScheduled(ExploreMode.BY_DATE))
+    }
+
+    /** 실시간 탭은 지금까지와 같다 — 이 변경이 기존 흐름을 건드리지 않는다는 쪽이 더 중요하다. */
+    @Test
+    fun `실시간 탭에서 만들면 지금 출발 그대로다`() {
+        assertFalse(createOpensScheduled(ExploreMode.REALTIME))
+    }
+
+    /**
+     * 모드가 늘어나도 **아무도 기본값에 조용히 쓸려 가지 않는다.** `when` 이 비포괄이면 컴파일이
+     * 깨지므로, 이 테스트가 지키는 것은 「지금 세 모드가 각자 답을 갖고 있다」는 사실이다.
+     */
+    @Test
+    fun `모든 탭이 답을 갖고 있다`() {
+        ExploreMode.entries.forEach { createOpensScheduled(it) }
+        assertEquals(3, ExploreMode.entries.size)
+    }
 }
