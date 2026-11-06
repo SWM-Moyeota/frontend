@@ -185,6 +185,8 @@ class HomeViewModel(
     private fun deleteFailureMessage(error: Throwable): String = when {
         (error as? FavoritePlaceException)?.isNotFound == true ->
             "이미 지워졌거나 없는 곳이에요. 목록을 다시 불러왔어요"
+        // 15 의 담기·빼기와 같은 문구를 쓴다 — 같은 비행기모드에서 화면마다 다른 말을 하지 않는다
+        (error as? FavoritePlaceException)?.isNetwork == true -> FavoriteNetworkFailureMessage
         else -> "즐겨찾기를 지우지 못했어요"
     }
 
