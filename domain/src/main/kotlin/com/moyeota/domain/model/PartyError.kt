@@ -509,6 +509,21 @@ class PartyLeaveException(
      */
     val isNotRecruiting: Boolean get() = code == PARTY_NOT_RECRUITING
 
+    /**
+     * 409 `CANNOT_LEAVE_CONFIRMED_PARTY` — **약속이 정해진 방은 아무도 나갈 수 없다.**
+     *
+     * 예약 방은 합류 순간부터 확정이라 **처음부터 끝까지** 이 답이 온다. 실시간 방은 방장이 약속
+     * 시간을 확정한 뒤부터다. 끝내는 길은 「출발」 하나뿐이고, 가지 않으면 노쇼로 남는다.
+     *
+     * 화면이 확정된 방에서 나가기를 **이미 막는데도**(21 의 `canLeaveParty`) 남겨 두는 이유는
+     * [isNotRecruiting] 과 같다 — 확정 사실은 SSE 로 오므로 그 프레임을 놓치면 낡은 스냅샷으로
+     * 버튼을 열어 둘 수 있고, 그 틈에 눌린 것을 받는다.
+     *
+     * [isNotRecruiting] 과 **뜻이 다르다**: 그쪽은 이미 끝난 방이고 이쪽은 **아직 살아 있는데
+     * 약속에 묶인 방**이다. 사용자가 할 일도 다르다 — 앞은 홈으로, 뒤는 약속 장소로.
+     */
+    val isCannotLeaveConfirmed: Boolean get() = code == CANNOT_LEAVE_CONFIRMED_PARTY
+
     /** 404 `PARTY_NOT_FOUND` — 방이 사라졌다. 나갈 방이 없으므로 홈으로 보내면 된다. */
     val isPartyNotFound: Boolean get() = code == PARTY_NOT_FOUND || (code == null && httpStatus == 404)
 
@@ -521,6 +536,7 @@ class PartyLeaveException(
          */
         const val NOT_PARTY_MEMBER = "NOT_PARTY_MEMBER"
         const val PARTY_NOT_RECRUITING = "PARTY_NOT_RECRUITING"
+        const val CANNOT_LEAVE_CONFIRMED_PARTY = "CANNOT_LEAVE_CONFIRMED_PARTY"
         const val PARTY_NOT_FOUND = "PARTY_NOT_FOUND"
     }
 }

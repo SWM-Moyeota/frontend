@@ -11,6 +11,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.moyeota.domain.model.FavoritePlace
 import com.moyeota.domain.model.FavoritePlaceException
+import com.moyeota.domain.model.FavoritePlacePolicy
 import com.moyeota.domain.model.Place
 import com.moyeota.domain.repository.PlaceRepository
 import com.moyeota.presentation.core.location.FormLocationIntervalMs
@@ -182,14 +183,30 @@ class DestinationViewModel(
                 repository.addFavoritePlace(place)
                 _uiState.update { it.copy(favoriteActionMessage = "${place.name}을(를) 자주 가는 곳에 담았어요") }
                 loadFavorites() // 등록 후 목록 재조회
+            } catch (e: CancellationException) {
+                // 취소는 실패가 아니다 — 화면을 떠난 것이라 문구를 세울 자리가 없다(removeFavorite 와 같은 규칙).
+                throw e
+            } catch (e: FavoritePlaceException) {
+                _uiState.update { it.copy(favoriteActionMessage = addFailureMessage(e)) }
             } catch (e: Exception) {
-                // 서버 409 CONFLICT: 이름 중복 · 10개 초과 (운영 OpenAPI 는 409 를 적어 두지 않았지만
-                // 실제 응답이 409 다 — 컨트롤러 @ApiResponses 누락. 어차피 사유를 가리지 않으므로 영향 없다)
-                _uiState.update { it.copy(favoriteActionMessage = "자주 가는 곳에 담지 못했어요 (중복이거나 10개를 넘었을 수 있어요)") }
+                _uiState.update { it.copy(favoriteActionMessage = "자주 가는 곳에 담지 못했어요") }
             } finally {
                 _uiState.update { it.copy(favoriteActionLoading = false) }
             }
         }
+    }
+
+    /**
+     * 등록 실패 문구. 둘 다 409 라 **코드를 봐야 가려진다** — 상태만 보면 뭉개진다
+     * (운영 OpenAPI 는 409 를 적어 두지 않았지만 실제 응답이 409 다 — 컨트롤러 `@ApiResponses` 누락).
+     *
+     * 두 사유의 **할 일이 반대**라서 가른다: 상한은 하나를 빼면 담기고, 중복은 할 일이 없다.
+     */
+    private fun addFailureMessage(e: FavoritePlaceException): String = when {
+        e.isLimitExceeded ->
+            "자주 가는 곳은 ${FavoritePlacePolicy.MAX_COUNT}개까지만 담을 수 있어요. 하나를 빼고 다시 담아 주세요"
+        e.isDuplicated -> "이미 담아 둔 곳이에요"
+        else -> "자주 가는 곳에 담지 못했어요"
     }
 
     /**

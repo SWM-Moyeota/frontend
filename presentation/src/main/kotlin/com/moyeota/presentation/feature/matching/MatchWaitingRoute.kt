@@ -1400,6 +1400,9 @@ private const val LEAVE_FAILED_MESSAGE = "방에서 나가지 못했어요"
  * 여기로 온다.
  */
 internal fun leaveFailureMessage(e: PartyLeaveException): String = when {
+    // 끝난 방이 아니라 **약속에 묶인 방**이다 — 홈으로 돌아가라고 하면 안 된다. 끝내는 길은 출발뿐이고
+    // 가지 않으면 노쇼로 남으므로, 무엇을 해야 하는지까지 말해 준다.
+    e.isCannotLeaveConfirmed -> "약속이 정해진 방은 나갈 수 없어요. 약속 시간에 출발지에서 만나 주세요"
     e.isNotRecruiting -> "이미 끝난 방이에요. 홈으로 돌아가 주세요"
     e.isPartyNotFound -> "이미 사라진 방이에요. 홈으로 돌아가 주세요"
     else -> LEAVE_FAILED_MESSAGE
