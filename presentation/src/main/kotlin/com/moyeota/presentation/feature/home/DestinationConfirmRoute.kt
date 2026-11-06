@@ -557,6 +557,14 @@ fun DestinationConfirmRoute(
     // 15 에서 확정한 출발지(고른 곳 또는 실위치). 15 를 거치지 않고 들어오면 null — 방을 만들지 않고 안내만 한다
     origin: Place?,
     destination: Place?,
+    /**
+     * 모달을 **시간 정하기로 열까.** 17 탐색의 예약 탭에서 들어온 경우에만 참이다
+     * (`MainNavGraph.createScheduled`).
+     *
+     * 기본값이 false 라 **지금까지의 모든 진입이 그대로다** — 홈 검색·즐겨찾기로 들어오면 전과 같이
+     * 「지금 출발」로 열린다. 고르는 쪽을 바꿀 뿐이라 사용자는 모달에서 언제든 되돌릴 수 있다.
+     */
+    initiallyScheduled: Boolean = false,
     onDismiss: () -> Unit = {},
     onPartyCreated: (Ride) -> Unit = {},
     /**
@@ -658,6 +666,7 @@ fun DestinationConfirmRoute(
     // 15 를 거치지 않고 들어오면 좌표가 없어 방을 만들 수 없다 — 안내만 하고 닫기 유도.
     // 고정 좌표로 채우지 않는다 — 실제 출발 위치가 아닌 곳으로 방이 만들어진다.
     DestinationConfirmModal(
+        initiallyScheduled = initiallyScheduled,
         destinationName = destinationName,
         // 이름 자리가 이미 실주소면 검색 당시의 도로명은 같은 값을 두 번 적는 꼴이라 비운다.
         // (핀을 옮겼다면 그 도로명은 더 이상 핀이 선 자리도 아니다)
