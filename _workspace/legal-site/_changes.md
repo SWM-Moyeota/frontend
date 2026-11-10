@@ -407,3 +407,57 @@ python3 check_legal.py _workspace/legal-site
 버튼 이름 「합승 완료」도 「동승 완료」로 바꿨다 — **앱의 실제 버튼 이름이 바뀌었는지 확인할 것.**
 조항 번호·구조·의미는 그대로다(`_check.py` 통과). 시행일·최종 수정일은 손대지 않았다 —
 용어 교체만으로 개정 공지 대상이 되는지는 운영자가 판단한다.
+
+## 2026-11-10 — 메타(Facebook SDK) 광고 성과 측정 추가
+
+고친 문서: `privacy/index.html`
+안 고친 것: `index.html`, `terms/index.html`, `account-deletion/index.html`, `assets/style.css`
+
+iOS 1.0.3(frontend-ios PR #38·#41, 2026-11-10 10:35 KST 출시)과 Android(frontend PR #91·#92, `v2026.1110.1`, 스토어 업로드 전)에
+메타 Facebook SDK 가 들어가 **설치·실행 이벤트가 메타로 간다.** 그런데 배포본 처리방침은 메타를 언급하지 않았고,
+제2조 「광고와 마케팅에 사용하지 않습니다」, 제9조 1항 「광고 구성요소가 들어 있지 않습니다」라고 적혀 있었다.
+**iOS 1.0.3 출시부터 이 개정까지 처리방침이 사실과 달랐다.** 개정 이력에 그대로 적었다.
+
+| 자리 | 조치 | 근거 |
+|---|---|---|
+| privacy 머리말 | 시행일·최종 수정일 2026-11-10 | 목적과 수집 항목이 늘어나는 개정 |
+| privacy 제1조 표3 | 「광고 성과 측정 정보(메타)」·「메타 기기 식별자」 두 줄 | 아래 SDK 확인 |
+| privacy 제2조 | 8호 「광고 성과 측정」 추가. notice 의 「광고와 마케팅에 사용하지 않습니다」 → 맞춤 광고·마케팅 메시지에 쓰지 않는다 + 광고 성과 측정 예외 | 그대로 두면 허위 고지 |
+| privacy 제6조 표5 | 「광고 성과 측정 정보와 메타 기기 식별자 — 메타 정책, 탈퇴로 안 지워짐」 | 앱이 `app_user_id`·`setUserID` 를 쓰지 않는다 → 계정과 연결 안 됨 |
+| privacy 제7조 표6 | Meta Platforms, Inc. 행. 5항 「광고·마케팅 목적 제공 없음」에 예외 | |
+| privacy 제8조 2항 | 「두 가지 예외」 → 「세 가지」 | |
+| **privacy 제9조** | 제목 → 「앱 이용 기록, 광고 성과 측정, 오류 진단」. 1항 「광고 구성요소가 들어 있지 않습니다」 → 「광고를 보여 주지 않습니다」. **4항 신설**(무엇을 왜, 무엇을 안 보내는지, 끄는 설정 없음). 옛 4·5항은 5·6항이 되고 메타를 더함 | |
+| privacy 제10조 3항 | 메타 정보는 탈퇴로 지워지지 않는다는 문단 | |
+| privacy 제11조 5항 | 없는 기능에 「광고 성과 측정 정보 전송을 끄는 설정」 | 앱에 opt-out UI 없음 |
+| privacy 제16조 | 개정 이력 행. iOS 선배포와 30일 공지 미준수를 적었다 | |
+| 목차 | 제9조 제목 맞춤 | |
+
+### 메타 SDK 가 보내는 것 — 확인 방법
+
+- **Android `facebook-core` 19.0.1 소스**(Maven Central `-sources.jar`)
+  - `Utility.setAppEventExtendedDeviceInfoParameters` 의 `extinfo`: 패키지 이름·versionCode·versionName, `Build.VERSION.RELEASE`, `Build.MODEL`, 언어_국가,
+    시간대 약어, 통신사 이름, 화면 가로·세로·밀도, CPU 코어 수, 외부 저장공간 전체·남은 GB, 시간대 이름.
+  - `Utility` 의 식별자: `anon_id`(SDK 가 만든 무작위 `XZ…` GUID — 에뮬레이터 `appEventPreferences` 에서 확인), `advertiser_id`(광고 ID — **꺼 둠**:
+    `AdvertiserIDCollectionEnabled=false` + `AD_ID` 권한 `tools:node="remove"`), `attribution`(Facebook 앱의 ContentProvider 에서 읽는 값.
+    Android 11+ 는 `<queries>` 선언이 없어 못 읽는다 — logcat `NativeProtocol` 경고로 확인. 그래서 「Android 10 이하」로 적었다), 설치 리퍼러(`installreferrer` 의존성).
+  - 이벤트: 자동 앱 이벤트(설치 ping `2448080759263977ping`, `fb_mobile_activate_app`·`deactivate_app` 세션 시간).
+- **메타 서버 설정**(에뮬레이터에 내려온 `APP_SETTINGS`, 2026-11-10): `aam_rules` = `{}`(자동 고급 매칭 꺼짐), `suggested_events_setting.production_events` = `[]`,
+  `app_events_feature_bitmask` 65559 → codeless(bit 5)·자동 버튼 로깅(bit 3) 꺼짐. 그래서 「화면의 버튼이나 입력값을 자동으로 수집하는 메타의 기능은 쓰지 않습니다」라고 적었다.
+  **이 값은 메타 이벤트 관리자 설정으로 바뀔 수 있다** — 이벤트 관리자에서 자동 고급 매칭·코드리스 이벤트를 켜면 이 문장이 거짓이 된다.
+- **iOS 18.1.1** 은 바이너리 XCFramework 라 소스를 보지 못했다. frontend-ios `docs/ANALYTICS.md`(IDFA 안 읽음, ATT 안 띄움, 자동 앱 이벤트만, SKAdNetwork)와
+  같은 SDK 계열의 공통 동작을 근거로 범주 수준으로 적고 「운영체제에 따라 일부 항목은 빠질 수 있습니다」를 붙였다.
+- 앱 코드는 메타로 계정 식별자를 보내지 않는다(Android: SDK 호출 코드 0줄, iOS: `MetaAdsAttribution.start` 만). 그래서 탈퇴 연동은 없다.
+
+### 판단 기록
+
+- **account-deletion 은 고치지 않았다.** 메타 정보는 계정과 연결되지 않아 Crashlytics 처럼 「계정 데이터」 표에 넣지 않았다. 「탈퇴해도 남는다」는 privacy 제6조·제10조에 적었다.
+- **제2조 「다른 용도는 미리 알리고 따로 동의를 받습니다」를 지키지 못했다.** 광고 성과 측정은 새 목적인데 별도 동의 절차가 없다. 지금 할 수 있는 것은
+  (가) 이대로 개정·공지, (나) 이벤트 관리자에서 자동 앱 이벤트 기록을 꺼서 전송을 멈추고 동의 절차 뒤 다시 켜기, (다) 앱에 동의 화면 추가. **오너 결정(2026-11-10): (가) — 이대로 개정·당일 시행.**
+- 시행일은 초안으로 당일(11-10)을 넣었다. 11-01·11-03·11-05 와 같은 선택이며 30일 공지를 지키지 못한다. 바꾸면 머리말·제16조 표 두 곳.
+- 「모여타는 메타로부터 광고별 설치 수 같은 집계 결과만 받는다」 — 광고관리자·이벤트 관리자 화면에 개인 단위 기록이 없음을 2026-11-10 확인.
+
+### 배포 (2026-11-10)
+
+- `python3 _check.py .` 실패 0. 배포본을 내려받아 `diff -rq` — 달라진 파일은 `privacy/index.html` 하나. `--dryrun` 삭제 0.
+- `aws s3 sync … --profile moyeota`(IAM `jiwoo`) → CloudFront 무효화 `I1YJ9GDUW1S2N9V37SXLYDIXHM` 완료.
+- 라이브 확인: `/`·`/privacy/`·`/terms/`·`/account-deletion/` 200, `privacy/` 가 저장소 파일과 `cmp` 바이트 일치, `Meta Platforms` 4곳.
