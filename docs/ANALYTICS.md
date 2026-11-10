@@ -120,6 +120,25 @@ Mixpanel 퍼널이 플랫폼별로 갈라진다. 바꿔야 하면 iOS·보드를
 | 로그인 상태에서 빠져나옴 | `reset()` — identify 된 적이 있을 때만 |
 | `Unknown` | 무시 |
 
+## Meta 광고 설치 측정 (Facebook SDK)
+
+Mixpanel 과 별개다. 메타 광고관리자의 Android 앱 설치 캠페인이 **설치를 세고 그 설치에 맞춰 노출을 최적화**하려면
+앱이 SDK 로 설치·실행 이벤트를 보내야 한다. 이게 없던 동안(~2026-11-10) 캠페인 결과는 계속 「설치 0」이었다.
+
+| 자리 | 내용 |
+|---|---|
+| `gradle/libs.versions.toml` | `com.facebook.android:facebook-core` — 로그인·공유 없이 core 만 |
+| `app/build.gradle.kts` | `FACEBOOK_APP_ID`(기본값 2448080759263977, 공개 값)·`FACEBOOK_CLIENT_TOKEN` → `resValue` 문자열 리소스 |
+| `app/src/main/AndroidManifest.xml` | `com.facebook.sdk.*` meta-data, `AD_ID` 권한 제거 |
+
+- 앱 코드에서 SDK 를 부르지 않는다. SDK 의 `FacebookInitProvider` 가 앱 시작 때 매니페스트 값으로 켜고, **자동 앱 이벤트(설치·실행)만** 보낸다. `Analytics` 이벤트는 메타로 보내지 않는다.
+- 광고 ID 를 읽지 않는다(`AdvertiserIDCollectionEnabled=false`, `AD_ID` 권한 `tools:node="remove"`). 설치 귀속은 SDK 가 함께 끌고 오는 Play Install Referrer 에 기댄다. iOS 가 IDFA 를 읽지 않는 것과 같은 선택이다.
+- 클라이언트 토큰: 로컬은 `local.properties` 의 `FACEBOOK_CLIENT_TOKEN=…`(iOS `Config/Secrets.xcconfig` 와 같은 값, 개발자 센터 → 앱 설정 → 고급 → 보안).
+  CI 는 GitHub Secrets `FACEBOOK_CLIENT_TOKEN` — **저장소 소유자가 `gh secret set FACEBOOK_CLIENT_TOKEN` 으로 등록해야 한다.**
+- 토큰이 비면 SDK 초기화가 실패하지만 `FacebookInitProvider` 가 예외를 잡고 로그만 남긴다 → 앱은 정상, 메타로 아무것도 안 간다.
+- 확인: 설치 후 이벤트 관리자(앱 2448080759263977) → 개요에서 「앱 설치」·「앱 활성화」가 Android 로 들어오는지 본다. 이벤트 테스트 탭으로 실시간 확인도 된다.
+- **Play Console 데이터 보안 양식과 처리방침에 메타(Meta Platforms, 미국)로 가는 앱 사용 데이터(앱 상호작용·기기 정보, 목적: 광고/마케팅)를 적어야 한다.**
+
 ## 이벤트를 더할 때
 
 1. 이 문서와 `frontend-ios/docs/ANALYTICS.md` 의 표에 먼저 적는다.

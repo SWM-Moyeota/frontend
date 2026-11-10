@@ -65,6 +65,17 @@ val moyeotaBaseUrl: String =
  */
 val mixpanelToken: String = buildSetting("MIXPANEL_TOKEN", default = "")
 
+/**
+ * Meta(Facebook) 광고 설치 측정. 앱 ID 는 메타 앱 「모여타」의 **공개 값**이라 기본값으로 둔다(iOS Base.xcconfig 와 같은 값).
+ * 클라이언트 토큰은 저장소에 두지 않는다 — local.properties 또는 환경변수 FACEBOOK_CLIENT_TOKEN(CI 는 secrets).
+ * 개발자 센터 → 앱 설정 → 고급 → 보안에 있다.
+ *
+ * 토큰이 비면 SDK 의 FacebookInitProvider 가 초기화 예외를 **스스로 잡고 로그만 남긴다**(19.0.1 소스 확인).
+ * 즉 토큰 없는 팀원 로컬·fork 빌드는 메타로 아무것도 보내지 않을 뿐 정상 동작한다 — Mixpanel 과 같은 규칙.
+ */
+val facebookAppId: String = buildSetting("FACEBOOK_APP_ID", default = "2448080759263977")
+val facebookClientToken: String = buildSetting("FACEBOOK_CLIENT_TOKEN", default = "")
+
 val keystorePath: String = buildSetting("MOYEOTA_KEYSTORE_PATH", default = "")
 val keystorePassword: String = buildSetting("MOYEOTA_KEYSTORE_PASSWORD", default = "")
 val keyAliasValue: String = buildSetting("MOYEOTA_KEY_ALIAS", default = "")
@@ -102,6 +113,11 @@ android {
         manifestPlaceholders["naverMapsClientId"] = naverMapsClientId
         buildConfigField("String", "BASE_URL", "\"$moyeotaBaseUrl\"")
         buildConfigField("String", "MIXPANEL_TOKEN", "\"$mixpanelToken\"")
+
+        // manifestPlaceholders 가 아니라 문자열 리소스로 넘긴다. meta-data 에 숫자만 있는 값을 직접 쓰면
+        // 플랫폼이 Integer/Float 로 읽어 버리고, SDK 는 숫자형 앱 ID 를 거부한다(FacebookSdk.loadDefaultsFromMetadata).
+        resValue("string", "facebook_app_id", facebookAppId)
+        resValue("string", "facebook_client_token", facebookClientToken)
     }
 
     signingConfigs {
@@ -145,6 +161,8 @@ android {
         compose = true
         // BuildConfig.BASE_URL 생성을 위해 필요.
         buildConfig = true
+        // defaultConfig 의 resValue(메타 앱 ID·클라이언트 토큰) 생성을 위해 필요.
+        resValues = true
     }
 
     compileOptions {
@@ -184,6 +202,9 @@ dependencies {
     implementation(libs.firebase.crashlytics)
     // 행동 이벤트 전송. Mixpanel 을 아는 파일은 MixpanelAnalyticsReporter 하나다.
     implementation(libs.mixpanel.android)
+    // 메타 광고 설치 측정. 코드에서 부르지 않는다 — SDK 의 초기화 ContentProvider 가 매니페스트 값으로 켜고,
+    // 자동 앱 이벤트(설치·실행)만 보낸다. 설정은 AndroidManifest.xml 의 com.facebook.sdk.* meta-data.
+    implementation(libs.facebook.core)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.junit)
