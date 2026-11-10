@@ -10,6 +10,13 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
+    <!-- 메타 SDK(facebook-core)가 광고 ID 권한을 매니페스트 병합으로 끌고 들어오는데, 걷어 낸다.
+         아래 AdvertiserIDCollectionEnabled=false 로 광고 ID 를 읽지 않으므로 권한도 필요 없고,
+         남겨 두면 Play Console 「광고 ID」 신고와 어긋나 출시가 막힐 수 있다. iOS 가 IDFA 를 읽지 않는 것과 같은 선택이다. -->
+    <uses-permission
+        android:name="com.google.android.gms.permission.AD_ID"
+        tools:node="remove" />
+
     <!-- 평문(http) 통신은 **디버그 빌드에만** 허용한다 — `app/src/debug/AndroidManifest.xml` 참고.
          여기에 usesCleartextTraffic 을 두면 스토어에 올라가는 릴리스에도 그대로 들어가,
          토큰이 실린 요청이 http 로 나가는 것을 플랫폼이 더 이상 막아 주지 않는다.
@@ -29,6 +36,21 @@
         <meta-data
             android:name="com.naver.maps.map.NCP_KEY_ID"
             android:value="${naverMapsClientId}" />
+
+        <!-- 메타 광고 설치 측정(facebook-core). 값은 app/build.gradle.kts 의 resValue 에서 온다.
+             SDK 가 보내는 것은 자동 앱 이벤트(설치·실행)뿐이다. 우리 Analytics 이벤트는 메타로 가지 않는다(docs/ANALYTICS.md). -->
+        <meta-data
+            android:name="com.facebook.sdk.ApplicationId"
+            android:value="@string/facebook_app_id" />
+        <meta-data
+            android:name="com.facebook.sdk.ClientToken"
+            android:value="@string/facebook_client_token" />
+        <meta-data
+            android:name="com.facebook.sdk.AutoLogAppEventsEnabled"
+            android:value="true" />
+        <meta-data
+            android:name="com.facebook.sdk.AdvertiserIDCollectionEnabled"
+            android:value="false" />
 
         <!--
             windowSoftInputMode 는 **adjustResize 여야 한다**(예전 값 adjustNothing).

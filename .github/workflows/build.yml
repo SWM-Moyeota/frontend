@@ -62,6 +62,8 @@ jobs:
         env:
           NAVER_MAPS_CLIENT_ID: ${{ secrets.NAVER_MAPS_CLIENT_ID }}
           MIXPANEL_TOKEN: ${{ secrets.MIXPANEL_TOKEN }}
+          # 메타 광고 설치 측정. 비면 SDK 가 켜지지 않아 설치가 메타로 안 간다(docs/ANALYTICS.md).
+          FACEBOOK_CLIENT_TOKEN: ${{ secrets.FACEBOOK_CLIENT_TOKEN }}
         run: ./gradlew :app:assembleDebug :data:testDebugUnitTest :presentation:testDebugUnitTest --no-daemon
 
       - name: Upload test report
