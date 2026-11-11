@@ -151,6 +151,50 @@ class ChatRoomSendReadTest {
         assertEquals(listOf(101L), repository.reads)
     }
 
+    /** 타임아웃인데 서버는 저장한 경우 — 소켓으로 같은 메시지가 오면 「전송 실패」가 남지 않는다 */
+    @Test
+    fun `타임아웃 뒤 저장된 메시지가 오면 전송 실패 말풍선이 사라진다`() = runTest(main) {
+        val repository = FakeRoomRepository(initial = listOf(msg(100, seq = 10)))
+        repository.sendHook = {
+            delay(1_000)
+            throw ChatException(code = null, serverMessage = null, isNetwork = true)
+        }
+        val viewModel = openRoom(repository)
+
+        viewModel.onInputChange("도착")
+        viewModel.send()
+        advanceTimeBy(1_001)
+        runCurrent()
+        assertTrue(success(viewModel).pending.single().failed)
+
+        repository.events.emit(ChatRealtimeEvent.Message(msg(101, seq = 11, mine = true, content = "도착")))
+        runCurrent()
+
+        val state = success(viewModel)
+        assertTrue("저장된 메시지와 실패 말풍선이 함께 남았다", state.pending.isEmpty())
+        assertEquals(listOf("본문 100", "도착"), state.messages.map { it.content })
+        viewModel.stopPolling()
+    }
+
+    /** 빈 번호 조회가 실패하면 한 주기 쉰다 — 소켓 메시지마다 같은 조회를 쏘지 않는다 */
+    @Test
+    fun `빈 번호 채우기가 실패하면 메시지마다 다시 쏘지 않는다`() = runTest(main) {
+        val repository = FakeRoomRepository(initial = listOf(msg(100, seq = 10), msg(101, seq = 11)))
+        repository.afterHook = { throw ChatException(code = null, serverMessage = null, httpStatus = 500) }
+        val viewModel = openRoom(repository)
+        repository.events.emit(ChatRealtimeEvent.Connected)
+        runCurrent()
+        val before = repository.afterCursors.size
+
+        repository.events.emit(ChatRealtimeEvent.Message(msg(103, seq = 13)))
+        repository.events.emit(ChatRealtimeEvent.Message(msg(104, seq = 14)))
+        repository.events.emit(ChatRealtimeEvent.Message(msg(105, seq = 15)))
+        runCurrent()
+
+        assertEquals(listOf(101L), repository.afterCursors.drop(before))
+        viewModel.stopPolling()
+    }
+
     /** 구독이 거절되면(NOT_PARTICIPANT) REST 로 확인하고, 403 이면 폴링까지 멈춰 화면에 알린다 */
     @Test
     fun `구독 거절 뒤 403 이면 폴링을 멈추고 참여자 아님으로 올린다`() = runTest(main) {

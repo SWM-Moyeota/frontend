@@ -79,4 +79,16 @@ class PendingMessageTest {
 
         assertEquals(listOf(-1L), left.map { it.localId })
     }
+
+    /** 타임아웃처럼 응답을 못 받은 실패는 서버가 저장했을 수 있다 — 확인이 오면 「전송 실패」를 걷어낸다 */
+    @Test
+    fun `응답을 못 받은 실패는 같은 문장의 확인으로 걷힌다`() {
+        val waiting = listOf(
+            ChatRoomViewModel.PendingMessage(localId = -1, content = "네", sinceId = 5, failed = true, uncertain = true),
+        )
+
+        val left = reconcilePending(listOf(message(6, "네")), waiting)
+
+        assertEquals(emptyList<Long>(), left.map { it.localId })
+    }
 }

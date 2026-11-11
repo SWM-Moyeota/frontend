@@ -214,7 +214,7 @@ class ChatSocket(
      *
      * 서버 ERROR 코드별 동작([toAction]):
      * - `TOKEN_EXPIRED` — 재발급 후 **바로** 다시 붙는다. 재발급 직후 또 만료면(서버 시계 문제 등) 무한 반복을
-     *   막으려고 연속으로는 한 번만 바로 붙고, 그다음은 백오프를 탄다.
+     *   막으려고 연속으로는 한 번만 바로 붙고, 그다음은 백오프를 탄다. 재발급이 거절돼 세션이 비면 끝난다.
      * - `TOKEN_INVALID` — 재발급하지 않고 세션을 비운다([TokenHolder.onSessionExpired]) — 앱이 로그인 화면으로 간다.
      * - `NOT_PARTICIPANT`·`INVALID_DESTINATION` — [RoomSignal.Stopped] 를 내고 끝난다.
      * - `SERVER_UNAVAILABLE`·코드 없음 — 같은 토큰으로 백오프 뒤 다시 붙는다.
@@ -275,6 +275,14 @@ class ChatSocket(
                                 renewedJustNow = true
                                 emit(RoomSignal.Disconnected)
                                 continue
+                            }
+                            // 재발급을 서버가 거절해 세션이 비워졌다 — 재로그인 말고 길이 없으니 TOKEN_INVALID 처럼 끝낸다.
+                            // 계속 돌면 미로그인 분기로 30초마다 영원히 깨어난다.
+                            if (tokens.currentAccessToken() == null) {
+                                Log.w(TAG, "재발급 거절로 세션이 비었다 — 구독을 끝낸다")
+                                emit(RoomSignal.Disconnected)
+                                emit(RoomSignal.Stopped)
+                                return@flow
                             }
                             failures++
                             lastErrorType = "TOKEN_EXPIRED"

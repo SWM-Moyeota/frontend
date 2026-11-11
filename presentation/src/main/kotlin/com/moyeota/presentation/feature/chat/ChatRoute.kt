@@ -283,12 +283,16 @@ class ChatRoomViewModel(
      * @param localId 화면에서 구분하기 위한 임시 id(음수 — 서버 id 와 겹치지 않는다)
      * @param sinceId 보낼 때 이미 있던 가장 큰 메시지 id. 예전에 보낸 **같은 문장**을 소켓 확인으로 착각하지 않게 한다
      * @param failed 전송이 실패했다(타임아웃·네트워크·4xx·5xx). 자동으로 다시 보내지 않는다
+     * @param uncertain 실패했지만 **서버 응답을 못 받은** 실패(타임아웃·연결 끊김)다. 요청은 도착해 저장됐을 수
+     *   있어, 같은 내용의 내 메시지가 뒤이어 들어오면 그것을 이 말풍선의 확인으로 본다([reconcilePending]).
+     *   그러지 않으면 「전송 실패」와 실제 메시지가 함께 남고, 사용자가 다시 보내 중복이 된다.
      */
     data class PendingMessage(
         val localId: Long,
         val content: String,
         val sinceId: Long,
         val failed: Boolean = false,
+        val uncertain: Boolean = false,
     )
 
     /**
@@ -718,7 +722,8 @@ class ChatRoomViewModel(
                 throw e
             } catch (e: Exception) {
                 if (chatRoomId != roomId) return@launch
-                markPendingFailed(entry.localId)
+                // 응답 자체를 못 받았으면(타임아웃·끊김) 서버가 저장했을 수 있다 — 확인이 오면 걷어낸다
+                markPendingFailed(entry.localId, uncertain = (e as? ChatException)?.isNetwork == true)
                 _inputState.update { it.copy(errorMessage = e.toChatMessage("메시지를 보내지 못했어요")) }
             }
         }
@@ -737,11 +742,13 @@ class ChatRoomViewModel(
         socketJob = null
     }
 
-    private fun markPendingFailed(localId: Long) {
+    private fun markPendingFailed(localId: Long, uncertain: Boolean) {
         val current = _uiState.value as? UiState.Success ?: return
-        _uiState.value = current.copy(
-            pending = current.pending.map { if (it.localId == localId) it.copy(failed = true) else it },
-        )
+        val pending = current.pending.map {
+            if (it.localId == localId) it.copy(failed = true, uncertain = uncertain) else it
+        }
+        // 실패가 확정되는 사이 확인이 이미 와 있었을 수 있다(타임아웃 직전 저장 + 소켓 브로드캐스트) — 다시 짝짓는다
+        _uiState.value = current.copy(pending = reconcilePending(current.messages, pending))
     }
 
     /**
@@ -763,7 +770,14 @@ class ChatRoomViewModel(
         val cursor = seqGapCursor(messages, skip = triedGapCursors) ?: return
         gapFillJob = viewModelScope.launch {
             val ok = fetchAfter(roomId, cursor)
-            if (ok && chatRoomId == roomId) triedGapCursors += cursor
+            if (chatRoomId != roomId) return@launch
+            if (ok) {
+                triedGapCursors += cursor
+            } else {
+                // 실패면 한 주기 쉰다 — 이 job 이 살아 있는 동안은 재진입이 막혀, 서버가 5xx 인데 대화가 활발할 때
+                // 소켓 메시지마다 같은 조회를 쏘지 않는다. 그 뒤 메시지·폴링이 다시 시도한다.
+                delay(POLL_INTERVAL_MS)
+            }
         }
     }
 
@@ -1307,9 +1321,11 @@ internal fun reconcilePending(
     if (pending.isEmpty()) return pending
     val matched = mutableSetOf<Long>()
     return pending.filterNot { waiting ->
-        // 실패한 말풍선은 짝짓지 않는다 — 사용자가 같은 문장을 다시 보내면 그 메시지의 확인이 앞의 「전송 실패」를
-        // 지워 버려, 실패했다는 사실이 화면에서 사라진다. 실패는 사용자가 다시 보낼 때까지 남는다.
-        if (waiting.failed) return@filterNot false
+        // 서버가 거절한 실패(4xx·5xx)는 짝짓지 않는다 — 저장되지 않은 게 확실하다. 사용자가 같은 문장을 다시
+        // 보내면 그 확인이 앞의 「전송 실패」를 지워 버려, 실패했다는 사실이 화면에서 사라진다.
+        // 응답을 못 받은 실패(uncertain)는 짝짓는다 — 저장됐을 수 있고, 다시 보낸 경우라도 확인 하나가 말풍선
+        // 하나만 지우므로 화면에 남는 수가 실제 저장 수와 맞는다.
+        if (waiting.failed && !waiting.uncertain) return@filterNot false
         val echo = messages.firstOrNull { message ->
             message.isMine &&
                 message.id > waiting.sinceId &&

@@ -170,13 +170,12 @@ class RemoteChatRepository(
      * 전송 응답도 조회와 같은 shape 이라 발신자 publicId 가 들어 있다 — 방금 보낸 메시지가
      * 그 자리에서 바로 내 것으로 판정된다.
      */
-    override suspend fun sendMessage(chatRoomId: Long, content: String): ChatMessage =
-        sendLock(chatRoomId).withLock {
-            chatCall {
-                val sent = api.sendMessage(chatRoomId, SendMessageRequestDto(content))
-                sent.toChatMessage(resolveIdentity(chatRoomId, listOf(sent), priorRefresh = null))
-            }
-        }
+    override suspend fun sendMessage(chatRoomId: Long, content: String): ChatMessage = chatCall {
+        // 잠금은 **저장 요청 하나**에만 건다. 발신자 이름 풀기(참여자 재조회일 수 있다)는 순서와 무관해
+        // 잠금 밖에서 한다 — 안에 두면 다음 메시지가 그 조회까지 기다린다.
+        val sent = sendLock(chatRoomId).withLock { api.sendMessage(chatRoomId, SendMessageRequestDto(content)) }
+        sent.toChatMessage(resolveIdentity(chatRoomId, listOf(sent), priorRefresh = null))
+    }
 
     // 방 id → 전송 잠금. 방이 수십 개를 넘을 일이 없어 지우지 않는다(잠금 하나는 객체 하나다).
     private val sendLocks = ConcurrentHashMap<Long, Mutex>()
