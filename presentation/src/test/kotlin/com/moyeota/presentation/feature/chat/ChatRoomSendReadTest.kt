@@ -1,5 +1,6 @@
 package com.moyeota.presentation.feature.chat
 
+import com.moyeota.domain.model.ChatException
 import com.moyeota.domain.model.ChatMember
 import com.moyeota.domain.model.ChatMessage
 import com.moyeota.domain.model.ChatMessagePage
@@ -148,6 +149,41 @@ class ChatRoomSendReadTest {
         runCurrent()
 
         assertEquals(listOf(101L), repository.reads)
+    }
+
+    /** 구독이 거절되면(NOT_PARTICIPANT) REST 로 확인하고, 403 이면 폴링까지 멈춰 화면에 알린다 */
+    @Test
+    fun `구독 거절 뒤 403 이면 폴링을 멈추고 참여자 아님으로 올린다`() = runTest(main) {
+        val repository = FakeRoomRepository(initial = listOf(msg(100, seq = 10)))
+        repository.afterHook = { throw ChatException(code = "CHAT_NOT_PARTICIPANT", serverMessage = null, httpStatus = 403) }
+        val viewModel = openRoom(repository)
+
+        repository.events.emit(ChatRealtimeEvent.Stopped)
+        runCurrent()
+
+        val state = viewModel.uiState.value
+        assertTrue(state is ChatRoomViewModel.UiState.Error && state.notParticipant)
+        val calls = repository.afterCursors.size
+        advanceTimeBy(10_000)
+        runCurrent()
+        assertEquals("참여자가 아닌데 폴링을 계속했다", calls, repository.afterCursors.size)
+        assertEquals("참여자가 아닌데 읽음을 계속 보냈다", emptyList<Long>(), repository.reads)
+    }
+
+    /** 경로 버그 등으로 소켓만 거절되고 REST 는 멀쩡하면, 폴링이 대화를 이어 받는다 */
+    @Test
+    fun `구독 거절 뒤에도 REST 가 되면 폴링으로 계속 받는다`() = runTest(main) {
+        val repository = FakeRoomRepository(initial = listOf(msg(100, seq = 10)))
+        val viewModel = openRoom(repository)
+
+        repository.events.emit(ChatRealtimeEvent.Stopped)
+        runCurrent()
+        repository.afterHook = { listOf(msg(101, seq = 11)) }
+        advanceTimeBy(3_001)
+        runCurrent()
+
+        assertEquals(listOf(10L, 11L), success(viewModel).messages.map { it.seq })
+        viewModel.stopPolling()
     }
 
     private fun kotlinx.coroutines.test.TestScope.openRoom(repository: FakeRoomRepository): ChatRoomViewModel {

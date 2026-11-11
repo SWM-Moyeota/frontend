@@ -53,4 +53,10 @@ class ChatSocketErrorCodeTest {
     fun `코드가 없는 네트워크 실패는 null 이다`() {
         assertNull(java.io.IOException("socket closed").chatSocketErrorCode())
     }
+
+    /** 폴백은 메시지가 코드로 **끝날 때만** 맞춘다 — 설명 문구에 인용된 코드 이름에 속지 않는다 */
+    @Test
+    fun `메시지 중간에 인용된 코드 이름은 코드로 읽지 않는다`() {
+        assertNull(IllegalStateException("retry after TOKEN_EXPIRED handling failed").chatSocketErrorCode())
+    }
 }

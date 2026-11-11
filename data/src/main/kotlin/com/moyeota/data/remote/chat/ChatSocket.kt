@@ -134,9 +134,18 @@ internal fun ChatSocketErrorCode?.toAction(): ChatSocketErrorAction = when (this
 }
 
 /**
+ * 예외 메시지 폴백용 패턴 — **메시지 전체가 코드**이거나 **`…: 코드` 로 끝날 때만** 맞춘다
+ * (krossbow 의 `StompErrorFrameReceived` 메시지 모양이 `STOMP ERROR frame received: <message 헤더>` 다).
+ * 메시지 중간에 코드 이름이 인용된 다른 오류를 그 코드로 오인하지 않게 「어딘가에 들어 있으면」은 쓰지 않는다.
+ * 사슬을 돌 때마다 컴파일하지 않도록 한 번만 만든다.
+ */
+private val ERROR_CODE_PATTERNS: Map<ChatSocketErrorCode, Regex> =
+    ChatSocketErrorCode.entries.associateWith { Regex("""(^|:\s*)${it.name}\s*$""") }
+
+/**
  * 실패에서 서버 ERROR 코드를 꺼낸다. krossbow 는 ERROR 프레임을 [StompErrorFrameReceived] 로 올리지만
- * 연결 단계에서는 다른 예외로 감싸 올 수 있어 원인 사슬을 끝까지 본다. 프레임 객체가 없으면 예외 메시지에
- * 코드 이름이 그대로 들어 있는지 본다(krossbow 가 `message` 헤더를 예외 메시지에 싣는다).
+ * 연결 단계에서는 다른 예외로 감싸 올 수 있어 원인 사슬을 끝까지 본다. 프레임 객체가 없으면 예외 메시지가
+ * 코드로 끝나는지 본다([ERROR_CODE_PATTERNS]).
  */
 internal fun Throwable.chatSocketErrorCode(): ChatSocketErrorCode? {
     var current: Throwable? = this
@@ -147,8 +156,8 @@ internal fun Throwable.chatSocketErrorCode(): ChatSocketErrorCode? {
         }
         val text = current.message
         if (text != null) {
-            ChatSocketErrorCode.entries.firstOrNull { code -> Regex("\\b${code.name}\\b").containsMatchIn(text) }
-                ?.let { return it }
+            ERROR_CODE_PATTERNS.entries.firstOrNull { (_, pattern) -> pattern.containsMatchIn(text) }
+                ?.let { return it.key }
         }
         current = current.cause
     }

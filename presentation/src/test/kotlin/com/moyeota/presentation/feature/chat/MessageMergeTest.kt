@@ -115,4 +115,17 @@ class MessageMergeTest {
         assertEquals(null, seqGapCursor(listOf(message(1, "a"), message(5, "b"))))
         assertEquals(null, seqGapCursor(emptyList()))
     }
+
+    /** 영영 안 메워지는 빈틈이 앞에 남아도 뒤에 새로 생긴 빈틈은 찾아야 한다 */
+    @Test
+    fun `채워 본 빈틈은 건너뛰고 다음 빈틈을 찾는다`() {
+        val messages = listOf(
+            message(100, "a", seq = 10), message(101, "b", seq = 11), message(103, "c", seq = 13),
+            message(104, "d", seq = 14), message(106, "e", seq = 16),
+        )
+
+        assertEquals(101L, seqGapCursor(messages))
+        assertEquals(104L, seqGapCursor(messages, skip = setOf(101L)))
+        assertEquals(null, seqGapCursor(messages, skip = setOf(101L, 104L)))
+    }
 }

@@ -393,10 +393,13 @@ class ChatRoomViewModel(
     private var readSendingMessageId: Long? = null
 
     /**
-     * 빈 번호 채우기를 **이미 성공적으로 해 본** 커서. 서버가 채워 줄 게 없는데도 빈틈이 남는 경우
+     * 빈 번호 채우기를 **이미 성공적으로 해 본** 커서들. 서버가 채워 줄 게 없는데도 빈틈이 남는 경우
      * (서버 버그 등) 메시지가 올 때마다 같은 조회를 되풀이하지 않게 한다. 조회가 실패했으면 적지 않는다.
+     *
+     * 하나가 아니라 **집합**인 이유: 영영 안 메워지는 빈틈이 앞에 남아 있으면 「첫 빈틈」 커서가 늘 같아서,
+     * 하나만 기억하면 뒤에 새로 생긴 빈틈을 영영 채우지 못한다. 시도한 빈틈은 건너뛰고 다음 빈틈을 찾는다.
      */
-    private var gapCursorTried: Long? = null
+    private val triedGapCursors = mutableSetOf<Long>()
     private var gapFillJob: Job? = null
 
     private var nextLocalId = -1L
@@ -425,7 +428,7 @@ class ChatRoomViewModel(
             readSentMessageId = null
             readSendingMessageId = null
             gapFillJob?.cancel()
-            gapCursorTried = null
+            triedGapCursors.clear()
             _peerTitle.value = null
             // 제목과 **같은 자리에서** 비운다 — 사전은 「이 방의 참여자」가 근거다. 앞 방 것을 남겨 두면
             // 새 방의 참여자 조회가 실패해(= 근거가 없어) 회색 원이어야 할 자리에 앞 방에서 본 얼굴이
@@ -558,8 +561,13 @@ class ChatRoomViewModel(
                         fetchNew(roomId) // 구독이 걸린 뒤에 조회 — 겹치는 메시지는 id 로 합쳐진다
                     }
                     ChatRealtimeEvent.Disconnected -> realtimeAlive = false
-                    // 서버가 구독을 거절했다(참여자 아님 등) — 소켓은 다시 붙지 않고 폴링만 남는다
-                    ChatRealtimeEvent.Stopped -> realtimeAlive = false
+                    // 서버가 구독을 거절했다(참여자 아님·잘못된 경로). 소켓은 다시 붙지 않는다.
+                    // 바로 한 번 REST 로 물어 본다 — 참여자가 아니면 403 이 와서 [onNotParticipant] 가 폴링까지
+                    // 멈추고 화면에 알린다. REST 가 멀쩡하면(경로 버그) 폴링이 대화를 이어 받는다.
+                    ChatRealtimeEvent.Stopped -> {
+                        realtimeAlive = false
+                        fetchNew(roomId)
+                    }
                     is ChatRealtimeEvent.Message -> {
                         val current = _uiState.value as? UiState.Success ?: return@collect
                         // 같은 id 는 덮어쓰되 삭제 상태가 이긴다 — mergeMessagesById KDoc
@@ -643,7 +651,9 @@ class ChatRoomViewModel(
                 if (at == null) repository.getMessages(roomId) else repository.getMessagesAfter(roomId, at)
             } catch (e: CancellationException) {
                 throw e
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                // 참여자가 아니게 됐다(나감·강퇴) — 이후 요청은 전부 403 이라 되풀이하지 않는다
+                if ((e as? ChatException)?.isNotParticipant == true && chatRoomId == roomId) onNotParticipant(e)
                 return false
             }
             if (page.messages.isEmpty() || chatRoomId != roomId) return true
@@ -673,6 +683,7 @@ class ChatRoomViewModel(
      *   뒤에 다음이 나간다. 그래서 여기서는 연타를 막지 않는다.
      * - 실패(타임아웃·네트워크·4xx·5xx)하면 **다시 보내지 않고** 「전송 실패」로 남긴다. 줄은 다음 메시지로
      *   넘어간다. 사용자가 다시 보내면 새 메시지로 맨 뒤에 붙는다.
+     * - 화면을 벗어나도 취소되지 않는다(아래 [NonCancellable] 주석).
      */
     fun send() {
         val roomId = chatRoomId ?: return
@@ -691,7 +702,10 @@ class ChatRoomViewModel(
         )
         if (current != null) _uiState.value = current.copy(pending = current.pending + entry)
         _inputState.value = InputState()
-        viewModelScope.launch {
+        // 화면을 벗어나도 끝까지 보낸다(읽음의 flushRead 와 같은 이유) — 입력창은 이미 비워져 사용자는 보낸 줄
+        // 안다. viewModelScope 그대로면 앞 응답을 기다리며 저장소 줄에 서 있던 메시지가 화면 정리와 함께 조용히
+        // 취소돼 실패 표시도 없이 사라진다. 화면이 바뀐 뒤의 갱신은 아래 roomId 가드가 막는다.
+        viewModelScope.launch(NonCancellable) {
             try {
                 val sent = repository.sendMessage(roomId, content)
                 if (chatRoomId != roomId) return@launch
@@ -708,6 +722,19 @@ class ChatRoomViewModel(
                 _inputState.update { it.copy(errorMessage = e.toChatMessage("메시지를 보내지 못했어요")) }
             }
         }
+    }
+
+    /**
+     * 이 방의 참여자가 아니다(403 `CHAT_NOT_PARTICIPANT`). 폴링·소켓을 멈추고 에러 상태로 올린다 — 그대로 두면
+     * 화면이 보이는 내내 3초마다 403 이 되풀이된다. 화면은 이 상태를 보고 방 id 캐시를 버린다(진입 시 403 과 같은 길).
+     */
+    private fun onNotParticipant(e: Exception) {
+        pollingJob?.cancel()
+        pollingJob = null
+        realtimeAlive = false
+        _uiState.value = UiState.Error(message = e.toChatMessage("대화를 불러오지 못했어요"), notParticipant = true)
+        socketJob?.cancel()
+        socketJob = null
     }
 
     private fun markPendingFailed(localId: Long) {
@@ -732,14 +759,11 @@ class ChatRoomViewModel(
      * 열 때까지 빠진다. 동시에 하나만 돌고, 같은 커서로 이미 성공한 적이 있으면 다시 하지 않는다.
      */
     private fun fillSeqGap(roomId: Long, messages: List<DomainChatMessage>) {
-        val cursor = seqGapCursor(messages) ?: run {
-            gapCursorTried = null
-            return
-        }
-        if (cursor == gapCursorTried || gapFillJob?.isActive == true) return
+        if (gapFillJob?.isActive == true) return
+        val cursor = seqGapCursor(messages, skip = triedGapCursors) ?: return
         gapFillJob = viewModelScope.launch {
             val ok = fetchAfter(roomId, cursor)
-            if (ok && chatRoomId == roomId) gapCursorTried = cursor
+            if (ok && chatRoomId == roomId) triedGapCursors += cursor
         }
     }
 
@@ -1223,14 +1247,16 @@ internal fun mergeMessagesById(
  *
  * 감지는 seq 로, 커서는 id 로 한다(서버 `after` 가 id 커서다). 예: seq 10·11·13 이면 11번 메시지의 id.
  * [messages] 는 [mergeMessagesById] 가 정렬한 목록이어야 한다. seq 가 없는 메시지는 건너뛴다(구버전 서버).
+ *
+ * @param skip 이미 채워 봤지만 메워지지 않은 빈틈의 커서. 그 빈틈은 건너뛰고 **다음** 빈틈을 찾는다.
  */
-internal fun seqGapCursor(messages: List<DomainChatMessage>): Long? {
+internal fun seqGapCursor(messages: List<DomainChatMessage>, skip: Set<Long> = emptySet()): Long? {
     var previousSeq: Long? = null
     var previousId = 0L
     for (message in messages) {
         val seq = message.seq ?: continue
         val before = previousSeq
-        if (before != null && seq > before + 1) return previousId
+        if (before != null && seq > before + 1 && previousId !in skip) return previousId
         previousSeq = seq
         previousId = message.id
     }
