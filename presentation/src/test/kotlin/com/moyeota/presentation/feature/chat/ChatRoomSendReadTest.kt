@@ -195,6 +195,43 @@ class ChatRoomSendReadTest {
         viewModel.stopPolling()
     }
 
+    /** 주기 읽음이 보내는 중일 때 화면을 나가도, 나갈 때 한 번 더 보낸다(주기 전송은 화면과 함께 취소될 수 있다) */
+    @Test
+    fun `주기 읽음이 진행 중이어도 화면을 나가면 다시 보낸다`() = runTest(main) {
+        val repository = FakeRoomRepository(initial = listOf(msg(100, seq = 10)))
+        repository.readDelayMs = 5_000
+        val viewModel = openRoom(repository)
+
+        advanceTimeBy(3_001)
+        runCurrent()
+        assertEquals(listOf(100L), repository.reads)
+
+        viewModel.stopPolling()
+        runCurrent()
+        assertEquals(listOf(100L, 100L), repository.reads)
+    }
+
+    /** 빈 번호가 두 곳이면 첫째를 채운 뒤 새 메시지를 기다리지 않고 둘째도 채운다 */
+    @Test
+    fun `빈 번호가 둘이면 이어서 둘 다 채운다`() = runTest(main) {
+        val repository = FakeRoomRepository(initial = listOf(msg(100, seq = 10), msg(101, seq = 11)))
+        repository.afterHook = { cursor ->
+            when (cursor) {
+                101L -> listOf(msg(102, seq = 12), msg(103, seq = 13))
+                103L -> listOf(msg(104, seq = 14), msg(105, seq = 15))
+                else -> emptyList()
+            }
+        }
+        val viewModel = openRoom(repository)
+
+        repository.events.emit(ChatRealtimeEvent.Message(msg(106, seq = 16)))
+        runCurrent()
+
+        assertEquals(listOf(101L, 103L), repository.afterCursors)
+        assertEquals((10L..16L).toList(), success(viewModel).messages.map { it.seq })
+        viewModel.stopPolling()
+    }
+
     /** 구독이 거절되면(NOT_PARTICIPANT) REST 로 확인하고, 403 이면 폴링까지 멈춰 화면에 알린다 */
     @Test
     fun `구독 거절 뒤 403 이면 폴링을 멈추고 참여자 아님으로 올린다`() = runTest(main) {
@@ -271,8 +308,11 @@ private class FakeRoomRepository(private val initial: List<ChatMessage>) : ChatR
     override suspend fun getChatRoomMembers(chatRoomId: Long): List<ChatMember> = emptyList()
     override suspend fun setNotificationMuted(chatRoomId: Long, muted: Boolean) = Unit
 
+    var readDelayMs = 0L
+
     override suspend fun markAsRead(chatRoomId: Long, readMessageId: Long) {
         reads += readMessageId
+        if (readDelayMs > 0) delay(readDelayMs)
     }
 
     override suspend fun getMessages(chatRoomId: Long, cursor: Long?, size: Int) =

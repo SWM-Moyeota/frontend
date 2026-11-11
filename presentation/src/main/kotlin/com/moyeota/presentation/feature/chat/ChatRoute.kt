@@ -769,14 +769,22 @@ class ChatRoomViewModel(
         if (gapFillJob?.isActive == true) return
         val cursor = seqGapCursor(messages, skip = triedGapCursors) ?: return
         gapFillJob = viewModelScope.launch {
-            val ok = fetchAfter(roomId, cursor)
-            if (chatRoomId != roomId) return@launch
-            if (ok) {
-                triedGapCursors += cursor
-            } else {
-                // 실패면 한 주기 쉰다 — 이 job 이 살아 있는 동안은 재진입이 막혀, 서버가 5xx 인데 대화가 활발할 때
-                // 소켓 메시지마다 같은 조회를 쏘지 않는다. 그 뒤 메시지·폴링이 다시 시도한다.
-                delay(POLL_INTERVAL_MS)
+            // 채우는 동안 합치기가 이 함수를 다시 불러도 job 이 살아 있어 되돌아간다. 그래서 빈틈이 둘 이상이면
+            // 여기서 **남은 빈틈을 이어서** 찾는다 — 안 그러면 두 번째는 다음 메시지가 올 때까지 빠진 채로 남는다.
+            // 한 바퀴마다 시도한 커서가 늘어나므로(유한) 끝난다.
+            var next: Long? = cursor
+            while (next != null) {
+                val ok = fetchAfter(roomId, next)
+                if (chatRoomId != roomId) return@launch
+                if (!ok) {
+                    // 실패면 한 주기 쉰다 — 이 job 이 살아 있는 동안은 재진입이 막혀, 서버가 5xx 인데 대화가 활발할 때
+                    // 소켓 메시지마다 같은 조회를 쏘지 않는다. 그 뒤 메시지·폴링이 다시 시도한다.
+                    delay(POLL_INTERVAL_MS)
+                    return@launch
+                }
+                triedGapCursors += next
+                val messages = (_uiState.value as? UiState.Success)?.messages ?: return@launch
+                next = seqGapCursor(messages, skip = triedGapCursors)
             }
         }
     }
@@ -917,8 +925,12 @@ class ChatRoomViewModel(
     private fun flushRead(outliveScreen: Boolean = false) {
         val roomId = chatRoomId ?: return
         val id = lastMessageId ?: return
-        // 이미 반영됐거나 지금 보내는 중인 지점이면 보낼 것이 없다(평상시 이 길로 되돌아간다)
-        if (id == readSentMessageId || id == readSendingMessageId) return
+        // 이미 반영된 지점이면 보낼 것이 없다(평상시 이 길로 되돌아간다)
+        if (id == readSentMessageId) return
+        // 지금 보내는 중인 지점이면 보통은 건너뛴다. 단 화면을 벗어날 때는 **다시 보낸다** — 진행 중인 것은 주기
+        // 전송(취소 가능)일 수 있어 화면 정리와 함께 취소되면 마지막 읽음이 서버에 안 간다. 서버는 가장 큰 값만
+        // 기억하므로 두 번 가도 무해하다.
+        if (!outliveScreen && id == readSendingMessageId) return
         readSendingMessageId = id
         viewModelScope.launch(if (outliveScreen) NonCancellable else EmptyCoroutineContext) {
             val sent = try {
@@ -1232,8 +1244,8 @@ private const val UNKNOWN_PARTY_ID = 0L
  * 있다. 그때 뒤늦게 온 원본이 이기면 지운 말이 되살아난다 — 그래서 한 번 `deleted = true` 를 본 id 는
  * 삭제 사본을 지킨다(순번이 비어 있었으면 원본의 seq 만 빌려 온다).
  *
- * 정렬: 모든 메시지에 [DomainChatMessage.seq] 가 있으면 **seq 오름차순**(서버가 방 안에서 빈틈없이 매긴 순번이
- * 화면 순서의 근거다). 하나라도 없으면(seq 를 주지 않는 구버전 서버) 예전처럼 id 오름차순이다.
+ * 정렬: [DomainChatMessage.seq] **오름차순**(서버가 방 안에서 빈틈없이 매긴 순번이 화면 순서의 근거다).
+ * seq 가 없는 메시지는 id 로 그 사이에 끼운다([orderBySeq]).
  */
 internal fun mergeMessagesById(
     held: List<DomainChatMessage>,
@@ -1242,18 +1254,30 @@ internal fun mergeMessagesById(
     val byId = LinkedHashMap<Long, DomainChatMessage>()
     for (message in held + incoming) {
         val previous = byId[message.id]
-        byId[message.id] = if (previous != null && previous.deleted && !message.deleted) {
-            previous.copy(seq = previous.seq ?: message.seq)
-        } else {
-            message
+        byId[message.id] = when {
+            previous == null -> message
+            previous.deleted && !message.deleted -> previous.copy(seq = previous.seq ?: message.seq)
+            // 새 사본에 순번이 빠져 있으면(삭제 이벤트 등) 앞 사본의 순번을 물려받는다 — 정렬이 흔들리지 않게
+            else -> if (message.seq == null) message.copy(seq = previous.seq) else message
         }
     }
-    val merged = byId.values
-    return if (merged.all { it.seq != null }) {
-        merged.sortedWith(compareBy<DomainChatMessage>({ it.seq }, { it.id }))
-    } else {
-        merged.sortedBy { it.id }
+    return orderBySeq(byId.values)
+}
+
+/**
+ * 화면 순서. seq 가 있는 메시지는 **seq 순**, 없는 메시지(구버전 서버·순번이 빠진 응답)는 id 로 **사이에 끼운다** —
+ * 「id 가 자기보다 작은 마지막 메시지」 바로 뒤. 예전처럼 하나라도 seq 가 없으면 전체를 id 순으로 바꾸면,
+ * id 와 seq 가 뒤집힌 구간(다른 서버·스레드 저장)에서 말풍선 순서가 갑자기 바뀐다.
+ * 전부 seq 가 없으면 결과는 id 순과 같다.
+ */
+private fun orderBySeq(messages: Collection<DomainChatMessage>): List<DomainChatMessage> {
+    val (sequenced, unsequenced) = messages.partition { it.seq != null }
+    val ordered = sequenced.sortedWith(compareBy<DomainChatMessage>({ it.seq }, { it.id })).toMutableList()
+    for (message in unsequenced.sortedBy { it.id }) {
+        val after = ordered.indexOfLast { it.id < message.id }
+        ordered.add(after + 1, message)
     }
+    return ordered
 }
 
 /**

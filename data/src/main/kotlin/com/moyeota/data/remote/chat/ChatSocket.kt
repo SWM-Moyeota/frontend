@@ -288,6 +288,9 @@ class ChatSocket(
                             lastErrorType = "TOKEN_EXPIRED"
                         }
                         ChatSocketErrorAction.RETRY -> {
+                            // 「연속 두 번 바로 재발급하지 않는다」의 연속은 TOKEN_EXPIRED 끼리다. 다른 실패가 끼면 끊는다 —
+                            // 안 그러면 네트워크 오류로 백오프하는 사이 토큰이 또 만료됐을 때 재발급 없이 만료 토큰으로만 돈다.
+                            renewedJustNow = false
                             if (code == ChatSocketErrorCode.SEND_NOT_SUPPORTED) {
                                 Log.w(TAG, "SEND_NOT_SUPPORTED — 보내기는 REST 여야 한다(버그)")
                             }

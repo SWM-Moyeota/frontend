@@ -128,4 +128,25 @@ class MessageMergeTest {
         assertEquals(104L, seqGapCursor(messages, skip = setOf(101L)))
         assertEquals(null, seqGapCursor(messages, skip = setOf(101L, 104L)))
     }
+
+    /** seq 가 빠진 메시지 하나 때문에 전체가 id 순으로 바뀌면 안 된다 — 빠진 것만 id 로 사이에 끼운다 */
+    @Test
+    fun `seq 없는 메시지가 섞여도 나머지는 seq 순을 지킨다`() {
+        val merged = mergeMessagesById(
+            listOf(message(5, "둘째", seq = 2), message(4, "셋째", seq = 3), message(1, "첫째", seq = 1)),
+            listOf(message(9, "넷째")),
+        )
+
+        assertEquals(listOf("첫째", "둘째", "셋째", "넷째"), merged.map { it.content })
+    }
+
+    @Test
+    fun `순번 없는 새 사본은 앞 사본의 seq 를 물려받는다`() {
+        val merged = mergeMessagesById(
+            listOf(message(5, "원문", seq = 7)),
+            listOf(message(5, "고친 사본")),
+        )
+
+        assertEquals(7L, merged.single().seq)
+    }
 }
