@@ -37,51 +37,60 @@ class TokenAuthenticator(
 
         if (retryCount(response) >= MAX_RETRY) return null
 
-        val newAccessToken = synchronized(this) {
-            val current = tokens.currentAccessToken()
-            when {
-                // 다른 스레드가 이미 갱신을 끝냈다 — 재발급 없이 새 토큰으로 재시도한다.
-                current != null && current != failedAccessToken -> current
-
-                else -> {
-                    val refreshToken = tokens.currentRefreshToken()
-                    if (refreshToken == null) {
-                        tokens.onSessionExpired()
-                        null
-                    } else {
-                        when (val refreshed = refresher.refresh(refreshToken)) {
-                            is RefreshResult.Rotated -> {
-                                val (accessToken, newRefreshToken) = refreshed.tokens
-                                tokens.onTokensRefreshed(accessToken, newRefreshToken)
-                                accessToken
-                            }
-
-                            // 서버가 "이 리프레시는 못 쓴다"고 답했다 — 재로그인 외에 길이 없다.
-                            RefreshResult.Rejected -> {
-                                // 사용자를 로그인 화면으로 쫓아내는 **유일한** 경로다. 정상 만료(14일)로도
-                                // 오지만, 회전 버그나 서버 계약 변경으로 터질 때도 여기로 온다 — 둘을 앱에서
-                                // 가를 수 없으므로 건수 추이로 본다. 평소보다 치솟으면 그게 신호다.
-                                // 토큰 값은 넘기지 않는다(예외를 새로 만들어 종류만 남긴다).
-                                Diagnostics.report(
-                                    site = FailureSite.TOKEN_REFRESH_REJECTED,
-                                    throwable = IllegalStateException("refresh rejected by server"),
-                                )
-                                tokens.onSessionExpired()
-                                null
-                            }
-
-                            // 답을 못 받았을 뿐이다. 세션을 **비우지 않고** 401 을 호출부로 올려보낸다 —
-                            // 리프레시는 14일 수명 그대로 유효하므로 다음 요청이 재발급을 다시 시도한다.
-                            RefreshResult.Unavailable -> null
-                        }
-                    }
-                }
-            }
-        } ?: return null
+        val newAccessToken = renew(failedAccessToken) ?: return null
 
         return response.request.newBuilder()
             .header(HEADER_AUTHORIZATION, BEARER_PREFIX + newAccessToken)
             .build()
+    }
+
+    /**
+     * [failedAccessToken] 이 거절당했으니 새 액세스 토큰을 받아 온다 — 401 재시도와 **채팅 소켓의
+     * `TOKEN_EXPIRED`** 가 같이 쓴다. 같은 잠금을 써야 회전 경합(위 1번)이 두 경로 사이에서도 막힌다.
+     *
+     * 새 토큰을 못 받으면 null — 서버가 리프레시를 거절했으면 세션이 이미 비워졌고, 답을 못 받았으면
+     * 세션은 그대로다. **블로킹 호출이다**(재발급 왕복) — I/O 스레드에서만 부른다.
+     */
+    fun renew(failedAccessToken: String): String? = synchronized(this) {
+        val current = tokens.currentAccessToken()
+        when {
+            // 다른 스레드가 이미 갱신을 끝냈다 — 재발급 없이 새 토큰으로 재시도한다.
+            current != null && current != failedAccessToken -> current
+
+            else -> {
+                val refreshToken = tokens.currentRefreshToken()
+                if (refreshToken == null) {
+                    tokens.onSessionExpired()
+                    null
+                } else {
+                    when (val refreshed = refresher.refresh(refreshToken)) {
+                        is RefreshResult.Rotated -> {
+                            val (accessToken, newRefreshToken) = refreshed.tokens
+                            tokens.onTokensRefreshed(accessToken, newRefreshToken)
+                            accessToken
+                        }
+
+                        // 서버가 "이 리프레시는 못 쓴다"고 답했다 — 재로그인 외에 길이 없다.
+                        RefreshResult.Rejected -> {
+                            // 사용자를 로그인 화면으로 쫓아내는 **유일한** 경로다. 정상 만료(14일)로도
+                            // 오지만, 회전 버그나 서버 계약 변경으로 터질 때도 여기로 온다 — 둘을 앱에서
+                            // 가를 수 없으므로 건수 추이로 본다. 평소보다 치솟으면 그게 신호다.
+                            // 토큰 값은 넘기지 않는다(예외를 새로 만들어 종류만 남긴다).
+                            Diagnostics.report(
+                                site = FailureSite.TOKEN_REFRESH_REJECTED,
+                                throwable = IllegalStateException("refresh rejected by server"),
+                            )
+                            tokens.onSessionExpired()
+                            null
+                        }
+
+                        // 답을 못 받았을 뿐이다. 세션을 **비우지 않고** 401 을 호출부로 올려보낸다 —
+                        // 리프레시는 14일 수명 그대로 유효하므로 다음 요청이 재발급을 다시 시도한다.
+                        RefreshResult.Unavailable -> null
+                    }
+                }
+            }
+        }
     }
 
     private fun Request.bearerToken(): String? =

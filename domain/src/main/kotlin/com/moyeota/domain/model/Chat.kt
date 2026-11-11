@@ -112,6 +112,12 @@ data class ChatMessage(
      * 서버가 `senderNickname` 을 실어 주면 그걸 폴백으로 쓴다. 둘 다 없으면 null.
      */
     val senderName: String?,
+    /**
+     * 방 안 **순번**(서버 `seq`). 서버가 방마다 1부터 빈틈없이 1씩 매긴다 — 화면 순서의 근거이고,
+     * 받은 값이 건너뛰면(11 다음 13) 그 사이가 빠졌다는 신호다(소켓 서버는 늦게 온 번호를 버린다).
+     * 필드를 주지 않는 구버전 서버면 null 이고, 그때 순서는 [id] 로 떨어진다.
+     */
+    val seq: Long? = null,
 )
 
 // 커서 페이징 결과. nextCursor 가 null 이거나 hasNext=false 면 더 불러올 것이 없다.
@@ -122,10 +128,11 @@ data class ChatMessagePage(
 )
 
 /**
- * 채팅방 실시간 연결(STOMP `/sub/chat-rooms/{id}`)에서 오는 신호.
+ * 채팅방 실시간 연결(STOMP `/sub/chat-rooms/{id}`)에서 오는 신호. **받기 전용**이다 — 보내기·읽음은 REST 다.
  *
  * 서버 브로커는 **지금 구독 중인 사람에게만** 밀고 지난 메시지를 다시 주지 않는다. 그래서 끊겼다 다시 붙으면
- * 그 사이 메시지가 빠진다 — [Connected] 를 받을 때마다 마지막 id 이후를 한 번 조회해 메워야 한다.
+ * 그 사이 메시지가 빠진다 — [Connected] 를 받을 때마다 마지막 메시지 이후를 한 번 조회해 메워야 한다.
+ * 연결 중에도 순서를 지키려고 늦게 도착한 번호를 버리므로, [ChatMessage.seq] 가 건너뛰면 그 자리를 조회로 메운다.
  */
 sealed interface ChatRealtimeEvent {
     /** 구독이 (다시) 걸렸다. 이 시점 이후 메시지는 [Message] 로 오고, 그 전의 공백은 조회로 메운다 */
@@ -136,4 +143,10 @@ sealed interface ChatRealtimeEvent {
 
     /** 연결이 끊겼다. 곧 다시 붙는다 — 그동안은 폴링이 메운다 */
     data object Disconnected : ChatRealtimeEvent
+
+    /**
+     * 서버가 이 방 구독을 **거절했다**(`NOT_PARTICIPANT`·`INVALID_DESTINATION`) — 다시 붙지 않는다.
+     * 흐름은 이 신호 뒤에 끝난다. 화면은 폴링으로만 남는다(참여자가 아니면 REST 도 403 으로 답한다).
+     */
+    data object Stopped : ChatRealtimeEvent
 }

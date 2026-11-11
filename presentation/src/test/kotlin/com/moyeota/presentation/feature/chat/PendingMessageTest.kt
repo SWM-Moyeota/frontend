@@ -6,8 +6,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 /**
- * 소켓 전송은 응답이 없다 — 보낸 메시지는 구독으로 **되돌아와야** 확인된다.
- * 그 확인이 어떤 메시지와 짝지어지는지가 「보내는 중」 말풍선이 사라지는 규칙이다.
+ * 보낸 메시지는 저장 응답(201)보다 소켓 브로드캐스트로 **먼저 되돌아올** 수 있다.
+ * 그 확인이 어떤 메시지와 짝지어지는지가 대기 말풍선이 실제 메시지로 넘어가는 규칙이다.
  */
 class PendingMessageTest {
 
@@ -65,5 +65,18 @@ class PendingMessageTest {
         )
 
         assertEquals(1, left.size)
+    }
+
+    /** 실패는 사용자가 다시 보낼 때까지 남는다 — 다시 보낸 같은 문장의 확인이 「전송 실패」를 지우면 안 된다 */
+    @Test
+    fun `실패한 말풍선은 같은 문장의 확인으로 지워지지 않는다`() {
+        val waiting = listOf(
+            ChatRoomViewModel.PendingMessage(localId = -1, content = "네", sinceId = 5, failed = true),
+            pending(-2, "네", sinceId = 5),
+        )
+
+        val left = reconcilePending(listOf(message(6, "네")), waiting)
+
+        assertEquals(listOf(-1L), left.map { it.localId })
     }
 }

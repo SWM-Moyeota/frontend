@@ -15,7 +15,14 @@ import com.moyeota.domain.session.UserSession
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
@@ -32,6 +39,7 @@ import retrofit2.Response
  * 그래서 여기서 지키는 건 두 가지다: 참여자 사전이 없거나 실패해도 **isMine 이 흔들리지 않을 것**,
  * 그리고 사전 조회가 필요 이상으로 반복되지 않을 것.
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 class RemoteChatRepositoryTest {
 
     /**
@@ -386,6 +394,88 @@ class RemoteChatRepositoryTest {
         assertFalse(chat.isRoomClosed)
     }
 
+
+    // --- 보내기는 방마다 하나씩 차례로 (채팅 소켓 서버 분리) ---
+
+    /**
+     * REST 요청은 서로 독립이라 응답을 기다리지 않고 연달아 쏘면 저장 순서가 뒤집힐 수 있다.
+     * 응답을 일부러 5초 늦게 주는 가짜 API 로, 두 번째가 **첫 응답(201) 전에 나가지 않는지** 본다.
+     */
+    @Test
+    fun `같은 방의 두 번째 전송은 첫 응답 전에 나가지 않는다`() = runTest {
+        val api = FakeChatApi()
+        val log = mutableListOf<String>()
+        api.sendHook = { _, content ->
+            log += "start:$content"
+            delay(if (content == "첫째") 5_000 else 10)
+            log += "end:$content"
+            message(id = if (content == "첫째") 1 else 2, publicId = UUID_ME).copy(content = content)
+        }
+        val repository = RemoteChatRepository(api, FakeChatSession())
+
+        val first = async { repository.sendMessage(chatRoomId = 5, content = "첫째") }
+        val second = async { repository.sendMessage(chatRoomId = 5, content = "둘째") }
+        runCurrent()
+        advanceTimeBy(4_999)
+        runCurrent()
+        assertEquals("첫 응답 전에 두 번째가 나갔다", listOf("start:첫째"), log)
+
+        advanceUntilIdle()
+        assertEquals(listOf("start:첫째", "end:첫째", "start:둘째", "end:둘째"), log)
+        assertEquals(listOf("첫째", "둘째"), listOf(first.await().content, second.await().content))
+    }
+
+    /** 실패해도 자동으로 다시 보내지 않고, 줄은 다음 메시지로 넘어간다 */
+    @Test
+    fun `앞 전송이 실패하면 재전송 없이 다음 메시지가 나간다`() = runTest {
+        val api = FakeChatApi()
+        val calls = mutableListOf<String>()
+        api.sendHook = { _, content ->
+            calls += content
+            delay(1_000)
+            if (content == "첫째") throw httpException(500, """{"code":"INTERNAL","message":"x"}""")
+            message(id = 2, publicId = UUID_ME).copy(content = content)
+        }
+        val repository = RemoteChatRepository(api, FakeChatSession())
+
+        val first = async { runCatching { repository.sendMessage(chatRoomId = 5, content = "첫째") } }
+        val second = async { repository.sendMessage(chatRoomId = 5, content = "둘째") }
+        advanceUntilIdle()
+
+        assertTrue(first.await().exceptionOrNull() is ChatException)
+        assertEquals("둘째", second.await().content)
+        assertEquals("실패한 메시지를 다시 보냈다", listOf("첫째", "둘째"), calls)
+    }
+
+    /** 줄은 **방마다**다 — 다른 방의 느린 응답이 이 방 전송을 붙잡지 않는다 */
+    @Test
+    fun `다른 방 전송은 서로 기다리지 않는다`() = runTest {
+        val api = FakeChatApi()
+        val started = mutableListOf<Long>()
+        api.sendHook = { roomId, content ->
+            started += roomId
+            delay(5_000)
+            message(id = roomId, publicId = UUID_ME).copy(content = content)
+        }
+        val repository = RemoteChatRepository(api, FakeChatSession())
+
+        async { repository.sendMessage(chatRoomId = 5, content = "가") }
+        async { repository.sendMessage(chatRoomId = 6, content = "나") }
+        runCurrent()
+
+        assertEquals(listOf(5L, 6L), started)
+        advanceUntilIdle()
+    }
+
+    @Test
+    fun `메시지 응답의 seq 를 그대로 싣는다`() = runBlocking {
+        val api = FakeChatApi(history = listOf(message(id = 1, publicId = UUID_ME).copy(seq = 10)))
+
+        val page = RemoteChatRepository(api, FakeChatSession()).getMessages(chatRoomId = 5)
+
+        assertEquals(10L, page.messages.single().seq)
+    }
+
     private fun httpException(code: Int, body: String) = HttpException(
         Response.error<Any>(code, body.toResponseBody("application/json".toMediaType())),
     )
@@ -505,8 +595,12 @@ private class FakeChatApi(
         return ChatMessageSliceResponse(messages = afterMessages ?: history, nextCursor = null, hasNext = false)
     }
 
+    /** 전송을 가로채는 훅 — 응답을 일부러 늦추거나 실패시키는 「느린 가짜 API」를 만든다 */
+    var sendHook: (suspend (chatRoomId: Long, content: String) -> ChatMessageResponse)? = null
+
     // 서버는 전송 응답에도 발신자 publicId 를 담아 준다 — 조회와 같은 shape 이다.
     override suspend fun sendMessage(chatRoomId: Long, request: SendMessageRequestDto): ChatMessageResponse {
+        sendHook?.let { return it(chatRoomId, request.content) }
         failIfNeeded()
         sentRoomId = chatRoomId
         sentBody = request

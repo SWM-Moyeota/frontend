@@ -58,9 +58,11 @@ object NetworkModule {
         // 앱 설정은 permitAll — 토큰을 붙이지 않는다. 만료 토큰이 붙으면 401 재발급이 끼어들어 앱 시작이 늦어진다.
         val configApi = publicRetrofit.create(ConfigApi::class.java)
 
+        // 채팅 소켓의 TOKEN_EXPIRED 도 **같은 인스턴스**로 재발급한다 — 잠금이 하나여야 회전 경합이 막힌다
+        val authenticator = TokenAuthenticator(tokenHolder, RetrofitTokenRefresher(authApi))
         val apiClient = baseClient.newBuilder()
             .addInterceptor(AuthHeaderInterceptor(tokenHolder))
-            .authenticator(TokenAuthenticator(tokenHolder, RetrofitTokenRefresher(authApi)))
+            .authenticator(authenticator)
             .build()
         val retrofit = retrofit(baseUrl, apiClient)
 
@@ -101,6 +103,7 @@ object NetworkModule {
 
         return Apis(
             socketClient = socketClient,
+            renewAccessToken = authenticator::renew,
             streamClient = streamClient,
             imageClient = imageClient,
             auth = authApi,
@@ -122,6 +125,11 @@ object NetworkModule {
     data class Apis(
         /** 채팅 실시간 수신(STOMP)이 쓰는 OkHttp. 인증 인터셉터가 붙지 않은 순정 클라이언트다 */
         val socketClient: OkHttpClient,
+        /**
+         * 거절당한 액세스 토큰을 넘기면 새 토큰을 돌려준다(못 받으면 null). 채팅 소켓이 `TOKEN_EXPIRED` 를
+         * 받았을 때 쓴다 — HTTP 401 재발급과 같은 [TokenAuthenticator] 인스턴스다. 블로킹이라 I/O 스레드에서만.
+         */
+        val renewAccessToken: (String) -> String?,
         /** SSE 수신이 쓰는 OkHttp. 인증은 붙어 있고 readTimeout 만 [SSE_READ_TIMEOUT_SECONDS] 로 늘렸다 */
         val streamClient: OkHttpClient,
         /**

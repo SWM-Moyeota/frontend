@@ -8,19 +8,14 @@ import com.moyeota.domain.diagnostics.FailureSite
 import kotlin.random.Random
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
-import kotlinx.coroutines.launch
-import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import org.hildan.krossbow.stomp.StompClient
-import org.hildan.krossbow.stomp.StompSession
-import org.hildan.krossbow.stomp.sendText
+import org.hildan.krossbow.stomp.StompErrorFrameReceived
 import org.hildan.krossbow.stomp.subscribeText
 import org.hildan.krossbow.websocket.okhttp.OkHttpWebSocketClient
 
@@ -90,29 +85,102 @@ internal fun reconnectDelayMs(failures: Int, jitter: Double = Random.nextDouble(
     return base + (base * RECONNECT_JITTER_RATIO * jitter.coerceIn(0.0, 1.0)).toLong()
 }
 
-/** 서버가 이 세션의 요청을 거절할 때 쓰는 통로(`StompExceptionHandler`). 구독은 인증만 되면 허용된다 */
-private const val ERROR_DESTINATION = "/user/queue/errors"
+/**
+ * 소켓 서버가 STOMP **ERROR 프레임의 `message` 헤더**에 싣는 고정 코드(채팅 소켓 서버 분리, 2026-11).
+ * 이름이 서버 값과 1:1 이다 — 바꾸면 [of] 가 못 읽는다.
+ */
+internal enum class ChatSocketErrorCode {
+    /** 토큰 만료 — 재발급 후 다시 붙는다 */
+    TOKEN_EXPIRED,
+
+    /** 잘못된 토큰 — **재발급하지 않는다**(해도 또 거절이라 무한 반복). 다시 로그인한다 */
+    TOKEN_INVALID,
+
+    /** API 가 잠시 답을 못 한다(배포 중 등) — 같은 토큰으로 잠시 뒤 다시 붙는다 */
+    SERVER_UNAVAILABLE,
+
+    /** 참여하지 않은 방 — 구독을 멈춘다 */
+    NOT_PARTICIPANT,
+
+    /** 잘못된 구독 경로 — 앱 버그다. 다시 붙어도 같은 답이라 멈춘다 */
+    INVALID_DESTINATION,
+
+    /** SEND 를 보냈다 — 이 앱은 더 이상 보내지 않는다(보내기·읽음은 REST). 오면 버그라 로그만 남긴다 */
+    SEND_NOT_SUPPORTED,
+    ;
+
+    companion object {
+        fun of(message: String?): ChatSocketErrorCode? {
+            val code = message?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+            return entries.firstOrNull { it.name == code }
+        }
+    }
+}
+
+/** ERROR 코드 → 이 연결 루프가 할 일. 네트워크 없이 시험하려고 순수 함수로 뺐다 */
+internal enum class ChatSocketErrorAction { RENEW_TOKEN, RELOGIN, RETRY, STOP }
+
+internal fun ChatSocketErrorCode?.toAction(): ChatSocketErrorAction = when (this) {
+    ChatSocketErrorCode.TOKEN_EXPIRED -> ChatSocketErrorAction.RENEW_TOKEN
+    ChatSocketErrorCode.TOKEN_INVALID -> ChatSocketErrorAction.RELOGIN
+    ChatSocketErrorCode.NOT_PARTICIPANT,
+    ChatSocketErrorCode.INVALID_DESTINATION,
+    -> ChatSocketErrorAction.STOP
+    // 코드가 없는 실패(네트워크 끊김·타임아웃)도 여기 — 백오프 뒤 다시 붙는다
+    ChatSocketErrorCode.SERVER_UNAVAILABLE,
+    ChatSocketErrorCode.SEND_NOT_SUPPORTED,
+    null,
+    -> ChatSocketErrorAction.RETRY
+}
 
 /**
- * 채팅 실시간 **수신·전송** — STOMP over WebSocket.
+ * 실패에서 서버 ERROR 코드를 꺼낸다. krossbow 는 ERROR 프레임을 [StompErrorFrameReceived] 로 올리지만
+ * 연결 단계에서는 다른 예외로 감싸 올 수 있어 원인 사슬을 끝까지 본다. 프레임 객체가 없으면 예외 메시지에
+ * 코드 이름이 그대로 들어 있는지 본다(krossbow 가 `message` 헤더를 예외 메시지에 싣는다).
+ */
+internal fun Throwable.chatSocketErrorCode(): ChatSocketErrorCode? {
+    var current: Throwable? = this
+    var depth = 0
+    while (current != null && depth++ < 8) {
+        if (current is StompErrorFrameReceived) {
+            ChatSocketErrorCode.of(current.frame.headers.message)?.let { return it }
+        }
+        val text = current.message
+        if (text != null) {
+            ChatSocketErrorCode.entries.firstOrNull { code -> Regex("\\b${code.name}\\b").containsMatchIn(text) }
+                ?.let { return it }
+        }
+        current = current.cause
+    }
+    return null
+}
+
+/**
+ * 채팅 실시간 **받기 전용** — STOMP over WebSocket.
  *
- * 서버는 메시지가 저장될 때마다 `/sub/chat-rooms/{id}` 로 밀어 준다(`ChatRedisSubscriber`). 페이로드는
- * REST 조회와 **같은 shape**(`ChatMessageResult`)이라 [ChatMessageResponse] 를 그대로 재사용한다.
- * 보내는 쪽은 `/pub/chat-rooms/{id}/messages` 로 SEND 프레임을 쓴다(`StompChatController`) —
- * **응답이 없는 단방향**이다. 저장 결과는 나에게도 위 구독으로 되돌아온다.
+ * 채팅 소켓 서버가 API 서버에서 분리됐다(2026-11). 소켓 서버는 연결 유지와 전달만 한다 —
+ * **SEND 를 받지 않는다**(`ERROR SEND_NOT_SUPPORTED`). 보내기·읽음은 REST 이고([com.moyeota.data.remote.ChatApi]),
+ * 그래서 예전의 `sendMessage`·`markAsRead`(SEND `/pub/…`)와 거절 통로(`/user/queue/errors`) 구독은 지웠다 —
+ * 소켓 서버에 없는 경로를 구독하면 `INVALID_DESTINATION` 으로 연결째 끊긴다.
  *
- * 인증은 STOMP **CONNECT 프레임의 `Authorization: Bearer` 헤더**다(`StompAuthInterceptor`).
- * HTTP 헤더가 아니라 프레임 헤더라는 점이 중요하다 — 서버가 그것만 읽는다.
- * 구독도 서버가 검사한다: 그 방의 **활성 참여자**가 아니면 SUBSCRIBE 가 거부된다.
+ * 서버는 메시지가 저장될 때마다 `/sub/chat-rooms/{id}` 로 밀어 준다. 페이로드는 REST 조회와 **같은 shape**
+ * (`ChatMessageResult` + `seq`)이라 [ChatMessageResponse] 를 그대로 재사용한다. 순서를 지키려고 서버가 늦게 온
+ * 번호를 **버리므로**, 호출부가 `seq` 의 빈 번호를 REST 로 메워야 한다.
+ *
+ * 인증은 STOMP **CONNECT 프레임의 `Authorization: Bearer` 헤더**다. ERROR 프레임의 `message` 헤더로 오는
+ * 고정 코드([ChatSocketErrorCode])에 따라 재발급·재로그인·재시도·중단을 가른다([toAction]).
  *
  * **폴링을 대체하지 않고 앞선다.** 이 흐름이 끊겨도 호출부의 폴링이 메시지를 메우므로,
- * 연결 실패는 조용히 재시도만 하고 화면에 에러를 올리지 않는다. 재연결 사이에 오간 메시지도
- * 이 흐름으로는 오지 않으므로 커서 조회가 메워야 한다 — 그래서 폴링을 아주 끄지 않는다.
+ * 연결 실패는 조용히 재시도만 하고 화면에 에러를 올리지 않는다.
+ *
+ * @param renewAccessToken 거절당한 액세스 토큰을 넘기면 새 토큰을 돌려준다(못 받으면 null).
+ *   HTTP 401 재발급과 **같은 잠금**을 써야 한다([com.moyeota.data.remote.auth.TokenAuthenticator.renew]).
  */
 class ChatSocket(
     private val baseUrl: String,
     okHttpClient: OkHttpClient,
     private val tokens: TokenHolder,
+    private val renewAccessToken: (String) -> String? = { null },
 ) {
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -120,26 +188,14 @@ class ChatSocket(
     // 필요 없고, 401 재발급 Authenticator 가 업그레이드 요청에 끼어들 이유도 없다.
     private val client = StompClient(OkHttpWebSocketClient(okHttpClient))
 
-    /**
-     * 지금 붙어 있는 세션. [room] 을 수집하는 동안에만 채워지고, 전송이 **같은 세션**을 쓴다 —
-     * 보내려고 따로 연결하면 서버 입장에서 세션이 둘이 되고, 전송 결과를 되돌려받을 구독도 없다.
-     */
-    @Volatile
-    private var live: LiveSession? = null
-
-    private class LiveSession(val chatRoomId: Long, val session: StompSession)
-
-    @Serializable
-    private data class SendMessageFrame(val content: String)
-
-    @Serializable
-    private data class ReadFrame(val lastReadMessageId: Long)
-
     /** 연결 하나에서 오는 신호. 구독이 걸린 순간([Connected])을 알려야 호출부가 그 전의 공백을 메울 수 있다 */
     sealed interface RoomSignal {
         data object Connected : RoomSignal
         data class Message(val response: ChatMessageResponse) : RoomSignal
         data object Disconnected : RoomSignal
+
+        /** 서버가 구독을 거절했다(참여자 아님·잘못된 경로·잘못된 토큰). 흐름은 이 뒤에 끝난다 */
+        data object Stopped : RoomSignal
     }
 
     /**
@@ -147,12 +203,16 @@ class ChatSocket(
      * (연속 실패마다 늘어나는 간격 + 소량 지터 — 고정 3초가 아니다).
      * 미로그인이면 연결하지 않고 다음 주기를 기다린다(로그인 뒤 자연히 붙는다).
      *
-     * **[Dispatchers.IO] 에서 돈다.** 업스트림 본문이 [TokenHolder.currentAccessToken] 을 부르는데
-     * 그 구현은 디스크 복원을 **최대 5초 블로킹으로 기다린다** — 「OkHttp I/O 스레드에서만 부른다」는
-     * 전제의 API 다([TokenHolder] KDoc). 수집은 `viewModelScope`(= `Dispatchers.Main.immediate`)에서
-     * 일어나므로 `flowOn` 이 없으면 그 블로킹이 **메인 스레드에서** 일어나 앱이 최대 5초 멎는다
-     * (앱 시작 직후 채팅방으로 바로 들어가는 경로가 그렇다). `flowOn` 은 업스트림만 옮기므로
-     * 호출부의 수집은 그대로 메인에서 일어난다 — 화면 갱신 쪽은 바뀌지 않는다.
+     * 서버 ERROR 코드별 동작([toAction]):
+     * - `TOKEN_EXPIRED` — 재발급 후 **바로** 다시 붙는다. 재발급 직후 또 만료면(서버 시계 문제 등) 무한 반복을
+     *   막으려고 연속으로는 한 번만 바로 붙고, 그다음은 백오프를 탄다.
+     * - `TOKEN_INVALID` — 재발급하지 않고 세션을 비운다([TokenHolder.onSessionExpired]) — 앱이 로그인 화면으로 간다.
+     * - `NOT_PARTICIPANT`·`INVALID_DESTINATION` — [RoomSignal.Stopped] 를 내고 끝난다.
+     * - `SERVER_UNAVAILABLE`·코드 없음 — 같은 토큰으로 백오프 뒤 다시 붙는다.
+     *
+     * **[Dispatchers.IO] 에서 돈다.** 업스트림 본문이 [TokenHolder.currentAccessToken] 과 [renewAccessToken] 을
+     * 부르는데 둘 다 블로킹이다(디스크 복원 대기·재발급 왕복). 수집은 `viewModelScope`(메인)에서 일어나므로
+     * `flowOn` 이 없으면 그 블로킹이 메인 스레드에서 일어난다. `flowOn` 은 업스트림만 옮긴다.
      */
     fun room(chatRoomId: Long): Flow<RoomSignal> = flow {
         // 연속 실패 횟수 — 붙는 데 성공하면(Connected) 0 으로 되돌린다
@@ -160,26 +220,66 @@ class ChatSocket(
         // 마지막 실패의 **종류만** 기억한다. 예외 객체나 메시지를 들고 있지 않는 이유는
         // 보고에 서버 응답 조각 같은 값이 섞여 나가지 않게 하기 위해서다.
         var lastErrorType: String? = null
+        // 재발급 직후 바로 붙은 적이 있는가 — 연속 두 번은 바로 붙지 않는다(무한 반복 방지)
+        var renewedJustNow = false
         while (true) {
-            try {
-                collectRoom(chatRoomId) { signal ->
-                    // 구독까지 성공했으면 백오프를 처음으로 되돌린다. 긴 연결이 끊긴 것과
-                    // 「붙지도 못하는 상태」를 같게 다루면 멀쩡한 서버에도 30초를 기다린다.
-                    if (signal is RoomSignal.Connected) {
-                        failures = 0
-                        lastErrorType = null
+            val token = tokens.currentAccessToken()
+            if (token == null) {
+                // 미로그인. 조건이 그대로면 다음 시도도 같은 결과라 **실패로 센다**(하드 루프 방지)
+                Log.d(TAG, "토큰이 없어 연결하지 않는다(미로그인)")
+                failures++
+            } else {
+                try {
+                    collectRoom(chatRoomId, token) { signal ->
+                        // 구독까지 성공했으면 백오프를 처음으로 되돌린다. 긴 연결이 끊긴 것과
+                        // 「붙지도 못하는 상태」를 같게 다루면 멀쩡한 서버에도 30초를 기다린다.
+                        if (signal is RoomSignal.Connected) {
+                            failures = 0
+                            lastErrorType = null
+                            renewedJustNow = false
+                        }
+                        emit(signal)
                     }
-                    emit(signal)
+                    // 예외 없이 돌아오는 경우(구독 종료)도 실패로 센다
+                    failures++
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    val code = e.chatSocketErrorCode()
+                    when (code.toAction()) {
+                        ChatSocketErrorAction.STOP -> {
+                            Log.w(TAG, "구독 거절 roomId=$chatRoomId code=$code — 다시 붙지 않는다")
+                            emit(RoomSignal.Disconnected)
+                            emit(RoomSignal.Stopped)
+                            return@flow
+                        }
+                        ChatSocketErrorAction.RELOGIN -> {
+                            Log.w(TAG, "잘못된 토큰(TOKEN_INVALID) — 재발급하지 않고 세션을 비운다")
+                            tokens.onSessionExpired()
+                            emit(RoomSignal.Disconnected)
+                            emit(RoomSignal.Stopped)
+                            return@flow
+                        }
+                        ChatSocketErrorAction.RENEW_TOKEN -> {
+                            if (!renewedJustNow && renewAccessToken(token) != null) {
+                                Log.d(TAG, "토큰 만료 — 재발급 후 바로 다시 붙는다 roomId=$chatRoomId")
+                                renewedJustNow = true
+                                emit(RoomSignal.Disconnected)
+                                continue
+                            }
+                            failures++
+                            lastErrorType = "TOKEN_EXPIRED"
+                        }
+                        ChatSocketErrorAction.RETRY -> {
+                            if (code == ChatSocketErrorCode.SEND_NOT_SUPPORTED) {
+                                Log.w(TAG, "SEND_NOT_SUPPORTED — 보내기는 REST 여야 한다(버그)")
+                            }
+                            failures++
+                            lastErrorType = code?.name ?: e.javaClass.name
+                        }
+                    }
+                    Log.d(TAG, "연결 끊김 roomId=$chatRoomId — ${failures}회째 실패 code=$code: ${e.message}")
                 }
-                // 예외 없이 돌아오는 경우(미로그인·구독 종료)도 **실패로 센다** — 조건이 그대로면
-                // 다음 시도도 같은 결과라, 3초마다 깨어나는 하드 루프가 된다.
-                failures++
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                failures++
-                lastErrorType = e.javaClass.name
-                Log.d(TAG, "연결 끊김 roomId=$chatRoomId — ${failures}회째 실패: ${e.message}")
             }
             reportIfStuck(failures, lastErrorType)
             emit(RoomSignal.Disconnected)
@@ -189,83 +289,27 @@ class ChatSocket(
         }
     }.flowOn(Dispatchers.IO)
 
-    /**
-     * 이 방으로 메시지를 **보낸다**(SEND `/pub/chat-rooms/{id}/messages`).
-     *
-     * 서버 핸들러는 `void` 다 — 성공 여부가 프레임으로 돌아오지 않고, 저장된 메시지가 구독([room])으로
-     * 온다([room] 의 Message). 그래서 여기서 참을 돌려줘도 "서버가 저장했다"는 뜻이 아니라 **"살아 있는 세션에 써 넣었다"**는
-     * 뜻이다. 호출부는 되돌아오는 메시지를 확인으로 삼아야 한다.
-     *
-     * 연결이 없거나(미로그인·끊김) 다른 방에 붙어 있으면 false — 그때는 호출부가 REST 로 보낸다.
-     */
-    suspend fun sendMessage(chatRoomId: Long, content: String): Boolean =
-        send(chatRoomId, "/pub/chat-rooms/$chatRoomId/messages", json.encodeToString(SendMessageFrame(content)))
-
-    /**
-     * 읽음 지점 갱신(SEND `/pub/chat-rooms/{id}/read`). 메시지마다 한 번씩 일어나는 일이라
-     * 소켓이 붙어 있으면 REST 왕복을 아낀다. 실패해도 조용하다 — 배지 정확도보다 대화가 우선이다.
-     */
-    suspend fun markAsRead(chatRoomId: Long, readMessageId: Long): Boolean =
-        send(chatRoomId, "/pub/chat-rooms/$chatRoomId/read", json.encodeToString(ReadFrame(readMessageId)))
-
-    private suspend fun send(chatRoomId: Long, destination: String, body: String): Boolean {
-        val current = live ?: return false
-        if (current.chatRoomId != chatRoomId) return false
-        return try {
-            current.session.sendText(destination, body)
-            true
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Log.d(TAG, "전송 실패 dest=$destination: ${e.message}")
-            false
-        }
-    }
-
-    private suspend fun collectRoom(chatRoomId: Long, emit: suspend (RoomSignal) -> Unit) {
-        val token = tokens.currentAccessToken()
-        if (token == null) {
-            Log.d(TAG, "토큰이 없어 연결하지 않는다(미로그인)")
-            return
-        }
+    private suspend fun collectRoom(chatRoomId: Long, token: String, emit: suspend (RoomSignal) -> Unit) {
         val session = client.connect(
             url = webSocketUrl(),
             customStompConnectHeaders = mapOf("Authorization" to "Bearer $token"),
         )
-
         Log.d(TAG, "연결됨 roomId=$chatRoomId")
-        live = LiveSession(chatRoomId, session)
         try {
-            coroutineScope {
-                // 서버가 내 SEND 를 거절하면(참여자 아님·1000자 초과 등) 이 통로로만 알려 온다.
-                val errors = launch { collectErrors(session) }
-                try {
-                    // 프레임 본문을 직접 받아 파싱한다 — 서버가 보내는 JSON 이 REST 응답과 같은 shape 이라
-                    // 변환 계층을 따로 끼우지 않는다. 모르는 필드는 무시하므로 서버가 필드를 늘려도 깨지지 않는다.
-                    // subscribeText 는 suspend 라 반환 시점에 SUBSCRIBE 가 이미 나갔다. 그 **뒤에** Connected 를 내야
-                    // 호출부의 공백 조회와 소켓 수신 사이에 틈이 없다(겹치는 메시지는 호출부가 id 로 합친다).
-                    val messages = session.subscribeText("/sub/chat-rooms/$chatRoomId")
-                    emit(RoomSignal.Connected)
-                    messages.collect { body ->
-                        val response = runCatching { json.decodeFromString<ChatMessageResponse>(body) }.getOrNull()
-                            ?: return@collect // 파싱 못 한 프레임은 흘려보낸다 — 다음 연결의 공백 조회가 메운다
-                        emit(RoomSignal.Message(response))
-                    }
-                } finally {
-                    errors.cancel()
-                }
+            // 프레임 본문을 직접 받아 파싱한다 — 서버가 보내는 JSON 이 REST 응답과 같은 shape 이라
+            // 변환 계층을 따로 끼우지 않는다. 모르는 필드는 무시하므로 서버가 필드를 늘려도 깨지지 않는다.
+            // subscribeText 는 suspend 라 반환 시점에 SUBSCRIBE 가 이미 나갔다. 그 **뒤에** Connected 를 내야
+            // 호출부의 공백 조회와 소켓 수신 사이에 틈이 없다(겹치는 메시지는 호출부가 id 로 합친다).
+            val messages = session.subscribeText("/sub/chat-rooms/$chatRoomId")
+            emit(RoomSignal.Connected)
+            messages.collect { body ->
+                val response = runCatching { json.decodeFromString<ChatMessageResponse>(body) }.getOrNull()
+                    ?: return@collect // 파싱 못 한 프레임은 흘려보낸다 — seq 빈 번호 채우기가 메운다
+                emit(RoomSignal.Message(response))
             }
         } finally {
-            live = null
             runCatching { session.disconnect() }
         }
-    }
-
-    // 에러 통로가 막혀도(구버전 서버 등) 대화는 그대로 돌아가야 한다 — 실패는 로그로만 남긴다.
-    private suspend fun collectErrors(session: StompSession) {
-        session.subscribeText(ERROR_DESTINATION)
-            .catch { Log.d(TAG, "에러 통로 구독 실패: ${it.message}") }
-            .collect { body -> Log.w(TAG, "서버가 요청을 거절함: $body") }
     }
 
     /** `https://host/` → `wss://host/ws-chat`. baseUrl 은 Retrofit 규약상 항상 `/` 로 끝난다 */
