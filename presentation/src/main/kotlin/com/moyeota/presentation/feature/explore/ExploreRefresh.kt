@@ -24,7 +24,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -39,9 +38,10 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.moyeota.core.designsystem.component.MapOverlayShadow
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.core.designsystem.theme.MoyeotaType
+import com.moyeota.core.designsystem.theme.mapOverlayShadow
+import com.moyeota.core.designsystem.theme.tabularNums
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
@@ -161,8 +161,10 @@ internal val RefreshButtonEndInset = 9.dp
  *   (눌리지 않는다)
  * - **움직임 줄이기**(개발자 옵션·접근성의 「애니메이션 삭제」 = 애니메이터 배율 0)가 켜져 있으면 돌리지
  *   않고 고리를 흐리게만 한다 — 도는 표시는 장식이고, 상태는 「새로고침 중」으로 이미 읽힌다
- * - 색: 짙은 원(`InkPrimary`)에 흰 글자 — 지도 타일 위 어디서나 대비가 선다. 그림자는 지도 위 카드와
- *   같은 단계(`MapOverlayShadow`)다
+ * - 색: 짙은 원(`InkPrimary`)에 흰 글자 — 지도 타일 위 어디서나 대비가 선다. 그림자는 지도 위 알약과
+ *   같은 단계(`mapOverlayShadow` = `MoyeotaElevation.MapOverlay` 4dp)다
+ * - 숫자는 `BodySm` 세미볼드(13sp/600)에 **숫자 폭 고정**(`tabularNums`) — 15 → 9 로 줄어도 가운데가 흔들리지 않는다.
+ *   Bold 를 쓰지 않는 이유는 앱의 굵기 규칙(Bold 는 큰 버튼 글자·Display 만)이다
  */
 @Composable
 internal fun ExploreRefreshButton(
@@ -175,7 +177,7 @@ internal fun ExploreRefreshButton(
     Box(
         modifier = modifier
             .size(RefreshButtonSize)
-            .shadow(4.dp, CircleShape, spotColor = MapOverlayShadow)
+            .mapOverlayShadow(CircleShape)
             .clip(CircleShape)
             .background(MoyeotaColor.InkPrimary)
             // 역할·누르기·비활성은 clickable 이 의미 트리에 싣는다. 이름과 상태만 더한다 —
@@ -206,15 +208,14 @@ internal fun ExploreRefreshButton(
             0f
         }
         CircularArrowRing(
-            color = if (ui.refreshing && reduceMotion) Color.White.copy(alpha = 0.5f) else Color.White,
+            color = if (ui.refreshing && reduceMotion) MoyeotaColor.TextOnDark.copy(alpha = 0.5f) else MoyeotaColor.TextOnDark,
             modifier = Modifier.fillMaxSize().padding(7.dp).rotate(rotation),
         )
         if (!ui.refreshing) {
             Text(
                 text = ui.secondsLeft.toString(),
-                color = Color.White,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Bold,
+                color = MoyeotaColor.TextOnDark,
+                style = MoyeotaType.BodySm.copy(fontWeight = FontWeight.SemiBold).tabularNums(),
                 modifier = Modifier.clearAndSetSemantics {},
             )
         }

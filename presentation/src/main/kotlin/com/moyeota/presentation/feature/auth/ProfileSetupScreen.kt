@@ -2,7 +2,6 @@ package com.moyeota.presentation.feature.auth
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,12 +11,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
@@ -32,33 +31,30 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.tooling.preview.Preview
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
 import com.moyeota.core.designsystem.component.MoyeotaTextField
 import com.moyeota.core.designsystem.component.MoyeotaTopBar
 import com.moyeota.core.designsystem.component.NavigationBarSpacer
 import com.moyeota.core.designsystem.component.PrimaryCtaButton
 import com.moyeota.core.designsystem.component.StatusBarSpacer
+import com.moyeota.core.designsystem.component.TextLinkButton
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.core.designsystem.theme.MoyeotaShape
 import com.moyeota.core.designsystem.theme.MoyeotaTheme
 import com.moyeota.core.designsystem.theme.MoyeotaType
+import com.moyeota.core.designsystem.theme.tabularNums
 import com.moyeota.domain.model.AuthPolicy
 import com.moyeota.domain.model.Gender
 import com.moyeota.presentation.core.BirthDateTransformation
 import com.moyeota.presentation.core.PhoneNumberTransformation
 import java.time.LocalDate
-
-private val LabelGray = Color(0xFF8A93A0)
-private val CounterGray = Color(0xFF9AA1AC)
-private val SlateGray = Color(0xFF4B5563)
-private val InfoCardBlue = Color(0xFFF1F5FD)
-private val TrackGray = Color(0xFFE6EAF0)
 
 /**
  * 10 · 프로필 만들기 [S05] — **가입 1단계(1/2), 가입 플로우의 첫 화면**
@@ -210,19 +206,14 @@ fun ProfileSetupScreen(
     val isValid = NicknamePolicy.isValid(nickname) && nicknameError == null &&
         basicValid && phoneVerified && accountValid
 
-    Column(modifier = modifier.fillMaxSize().imePadding().background(MoyeotaColor.SurfaceSoft)) {
+    Column(modifier = modifier.fillMaxSize().imePadding().background(MoyeotaColor.SurfaceCanvas)) {
         StatusBarSpacer()
         MoyeotaTopBar(
             title = "",
             onBack = onBack,
             actions = {
                 // 가입은 10 → 12 두 단계다 (09 본인 인증은 MVP 범위에서 빠졌다)
-                Text(
-                    text = "1 / 2",
-                    style = MoyeotaType.BodySm,
-                    fontWeight = FontWeight.Medium,
-                    color = LabelGray,
-                )
+                Text(text = "1 / 2", style = MoyeotaType.BodySm, color = MoyeotaColor.TextMute)
             },
         )
         ProfileStepProgressBar(progress = 1f / 2f)
@@ -239,18 +230,18 @@ fun ProfileSetupScreen(
                 style = MoyeotaType.DisplayMd,
                 color = MoyeotaColor.InkPrimary,
             )
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(12.dp))
             Text(
                 // 실명·성별은 가입 시 서버에 저장된다 — "저장하지 않아요"로 안내하면 사실과 다르다.
                 // 「매칭 안전을 위해서만」은 지웠다 — 성별은 매칭에 쓰이지 않는다(2026-10-13).
                 text = "실명은 본인 확인에만 쓰고 탑승 상대에게는 보이지 않아요",
-                style = MoyeotaType.BodySm.copy(fontSize = 14.sp),
+                style = MoyeotaType.BodySm,
                 color = MoyeotaColor.TextMute,
             )
 
-            Spacer(Modifier.height(22.dp))
+            Spacer(Modifier.height(24.dp))
             ProfileAvatarPlaceholder(modifier = Modifier.align(Alignment.CenterHorizontally))
-            Spacer(Modifier.height(28.dp))
+            Spacer(Modifier.height(32.dp))
             ProfileSectionHeader(
                 title = "프로필",
                 description = "탑승 상대에게는 실명 대신 닉네임으로 보여요",
@@ -275,25 +266,24 @@ fun ProfileSetupScreen(
                 trailing = {
                     Text(
                         text = "${nickname.length} / ${NicknamePolicy.MAX_LENGTH}",
-                        style = MoyeotaType.CaptionMd,
-                        fontWeight = FontWeight.Medium,
-                        color = CounterGray,
+                        style = MoyeotaType.CaptionMd.tabularNums(),
+                        color = MoyeotaColor.TextMute,
                     )
                 },
             )
             // 사용 가능 확인만 초록으로 따로 세운다 — 나머지 상태는 필드가 자기 색으로 그린다.
             // 확인에 실패한 경우(네트워크)는 아무 말도 하지 않는다: 사용자가 고칠 수 있는 게 없다.
+            // Success500(흰 바탕 2.5:1)은 12sp 에서 읽기 어려워 한 단계 진한 Success600 으로 쓴다(디자인 QA P2 와 같은 이유)
             if (nicknameError == null && nicknameCheck == NicknameCheckState.Available) {
                 Spacer(Modifier.height(6.dp))
                 Text(
                     text = "사용 가능한 닉네임이에요",
                     style = MoyeotaType.CaptionMd,
-                    fontWeight = FontWeight.Medium,
-                    color = MoyeotaColor.Success500,
+                    color = MoyeotaColor.Success600,
                 )
             }
 
-            Spacer(Modifier.height(28.dp))
+            Spacer(Modifier.height(32.dp))
             ProfileSectionHeader(
                 title = "기본 정보",
                 // 「동성 매칭」은 지웠다 — 성별 조건 매칭이 없다(2026-10-13)
@@ -325,7 +315,8 @@ fun ProfileSetupScreen(
             )
 
             Spacer(Modifier.height(20.dp))
-            Text(text = "성별", style = MoyeotaType.BodySm, color = LabelGray)
+            // 필드 라벨은 MoyeotaTextField 의 라벨과 같은 모양(BodySm · TextBody)이어야 한 화면에서 같은 층으로 읽힌다
+            Text(text = "성별", style = MoyeotaType.BodySm, color = MoyeotaColor.TextBody)
             Spacer(Modifier.height(8.dp))
             Row(
                 // selectableGroup: 칩 셋이 **한 묶음의 라디오**라는 사실을 스크린리더에 싣는다.
@@ -347,7 +338,7 @@ fun ProfileSetupScreen(
                     )
                 }
             }
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(6.dp))
             Text(
                 // 09 의 안내 카드를 필드 바로 아래 한 줄로 옮긴 자리다
                 // — 필드가 7개인 화면에서 카드를 하나 더 세우면 읽는 흐름이 끊긴다.
@@ -356,8 +347,7 @@ fun ProfileSetupScreen(
                 // 그래서 용도를 말하지 않고, 프로필에 안 보인다는 사실만 적는다(2026-10-13).
                 text = "프로필에는 표시되지 않아요",
                 style = MoyeotaType.CaptionMd,
-                fontWeight = FontWeight.Medium,
-                color = LabelGray,
+                color = MoyeotaColor.TextMute,
             )
 
             Spacer(Modifier.height(20.dp))
@@ -396,7 +386,7 @@ fun ProfileSetupScreen(
                 onGoToLogin = onGoToLogin,
             )
 
-            Spacer(Modifier.height(28.dp))
+            Spacer(Modifier.height(32.dp))
             ProfileSectionHeader(
                 title = "로그인 정보",
                 description = "다음에 로그인할 때 쓰는 아이디와 비밀번호예요",
@@ -427,12 +417,13 @@ fun ProfileSetupScreen(
                     PasswordVisualTransformation()
                 },
                 trailing = {
-                    Text(
+                    // 글자만 눌리던 토글을 48dp 터치 + 물결로(디자인 QA G12). 글자 끝은 필드 안쪽 여백에 맞춘다
+                    TextLinkButton(
                         text = if (passwordVisible) "숨기기" else "보기",
-                        style = MoyeotaType.CaptionMd,
-                        fontWeight = FontWeight.Bold,
-                        color = CounterGray,
-                        modifier = Modifier.clickable { passwordVisible = !passwordVisible },
+                        onClick = { passwordVisible = !passwordVisible },
+                        color = MoyeotaColor.TextMute,
+                        style = MoyeotaType.ButtonSm,
+                        modifier = Modifier.offset(x = 8.dp),
                     )
                 },
             )
@@ -449,18 +440,20 @@ fun ProfileSetupScreen(
             )
 
             Spacer(Modifier.height(24.dp))
+            // 옅은 파란 상자를 NoticeBanner(INFO) 와 같은 **회색 안내 면**으로 바꿨다(디자인 QA G8·A2).
+            // NoticeBanner 는 한 문장만 담아서, 제목 + 본문 두 줄인 이 안내는 같은 면·모서리·여백으로 직접 그린다.
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(InfoCardBlue, RoundedCornerShape(18.dp))
-                    .padding(horizontal = 20.dp, vertical = 20.dp),
+                    .background(MoyeotaColor.SurfaceSoft, MoyeotaShape.Card)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
             ) {
                 Text(
                     // 여전히 참이다 — 업로드 경로는 서버에 없다. 2026-10-15 배포로 생긴 건
                     // **제공 이미지 16장 중 고르기**이고, 그것도 가입이 아니라 36 프로필 수정에서 한다.
                     text = "사진은 올리지 않아요",
-                    style = MoyeotaType.BodySm.copy(fontSize = 14.sp),
-                    fontWeight = FontWeight.Bold,
+                    style = MoyeotaType.BodySm,
+                    fontWeight = FontWeight.SemiBold,
                     color = MoyeotaColor.InkPrimary,
                 )
                 Spacer(Modifier.height(4.dp))
@@ -477,8 +470,7 @@ fun ProfileSetupScreen(
                     // 자기 사진이 노출되는 걸 모르게 된다 — 이 저장소가 거짓 문구를 들어낸 이유다.
                     text = "탑승 상대에게는 닉네임·프로필 사진·탑승 횟수만 보여요",
                     style = MoyeotaType.BodySm,
-                    fontWeight = FontWeight.Medium,
-                    color = SlateGray,
+                    color = MoyeotaColor.TextBody,
                 )
             }
             Spacer(Modifier.height(24.dp))
@@ -511,14 +503,14 @@ fun ProfileSetupScreen(
                 },
                 enabled = isValid,
             )
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(12.dp))
             Text(
                 text = "닉네임은 나중에 바꿀 수 있어요",
                 style = MoyeotaType.CaptionMd,
-                fontWeight = FontWeight.Medium,
-                color = CounterGray,
+                color = MoyeotaColor.TextMute,
                 modifier = Modifier.align(Alignment.CenterHorizontally),
             )
+            Spacer(Modifier.height(12.dp))
         }
         NavigationBarSpacer()
     }
@@ -530,23 +522,23 @@ private fun ProfileSectionHeader(title: String, description: String) {
     Column(modifier = Modifier.fillMaxWidth()) {
         Text(
             text = title,
-            style = MoyeotaType.BodyMd,
-            fontWeight = FontWeight.Bold,
+            style = MoyeotaType.HeadingMd,
             color = MoyeotaColor.InkPrimary,
+            modifier = Modifier.semantics { heading() },
         )
         Spacer(Modifier.height(4.dp))
         Text(
             text = description,
-            style = MoyeotaType.CaptionMd,
-            fontWeight = FontWeight.Medium,
-            color = LabelGray,
+            style = MoyeotaType.BodySm,
+            color = MoyeotaColor.TextMute,
         )
     }
 }
 
-// 아바타 기본색 (와이어프레임 톤 — core token 미정의)
-private val AvatarOuter = Color(0xFFD8E0F2)
-private val AvatarInner = Color(0xFF8296C8)
+// 아바타 기본색 — 예전 파란 기 도는 전용 색(#D8E0F2/#8296C8)을 회색 토큰으로 모았다(디자인 QA G1).
+// 비어 있는 자리를 뜻하는 실루엣이라 브랜드 파랑을 띨 이유가 없다.
+private val AvatarOuter = MoyeotaColor.Border
+private val AvatarInner = MoyeotaColor.TextPlaceholder
 
 // 와이어프레임의 사람 실루엣 아바타 (사진 업로드 없음 — 정책상 미지원)
 @Composable
@@ -577,13 +569,13 @@ private fun ProfileStepProgressBar(progress: Float, modifier: Modifier = Modifie
             .fillMaxWidth()
             .padding(horizontal = 16.dp)
             .height(4.dp)
-            .background(TrackGray, RoundedCornerShape(2.dp)),
+            .background(MoyeotaColor.Hairline, MoyeotaShape.Small),
     ) {
         Box(
             Modifier
                 .fillMaxWidth(progress)
                 .height(4.dp)
-                .background(MoyeotaColor.Primary500, RoundedCornerShape(2.dp)),
+                .background(MoyeotaColor.Primary500, MoyeotaShape.Small),
         )
     }
 }

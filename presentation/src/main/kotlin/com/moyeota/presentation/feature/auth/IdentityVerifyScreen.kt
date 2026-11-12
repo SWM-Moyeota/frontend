@@ -1,6 +1,5 @@
 package com.moyeota.presentation.feature.auth
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -18,7 +17,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
@@ -29,20 +27,19 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import com.moyeota.core.designsystem.component.CheckIcon
+import com.moyeota.core.designsystem.component.MoyeotaIconSize
 import com.moyeota.core.designsystem.component.MoyeotaTextField
 import com.moyeota.core.designsystem.component.MoyeotaTopBar
 import com.moyeota.core.designsystem.component.NavigationBarSpacer
 import com.moyeota.core.designsystem.component.PrimaryCtaButton
 import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.core.designsystem.theme.MoyeotaShape
 import com.moyeota.core.designsystem.theme.MoyeotaType
 import com.moyeota.domain.model.Gender
 import com.moyeota.presentation.core.BirthDateTransformation
@@ -59,10 +56,6 @@ import java.time.LocalDate
 // 되살릴 때는 (a) MainNavGraph 에 다시 등록, (b) 진행 표시 「1 / 4」 재계산,
 // (c) 10 과 중복되는 입력 정리, (d) 약관 동의(현재 12 매너 서약에 통합됨) 중복 여부 확인이 필요하다.
 private val Carriers = listOf("SKT", "KT", "LG U+", "알뜰폰")
-
-private val LabelGray = Color(0xFF8A93A0)
-private val SlateGray = Color(0xFF4B5563)
-private val InfoCardBlue = Color(0xFFF1F5FD)
 
 /**
  * @param onRequestCode 「다음」 → 10 프로필 만들기. 서버 가입에 그대로 들어갈 값들이다.
@@ -105,14 +98,14 @@ fun IdentityVerifyScreen(
     val ctaEnabled = carrier != null && phoneValid && nameValid &&
         birthDate != null && birthError == null && gender != null && agreed
 
-    Column(modifier = Modifier.fillMaxSize().imePadding().background(MoyeotaColor.SurfaceSoft)) {
+    Column(modifier = Modifier.fillMaxSize().imePadding().background(MoyeotaColor.SurfaceCanvas)) {
         StatusBarSpacer()
         MoyeotaTopBar(
             title = "",
             onBack = onBack,
             actions = {
                 // 가입은 09 → 10 → 11 → 12 네 단계다 (05~08 부가 인증은 가입 경로에서 빠졌다)
-                Text(text = "1 / 4", style = MoyeotaType.BodySm, color = LabelGray)
+                Text(text = "1 / 4", style = MoyeotaType.BodySm, color = MoyeotaColor.TextMute)
             },
         )
         IdentityVerifyProgressBar(progress = 1f / 4f)
@@ -129,17 +122,18 @@ fun IdentityVerifyScreen(
                 style = MoyeotaType.DisplayMd,
                 color = MoyeotaColor.InkPrimary,
             )
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(12.dp))
             Text(
                 // 실명·성별은 가입 시 서버에 저장된다 — "저장하지 않아요"로 안내하면 사실과 다르다.
                 // 「매칭 안전을 위해서만」은 지웠다 — 성별은 매칭에 쓰이지 않는다(2026-10-13).
                 text = "실명은 본인 확인에만 쓰고 탑승 상대에게는 보이지 않아요",
-                style = MoyeotaType.BodySm.copy(fontSize = 14.sp),
+                style = MoyeotaType.BodySm,
                 color = MoyeotaColor.TextMute,
             )
-            Spacer(Modifier.height(26.dp))
+            Spacer(Modifier.height(24.dp))
 
-            Text(text = "통신사", style = MoyeotaType.BodySm, color = LabelGray)
+            // 필드 라벨은 MoyeotaTextField 의 라벨과 같은 모양(BodySm · TextBody)이어야 한 화면에서 같은 층으로 읽힌다
+            Text(text = "통신사", style = MoyeotaType.BodySm, color = MoyeotaColor.TextBody)
             Spacer(Modifier.height(8.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -194,7 +188,7 @@ fun IdentityVerifyScreen(
             )
 
             Spacer(Modifier.height(20.dp))
-            Text(text = "성별", style = MoyeotaType.BodySm, color = LabelGray)
+            Text(text = "성별", style = MoyeotaType.BodySm, color = MoyeotaColor.TextBody)
             Spacer(Modifier.height(8.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -214,33 +208,28 @@ fun IdentityVerifyScreen(
                 )
             }
 
-            Spacer(Modifier.height(24.dp))
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(InfoCardBlue, RoundedCornerShape(18.dp))
-                    .padding(20.dp),
-            ) {
-                // 제목이던 「성별은 동성 매칭에만 써요」는 지웠다 — 성별 조건 매칭이 없다.
-                // 백엔드 matching 패키지에 성별이 0건이고, user/profile 에 저장만 된다(2026-10-13).
-                Text(
-                    text = "성별은 프로필에 표시되지 않아요",
-                    style = MoyeotaType.BodySm.copy(fontWeight = FontWeight.Bold),
-                    color = MoyeotaColor.InkPrimary,
-                )
-            }
+            // 성별 칸 한 줄을 설명하는 문장이라 파란 안내 상자 대신 **그 칸 바로 아래 캡션**으로 둔다
+            // (디자인 QA A2 — 10 프로필 만들기와 같은 자리·같은 모양: MoyeotaTextField 의 도움말과 같은 CaptionMd).
+            // 제목이던 「성별은 동성 매칭에만 써요」는 지웠다 — 성별 조건 매칭이 없다.
+            // 백엔드 matching 패키지에 성별이 0건이고, user/profile 에 저장만 된다(2026-10-13).
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = "성별은 프로필에 표시되지 않아요",
+                style = MoyeotaType.CaptionMd,
+                color = MoyeotaColor.TextMute,
+            )
 
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(24.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 IdentityAgreeCheckbox(checked = agreed, onToggle = { agreed = !agreed })
-                Spacer(Modifier.width(10.dp))
+                Spacer(Modifier.width(8.dp))
                 Text(
                     text = "이용약관 · 개인정보 수집에 동의해요",
                     style = MoyeotaType.BodySm,
-                    color = SlateGray,
+                    color = MoyeotaColor.TextBody,
                     modifier = Modifier
                         .weight(1f)
                         .clickable { agreed = !agreed },
@@ -248,8 +237,8 @@ fun IdentityVerifyScreen(
                 // 미연결: 「보기」(약관) — 클릭해도 동작 없음 (약관 상세 필요)
                 Text(
                     text = "보기",
-                    style = MoyeotaType.BodySm.copy(fontWeight = FontWeight.Bold),
-                    color = LabelGray,
+                    style = MoyeotaType.BodySm.copy(fontWeight = FontWeight.SemiBold),
+                    color = MoyeotaColor.TextMute,
                 )
             }
             Spacer(Modifier.height(24.dp))
@@ -282,7 +271,7 @@ fun IdentityVerifyScreen(
 
 @Composable
 private fun IdentityAgreeCheckbox(checked: Boolean, onToggle: () -> Unit) {
-    val shape = RoundedCornerShape(7.dp)
+    val shape = MoyeotaShape.Small
     Box(
         modifier = Modifier
             .size(22.dp)
@@ -290,33 +279,16 @@ private fun IdentityAgreeCheckbox(checked: Boolean, onToggle: () -> Unit) {
                 if (checked) {
                     Modifier.background(MoyeotaColor.Primary500, shape)
                 } else {
+                    // Hairline(1.15:1) 테두리는 흰 화면에서 상자가 보이지 않았다 — 입력칸과 같은 BorderStrong
                     Modifier
-                        .background(Color.White, shape)
-                        .border(1.5.dp, MoyeotaColor.Hairline, shape)
+                        .background(MoyeotaColor.SurfaceCanvas, shape)
+                        .border(1.5.dp, MoyeotaColor.BorderStrong, shape)
                 },
             )
             .clickable { onToggle() },
         contentAlignment = Alignment.Center,
     ) {
-        if (checked) {
-            Canvas(modifier = Modifier.size(14.dp)) {
-                val stroke = 2.dp.toPx()
-                drawLine(
-                    color = Color.White,
-                    start = Offset(size.width * 0.15f, size.height * 0.55f),
-                    end = Offset(size.width * 0.4f, size.height * 0.8f),
-                    strokeWidth = stroke,
-                    cap = StrokeCap.Round,
-                )
-                drawLine(
-                    color = Color.White,
-                    start = Offset(size.width * 0.4f, size.height * 0.8f),
-                    end = Offset(size.width * 0.85f, size.height * 0.25f),
-                    strokeWidth = stroke,
-                    cap = StrokeCap.Round,
-                )
-            }
-        }
+        if (checked) CheckIcon(size = MoyeotaIconSize.Sm, tint = MoyeotaColor.TextOnDark)
     }
 }
 
@@ -327,13 +299,13 @@ private fun IdentityVerifyProgressBar(progress: Float, modifier: Modifier = Modi
             .fillMaxWidth()
             .padding(horizontal = 16.dp)
             .height(4.dp)
-            .background(Color(0xFFE6EAF0), RoundedCornerShape(2.dp)),
+            .background(MoyeotaColor.Hairline, MoyeotaShape.Small),
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth(progress)
                 .fillMaxHeight()
-                .background(MoyeotaColor.Primary500, RoundedCornerShape(2.dp)),
+                .background(MoyeotaColor.Primary500, MoyeotaShape.Small),
         )
     }
 }

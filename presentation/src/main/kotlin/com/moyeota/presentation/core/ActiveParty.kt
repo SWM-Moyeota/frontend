@@ -10,22 +10,25 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import com.moyeota.core.designsystem.component.ChevronIcon
+import com.moyeota.core.designsystem.component.MoyeotaIconSize
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.core.designsystem.theme.MoyeotaShape
+import com.moyeota.core.designsystem.theme.MoyeotaSpacing
+import com.moyeota.core.designsystem.theme.MoyeotaType
+import com.moyeota.core.designsystem.theme.mapOverlayShadow
 import com.moyeota.domain.model.ChatRoomStatus
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
@@ -223,7 +226,7 @@ class ActivePartyViewModel(
      * 방 생성·합류 성공 직후. 기억을 심고, **홀더가 아직 그 방을 모를 때만** 상세를 읽는다.
      *
      * 조회를 아예 걷어내지 않은 이유(QA 119 D-2 의 두 선택지 중 뒤쪽을 고른 근거): [ride] 는 앱 전체가
-     * 공유하는 **유일한 [Ride] 객체**다 — 14·17 배너, 24 채팅 헤더의 「매칭 화면으로 →」(`MainNavGraph`
+     * 공유하는 **유일한 [Ride] 객체**다 — 14·17 배너, 24 채팅 헤더의 「매칭 화면으로」(`MainNavGraph`
      * 가 `activeRide?.id` 로 가른다), [pollChatRoom] 의 게이트가 모두 이 값에 달려 있다. 21 이 읽는
      * 상세는 21 자신의 상태로만 쓰이고 이 홀더로 흘러들지 않으므로, 여기서 조회를 지우면 홀더는 빈 채로
      * 남는다. 그러면
@@ -424,62 +427,41 @@ fun ActiveRideBanner(
         modifier = modifier
             .fillMaxWidth()
             .height(48.dp)
-            // 그림자도 토큰에서 뽑는다 — 예전 배너는 같은 값을 0x29085AF5 로 박아 두고 있었다
-            .shadow(8.dp, RoundedCornerShape(18.dp), spotColor = MoyeotaColor.Primary500.copy(alpha = 0.16f))
-            .clip(RoundedCornerShape(18.dp))
+            // 지도 위에 뜨는 배너라 그림자를 남긴다(디자인 QA G4 예외) — 다만 파랗게 물든 빛번짐은 걷고
+            // 지도 위 알약들과 같은 회청색 MapOverlay 높이로 맞춘다
+            .mapOverlayShadow(MoyeotaShape.Card)
+            .clip(MoyeotaShape.Card)
             .background(MoyeotaColor.SurfaceCanvas)
             .clickable { onClick() }
-            .padding(horizontal = 18.dp),
+            .padding(horizontal = MoyeotaSpacing.ScreenGutter),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.size(8.dp).background(MoyeotaColor.Primary500, CircleShape))
-        Spacer(Modifier.size(10.dp))
+        Spacer(Modifier.size(8.dp))
         Text(
             text = ride.activeStageLabel,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Bold,
+            style = MoyeotaType.BodySm,
+            fontWeight = FontWeight.SemiBold,
             color = MoyeotaColor.InkPrimary,
             maxLines = 1,
         )
         Spacer(Modifier.size(8.dp))
         Text(
             text = ride.destination,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Medium,
+            style = MoyeotaType.BodySm,
             color = MoyeotaColor.TextMute,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
         Spacer(Modifier.size(8.dp))
+        // 「›」 글자 대신 그린 꺾쇠 — 글꼴마다 모양이 달라지는 글자를 아이콘으로 쓰지 않는다(G10)
         Text(
-            text = "보기 ›",
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Bold,
+            text = "보기",
+            style = MoyeotaType.BodySm,
+            fontWeight = FontWeight.SemiBold,
             color = MoyeotaColor.Primary600,
         )
-    }
-}
-
-/** 21 대기 화면의 「채팅 열기」. **채팅방이 실제로 있을 때만** 그린다(호출부가 null 검사로 가른다). */
-@Composable
-fun OpenChatButton(
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Box(
-        modifier = modifier
-            .height(48.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(MoyeotaColor.Primary50)
-            .clickable { onClick() },
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = "채팅 열기",
-            fontSize = 15.sp,
-            fontWeight = FontWeight.Bold,
-            color = MoyeotaColor.Primary600,
-        )
+        ChevronIcon(size = MoyeotaIconSize.Sm, tint = MoyeotaColor.Primary600)
     }
 }

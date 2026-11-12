@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -28,7 +27,15 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.core.designsystem.theme.MoyeotaShape
 import com.moyeota.core.designsystem.theme.MoyeotaType
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextStyle
 
 // 온보딩 페이지 인디케이터 — 활성은 20x8 pill, 비활성은 8x8 dot
 @Composable
@@ -44,35 +51,114 @@ fun PageDots(count: Int, activeIndex: Int, modifier: Modifier = Modifier) {
     }
 }
 
-enum class NoticeKind { INFO, ERROR, SUCCESS, WAITING }
+/**
+ * 안내·상태의 종류. 색이 **뜻을 싣는** 셋(ERROR 빨강 · SUCCESS 초록 = 매칭/확정 · WAITING 호박 = 대기)과
+ * 뜻이 없는 둘(INFO · NEUTRAL)로 나뉜다.
+ */
+enum class NoticeKind { INFO, ERROR, SUCCESS, WAITING, NEUTRAL }
 
-// 공통 규칙: 화면 단위 오류는 CTA 위 NoticeBanner Kind=error
+/**
+ * 공통 규칙: 화면 단위 오류는 CTA 위 NoticeBanner Kind=error.
+ *
+ * **INFO 는 회색이다**(디자인 QA G8, 2026-11). 예전엔 옅은 파랑이었는데, 안내 한 줄마다 파란 판이 깔려
+ * 화면 곳곳이 "강조"가 되고 정작 파란 CTA 가 묻혔다. 색이 뜻을 싣는 ERROR·SUCCESS·WAITING 만 물들인다.
+ */
 @Composable
 fun NoticeBanner(kind: NoticeKind, text: String, modifier: Modifier = Modifier) {
     val (bg, fg) = when (kind) {
-        NoticeKind.INFO -> MoyeotaColor.Primary50 to MoyeotaColor.Primary600
+        NoticeKind.INFO, NoticeKind.NEUTRAL -> MoyeotaColor.SurfaceSoft to MoyeotaColor.TextBody
         NoticeKind.ERROR -> MoyeotaColor.Danger50 to MoyeotaColor.Danger600
         NoticeKind.SUCCESS -> MoyeotaColor.Success50 to MoyeotaColor.Success600
         NoticeKind.WAITING -> MoyeotaColor.Waiting50 to MoyeotaColor.Waiting600
     }
     Box(
-        modifier = modifier.fillMaxWidth().background(bg, RoundedCornerShape(12.dp)).padding(horizontal = 16.dp, vertical = 12.dp),
+        modifier = modifier.fillMaxWidth().background(bg, MoyeotaShape.Card).padding(horizontal = 16.dp, vertical = 12.dp),
     ) {
         Text(text = text, style = MoyeotaType.BodySm, color = fg)
     }
 }
 
-// 상태 배지 (모집 중 · 매칭 완료 · 대기 등)
+/**
+ * 상태 배지 (모집 중 · 매칭 완료 · 대기 등).
+ *
+ * [NoticeKind.NEUTRAL] 은 상태가 아니라 **사실**(「2/3명」·「도착지」)을 붙일 때 쓴다 — 초록(=매칭됨)이나
+ * 호박(=기다리는 중)으로 칠하면 없는 상태를 말하게 된다(디자인 QA S16-5·E2).
+ */
 @Composable
 fun StatusBadge(kind: NoticeKind, text: String, modifier: Modifier = Modifier) {
     val (bg, fg) = when (kind) {
         NoticeKind.INFO -> MoyeotaColor.Primary50 to MoyeotaColor.Primary600
+        NoticeKind.NEUTRAL -> MoyeotaColor.SurfaceSoft to MoyeotaColor.TextBody
         NoticeKind.ERROR -> MoyeotaColor.Danger50 to MoyeotaColor.Danger600
         NoticeKind.SUCCESS -> MoyeotaColor.Success50 to MoyeotaColor.Success600
         NoticeKind.WAITING -> MoyeotaColor.Waiting50 to MoyeotaColor.Waiting600
     }
     Box(modifier = modifier.background(bg, CircleShape).padding(horizontal = 10.dp, vertical = 4.dp)) {
         Text(text = text, style = MoyeotaType.CaptionMd, color = fg, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+/**
+ * 묶음 머리말 — 「즐겨찾기」·「매칭 조건」·「이미 참여한 사람」 (디자인 QA G9).
+ *
+ * 예전엔 같은 역할의 머리말이 13 Bold · 13 Medium · 12 Bold 로 여섯 갈래였다. 13sp SemiBold [MoyeotaColor.TextMute]
+ * 한 가지로 모으고, 아래 8dp 를 띄운다. **좌우 여백은 놓이는 자리가 준다** — 대부분 이미 16dp 화면 여백 안에
+ * 놓이므로 여기서 또 주면 두 번 들어간다. 스크린리더에는 제목(heading)으로 알린다.
+ *
+ * @param trailing 오른쪽 끝의 작은 행동(「편집」) — [TextLinkButton] 을 넘긴다
+ */
+@Composable
+fun SectionLabel(
+    text: String,
+    modifier: Modifier = Modifier,
+    trailing: (@Composable () -> Unit)? = null,
+) {
+    Row(
+        modifier = modifier.fillMaxWidth().padding(bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = text,
+            style = MoyeotaType.BodySm,
+            fontWeight = FontWeight.SemiBold,
+            color = MoyeotaColor.TextMute,
+            modifier = Modifier.weight(1f).semantics { heading() },
+        )
+        if (trailing != null) trailing()
+    }
+}
+
+/**
+ * 글자만 있는 작은 행동(「편집」·「조정」·「로그인」·「지도 접기」) — **보이는 건 글자지만 터치 영역은 48dp** 이고
+ * 누르면 물결이 번진다(디자인 QA G12). 예전엔 글자 크기 그대로(24dp 안팎) 눌리고 눌림 표시도 없었다.
+ *
+ * 좌우 8dp 안쪽 여백이 있어 글자는 터치 상자보다 8dp 안에 그려진다 — 화면 여백에 글자 끝을 맞추려면
+ * 호출부가 그만큼 바깥으로 둔다.
+ *
+ * @param trailingIcon 글자 뒤의 16dp 아이콘(「지도 접기」의 꺾쇠)
+ */
+@Composable
+fun TextLinkButton(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    color: Color = MoyeotaColor.Primary600,
+    style: TextStyle = MoyeotaType.ButtonMd,
+    enabled: Boolean = true,
+    onClickLabel: String? = null,
+    trailingIcon: (@Composable () -> Unit)? = null,
+) {
+    Row(
+        modifier = modifier
+            .minimumInteractiveComponentSize()
+            .clip(MoyeotaShape.Small)
+            .clickable(enabled = enabled, onClickLabel = onClickLabel, role = Role.Button, onClick = onClick)
+            .padding(horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Text(text = text, style = style, color = if (enabled) color else MoyeotaColor.TextPlaceholder, maxLines = 1)
+        if (trailingIcon != null) trailingIcon()
     }
 }
 
@@ -148,27 +234,52 @@ fun AvatarCircle(
     }
 }
 
-// 선택 칩 (매칭 조건 등)
+/**
+ * 선택 칩 — 앱의 **단 하나뿐인 칩** (디자인 QA G6, 2026-11). 16 매칭 조건, 16a 출발지/도착지 토글,
+ * 17 탐색 모드·날짜, 21 약속 프리셋이 모두 이걸 쓴다.
+ *
+ * - 보이는 높이 36dp, **터치 영역 48dp**([minimumInteractiveComponentSize]), 그림자 없음
+ * - 미선택: 흰 바탕 + [MoyeotaColor.Border] 테두리 + [MoyeotaColor.TextBody] 글자
+ * - 선택: 옅은 파랑 바탕 + 파란 테두리 + 진한 파랑 글자
+ *
+ * 선택을 **솔리드 파랑으로 칠하지 않는 이유**: 한 화면에 솔리드 파랑은 CTA 하나만 둔다(디자인 문서
+ * "primary 를 아껴 쓴다"). 예전 16 은 흰 그림자 칩 + 솔리드 파랑 선택 칩, 17 은 옅은 칩으로 두 갈래였다.
+ *
+ * @param horizontalPadding 글자 좌우 여백. 둘뿐인 토글(16a 출발지/도착지)처럼 넓게 누르게 할 때만 늘린다
+ */
 @Composable
 fun MoyeotaChip(
     text: String,
     selected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    horizontalPadding: Dp = 14.dp,
 ) {
     val bg = if (selected) MoyeotaColor.Primary50 else MoyeotaColor.SurfaceCanvas
-    val fg = if (selected) MoyeotaColor.Primary600 else MoyeotaColor.TextMute
-    val border = if (selected) MoyeotaColor.Primary500 else MoyeotaColor.Hairline
+    val fg = when {
+        !enabled -> MoyeotaColor.TextPlaceholder
+        selected -> MoyeotaColor.Primary600
+        else -> MoyeotaColor.TextBody
+    }
+    val border = if (selected) MoyeotaColor.Primary500 else MoyeotaColor.Border
     Box(
         modifier = modifier
-            .clip(CircleShape)
-            .background(bg)
-            .border(1.dp, border, CircleShape)
-            .clickable { onClick() }
-            .padding(horizontal = 14.dp, vertical = 8.dp),
+            .minimumInteractiveComponentSize()
+            .selectable(selected = selected, enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text = text, style = MoyeotaType.ButtonMd, color = fg)
+        Box(
+            modifier = Modifier
+                .height(36.dp)
+                .clip(CircleShape)
+                .background(bg)
+                .border(1.dp, border, CircleShape)
+                .padding(horizontal = horizontalPadding),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(text = text, style = MoyeotaType.ButtonMd, color = fg, maxLines = 1, softWrap = false)
+        }
     }
 }
 
@@ -192,12 +303,12 @@ fun MapPlaceholder(modifier: Modifier = Modifier) {
                 .fillMaxWidth()
                 .padding(horizontal = 24.dp)
                 .size(height = 2.dp, width = Dp.Unspecified)
-                .background(Color(0xFFE2E6ED)),
+                .background(MoyeotaColor.Border),
         )
         Text(
             text = "지도 영역",
             style = MoyeotaType.CaptionMd,
-            color = MoyeotaColor.TextAsh,
+            color = MoyeotaColor.TextPlaceholder,
             modifier = Modifier.align(Alignment.Center),
         )
     }

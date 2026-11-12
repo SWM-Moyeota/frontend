@@ -1,6 +1,5 @@
 package com.moyeota.presentation.feature.home
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -14,11 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -30,18 +25,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.PathEffect
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.moyeota.domain.model.MatchCandidate
-import com.moyeota.core.designsystem.component.BackArrowIcon
 import com.moyeota.core.designsystem.component.MapPlaceholder
 import com.moyeota.core.designsystem.component.MapSheetScaffold
 import com.moyeota.core.designsystem.component.NavigationBarSpacer
@@ -55,17 +43,30 @@ import com.moyeota.core.designsystem.component.decodePolyline
 import com.moyeota.core.designsystem.component.fitMapCamera
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.core.designsystem.theme.MoyeotaType
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import com.moyeota.core.designsystem.component.MapOverlayPill
+import com.moyeota.core.designsystem.component.MoyeotaChip
+import com.moyeota.core.designsystem.component.MoyeotaTopBar
+import com.moyeota.core.designsystem.component.RouteSummary
+import com.moyeota.core.designsystem.component.SectionLabel
+import com.moyeota.core.designsystem.component.TextLinkButton
+import com.moyeota.core.designsystem.theme.MoyeotaShape
+import com.moyeota.core.designsystem.theme.MoyeotaSpacing
+import com.moyeota.core.designsystem.theme.mapOverlayShadow
+import com.moyeota.core.designsystem.theme.tabularNums
 import com.moyeota.presentation.core.KoreanParagraphText
 import com.naver.maps.geometry.LatLng
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
 import kotlin.math.roundToInt
-
-private val ChipBlueBg = Color(0xFFF1F5FD)
-private val GraySlate = Color(0xFF4B5563)
-private val GrayMute = Color(0xFF8A93A0)
-private val GrayAsh = Color(0xFF9AA1AC)
 
 /**
  * 16 지도·요약 칩·요금 문구에 쓰이는 경로 미리보기 값 (POST /matching/routes 응답).
@@ -292,33 +293,25 @@ fun DestinationConfirmModal(
                     indication = null,
                 ) {},
         ) {
-            // 상단 헤더
+            // 상단 헤더 — 다른 하위 화면과 같은 가운데 제목 앱바(디자인 QA G7·4-6). 상태바 자리도 흰색으로
+            // 칠한다: 다이얼로그 창이 시스템 바 아래까지 그리므로(MainNavGraph 의 S16-1) 인셋이 실제 값이다.
             Column(modifier = Modifier.fillMaxWidth().background(MoyeotaColor.SurfaceCanvas)) {
                 StatusBarSpacer()
-                Row(
-                    modifier = Modifier.fillMaxWidth().height(56.dp).padding(start = 12.dp, end = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    IconButton(onClick = onDismiss) {
-                        BackArrowIcon()
-                    }
-                    Text(
-                        text = "도착지 확인",
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MoyeotaColor.InkPrimary,
-                    )
-                    // 오른쪽 방패 아이콘은 지웠다(2026-11, 오너 UX 피드백) — 누를 수도 없고 가리키는
-                    // 기능도 없는 장식이었다. 안전 기능(원터치 신고)은 2차 범위라 이 화면에 그 약속을
-                    // 그려 둘 근거가 없다(DESIGN-moyeota.md: 방패는 비상 신고 진입점에만 쓴다).
-                }
+                // 오른쪽 방패 아이콘은 지웠다(2026-11, 오너 UX 피드백) — 누를 수도 없고 가리키는
+                // 기능도 없는 장식이었다. 안전 기능(원터치 신고)은 2차 범위라 이 화면에 그 약속을
+                // 그려 둘 근거가 없다(DESIGN-moyeota.md: 방패는 비상 신고 진입점에만 쓴다).
+                // 그 자리에 빈칸을 남기지 않는다 — 가운데 제목이라 오른쪽이 비어도 균형이 깨지지 않는다.
+                MoyeotaTopBar(title = "도착지 확인", onBack = onDismiss)
             }
 
             // 지도(헤더 아래 전부) 위에 드래그 시트를 얹는다 — 시트 메커니즘은 21 과 공유한다
+            // 접힘 = 핸들 + 도착지 배지 + 요금 줄 + CTA (기본값과 같은 구성) + 내비게이션 바 인셋.
+            // 인셋을 더하는 이유: 다이얼로그 창이 시스템 바 아래까지 그린 뒤로(S16-1) CTA 아래 NavigationBarSpacer
+            // 가 실제 높이를 갖는다 — 추정치에 넣지 않으면 그만큼 펼침 상태의 지도 노출이 줄어든다.
+            val navigationBarHeight = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
             MapSheetScaffold(
                 modifier = Modifier.weight(1f).fillMaxWidth(),
-                // 접힘 = 핸들 + 도착지 배지 + 요금 문구 + CTA (기본값과 같은 구성)
-                collapsedSheetHeight = 176.dp,
+                collapsedSheetHeight = 176.dp + navigationBarHeight,
                 background = { sheet ->
                     val widthDp = sheet.containerWidth.value
                     // fit 기준은 **시트에 가리지 않고 실제로 보이는 지도 높이**다.
@@ -362,64 +355,65 @@ fun DestinationConfirmModal(
 
                     // 경로 미리보기 실패 시엔 칩을 통째로 감춘다 — 틀린 값보다 없는 편이 낫다
                     if (routeSummaryLabel != null) {
-                        Box(
-                            modifier = Modifier
-                                .padding(16.dp)
-                                .height(30.dp)
-                                .shadow(3.dp, RoundedCornerShape(15.dp), spotColor = Color(0x1A1B2A4A))
-                                .clip(RoundedCornerShape(15.dp))
-                                .background(MoyeotaColor.SurfaceCanvas)
-                                .padding(horizontal = 16.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
+                        MapOverlayPill(modifier = Modifier.padding(MoyeotaSpacing.ScreenGutter)) {
                             Text(
                                 text = routeSummaryLabel,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold,
+                                style = MoyeotaType.BodySm.tabularNums(),
+                                fontWeight = FontWeight.SemiBold,
                                 color = MoyeotaColor.InkPrimary,
                             )
                         }
                     }
 
                     // 지도 조정 진입점. 오른쪽 아래는 SDK 줌 컨트롤(+/-) 자리라 왼쪽에 둔다.
+                    // 보이는 알약은 32dp 지만 **터치 영역은 48dp** 다(디자인 QA G12) — 바깥 상자가 48dp 를
+                    // 잡아 두고 그 가운데에 알약을 그린다. 글자는 파랑이 아니라 검정이다: 이 화면의 파랑은
+                    // CTA 하나에만 둔다(예전엔 한 시트에 파랑이 여섯 번 나왔다 — S16-2).
                     if (canAdjust) {
                         Box(
                             modifier = Modifier
                                 .align(Alignment.BottomStart)
-                                .padding(start = 12.dp, bottom = sheetHeight + 12.dp)
-                                .height(30.dp)
-                                .shadow(3.dp, RoundedCornerShape(15.dp), spotColor = Color(0x1A1B2A4A))
-                                .clip(RoundedCornerShape(15.dp))
-                                .background(MoyeotaColor.SurfaceCanvas)
-                                .clickable { adjustTarget = PinTarget.DESTINATION }
-                                .padding(horizontal = 14.dp),
+                                // 바깥 48dp 상자의 위아래 8dp 만큼 덜 띄워 알약과 시트 사이를 12dp 로 맞춘다
+                                .padding(start = MoyeotaSpacing.ScreenGutter, bottom = sheetHeight + 4.dp)
+                                .minimumInteractiveComponentSize(),
                             contentAlignment = Alignment.Center,
                         ) {
-                            Text(
-                                text = "위치 조정",
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MoyeotaColor.Primary500,
-                            )
+                            Box(
+                                modifier = Modifier
+                                    .height(32.dp)
+                                    .mapOverlayShadow(MoyeotaShape.Pill)
+                                    .clip(MoyeotaShape.Pill)
+                                    .background(MoyeotaColor.SurfaceCanvas)
+                                    .clickable(role = Role.Button) { adjustTarget = PinTarget.DESTINATION }
+                                    .padding(horizontal = 14.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    text = "위치 조정",
+                                    style = MoyeotaType.ButtonSm,
+                                    color = MoyeotaColor.InkPrimary,
+                                )
+                            }
                         }
                     }
                 },
                 sheetTop = {
-                    // 도착지 배지 — 접힌 상태에서도 보이는 최소 정보
+                    // 도착지 배지 — 접힌 상태에서도 보이는 최소 정보.
+                    // 배지는 **회색**이다(디자인 QA S16-5): 초록은 이 앱에서 「매칭됨·확정」을 뜻해서, 아직 아무것도
+                    // 확정되지 않은 화면에 초록 배지를 달면 없는 상태를 말하게 된다. 「도착지」는 상태가 아니라 이름표다.
                     Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = MoyeotaSpacing.ScreenGutter),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        StatusBadge(kind = NoticeKind.SUCCESS, text = "도착지")
-                        Spacer(Modifier.size(10.dp))
+                        StatusBadge(kind = NoticeKind.NEUTRAL, text = "도착지")
+                        Spacer(Modifier.width(8.dp))
                         Text(
                             // 이름이 이미 실주소면 호출부가 주소 칸을 비워 보낸다 — 구분자만 남지 않게 합친다
                             text = listOf(destinationName, destinationAddress)
                                 .filter { it.isNotBlank() }
                                 .joinToString(" · "),
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = GrayMute,
+                            style = MoyeotaType.BodySm,
+                            color = MoyeotaColor.TextMute,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f),
@@ -428,108 +422,48 @@ fun DestinationConfirmModal(
                 },
                 sheetDetail = {
                     // 상세 영역은 시트가 접히면 높이 0 이 된다 — 좌우 여백은 여기서 준다
-                    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-                        // 「도착지」 배지 줄(sheetTop)과 아래 경로 카드 사이의 숨 쉴 자리 — 예전에는 둘이
+                    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = MoyeotaSpacing.ScreenGutter)) {
+                        // 「도착지」 배지 줄(sheetTop)과 아래 경로 요약 사이의 숨 쉴 자리 — 예전에는 둘이
                         // 맞닿아 배지 줄이 카드의 머리처럼 보였다(오너 UX 피드백). 12dp 는 4/8 리듬의
                         // `spacing.sm` 이다. **상세 영역 안에** 두는 이유: 시트를 접으면 상세가 통째로
                         // 0 이 되므로 이 간격도 함께 사라져 접힘 높이(176dp 추정치)가 흔들리지 않는다.
                         Spacer(Modifier.height(12.dp))
-                        // 경로 카드
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(ChipBlueBg)
-                                .padding(16.dp),
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(Modifier.size(11.dp).background(MoyeotaColor.Primary500, CircleShape))
-                                Spacer(Modifier.size(13.dp))
-                                Text(
-                                    text = originStopName,
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MoyeotaColor.InkPrimary,
-                                    // 실주소가 들어오면 시각·「조정」과 같은 줄에 못 담긴다 — 줄바꿈 대신 말줄임
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f),
-                                )
-                                // 이름이 남는 폭을 전부 쓰므로(weight) 시각과 붙지 않게 최소 간격을 둔다
-                                Spacer(Modifier.size(8.dp))
-                                // 빈 문자열이면 Text 를 세우지 않는다 — 빈 글자도 폭을 먹어
-                                // 이름 말줄임 위치가 시각이 있을 때와 달라진다
-                                if (departureText.isNotEmpty()) {
-                                    Text(
-                                        text = departureText,
-                                        fontSize = 15.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MoyeotaColor.InkPrimary,
-                                    )
-                                }
-                                // 무엇을 조정하는지 애매하지 않도록 출발지·도착지 각각에 진입점을 둔다
-                                if (originPosition != null) {
-                                    AdjustLink(onClick = { adjustTarget = PinTarget.ORIGIN })
-                                }
-                            }
-                            Row {
-                                Box(modifier = Modifier.size(width = 11.dp, height = 30.dp), contentAlignment = Alignment.Center) {
-                                    DashedVerticalLine()
-                                }
-                                // 출발지 → 도착지 연결선만 그린다. 도보 거리·시간은 서버가 주지 않아 표기하지 않는다.
-                            }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(Modifier.size(11.dp).background(MoyeotaColor.MarkerDestination, CircleShape))
-                                Spacer(Modifier.size(13.dp))
-                                Text(
-                                    text = destinationName,
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MoyeotaColor.InkPrimary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f),
-                                )
-                                Spacer(Modifier.size(8.dp))
-                                if (arrivalText.isNotEmpty()) {
-                                    Text(
-                                        text = arrivalText,
-                                        fontSize = 15.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MoyeotaColor.InkPrimary,
-                                    )
-                                }
-                                if (destinationPosition != null) {
-                                    AdjustLink(onClick = { adjustTarget = PinTarget.DESTINATION })
-                                }
-                            }
-                        }
-
-                        Spacer(Modifier.height(20.dp))
-
-                        Text(
-                            text = "매칭 조건",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = GrayMute,
+                        // 경로 요약 — 판(배경) 없이 흰 시트 위에 바로(디자인 QA S16-2 · G9). 20·22 와 같은 조각이다.
+                        // 이름은 굵게, 시각은 보통 굵기 + 고정폭 숫자로 — 예전엔 네 줄이 모두 15sp Bold 라
+                        // 무엇이 중요한지 읽히지 않았다. 출발지·도착지 각각에 「조정」을 둔다(무엇을 조정하는지
+                        // 애매하지 않게 — 오너 결정으로 지도의 「위치 조정」까지 진입점 셋을 유지한다).
+                        // 좌표가 없는 쪽은 조정할 핀이 없어 「조정」을 그리지 않는다(예전과 같은 조건).
+                        // 출발지 → 도착지 연결선만 그린다. 도보 거리·시간은 서버가 주지 않아 표기하지 않는다.
+                        RouteSummary(
+                            origin = originStopName,
+                            destination = destinationName,
+                            originMeta = departureText,
+                            destinationMeta = arrivalText,
+                            onAdjustOrigin = if (originPosition != null) {
+                                { adjustTarget = PinTarget.ORIGIN }
+                            } else {
+                                null
+                            },
+                            onAdjustDestination = if (destinationPosition != null) {
+                                { adjustTarget = PinTarget.DESTINATION }
+                            } else {
+                                null
+                            },
                         )
-                        Spacer(Modifier.height(10.dp))
 
-                        // 매칭 조건 카드
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .shadow(4.dp, RoundedCornerShape(18.dp), spotColor = Color(0x1A1B2A4A))
-                                .clip(RoundedCornerShape(18.dp))
-                                .background(MoyeotaColor.SurfaceCanvas)
-                                .padding(horizontal = 20.dp),
-                        ) {
+                        Spacer(Modifier.height(MoyeotaSpacing.SectionGap))
+
+                        SectionLabel(text = "매칭 조건")
+
+                        // 매칭 조건 — 시트 안에 그림자 카드를 또 두지 않는다(디자인 QA S16-4 · G4). 줄은 흰 시트
+                        // 위에 바로 놓이고, 「출발 시각」 묶음과 「인원」 줄 사이만 Hairline 으로 나눈다.
+                        Column(modifier = Modifier.fillMaxWidth()) {
                             // 「출발 시각」이 **맨 위**에 있는 이유: 이 선택이 아래 모든 것을 바꾼다
                             // (정원 범위·요금 표시·CTA 가 부르는 엔드포인트). 아래에 두면 사용자가
                             // 정원을 고른 뒤에 선택지가 줄어드는 것을 보게 된다.
                             ConditionRow(label = "출발 시각") {
                                 DepartureMode.entries.forEach { mode ->
-                                    ConditionChip(
+                                    MoyeotaChip(
                                         text = departureModeLabel(mode),
                                         selected = departureMode == mode,
                                         onClick = { departureMode = mode },
@@ -542,6 +476,8 @@ fun DestinationConfirmModal(
                                 // 예전 칩(「오늘·내일·11월 14일 (토)」 8개 + 30분 시각 칩 최대 48개)은 가로로
                                 // 길게 밀어야 해서 요일을 한눈에 볼 수 없었고, 30분 단위는 약속에 거칠었다.
                                 // 두 조각은 17 「날짜로 찾기」와 **같은 컴포넌트**다([ReservationDateStrip]).
+                                // 띠는 16dp 화면 여백 안에 놓여 첫 칸이 「매칭 조건」 머리말과 같은 선에서 시작한다
+                                // (디자인 QA 4-3 — 예전엔 카드 안쪽 20dp 가 더해져 36dp 였다)
                                 PickerSection(label = "날짜", trailing = reservationMonthLabel(dateOptions)) {
                                     ReservationDateStrip(
                                         dates = dateOptions,
@@ -567,6 +503,8 @@ fun DestinationConfirmModal(
                                 }
                             }
 
+                            HorizontalDivider(color = MoyeotaColor.Hairline)
+
                             // 라벨에 「나 포함」을 박았다 — 서버 정원(`Capacity`)은 **방장을 포함한 총
                             // 인원**이라(`Party.open` 이 생성자를 멤버로 넣고 `members.size == capacity`
                             // 면 꽉 찬 것으로 본다) 「3인」만 쓰면 「나 외 3명」으로 읽힌다. 「나 포함 N명」을
@@ -579,7 +517,7 @@ fun DestinationConfirmModal(
                             // 그 이유를 말한다).
                             ConditionRow(label = "인원(나 포함)") {
                                 capacityChoices(departureMode).forEach { count ->
-                                    ConditionChip(
+                                    MoyeotaChip(
                                         text = "${count}명",
                                         selected = capacity == count,
                                         onClick = { peopleCount = count },
@@ -607,7 +545,7 @@ fun DestinationConfirmModal(
                             // 상시 빈 자리를 두면 2·3명(기본값 3)에서 늘 비어 있는 ~30dp 가
                             // 좁은 폰의 스크롤 영역에서 추천 카드 한 줄만큼을 먹는다.
                             //
-                            // 색·크기는 이 파일의 보조 문구 관습(13sp Medium + [GrayMute])이다.
+                            // 색·크기는 이 파일의 보조 문구 관습([ConditionNotice] — BodySm + TextMute)이다.
                             // 빨강·경고 아이콘을 쓰지 않는다 — 정상 선택이고, 오류로 읽히면
                             // 사용자는 고를 수 있는 값을 「막힌 값」으로 본다.
                             // 줄바꿈을 막지 않는다(maxLines 없음) — 큰 글꼴 설정에서 잘린 안내보다
@@ -621,8 +559,8 @@ fun DestinationConfirmModal(
                             // 없다. 서버에 승차지점 개념이 없고(방은 사용자가 찍은 좌표 그대로 만들어진다)
                             // 칩도 항상 선택된 채 무동작이었다. 고를 것도, 가리킬 기능도 없는 줄이었다.
                             //
-                            // 남은 행이 「인원」 하나라 구분선도 없다 — 카드는 그대로 둔다. 실제 매칭
-                            // 조건이 하나뿐이라는 사실을 그대로 보여 주는 모양이다.
+                            // 카드는 걷어냈다(디자인 QA S16-4) — 「출발 시각」·「인원」 두 줄이 시트 위에 바로 놓이고
+                            // 둘 사이만 Hairline 으로 나눈다.
                         }
 
                         // 「걸어서 가까운 방」 — 후보가 있을 때만 그린다. 없는 게 기본 상태라
@@ -647,18 +585,11 @@ fun DestinationConfirmModal(
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text(
                                         text = "가까운 방을 불러오지 못했어요",
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Medium,
-                                        color = GrayAsh,
+                                        style = MoyeotaType.BodySm,
+                                        color = MoyeotaColor.TextMute,
                                     )
-                                    Spacer(Modifier.width(8.dp))
-                                    Text(
-                                        text = "다시 시도",
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MoyeotaColor.Primary600,
-                                        modifier = Modifier.clickable { onRetryNearby() },
-                                    )
+                                    // 글자만 보이지만 48dp 로 눌린다(G12) — 예전엔 12sp 글자 크기 그대로였다
+                                    TextLinkButton(text = "다시 시도", onClick = onRetryNearby)
                                 }
                             }
                         }
@@ -685,37 +616,61 @@ fun DestinationConfirmModal(
                                 ?.let { "${reservationDepartureSummary(selectedDate, it, today)} 출발" }
                                 ?: RESERVATION_NEEDS_TIME_NOTICE,
                             // body-strong(15/600) — 디자인 QA 4-4 의 되읽기 줄
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.SemiBold,
+                            style = MoyeotaType.BodyStrong,
                             color = MoyeotaColor.InkPrimary,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier
                                 .align(Alignment.CenterHorizontally)
-                                .padding(horizontal = 16.dp),
+                                .padding(horizontal = MoyeotaSpacing.ScreenGutter),
                         )
                         Spacer(Modifier.height(2.dp))
                     }
-                    Text(
-                        text = when {
-                            // 예약 방에는 요금이 없다 — 「—」로 비워 두면 로딩 실패로 읽히므로
-                            // 왜 없는지 적는다(없는 숫자를 지어내지 않는 것이 1급 규칙이다).
-                            scheduled -> RESERVATION_NO_ESTIMATE_NOTICE
-                            routePreview.loading -> "예상 요금 계산 중이에요"
-                            // 뒤에 붙던 설명 문구(「인원이 확정되면…」)는 뺐다 — 한 줄 안내는 금액만으로 충분하다
-                            farePerPersonText != null -> "예상 요금 1인 ${farePerPersonText}원"
-                            else -> "예상 요금 —"
-                        },
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = GrayAsh,
-                        // 접힘 높이가 문구 길이에 따라 흔들리지 않게 한 줄로 고정한다
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier
-                            .align(Alignment.CenterHorizontally)
-                            .padding(horizontal = 16.dp),
-                    )
+                    if (scheduled) {
+                        // 예약 방에는 요금이 없다 — 「—」로 비워 두면 로딩 실패로 읽히므로
+                        // 왜 없는지 적는다(없는 숫자를 지어내지 않는 것이 1급 규칙이다).
+                        Text(
+                            text = RESERVATION_NO_ESTIMATE_NOTICE,
+                            style = MoyeotaType.CaptionMd,
+                            color = MoyeotaColor.TextMute,
+                            // 접힘 높이가 문구 길이에 따라 흔들리지 않게 한 줄로 고정한다
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier
+                                .align(Alignment.CenterHorizontally)
+                                .padding(horizontal = MoyeotaSpacing.ScreenGutter),
+                        )
+                    } else {
+                        // 1인 예상 요금 — **이 화면의 주인공 숫자**다(디자인 QA S16-3). 예전엔 가운데 정렬
+                        // 12sp 회색(흰 바탕 대비 2.6:1) 한 줄이라 CTA 바로 위에서도 읽히지 않았다. 이름표는 왼쪽
+                        // 작은 회색, 금액은 오른쪽 HeadingMd 검정으로 나눠 CTA 위 12dp 에 둔다.
+                        // 뒤에 붙던 설명 문구(「인원이 확정되면…」)는 뺐다 — 금액만으로 충분하다.
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = MoyeotaSpacing.ScreenGutter)
+                                // 이름표와 금액을 한 문장으로 읽힌다(「1인 예상 요금, 3,200원」)
+                                .semantics(mergeDescendants = true) {},
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = "1인 예상 요금",
+                                style = MoyeotaType.BodySm,
+                                color = MoyeotaColor.TextMute,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Text(
+                                text = when {
+                                    routePreview.loading -> "계산 중"
+                                    farePerPersonText != null -> "${farePerPersonText}원"
+                                    else -> "—"
+                                },
+                                style = MoyeotaType.HeadingMd.tabularNums(),
+                                color = MoyeotaColor.InkPrimary,
+                                maxLines = 1,
+                            )
+                        }
+                    }
                     // ★ **나갈 수 없다**는 사실은 CTA 앞에 둔다([reservationCommitmentNotice]) —
                     // 실시간 방은 「그만 찾기」로 빠져나올 수 있어서 사용자는 방에 들어가는 일을
                     // 되돌릴 수 있는 선택으로 배워 왔고, 예약은 **같은 모양의 버튼으로 전혀 다른
@@ -727,20 +682,20 @@ fun DestinationConfirmModal(
                     // 모양은 `BodySm` · `TextMute`, 최대 두 줄, CTA 위 8dp(디자인 QA 4-5) — 경고가 아니라
                     // 알아 둘 사실이라 조용한 보조 글이다.
                     if (scheduled) {
-                        Spacer(Modifier.height(6.dp))
+                        Spacer(Modifier.height(8.dp))
                         KoreanParagraphText(
                             text = reservationCommitmentNotice(joining = false),
                             style = MoyeotaType.BodySm.copy(color = MoyeotaColor.TextMute),
                             maxLines = 2,
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = MoyeotaSpacing.ScreenGutter),
                         )
                     }
                     if (errorMessage != null) {
-                        Spacer(Modifier.height(10.dp))
+                        Spacer(Modifier.height(12.dp))
                         NoticeBanner(
                             kind = NoticeKind.ERROR,
                             text = errorMessage,
-                            modifier = Modifier.padding(horizontal = 16.dp),
+                            modifier = Modifier.padding(horizontal = MoyeotaSpacing.ScreenGutter),
                         )
                     }
                     // 예약 안내가 CTA 바로 위에 올 때는 8dp 로 붙인다 — 그 안내는 이 버튼에 대한 말이다
@@ -757,10 +712,11 @@ fun DestinationConfirmModal(
                         // ([RESERVATION_NEEDS_TIME_NOTICE]). 비활성 버튼만 두면 이유를 모른다.
                         enabled = !scheduled || departureAt != null,
                         loading = creating,
-                        modifier = Modifier.padding(horizontal = 16.dp),
+                        modifier = Modifier.padding(horizontal = MoyeotaSpacing.ScreenGutter),
                     )
-                    // dialog() 윈도우라 인셋은 0 — CTA 아래 여백만 남는다
-                    Spacer(Modifier.height(20.dp))
+                    // CTA 아래 16dp + 내비게이션 바 인셋. 다이얼로그 창이 시스템 바 아래까지 그리므로(S16-1)
+                    // 인셋이 실제 값이고, 시트의 흰 바탕이 제스처 바 뒤까지 이어진다.
+                    Spacer(Modifier.height(16.dp))
                     NavigationBarSpacer()
                 },
             )
@@ -784,22 +740,6 @@ fun DestinationConfirmModal(
     }
 }
 
-// 경로 카드 행에 붙는 좌표 조정 진입점
-@Composable
-private fun AdjustLink(onClick: () -> Unit) {
-    Text(
-        text = "조정",
-        fontSize = 12.sp,
-        fontWeight = FontWeight.Bold,
-        color = MoyeotaColor.Primary500,
-        modifier = Modifier
-            .padding(start = 8.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .clickable { onClick() }
-            .padding(horizontal = 8.dp, vertical = 4.dp),
-    )
-}
-
 /**
  * 「걸어서 가까운 방」 추천 목록. **후보가 있을 때만** 불린다(빈 목록은 호출부가 거른다).
  *
@@ -813,65 +753,58 @@ private fun NearbyCandidateSection(
     onCandidateClick: (MatchCandidate) -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
-        Text(
-            text = "걸어서 가까운 방",
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Bold,
-            color = MoyeotaColor.InkPrimary,
-        )
-        Spacer(Modifier.height(4.dp))
+        SectionLabel(text = "걸어서 가까운 방")
         Text(
             // 「N분 소요」라고 쓰면 목적지까지 N분으로 읽힌다 — 걷는 시간이라는 걸 못 박는다.
             text = "타러 가고, 내려서 걷는 시간을 더한 값이에요",
-            fontSize = 12.sp,
-            color = GrayAsh,
+            style = MoyeotaType.CaptionMd,
+            color = MoyeotaColor.TextMute,
         )
-        Spacer(Modifier.height(10.dp))
-        candidates.forEach { candidate ->
-            NearbyCandidateCard(candidate = candidate, onClick = { onCandidateClick(candidate) })
-            Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(4.dp))
+        // 그림자 카드 대신 줄 + Hairline(디자인 QA S16-6) — 시트 안에서 카드가 또 떠 있지 않게 한다
+        candidates.forEachIndexed { index, candidate ->
+            if (index > 0) HorizontalDivider(color = MoyeotaColor.Hairline)
+            NearbyCandidateRow(candidate = candidate, onClick = { onCandidateClick(candidate) })
         }
     }
 }
 
 @Composable
-private fun NearbyCandidateCard(candidate: MatchCandidate, onClick: () -> Unit) {
+private fun NearbyCandidateRow(candidate: MatchCandidate, onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .shadow(4.dp, RoundedCornerShape(14.dp), spotColor = Color(0x1A1B2A4A))
-            .clip(RoundedCornerShape(14.dp))
-            .background(MoyeotaColor.SurfaceCanvas)
+            .heightIn(min = 56.dp)
             .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .padding(vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = "${candidate.ride.origin} → ${candidate.ride.destination}",
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold,
+                style = MoyeotaType.BodyStrong,
                 color = MoyeotaColor.InkPrimary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Spacer(Modifier.height(4.dp))
             val headcount = headcountLabel(joined = candidate.ride.members.size, capacity = candidate.ride.capacity)
             if (headcount.isNotEmpty()) {
+                Spacer(Modifier.height(2.dp))
                 Text(
                     text = headcount,
-                    fontSize = 12.sp,
-                    color = GrayAsh,
+                    style = MoyeotaType.BodySm,
+                    color = MoyeotaColor.TextMute,
                     maxLines = 1,
                 )
             }
         }
         Spacer(Modifier.width(12.dp))
+        // 파랑이 아니라 본문 회색 SemiBold — 이 시트의 파랑은 CTA 하나다(S16-6)
         Text(
             text = walkMinutesLabel(candidate.walkSeconds),
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Bold,
-            color = MoyeotaColor.Primary500,
+            style = MoyeotaType.BodySm,
+            fontWeight = FontWeight.SemiBold,
+            color = MoyeotaColor.TextBody,
             maxLines = 1,
         )
     }
@@ -937,7 +870,7 @@ internal fun farePerPersonWon(totalFare: Int, people: Int): Int =
  * - 「같이 탈 사람」은 이 화면 CTA 와 **같은 말**이다. 「동승자」·「합승 인원」으로 바꾸지 말 것 —
  *   CTA 가 「같이 탈 사람 찾기」인데 안내가 다른 단어를 쓰면 같은 대상인지 한 번 더 생각해야 한다.
  * - 요금과 모순되지 않는다: 1명이면 [farePerPersonWon] 이 총액을 1 로 나눠 **1인 요금 = 총 요금**이
- *   되고(「예상 N분 · 총 7,900원」 칩과 「예상 요금 1인 7,900원」이 같은 수가 된다) 그건 혼자
+ *   되고(「예상 N분 · 총 7,900원」 칩과 푸터의 「1인 예상 요금 7,900원」이 같은 수가 된다) 그건 혼자
  *   출발하는 방의 **사실**이다. 그래서 요금 문구는 손대지 않았다 — 여기서 「요금을 전부 부담한다」를
  *   한 번 더 말하면 같은 사실을 두 자리에서 말하게 되고, 한 줄 안내가 두 줄로 늘어난다.
  */
@@ -970,10 +903,9 @@ internal fun walkMinutesLabel(walkSeconds: Int): String {
 private fun ConditionNotice(text: String) {
     Text(
         text = text,
-        fontSize = 13.sp,
-        fontWeight = FontWeight.Medium,
-        color = GrayMute,
-        modifier = Modifier.padding(bottom = 11.dp),
+        style = MoyeotaType.BodySm,
+        color = MoyeotaColor.TextMute,
+        modifier = Modifier.padding(bottom = 12.dp),
     )
 }
 
@@ -988,20 +920,18 @@ private fun ConditionNotice(text: String) {
  */
 @Composable
 private fun PickerSection(label: String, trailing: String? = null, content: @Composable () -> Unit) {
-    Column(modifier = Modifier.fillMaxWidth().padding(bottom = 11.dp)) {
+    Column(modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = label,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold,
+                style = MoyeotaType.BodyStrong,
                 color = MoyeotaColor.InkPrimary,
                 modifier = Modifier.weight(1f),
             )
             if (trailing != null) {
                 Text(
                     text = trailing,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
+                    style = MoyeotaType.CaptionMd,
                     color = MoyeotaColor.TextMute,
                 )
             }
@@ -1014,73 +944,26 @@ private fun PickerSection(label: String, trailing: String? = null, content: @Com
 @Composable
 private fun ConditionRow(label: String, chips: @Composable () -> Unit) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 11.dp),
+        // 칩이 48dp 터치 영역을 가지므로(MoyeotaChip) 위아래 4dp 만 더해 줄 높이 56dp 가 된다
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             text = label,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Bold,
+            style = MoyeotaType.BodyStrong,
             color = MoyeotaColor.InkPrimary,
         )
         Spacer(Modifier.width(12.dp))
         // 칩 행이 **남는 폭 안에서** 오른쪽 정렬된다. 예전엔 라벨 뒤 Spacer(weight) + 고정폭 칩이라
         // 작은 폰(360dp)에서 칩 3개가 카드 밖으로 밀려 「500m」이 잘리고 선택 칩의 파란 배경이 카드
-        // 모서리를 넘어 보였다(실기 QA). 칩 자체도 좁아졌다(ConditionChip 패딩 20 → 14dp).
+        // 모서리를 넘어 보였다(실기 QA). 칩은 앱 공용 [MoyeotaChip] 이고 칩 사이는 8dp(터치 간격 규칙)다.
         Row(
             modifier = Modifier.weight(1f),
-            horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.End),
+            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             chips()
         }
-    }
-}
-
-// 와이어프레임 스타일 칩 — 선택 시 Primary 솔리드, 미선택 시 흰색 + 그림자
-// (핀 조정 화면의 출발지/도착지 토글도 같은 칩을 쓴다 — 모듈 내부라 internal)
-@Composable
-internal fun ConditionChip(
-    text: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-    /** 넓은 패딩 — 핀 조정 화면(16a)의 출발지/도착지 토글이 쓴다 */
-    wide: Boolean = false,
-) {
-    val bg = if (selected) MoyeotaColor.Primary500 else MoyeotaColor.SurfaceCanvas
-    val fg = if (selected) MoyeotaColor.TextOnDark else GraySlate
-    Box(
-        modifier = Modifier
-            .height(32.dp)
-            .shadow(if (selected) 0.dp else 3.dp, RoundedCornerShape(18.dp), spotColor = Color(0x1A1B2A4A))
-            .clip(RoundedCornerShape(18.dp))
-            .background(bg)
-            .clickable { onClick() }
-            .padding(horizontal = if (wide) 28.dp else 14.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = text,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Bold,
-            color = fg,
-            maxLines = 1,
-            softWrap = false,
-        )
-    }
-}
-
-@Composable
-private fun DashedVerticalLine(modifier: Modifier = Modifier, color: Color = Color(0xFFB9C6DE)) {
-    Canvas(modifier = modifier.size(width = 3.dp, height = 30.dp)) {
-        drawLine(
-            color = color,
-            start = Offset(size.width / 2f, 0f),
-            end = Offset(size.width / 2f, size.height),
-            strokeWidth = 2.dp.toPx(),
-            cap = StrokeCap.Round,
-            pathEffect = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 4.dp.toPx())),
-        )
     }
 }
 

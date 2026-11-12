@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -39,13 +38,12 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.semantics.stateDescription
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.core.designsystem.theme.MoyeotaShape
 import com.moyeota.core.designsystem.theme.MoyeotaType
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -101,7 +99,7 @@ private fun BoxScope.HighlightBand(itemHeight: Dp) {
             .align(Alignment.Center)
             .fillMaxWidth()
             .height(itemHeight)
-            .background(MoyeotaColor.SurfaceSoft, RoundedCornerShape(8.dp)),
+            .background(MoyeotaColor.SurfaceSoft, MoyeotaShape.Small),
     )
 }
 
@@ -276,7 +274,7 @@ private fun SnapWheelPickerPreview() {
             label = "출발 시",
             modifier = Modifier.weight(1f),
         )
-        Text(text = "시", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = MoyeotaColor.InkPrimary)
+        Text(text = "시", style = MoyeotaType.HeadingMd, color = MoyeotaColor.InkPrimary)
         SnapWheelPicker(
             items = listOf("00", "10", "20", "30", "40", "50"),
             selectedIndex = 3,
@@ -284,6 +282,6 @@ private fun SnapWheelPickerPreview() {
             label = "출발 분",
             modifier = Modifier.weight(1f),
         )
-        Text(text = "분", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = MoyeotaColor.InkPrimary)
+        Text(text = "분", style = MoyeotaType.HeadingMd, color = MoyeotaColor.InkPrimary)
     }
 }

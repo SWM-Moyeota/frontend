@@ -33,16 +33,25 @@ internal fun routePlaces(departure: String, destination: String): List<RoutePlac
  *
  * 이름표와 장소를 **한 Text** 에 담는다 — 두 Text 로 나누면 말줄임이 장소 쪽에만 걸리게 폭을 따로
  * 계산해야 하고, 스크린리더도 한 문장(「출발지: 강남역」)으로 읽는 편이 자연스럽다.
- * 탐색 카드의 출발·도착 줄도 다듬기 단계에서 이 조각으로 옮겨 두 화면이 어긋나지 않게 할 예정이다.
+ * 24 채팅 목록과 17 탐색 목록이 **이 조각 하나**를 쓴다(디자인 QA E5) — 두 화면의 이름표 모양이 어긋나지 않게.
+ *
+ * @param emphasizePlace 장소를 `BodyStrong`·`InkPrimary` 로 — **장소가 그 줄의 제목인 자리**에서만 켠다
+ *   (17 실시간 목록: 줄에 방 이름 같은 다른 제목이 없다). 이름표는 그대로 `BodySm`·`TextMute` 라 두 화면의
+ *   「출발지:」는 같은 모양이다. 기본값 false 가 24 채팅 목록의 모양(방 이름이 제목, 장소는 부제)이다
  */
 @Composable
-internal fun RoutePlaceLine(place: RoutePlace, modifier: Modifier = Modifier) {
+internal fun RoutePlaceLine(place: RoutePlace, modifier: Modifier = Modifier, emphasizePlace: Boolean = false) {
     Text(
         text = buildAnnotatedString {
-            withStyle(SpanStyle(color = MoyeotaColor.TextMute)) { append("${place.label}: ") }
-            withStyle(SpanStyle(color = MoyeotaColor.TextBody)) { append(place.place) }
+            withStyle(MoyeotaType.BodySm.toSpanStyle().copy(color = MoyeotaColor.TextMute)) {
+                append("${place.label}: ")
+            }
+            withStyle(SpanStyle(color = if (emphasizePlace) MoyeotaColor.InkPrimary else MoyeotaColor.TextBody)) {
+                append(place.place)
+            }
         },
-        style = MoyeotaType.BodySm,
+        // 강조할 때는 문단 기준을 BodyStrong 으로 둬 줄 높이가 15sp 장소에 맞는다(이름표는 위에서 13sp 로 덮는다)
+        style = if (emphasizePlace) MoyeotaType.BodyStrong else MoyeotaType.BodySm,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
         modifier = modifier,

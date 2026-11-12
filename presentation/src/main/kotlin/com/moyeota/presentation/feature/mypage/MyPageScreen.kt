@@ -1,6 +1,5 @@
 package com.moyeota.presentation.feature.mypage
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -13,11 +12,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -26,23 +23,26 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.AvatarCircle
+import com.moyeota.core.designsystem.component.ChevronIcon
+import com.moyeota.core.designsystem.component.ExternalLinkIcon
 import com.moyeota.core.designsystem.component.MoyeotaBottomBar
+import com.moyeota.core.designsystem.component.MoyeotaConfirmDialog
 import com.moyeota.core.designsystem.component.MoyeotaTab
+import com.moyeota.core.designsystem.component.MoyeotaTabHeader
 import com.moyeota.core.designsystem.component.NoticeBanner
 import com.moyeota.core.designsystem.component.NoticeKind
+import com.moyeota.core.designsystem.component.SectionLabel
 import com.moyeota.core.designsystem.component.StatusBarSpacer
+import com.moyeota.core.designsystem.component.TextLinkButton
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.core.designsystem.theme.MoyeotaShape
+import com.moyeota.core.designsystem.theme.MoyeotaSpacing
+import com.moyeota.core.designsystem.theme.MoyeotaType
 import com.moyeota.presentation.core.SupportLinkTargets
 import com.moyeota.presentation.core.UserNameState
 import com.moyeota.presentation.core.appVersionName
@@ -51,13 +51,6 @@ import com.moyeota.presentation.core.openSupportEmail
 import com.moyeota.presentation.core.openWebPage
 import java.time.Instant
 import java.time.temporal.ChronoUnit
-
-// 와이어프레임 그레이 (core token 미정의 색 — 화면 재현용)
-private val CanvasBg = Color(0xFFF5F7FA)
-private val GrayMute = Color(0xFF8A93A0)
-private val GrayAsh = Color(0xFF9AA1AC)
-private val SoftDivider = Color(0xFFE4E9F0)
-private val CardShadow = Color(0x0F1B2A4A)
 
 /**
  * 35 · 마이페이지 · 설정 [S24]
@@ -73,7 +66,8 @@ private val CardShadow = Color(0x0F1B2A4A)
  *         노쇼 기록                           ›   ← 2026-11-06 추가
  * [설정]  알림 설정                          ↗
  * [안내]  개인정보 처리방침 / 이용약관 / 문의하기   ↗   ← 한 카드, 구분선
- * [계정]  로그아웃 / 탈퇴하기(빨강)            ›   ← 한 카드, 구분선
+ * [계정]  로그아웃                           ›
+ *         탈퇴하기                                ← 카드 밖 회색 글자 링크 (2026-11 디자인 QA M2)
  *         탈퇴하면 계정과 저장한 정보가 사라지고…
  *                      v1.0                      ← 가운데
  * ```
@@ -99,6 +93,14 @@ private val CardShadow = Color(0x0F1B2A4A)
  *    (그전의 오탭 보호는 40dp 간격이었는데, 간격으로 떼어 놓으려면 로그아웃을 작게 둬야 했다.)
  * 3. **버전은 맨 아래 가운데로.** 로그아웃 줄 오른쪽에 있던 값이라, 로그아웃이 카드로 들어가면서
  *    같이 들어가면 행 안에 뜻이 다른 두 정보가 섞인다.
+ *
+ * ### 2026-11 디자인 QA — 떠 있는 카드를 걷어 냈다
+ * - 카드의 그림자를 없앴다. 회색 바탕 위 흰 카드는 면의 차이만으로 묶음이 읽힌다 — 그림자까지 얹으면
+ *   카드마다 떠 있어 화면 전체가 들뜬다(G4). 모서리 18 → 12dp, 안쪽 여백 20 → 16dp, 프로필 카드 104 → 80dp
+ * - **「탈퇴하기」는 카드 밖으로 뗐다**(M2). 위 2번의 「색으로 가른다」는 한 카드 안에 빨간 행을 두는 방식이었는데,
+ *   되돌릴 수 없는 동작은 자주 쓰는 행 옆이 아니라 **공간으로도** 떨어져 있어야 한다(destructive-nav-separation).
+ *   그래서 로그아웃만 카드에 남기고, 탈퇴는 카드 아래 회색 글자 링크로 둔다 — 37 이 이미 빨간
+ *   「탈퇴하기」 버튼과 비밀번호 확인을 갖고 있어 여기서까지 빨강으로 부를 이유가 없다.
  *
  * 상태(디스크립션):
  * - **없는 기능은 행을 만들지 않는다.** 고객센터는 서버 API 가 없어 빠져 있고
@@ -175,7 +177,8 @@ fun MyPageScreen(
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize().background(CanvasBg)) {
+    // 묶음 목록(inset-grouped) 화면이라 바탕은 SurfaceSoft 다 — 흰 카드가 면의 차이로 묶음이 된다(G2)
+    Column(modifier = Modifier.fillMaxSize().background(MoyeotaColor.SurfaceSoft)) {
         StatusBarSpacer()
 
         Column(
@@ -184,28 +187,21 @@ fun MyPageScreen(
                 .fillMaxWidth()
                 .verticalScroll(rememberScrollState()),
         ) {
-            Spacer(Modifier.height(16.dp))
-            Text(
-                text = "마이페이지",
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold,
-                color = MoyeotaColor.InkPrimary,
-                modifier = Modifier.padding(horizontal = 16.dp),
-            )
+            // 탭 첫 화면의 머리줄 — 채팅·동승 탭과 같은 크기·여백이다(G7)
+            MoyeotaTabHeader(title = "마이페이지")
 
-            Spacer(Modifier.height(17.dp))
+            Spacer(Modifier.height(8.dp))
             // 프로필 카드 → 36 프로필 수정. 꺾쇠는 "눌러서 갈 곳이 있다"는 표시다
             // — 갈 화면이 없던 동안에는 일부러 꺾쇠도 탭 동작도 두지 않았다.
             Row(
                 modifier = Modifier
-                    .padding(horizontal = 16.dp)
+                    .padding(horizontal = MoyeotaSpacing.ScreenGutter)
                     .fillMaxWidth()
-                    .height(104.dp)
-                    .shadow(4.dp, RoundedCornerShape(18.dp), spotColor = CardShadow)
-                    .clip(RoundedCornerShape(18.dp))
+                    .height(80.dp)
+                    .clip(MoyeotaShape.Card)
                     .background(MoyeotaColor.SurfaceCanvas)
                     .clickable { onEditProfile() }
-                    .padding(horizontal = 20.dp),
+                    .padding(horizontal = 16.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 // 아바타의 인증 체크 배지는 두지 않는다 — 서버가 학교·재직 인증 여부를 주지 않는
@@ -225,20 +221,19 @@ fun MyPageScreen(
                     size = 56.dp,
                     imageUrl = (userName as? UserNameState.Resolved)?.imageUrl,
                 )
-                Spacer(Modifier.size(14.dp))
+                Spacer(Modifier.size(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     when (userName) {
                         // 조회 전 — 폴백 문구가 스쳐 보이지 않게 자리만 잡아 둔다
                         UserNameState.Loading -> Box(
                             modifier = Modifier
                                 .size(width = 88.dp, height = 18.dp)
-                                .background(SoftDivider, RoundedCornerShape(6.dp)),
+                                .background(MoyeotaColor.Hairline, MoyeotaShape.Small),
                         )
                         is UserNameState.Resolved -> Text(
                             text = userName.name ?: "이름 미설정",
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = if (userName.name != null) MoyeotaColor.InkPrimary else GrayMute,
+                            style = MoyeotaType.HeadingLg,
+                            color = if (userName.name != null) MoyeotaColor.InkPrimary else MoyeotaColor.TextMute,
                         )
                     }
                     Spacer(Modifier.height(4.dp))
@@ -253,12 +248,11 @@ fun MyPageScreen(
                         // 세 번째 값이 수정 가능해지면 이 라벨은 더 못 늘어난다. 그때가 「프로필 수정」
                         // 으로 넓힐 자리다.
                         text = "닉네임·사진 바꾸기",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = GrayMute,
+                        style = MoyeotaType.CaptionMd,
+                        color = MoyeotaColor.TextMute,
                     )
                 }
-                ChevronRightIcon()
+                ChevronIcon()
             }
 
             // 제재 배너는 **프로필 카드 바로 아래**다. 「계정에 무슨 문제가 있나」를 찾아 들어온
@@ -276,7 +270,7 @@ fun MyPageScreen(
                         NoShowSanctionKind.COUNTED -> NoticeKind.WAITING
                     },
                     text = sanction.text,
-                    modifier = Modifier.padding(horizontal = 16.dp),
+                    modifier = Modifier.padding(horizontal = MoyeotaSpacing.ScreenGutter),
                 )
             }
 
@@ -290,10 +284,10 @@ fun MyPageScreen(
             if (versionLabel != null) {
                 Text(
                     text = versionLabel,
-                    fontSize = 11.sp,
-                    color = GrayAsh,
+                    style = MoyeotaType.CaptionMd,
+                    color = MoyeotaColor.TextMute,
                     textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = MoyeotaSpacing.ScreenGutter),
                 )
             }
 
@@ -305,34 +299,31 @@ fun MyPageScreen(
     }
 
     if (logoutConfirming) {
-        AlertDialog(
-            onDismissRequest = { logoutConfirming = false },
-            title = { Text(text = "로그아웃할까요?", fontSize = 17.sp, fontWeight = FontWeight.Bold) },
-            text = { Text(text = "다시 이용하려면 아이디로 로그인해야 해요", fontSize = 14.sp) },
-            confirmButton = {
-                TextButton(onClick = {
-                    logoutConfirming = false
-                    onLogout()
-                }) {
-                    Text(text = "로그아웃", fontWeight = FontWeight.Bold, color = MoyeotaColor.Danger500)
-                }
+        // 앱 공용 확인 다이얼로그(G11). 확인 버튼은 예전처럼 빨강 — 세션이 끝나는 이탈이다
+        MoyeotaConfirmDialog(
+            title = "로그아웃할까요?",
+            body = "다시 이용하려면 아이디로 로그인해야 해요",
+            confirmText = "로그아웃",
+            onConfirm = {
+                logoutConfirming = false
+                onLogout()
             },
-            dismissButton = {
-                TextButton(onClick = { logoutConfirming = false }) {
-                    Text(text = "취소", color = GrayMute)
-                }
-            },
-            containerColor = MoyeotaColor.SurfaceCanvas,
+            onDismiss = { logoutConfirming = false },
+            dismissText = "취소",
+            destructive = true,
         )
     }
 }
 
 /**
- * 머리말 + 카드 + (있으면) 카드 아래 한 줄.
+ * 머리말 + 카드 + (있으면) 카드 밖 회색 링크 + (있으면) 그 아래 한 줄.
  *
- * 행마다 아이콘을 두지 않는다 — 이 앱에는 아이콘 자산이 없고, 글자 네 개짜리 목록에서 급조한
- * 아이콘은 구분이 아니라 장식이다. 대신 오른쪽 기호 두 개에만 뜻을 준다
- * ([MyPageRowMark]: ↗ = 앱 밖, › = 앱 안).
+ * 행마다 아이콘을 두지 않는다 — 글자 네 개짜리 목록에서 행마다 붙인 아이콘은 구분이 아니라 장식이다.
+ * 대신 오른쪽 기호 두 개에만 뜻을 준다([MyPageRowMark]: 바깥 화살표 = 앱 밖, 꺾쇠 = 앱 안). 두 기호는
+ * 디자인시스템의 그린 아이콘 한 벌([ExternalLinkIcon]·[ChevronIcon], 16dp)을 쓴다.
+ *
+ * **되돌릴 수 없는 행([MyPageRow.danger])은 카드에 넣지 않는다**(디자인 QA M2) — 카드 아래 회색 글자
+ * 링크로 떼어 자주 쓰는 행과 공간으로 떨어뜨린다. 모델(`myPageGroups`)의 행 순서와 동작은 그대로다.
  *
  * 빈 그룹은 `myPageGroups` 가 미리 걸러내므로 여기 오지 않는다. 그래도 방어로 한 줄 둔다
  * — 빈 카드는 "고장난 메뉴"로 보이고, 머리말만 남으면 더 이상하다.
@@ -340,98 +331,75 @@ fun MyPageScreen(
 @Composable
 private fun MyPageMenuCard(group: MyPageGroup, onAction: (MyPageAction) -> Unit) {
     if (group.rows.isEmpty()) return
-    Text(
+    val cardRows = group.rows.filterNot { it.danger }
+    val linkRows = group.rows.filter { it.danger }
+    SectionLabel(
         text = group.label,
-        fontSize = 12.sp,
-        fontWeight = FontWeight.Bold,
-        color = GrayAsh,
-        modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+        modifier = Modifier.padding(horizontal = MoyeotaSpacing.ScreenGutter),
     )
-    Column(
-        modifier = Modifier
-            .padding(horizontal = 16.dp)
-            .fillMaxWidth()
-            .shadow(4.dp, RoundedCornerShape(18.dp), spotColor = CardShadow)
-            .clip(RoundedCornerShape(18.dp))
-            .background(MoyeotaColor.SurfaceCanvas),
-    ) {
-        group.rows.forEachIndexed { index, row ->
-            if (index > 0) {
-                // 구분선은 글자 시작선에 맞춰 들여 둔다 — 카드 폭을 꽉 채우면 행이 카드에서 떨어져 보인다
-                Box(
+    if (cardRows.isNotEmpty()) {
+        Column(
+            modifier = Modifier
+                .padding(horizontal = MoyeotaSpacing.ScreenGutter)
+                .fillMaxWidth()
+                .clip(MoyeotaShape.Card)
+                .background(MoyeotaColor.SurfaceCanvas),
+        ) {
+            cardRows.forEachIndexed { index, row ->
+                if (index > 0) {
+                    // 구분선은 글자 시작선에 맞춰 들여 둔다 — 카드 폭을 꽉 채우면 행이 카드에서 떨어져 보인다
+                    HorizontalDivider(
+                        color = MoyeotaColor.Hairline,
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                    )
+                }
+                Row(
                     modifier = Modifier
-                        .padding(horizontal = 20.dp)
                         .fillMaxWidth()
-                        .height(1.dp)
-                        .background(SoftDivider),
-                )
-            }
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(56.dp)
-                    .clickable { onAction(row.action) }
-                    .padding(horizontal = 20.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = row.text,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Medium,
-                    // 되돌릴 수 없는 행만 색이 다르다. 카드 안에서 유일한 빨강이라야 경고로 읽힌다.
-                    color = if (row.danger) MoyeotaColor.Danger500 else MoyeotaColor.InkPrimary,
-                    modifier = Modifier.weight(1f),
-                )
-                when (row.mark) {
-                    MyPageRowMark.EXTERNAL -> ExternalLinkIcon()
-                    MyPageRowMark.CHEVRON -> ChevronRightIcon()
+                        .height(56.dp)
+                        .clickable { onAction(row.action) }
+                        .padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = row.text,
+                        style = MoyeotaType.BodyMd,
+                        color = MoyeotaColor.InkPrimary,
+                        modifier = Modifier.weight(1f),
+                    )
+                    when (row.mark) {
+                        MyPageRowMark.EXTERNAL -> ExternalLinkIcon()
+                        MyPageRowMark.CHEVRON -> ChevronIcon()
+                    }
                 }
             }
         }
     }
+    linkRows.forEach { row ->
+        // 글자 링크의 안쪽 여백(8dp)만큼 덜 들여 글자 시작을 카드 가장자리(16dp)에 맞춘다
+        TextLinkButton(
+            text = row.text,
+            onClick = { onAction(row.action) },
+            color = MoyeotaColor.TextMute,
+            style = MoyeotaType.BodySm,
+            modifier = Modifier.padding(start = MoyeotaSpacing.ScreenGutter - 8.dp, top = 4.dp),
+        )
+    }
     if (group.caption != null) {
         Text(
-            // 카드 **아래**에 둔다. 행 안에 넣으면 56dp 행이 두 줄로 늘어나 다른 행과 높이가 달라지고,
-            // 카드 위에 두면 머리말과 붙어 무엇에 걸리는 말인지 흐려진다.
+            // 카드(와 탈퇴 링크) **아래**에 둔다. 행 안에 넣으면 56dp 행이 두 줄로 늘어나 다른 행과 높이가
+            // 달라지고, 카드 위에 두면 머리말과 붙어 무엇에 걸리는 말인지 흐려진다.
             text = group.caption,
-            fontSize = 11.sp,
-            color = GrayAsh,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+            style = MoyeotaType.CaptionMd,
+            color = MoyeotaColor.TextMute,
+            modifier = Modifier.padding(
+                start = MoyeotaSpacing.ScreenGutter,
+                end = MoyeotaSpacing.ScreenGutter,
+                top = if (linkRows.isEmpty()) 8.dp else 0.dp,
+            ),
         )
     }
     Spacer(Modifier.height(24.dp))
-}
-
-// 아이콘 라이브러리 없이 그리는 꺾쇠(›) — 앱 안에서 다음 화면으로 간다는 표시
-@Composable
-private fun ChevronRightIcon(modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier.size(18.dp)) {
-        val w = size.width
-        val h = size.height
-        val strokeWidth = 2.dp.toPx()
-        drawLine(GrayAsh, Offset(w * 0.38f, h * 0.24f), Offset(w * 0.66f, h * 0.5f), strokeWidth, StrokeCap.Round)
-        drawLine(GrayAsh, Offset(w * 0.38f, h * 0.76f), Offset(w * 0.66f, h * 0.5f), strokeWidth, StrokeCap.Round)
-    }
-}
-
-/**
- * 외부로 나간다는 표시(↗). 글꼴에 따라 빠질 수 있는 유니코드 화살표 대신 직접 그린다.
- *
- * 같은 패키지의 37 회원 탈퇴도 이것을 쓴다(「자세히 보기」) — 기호의 뜻이 두 화면에서 어긋나면
- * 규칙 자체가 무의미해진다. 세 번째 화면이 쓰게 되면 `core/designsystem` 으로 올릴 자리다.
- */
-@Composable
-internal fun ExternalLinkIcon(modifier: Modifier = Modifier, tint: Color = GrayAsh) {
-    Canvas(modifier = modifier.size(16.dp)) {
-        val w = size.width
-        val h = size.height
-        val strokeWidth = 1.8.dp.toPx()
-        // 대각선 ↗
-        drawLine(tint, Offset(w * 0.22f, h * 0.78f), Offset(w * 0.78f, h * 0.22f), strokeWidth, StrokeCap.Round)
-        // 화살머리 두 변
-        drawLine(tint, Offset(w * 0.42f, h * 0.22f), Offset(w * 0.78f, h * 0.22f), strokeWidth, StrokeCap.Round)
-        drawLine(tint, Offset(w * 0.78f, h * 0.22f), Offset(w * 0.78f, h * 0.58f), strokeWidth, StrokeCap.Round)
-    }
 }
 
 // 운영 주소가 채워진 지금 모습 — 「안내」 카드에 세 행이 선다
@@ -490,7 +458,7 @@ private fun MyPageScreenNoNamePreview() {
 // 36 에서 사진을 고른 사용자. **프리뷰에서는 회색 원이 보이는 게 정상이다** — 프리뷰 샌드박스에는
 // 네트워크가 없어 요청이 실패하고, AvatarCircle 이 그걸 빈 원으로 떨어뜨린다. 그래서 이 프리뷰가
 // 고정하는 건 사진 자체가 아니라 **사진이 실린 상태에서도 카드 레이아웃이 그대로인가**다
-// (56dp 원 + 14dp 간격 + 두 줄 글자 + 꺾쇠가 104dp 카드 안에 들어가는가). 사진은 실기에서 본다.
+// (56dp 원 + 12dp 간격 + 두 줄 글자 + 꺾쇠가 80dp 카드 안에 들어가는가). 사진은 실기에서 본다.
 @Preview(showBackground = true, widthDp = 393, heightDp = 852, name = "프로필 사진 있음")
 @Composable
 private fun MyPageScreenWithPhotoPreview() {

@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
@@ -29,13 +28,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.core.designsystem.theme.MoyeotaElevation
+import com.moyeota.core.designsystem.theme.MoyeotaShape
+import com.moyeota.core.designsystem.theme.mapOverlayShadow
+import com.moyeota.core.designsystem.theme.sheetShadow
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.offset
 import androidx.compose.runtime.rememberCoroutineScope
@@ -229,8 +231,9 @@ fun MapSheetScaffold(
                 .offset { IntOffset(0, hidePx.roundToInt()) }
                 .fillMaxWidth()
                 .onSizeChanged { sheetHeightPx = it.height }
-                .shadow(14.dp, RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp), spotColor = SheetShadow)
-                .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
+                // 시트 가장자리만 그림자를 갖는다(G4 — 8dp). 시트 **안의** 카드·칩에는 그림자를 두지 않는다
+                .sheetShadow(MoyeotaShape.Sheet)
+                .clip(MoyeotaShape.Sheet)
                 .background(MoyeotaColor.SurfaceCanvas),
         ) {
             // 드래그 손잡이 — 핸들과 그 아래 항상 보이는 줄 전체가 실제 드래그 타깃이다
@@ -305,11 +308,12 @@ private enum class SheetAnchor { HIDDEN, COLLAPSED, EXPANDED }
 /** 손잡이 줄 높이 = 위 12dp + 손잡이 4dp + 아래 12dp. 손잡이만 남을 때 보이는 높이이기도 하다. */
 private val SheetHandleZoneHeight: Dp = 28.dp
 
-// 시트 그림자 — 16·21 이 함께 쓰던 값
-private val SheetShadow = Color(0x141B2A4A)
-
-/** 지도 위에 얹는 흰 알약 배지의 그림자 — 요약 칩·「위치 조정」 버튼이 함께 쓴다 */
-val MapOverlayShadow = Color(0x1A1B2A4A)
+/**
+ * 지도 위에 얹는 흰 알약 배지의 그림자 색 — 요약 칩·「위치 조정」 버튼이 함께 쓴다.
+ * 값은 [MoyeotaColor.ShadowOverlay] 하나다(이 이름은 기존 호출부를 위해 남긴다). 새 코드는
+ * `Modifier.mapOverlayShadow(shape)` 를 쓴다 — 높이까지 [MoyeotaElevation.MapOverlay] 로 묶여 있다.
+ */
+val MapOverlayShadow: Color = MoyeotaColor.ShadowOverlay
 
 /** [MapSheetScaffold] 시트 안쪽 좌우 여백 — 16·21 이 같은 값을 쓴다 */
 val MapSheetContentPadding: Dp = 16.dp
@@ -323,8 +327,8 @@ fun MapOverlayPill(
     Box(
         modifier = modifier
             .height(30.dp)
-            .shadow(3.dp, RoundedCornerShape(15.dp), spotColor = MapOverlayShadow)
-            .clip(RoundedCornerShape(15.dp))
+            .mapOverlayShadow(MoyeotaShape.Pill)
+            .clip(MoyeotaShape.Pill)
             .background(MoyeotaColor.SurfaceCanvas)
             .padding(horizontal = 14.dp),
         contentAlignment = Alignment.Center,

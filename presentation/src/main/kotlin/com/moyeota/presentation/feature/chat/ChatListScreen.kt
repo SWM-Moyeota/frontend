@@ -14,36 +14,31 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.AvatarCircle
 import com.moyeota.core.designsystem.component.MoyeotaBottomBar
 import com.moyeota.core.designsystem.component.MoyeotaTab
+import com.moyeota.core.designsystem.component.MoyeotaTabHeader
 import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.core.designsystem.theme.MoyeotaSpacing
+import com.moyeota.core.designsystem.theme.MoyeotaType
+import com.moyeota.core.designsystem.theme.tabularNums
 import com.moyeota.domain.model.ChatMessageType
 import com.moyeota.domain.model.ChatRoomStatus
 import com.moyeota.domain.model.MyChatRoom
 import com.moyeota.presentation.core.RoutePlace
 import com.moyeota.presentation.core.RoutePlaceLine
 import com.moyeota.presentation.core.routePlaces
-
-private val CanvasBg = Color(0xFFF5F7FA)
-private val GrayMute = Color(0xFF8A93A0)
-private val GrayAsh = Color(0xFF9AA1AC)
 
 /**
  * 24 · 채팅 목록 — 내가 속한 채팅방(GET /chat-rooms/me)
@@ -62,59 +57,51 @@ fun ChatListScreen(
     onRoomClick: (MyChatRoom) -> Unit = {},
     onTabSelect: (MoyeotaTab) -> Unit = {},
 ) {
-    Column(modifier = Modifier.fillMaxSize().background(CanvasBg)) {
-        Column(modifier = Modifier.fillMaxWidth().background(MoyeotaColor.SurfaceCanvas)) {
-            StatusBarSpacer()
-            Text(
-                text = "채팅",
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-                color = MoyeotaColor.InkPrimary,
-                modifier = Modifier.padding(horizontal = 24.dp, vertical = 14.dp),
-            )
-        }
+    // 흰 바탕 위 꽉 찬 행 목록(디자인 QA C1). 예전엔 회색 화면 위에 그림자 진 큰 카드 하나를 띄우고 그 안에
+    // 행을 넣었다 — 카드가 행을 한 번 더 감싸 목록이 "판 위의 판"으로 보였다. 메신저 목록의 관습대로 행이
+    // 화면 폭을 다 쓰고, 행 사이는 글 시작선에 맞춘 얇은 선 하나로 나눈다.
+    Column(modifier = Modifier.fillMaxSize().background(MoyeotaColor.SurfaceCanvas)) {
+        StatusBarSpacer()
+        MoyeotaTabHeader(title = "채팅")
 
         Column(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp),
+                .verticalScroll(rememberScrollState()),
         ) {
-            Spacer(Modifier.size(16.dp))
+            Spacer(Modifier.size(MoyeotaSpacing.Xs))
             if (rooms.isEmpty()) {
                 Text(
                     text = "아직 참여 중인 채팅방이 없어요. 동승에 합류하면 채팅방이 열려요",
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = GrayAsh,
-                    modifier = Modifier.padding(vertical = 24.dp),
+                    style = MoyeotaType.BodySm,
+                    color = MoyeotaColor.TextMute,
+                    modifier = Modifier.padding(horizontal = MoyeotaSpacing.ScreenGutter, vertical = MoyeotaSpacing.Lg),
                 )
             } else {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .shadow(4.dp, RoundedCornerShape(18.dp), spotColor = Color(0x1A1B2A4A))
-                        .clip(RoundedCornerShape(18.dp))
-                        .background(MoyeotaColor.SurfaceCanvas),
-                ) {
-                    rooms.forEachIndexed { index, item ->
-                        ChatRoomRow(item = item, onClick = { onRoomClick(item.room) })
-                        if (index != rooms.lastIndex) {
-                            HorizontalDivider(
-                                color = MoyeotaColor.Hairline,
-                                modifier = Modifier.padding(start = 66.dp, end = 20.dp),
-                            )
-                        }
+                rooms.forEachIndexed { index, item ->
+                    ChatRoomRow(item = item, onClick = { onRoomClick(item.room) })
+                    if (index != rooms.lastIndex) {
+                        HorizontalDivider(
+                            color = MoyeotaColor.Hairline,
+                            // 글 시작선(여백 16 + 아바타 48 + 간격 12)에 맞춘다 — 아바타 열은 끊김 없이 이어진다
+                            modifier = Modifier.padding(start = ChatRowTextStart),
+                        )
                     }
                 }
             }
-            Spacer(Modifier.size(16.dp))
+            Spacer(Modifier.size(MoyeotaSpacing.Md))
         }
 
         MoyeotaBottomBar(selected = MoyeotaTab.CHAT, onSelect = onTabSelect)
     }
 }
+
+/** 행 아바타 지름 — 40 → 48dp(디자인 QA C1). 부제가 두 줄인 행(약 76dp)에서도 얼굴이 작아 보이지 않게 */
+private val ChatRowAvatarSize = 48.dp
+
+/** 행 글 묶음이 시작하는 x — 구분선도 여기서 시작한다 */
+private val ChatRowTextStart = MoyeotaSpacing.ScreenGutter + ChatRowAvatarSize + MoyeotaSpacing.Sm
 
 /**
  * 목록 부제 — 한 줄 글([Line]) 또는 경로 두 줄([Route]).
@@ -145,7 +132,8 @@ internal fun chatRoomSubtitle(item: ChatRoomListItem): ChatRoomSubtitle {
     val last = item.room.membership.lastMessage
     if (last != null) {
         val preview = when (last.type) {
-            ChatMessageType.LOCATION -> "📍 위치를 공유했어요"
+            // 이모지를 앞에 붙이지 않는다 — 글꼴마다 모양이 달라지고 문장만으로 뜻이 선다(디자인 QA C2)
+            ChatMessageType.LOCATION -> "위치를 공유했어요"
             ChatMessageType.TEXT -> last.content
         }
         return ChatRoomSubtitle.Line(if (active) preview else "종료 · $preview")
@@ -177,31 +165,31 @@ private fun ChatRoomRow(item: ChatRoomListItem, onClick: () -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .clickable { onClick() }
-            .padding(horizontal = 18.dp, vertical = 14.dp),
+            .padding(horizontal = MoyeotaSpacing.ScreenGutter, vertical = MoyeotaSpacing.Sm),
     ) {
         // 제목이 부르는 사람의 얼굴([ChatRoomListItem.peerImageUrl]) — 제목과 **같은 멤버 목록**에서
         // 뽑아 Route 가 실어 보낸다. 참여자를 못 받은 방은 제목이 경로로 떨어지고 여기도 회색 원이다.
         // 부제가 두 줄이 되어 행이 높아져도 아바타는 행 가운데에 선다.
-        AvatarCircle(size = 40.dp, imageUrl = item.peerImageUrl, modifier = Modifier.align(Alignment.CenterVertically))
-        Spacer(Modifier.size(10.dp))
+        AvatarCircle(size = ChatRowAvatarSize, imageUrl = item.peerImageUrl, modifier = Modifier.align(Alignment.CenterVertically))
+        Spacer(Modifier.size(MoyeotaSpacing.Sm))
         // 글 묶음과 오른쪽 시각은 **제목의 기준선**에 맞춘다 — 부제가 두 줄이 된 행에서 시각이 행 가운데로
         // 내려가면 어느 줄의 시각인지 흐려진다(디자인 QA 4-10).
         Column(modifier = Modifier.weight(1f).alignByBaseline()) {
             Text(
                 text = title,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold,
+                style = MoyeotaType.HeadingMd,
                 color = MoyeotaColor.InkPrimary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            Spacer(Modifier.height(2.dp))
             when (subtitle) {
                 is ChatRoomSubtitle.Line -> Text(
                     text = subtitle.text,
-                    fontSize = 12.sp,
+                    style = MoyeotaType.BodySm,
                     // 안 읽은 방은 미리보기를 진하게 — 배지와 함께 「새 대화」를 두 신호로 알린다
-                    fontWeight = if (unread) FontWeight.SemiBold else FontWeight.Medium,
-                    color = if (unread) MoyeotaColor.InkPrimary else GrayMute,
+                    fontWeight = if (unread) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (unread) MoyeotaColor.InkPrimary else MoyeotaColor.TextMute,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -212,16 +200,15 @@ private fun ChatRoomRow(item: ChatRoomListItem, onClick: () -> Unit) {
                 }
             }
         }
-        Spacer(Modifier.size(8.dp))
+        Spacer(Modifier.size(MoyeotaSpacing.Xs))
         Column(horizontalAlignment = Alignment.End, modifier = Modifier.alignByBaseline()) {
             if (timeLabel != null) {
                 Text(
                     text = timeLabel,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = GrayAsh,
+                    style = MoyeotaType.CaptionMd.tabularNums(),
+                    color = MoyeotaColor.TextMute,
                 )
-                Spacer(Modifier.size(6.dp))
+                Spacer(Modifier.size(MoyeotaSpacing.Xs))
             }
             // 안읽음 배지 — 서버가 개수를 주면 숫자(99+ 상한), 개수 없는 구버전 응답이면 점
             if (unread) {
@@ -255,9 +242,9 @@ private fun UnreadBadge(count: Int?) {
     ) {
         Text(
             text = label,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Bold,
-            color = MoyeotaColor.SurfaceCanvas,
+            style = MoyeotaType.CaptionSm.tabularNums(),
+            fontWeight = FontWeight.SemiBold,
+            color = MoyeotaColor.TextOnDark,
         )
     }
 }

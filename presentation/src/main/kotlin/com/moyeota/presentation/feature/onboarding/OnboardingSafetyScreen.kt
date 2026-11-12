@@ -2,7 +2,6 @@ package com.moyeota.presentation.feature.onboarding
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,25 +12,23 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.NavigationBarSpacer
 import com.moyeota.core.designsystem.component.PageDots
 import com.moyeota.core.designsystem.component.PrimaryCtaButton
 import com.moyeota.core.designsystem.component.StatusBarSpacer
+import com.moyeota.core.designsystem.component.TextLinkButton
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.core.designsystem.theme.MoyeotaShape
 import com.moyeota.core.designsystem.theme.MoyeotaType
 
 /**
@@ -63,25 +60,19 @@ fun OnboardingSafetyScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(MoyeotaColor.SurfaceSoft),
+            .background(MoyeotaColor.SurfaceCanvas),
     ) {
         StatusBarSpacer()
 
-        // 건너뛰기 (우상단)
+        // 건너뛰기 (우상단) — 48dp 터치 + 물결(디자인 QA G12). 링크 안쪽 8dp 만큼 줄 여백을 줄여
+        // 글자 끝이 16dp 화면 여백에 선다
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(horizontal = 8.dp),
             horizontalArrangement = Arrangement.End,
         ) {
-            Text(
-                text = "건너뛰기",
-                style = MoyeotaType.ButtonMd,
-                color = MoyeotaColor.TextMute,
-                modifier = Modifier
-                    .clickable { onSkip() }
-                    .padding(8.dp),
-            )
+            TextLinkButton(text = "건너뛰기", onClick = onSkip, color = MoyeotaColor.TextMute)
         }
 
         Spacer(Modifier.height(24.dp))
@@ -97,7 +88,7 @@ fun OnboardingSafetyScreen(
 
         Text(
             text = OnboardingMeetingCopy.headline,
-            style = MoyeotaType.DisplayMd.copy(fontSize = 26.sp, letterSpacing = (-0.52).sp),
+            style = MoyeotaType.DisplayMd,
             color = MoyeotaColor.InkPrimary,
             textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth(),
@@ -107,7 +98,7 @@ fun OnboardingSafetyScreen(
 
         Text(
             text = OnboardingMeetingCopy.body,
-            style = MoyeotaType.BodyMd.copy(lineHeight = 22.sp, letterSpacing = (-0.3).sp),
+            style = MoyeotaType.BodyMd,
             color = MoyeotaColor.TextMute,
             textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth(),
@@ -129,16 +120,13 @@ fun OnboardingSafetyScreen(
             modifier = Modifier.padding(horizontal = 16.dp),
         )
 
-        Spacer(Modifier.height(18.dp))
+        Spacer(Modifier.height(8.dp))
 
-        Text(
+        TextLinkButton(
             text = "이미 계정이 있어요",
-            style = MoyeotaType.BodySm.copy(fontWeight = FontWeight.Medium, letterSpacing = (-0.26).sp),
+            onClick = onAlreadyHaveAccount,
             color = MoyeotaColor.TextMute,
-            modifier = Modifier
-                .align(Alignment.CenterHorizontally)
-                .clickable { onAlreadyHaveAccount() }
-                .padding(8.dp),
+            modifier = Modifier.align(Alignment.CenterHorizontally),
         )
 
         Spacer(Modifier.weight(1f))
@@ -147,18 +135,19 @@ fun OnboardingSafetyScreen(
     }
 }
 
-// 일러스트 — 지도(만날 곳: 파란 점 → 빨간 핀). 공유 배지는 보호자 공유 기능이 없어 뺐고, 지도를 카드 가운데에 둔다
+// 일러스트 — 지도(만날 곳: 파란 점 → 빨간 핀). 공유 배지는 보호자 공유 기능이 없어 뺐고, 지도를 가운데에 둔다.
+// 뒤에 깔던 옅은 파란 판(r24)은 걷었다(디자인 QA A3) — 지도 목업이 흰 화면에 바로 선다.
 @Composable
 private fun SafetyIllustration(modifier: Modifier = Modifier) {
     Box(
-        modifier = modifier.background(MoyeotaColor.Primary50, RoundedCornerShape(24.dp)),
+        modifier = modifier,
         contentAlignment = Alignment.Center,
     ) {
-        // 지도 목업 (경로 라인) — 배지가 빠진 만큼 키워 카드를 채운다
+        // 지도 목업 (경로 라인) — 배지가 빠진 만큼 키워 자리를 채운다
         Box(
             modifier = Modifier
                 .size(width = 260.dp, height = 180.dp)
-                .background(Color(0xFFE2E7EF), RoundedCornerShape(16.dp)),
+                .background(MoyeotaColor.Border, MoyeotaShape.Card),
         ) {
             Canvas(modifier = Modifier.fillMaxSize()) {
                 val start = Offset(size.width * 0.16f, size.height * 0.78f)
@@ -174,7 +163,7 @@ private fun SafetyIllustration(modifier: Modifier = Modifier) {
                 )
 
                 // 출발 지점 — 파란 점 (흰 테두리)
-                drawCircle(color = Color.White, radius = 9.dp.toPx() / 2f + 2.dp.toPx(), center = start)
+                drawCircle(color = MoyeotaColor.SurfaceCanvas, radius = 9.dp.toPx() / 2f + 2.dp.toPx(), center = start)
                 drawCircle(color = MoyeotaColor.Primary500, radius = 9.dp.toPx() / 2f, center = start)
 
                 // 도착 지점 — 빨간 핀
@@ -188,7 +177,7 @@ private fun SafetyIllustration(modifier: Modifier = Modifier) {
                 }
                 drawPath(pinPath, color = MoyeotaColor.Danger500)
                 drawCircle(color = MoyeotaColor.Danger500, radius = pinRadius, center = pinCenter)
-                drawCircle(color = Color.White, radius = pinRadius * 0.35f, center = pinCenter)
+                drawCircle(color = MoyeotaColor.SurfaceCanvas, radius = pinRadius * 0.35f, center = pinCenter)
             }
         }
     }

@@ -201,9 +201,6 @@ class HomeViewModel(
 @Composable
 fun HomeRoute(
     repository: PlaceRepository,
-    // 이름은 NavHost 의 공용 홀더(UserProfileViewModel)가 세션당 한 번 받아 내려보낸다
-    // — 홈 진입마다 다시 조회하지 않는다.
-    userName: String? = null,
     /** 지금 진행 중인 내 방(ActivePartyViewModel.resolve 결과). 있으면 지도 위에 복귀 배너를 띄운다 */
     activeRide: Ride? = null,
     onSearchClick: () -> Unit = {},
@@ -223,7 +220,6 @@ fun HomeRoute(
     LaunchedEffect(Unit) { viewModel.refresh() }
 
     HomeScreen(
-        userName = userName,
         activeRide = activeRide,
         myLocation = myLocation.coordinates,
         favoritePlaces = favorites,

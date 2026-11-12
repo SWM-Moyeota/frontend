@@ -111,7 +111,7 @@ class ChatRoomTitleTest {
             myRoom(1, lastMessageAt = "2026-09-11T03:00:00Z", content = "35.1,129.0", type = ChatMessageType.LOCATION),
             "스모크일",
         )
-        assertEquals(ChatRoomSubtitle.Line("📍 위치를 공유했어요"), chatRoomSubtitle(location))
+        assertEquals(ChatRoomSubtitle.Line("위치를 공유했어요"), chatRoomSubtitle(location))
     }
 
     /**

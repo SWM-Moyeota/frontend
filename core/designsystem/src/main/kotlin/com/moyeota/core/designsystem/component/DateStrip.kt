@@ -33,7 +33,6 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -104,12 +103,12 @@ object DateStripDefaults {
  * - **8칸을 같은 폭으로** 나눠 한 줄에 담는다 — 달력은 한눈에 일주일이 보여야 달력이다. 360dp 이상에서는
  *   스크롤하지 않는다. 그보다 좁으면([DateStripDefaults.MinEqualCellWidth] 미만) 가로 스크롤로 떨어지고,
  *   그때는 **선택 칸이 화면 밖이면 그 칸까지 스크롤**해 보여 준다
- * - 글자: 요일 `CaptionMd`, 숫자 `BodyMd` 세미볼드, 기본 색 `TextBody`. **토요일 `Primary600` · 일요일
+ * - 글자: 요일 `CaptionMd`, 숫자 `BodyStrong`, 기본 색 `TextBody`. **토요일 `Primary600` · 일요일
  *   `Danger600`** — 500 이 아니라 600 인 이유는 12sp 글자가 4.5:1 대비를 넘게 하려는 것이고, `Primary500`
  *   은 선택 색이라 겹치면 토요일이 골라진 것처럼 보인다
  * - 선택: 숫자를 감싸는 36dp `Primary500` 원 + 흰 숫자. 요일 글자는 제 색을 지킨다
  * - 오늘: 숫자 아래 4dp `TextMute` 점(선택돼도 같다)
- * - 고를 수 없는 날([DateStripCell.enabled] false): 숫자 `TextAsh`, 누르지 못한다
+ * - 고를 수 없는 날([DateStripCell.enabled] false): 숫자 `TextPlaceholder`, 누르지 못한다
  * - 칩·테두리·그림자는 없다 — 카드 안에 또 하나의 카드를 만들지 않는다
  *
  * ### 터치 타깃
@@ -213,7 +212,7 @@ private fun DateStripCellView(
     }
     val dayColor = when {
         selected -> MoyeotaColor.TextOnDark
-        !cell.enabled -> MoyeotaColor.TextAsh
+        !cell.enabled -> MoyeotaColor.TextPlaceholder
         else -> toneColor
     }
     Box(
@@ -227,8 +226,7 @@ private fun DateStripCellView(
             Text(
                 text = cell.weekday,
                 style = MoyeotaType.CaptionMd,
-                fontWeight = FontWeight.Medium,
-                color = if (cell.enabled) toneColor else MoyeotaColor.TextAsh,
+                color = if (cell.enabled) toneColor else MoyeotaColor.TextPlaceholder,
                 modifier = Modifier.clearAndSetSemantics {},
             )
             Spacer(Modifier.height(2.dp))
@@ -240,8 +238,7 @@ private fun DateStripCellView(
             ) {
                 Text(
                     text = cell.day,
-                    style = MoyeotaType.BodyMd,
-                    fontWeight = FontWeight.SemiBold,
+                    style = MoyeotaType.BodyStrong,
                     color = dayColor,
                     modifier = Modifier.clearAndSetSemantics {},
                 )
@@ -276,9 +273,9 @@ private fun WeekDateStripPreview() {
         )
     }
     Column {
-        // 16 카드 안(좌우 36dp)과 17 시트(좌우 24dp)의 폭
-        WeekDateStrip(cells = cells, selectedIndex = 1, onSelect = {}, contentPadding = PaddingValues(horizontal = 36.dp))
+        // 16·17 시트 모두 좌우 16dp 화면 여백 안에 놓인다(디자인 QA G3)
+        WeekDateStrip(cells = cells, selectedIndex = 1, onSelect = {}, contentPadding = PaddingValues(horizontal = 16.dp))
         Spacer(Modifier.height(8.dp))
-        WeekDateStrip(cells = cells, selectedIndex = 2, onSelect = {}, contentPadding = PaddingValues(horizontal = 24.dp))
+        WeekDateStrip(cells = cells, selectedIndex = 2, onSelect = {}, contentPadding = PaddingValues(horizontal = 16.dp))
     }
 }

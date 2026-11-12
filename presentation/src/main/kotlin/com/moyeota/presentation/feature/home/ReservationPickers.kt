@@ -9,13 +9,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.clearAndSetSemantics
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.SnapWheelPicker
 import com.moyeota.core.designsystem.component.WeekDateStrip
 import com.moyeota.core.designsystem.component.WheelPickerFrame
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.core.designsystem.theme.MoyeotaType
 import java.time.LocalDate
 import java.time.LocalTime
 
@@ -115,8 +114,7 @@ internal fun ReservationTimeWheel(
 private fun WheelUnit(text: String) {
     Text(
         text = text,
-        fontSize = 16.sp,
-        fontWeight = FontWeight.Bold,
+        style = MoyeotaType.HeadingMd,
         color = MoyeotaColor.InkPrimary,
         // 휠 줄의 문장(「18시」)이 단위를 이미 말한다 — 이 글자가 따로 읽히면 「시」가 한 번 더 들린다
         modifier = Modifier.clearAndSetSemantics {},

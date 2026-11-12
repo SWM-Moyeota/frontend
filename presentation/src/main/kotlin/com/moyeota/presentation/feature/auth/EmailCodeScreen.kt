@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -34,9 +33,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
@@ -44,13 +43,18 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import com.moyeota.core.designsystem.component.ChevronIcon
+import com.moyeota.core.designsystem.component.IconStrokeWidth
+import com.moyeota.core.designsystem.component.MoyeotaIconSize
 import com.moyeota.core.designsystem.component.MoyeotaTopBar
 import com.moyeota.core.designsystem.component.NavigationBarSpacer
 import com.moyeota.core.designsystem.component.PrimaryCtaButton
 import com.moyeota.core.designsystem.component.StatusBarSpacer
+import com.moyeota.core.designsystem.component.TextLinkButton
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.core.designsystem.theme.MoyeotaShape
 import com.moyeota.core.designsystem.theme.MoyeotaType
+import com.moyeota.core.designsystem.theme.tabularNums
 import kotlinx.coroutines.delay
 
 // 07 · 인증 코드 [S03]
@@ -62,9 +66,6 @@ import kotlinx.coroutines.delay
 private const val CODE_LENGTH = 6
 private const val RESEND_COOLDOWN_SECONDS = 4 * 60 + 31 // 재발송 쿨다운 4:31
 private const val CODE_EXPIRY_SECONDS = 10 * 60 // 코드 유효시간 10분
-
-private val LabelGray = Color(0xFF8A93A0)
-private val FooterGray = Color(0xFF9AA1AC)
 
 @Composable
 fun EmailCodeScreen(
@@ -114,13 +115,13 @@ fun EmailCodeScreen(
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize().imePadding().background(MoyeotaColor.SurfaceSoft)) {
+    Column(modifier = Modifier.fillMaxSize().imePadding().background(MoyeotaColor.SurfaceCanvas)) {
         StatusBarSpacer()
         MoyeotaTopBar(
             title = "",
             onBack = onBack,
             actions = {
-                Text(text = "1 / 5", style = MoyeotaType.BodySm, color = LabelGray)
+                Text(text = "1 / 5", style = MoyeotaType.BodySm, color = MoyeotaColor.TextMute)
             },
         )
         EmailCodeProgressBar(progress = 1f / 5f)
@@ -140,10 +141,10 @@ fun EmailCodeScreen(
             Spacer(Modifier.height(12.dp))
             Text(
                 text = "$email 로 보냈어요",
-                style = MoyeotaType.BodySm.copy(fontSize = 14.sp),
+                style = MoyeotaType.BodySm,
                 color = MoyeotaColor.TextMute,
             )
-            Spacer(Modifier.height(28.dp))
+            Spacer(Modifier.height(32.dp))
 
             EmailCodeInput(
                 code = code,
@@ -157,16 +158,16 @@ fun EmailCodeScreen(
             )
 
             if (errorText != null) {
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(8.dp))
                 Text(
                     text = errorText.orEmpty(),
-                    style = MoyeotaType.BodySm.copy(fontWeight = FontWeight.Bold),
+                    style = MoyeotaType.BodySm.copy(fontWeight = FontWeight.SemiBold),
                     color = MoyeotaColor.Danger500,
                     modifier = Modifier.clickable { resend() },
                 )
             }
 
-            Spacer(Modifier.height(18.dp))
+            Spacer(Modifier.height(8.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -174,24 +175,27 @@ fun EmailCodeScreen(
             ) {
                 Text(
                     text = "남은 시간 ${formatSeconds(resendRemaining)}",
-                    style = MoyeotaType.BodySm.copy(fontWeight = FontWeight.Bold),
+                    // 초가 바뀔 때마다 글자 폭이 흔들리지 않게 숫자 폭을 고정한다
+                    style = MoyeotaType.BodySm.copy(fontWeight = FontWeight.SemiBold).tabularNums(),
                     color = MoyeotaColor.Waiting600,
                 )
-                Text(
+                // 글자 오른쪽 끝을 화면 여백에 맞춘다(TextLinkButton 의 안쪽 8dp 만큼 바깥으로)
+                TextLinkButton(
                     text = "코드 다시 받기",
-                    style = MoyeotaType.BodySm.copy(fontWeight = FontWeight.Bold),
-                    color = MoyeotaColor.Primary500,
-                    modifier = Modifier.clickable { resend() },
+                    onClick = { resend() },
+                    style = MoyeotaType.BodySm.copy(fontWeight = FontWeight.SemiBold),
+                    modifier = Modifier.offset(x = 8.dp),
                 )
             }
 
-            Spacer(Modifier.height(22.dp))
+            Spacer(Modifier.height(16.dp))
 
+            // 흰 화면 위라 그림자 대신 Border 선으로 묶음을 나눈다(디자인 QA G4)
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .shadow(2.dp, RoundedCornerShape(18.dp))
-                    .background(Color.White, RoundedCornerShape(18.dp)),
+                    .clip(MoyeotaShape.Card)
+                    .border(1.dp, MoyeotaColor.Border, MoyeotaShape.Card),
             ) {
                 // 스팸함 안내 — 동작 없음
                 EmailCodeHelpRow(
@@ -201,7 +205,7 @@ fun EmailCodeScreen(
                 )
                 HorizontalDivider(
                     color = MoyeotaColor.Hairline,
-                    modifier = Modifier.padding(horizontal = 20.dp),
+                    modifier = Modifier.padding(horizontal = 16.dp),
                 )
                 // 「메일 주소 다시 입력하기」 → 06
                 EmailCodeHelpRow(
@@ -223,11 +227,11 @@ fun EmailCodeScreen(
                 enabled = code.length == CODE_LENGTH,
                 loading = submitting,
             )
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(12.dp))
             Text(
                 text = "코드는 10분 뒤에 만료돼요",
                 style = MoyeotaType.CaptionMd,
-                color = FooterGray,
+                color = MoyeotaColor.TextMute,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -257,29 +261,23 @@ private fun EmailCodeInput(
             Box {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(9.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     repeat(CODE_LENGTH) { index ->
                         val filled = index < code.length
                         val active = index == code.length && enabled
+                        // 칸 하나하나가 입력칸이다 — 그림자 대신 MoyeotaTextField 와 같은 테두리 규칙(쉬는 칸 BorderStrong)
                         val borderColor = when {
                             isError -> MoyeotaColor.Danger500
                             active -> MoyeotaColor.Primary500
-                            else -> null
+                            else -> MoyeotaColor.BorderStrong
                         }
                         Box(
                             modifier = Modifier
                                 .weight(1f)
                                 .height(64.dp)
-                                .shadow(2.dp, RoundedCornerShape(16.dp))
-                                .background(Color.White, RoundedCornerShape(16.dp))
-                                .then(
-                                    if (borderColor != null) {
-                                        Modifier.border(1.5.dp, borderColor, RoundedCornerShape(16.dp))
-                                    } else {
-                                        Modifier
-                                    },
-                                ),
+                                .background(MoyeotaColor.SurfaceCanvas, MoyeotaShape.Card)
+                                .border(if (isError || active) 1.5.dp else 1.dp, borderColor, MoyeotaShape.Card),
                             contentAlignment = Alignment.Center,
                         ) {
                             if (filled) {
@@ -293,7 +291,7 @@ private fun EmailCodeInput(
                                     modifier = Modifier
                                         .width(2.dp)
                                         .height(28.dp)
-                                        .background(MoyeotaColor.Primary500, RoundedCornerShape(1.dp)),
+                                        .background(MoyeotaColor.Primary500, MoyeotaShape.Pill),
                                 )
                             }
                         }
@@ -318,21 +316,22 @@ private fun EmailCodeHelpRow(
         modifier = Modifier
             .fillMaxWidth()
             .then(if (onClick != null) Modifier.clickable { onClick() } else Modifier)
-            .padding(horizontal = 20.dp, vertical = 14.dp),
+            .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         EmailCodeMailIcon()
-        Spacer(Modifier.width(11.dp))
+        Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = title,
-                style = MoyeotaType.BodySm.copy(fontSize = 14.sp, fontWeight = FontWeight.Bold),
+                style = MoyeotaType.BodyStrong,
                 color = MoyeotaColor.InkPrimary,
             )
-            Spacer(Modifier.height(3.dp))
-            Text(text = subtitle, style = MoyeotaType.CaptionMd, color = LabelGray)
+            Spacer(Modifier.height(4.dp))
+            Text(text = subtitle, style = MoyeotaType.BodySm, color = MoyeotaColor.TextMute)
         }
-        EmailCodeChevronIcon()
+        // 누를 수 있는 줄에만 꺾쇠를 둔다 — 안내뿐인 줄(스팸함)에 꺾쇠가 있으면 눌러도 아무 일 없는 버튼이 된다
+        if (onClick != null) ChevronIcon()
     }
 }
 
@@ -343,22 +342,22 @@ private fun EmailCodeProgressBar(progress: Float, modifier: Modifier = Modifier)
             .fillMaxWidth()
             .padding(horizontal = 16.dp)
             .height(4.dp)
-            .background(Color(0xFFE6EAF0), RoundedCornerShape(2.dp)),
+            .background(MoyeotaColor.Hairline, MoyeotaShape.Small),
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth(progress)
                 .fillMaxHeight()
-                .background(MoyeotaColor.Primary500, RoundedCornerShape(2.dp)),
+                .background(MoyeotaColor.Primary500, MoyeotaShape.Small),
         )
     }
 }
 
 @Composable
 private fun EmailCodeMailIcon(modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier.size(17.dp)) {
-        val stroke = 1.5.dp.toPx()
-        val color = Color(0xFF8A93A0)
+    Canvas(modifier = modifier.size(MoyeotaIconSize.Md)) {
+        val stroke = IconStrokeWidth.toPx() * (MoyeotaIconSize.Md / MoyeotaIconSize.Lg)
+        val color = MoyeotaColor.TextMute
         val top = size.height * 0.18f
         val bottom = size.height * 0.82f
         drawRoundRect(
@@ -379,28 +378,6 @@ private fun EmailCodeMailIcon(modifier: Modifier = Modifier) {
             color = color,
             start = Offset(size.width * 0.5f, size.height * 0.55f),
             end = Offset(size.width * 0.92f, top + stroke),
-            strokeWidth = stroke,
-            cap = StrokeCap.Round,
-        )
-    }
-}
-
-@Composable
-private fun EmailCodeChevronIcon(modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier.size(16.dp)) {
-        val stroke = 2.dp.toPx()
-        val color = Color(0xFFB6BEC9)
-        drawLine(
-            color = color,
-            start = Offset(size.width * 0.35f, size.height * 0.2f),
-            end = Offset(size.width * 0.7f, size.height * 0.5f),
-            strokeWidth = stroke,
-            cap = StrokeCap.Round,
-        )
-        drawLine(
-            color = color,
-            start = Offset(size.width * 0.7f, size.height * 0.5f),
-            end = Offset(size.width * 0.35f, size.height * 0.8f),
             strokeWidth = stroke,
             cap = StrokeCap.Round,
         )
