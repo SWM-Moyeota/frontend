@@ -11,7 +11,7 @@ import org.junit.Test
  *
  * | 판정이 참이면 | 화면 |
  * |---|---|
- * | 「매칭 화면으로 →」 배너를 그린다 | `ChatRoute` 가 `onOpenMatching` 을 넘긴다 → `ChatScreen` 이 `onOpenMatching != null` 일 때만 그린다 |
+ * | 「매칭 화면으로」 배너를 그린다 | `ChatRoute` 가 `onOpenMatching` 을 넘긴다 → `ChatScreen` 이 `onOpenMatching != null` 일 때만 그린다 |
  * | 「나가기」를 메뉴에서 **감춘다** | `canLeave = onOpenMatching == null` |
  *
  * 그래서 이 함수가 틀리면 **되돌릴 수 없는 「나가기」가 진행 중인 방에 노출되고**, 동시에 목록에서 들어온

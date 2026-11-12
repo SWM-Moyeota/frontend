@@ -1,5 +1,6 @@
 package com.moyeota.presentation.feature.explore
 
+import com.naver.maps.geometry.LatLng
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -294,6 +295,9 @@ fun JoinConfirmRoute(
         is JoinConfirmViewModel.UiState.Success -> JoinConfirmScreen(
             ride = current.ride,
             pickupDistanceMeters = pickupDistanceMeters(current.ride, myLocation.coordinates),
+            // 방 좌표를 하나도 못 쓸 때 지도가 보여 줄 「내 주변」. 권한이 없거나 fix 가 없으면 null 이고,
+            // 그때 지도는 앱 기본 카메라로 물러난다(SDK 기본값이 아니다 — [joinMapFallback]).
+            userPosition = myLocation.coordinates?.let { LatLng(it.latitude, it.longitude) },
             joining = join.joining,
             joinErrorMessage = join.errorMessage,
             onDismiss = onDismiss,

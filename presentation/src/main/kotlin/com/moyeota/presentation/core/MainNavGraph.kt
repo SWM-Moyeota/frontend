@@ -15,6 +15,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.runtime.SideEffect
+import android.os.Build
+import android.view.View
+import android.view.WindowInsetsController
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.LifecycleStartEffect
@@ -335,7 +341,7 @@ private fun MainNavHost(
     var createdPartyId by rememberSaveable { mutableStateOf<Long?>(null) }
 
     /**
-     * 16 도착지 확인을 **시간 정하기로 열까.** 17 탐색의 예약 탭에서 「＋ 새 동승 방 만들기」를 누른
+     * 16 도착지 확인을 **시간 정하기로 열까.** 17 탐색의 예약 탭에서 「새 동승 방 만들기」를 누른
      * 경우에만 참이다.
      *
      * 깃발을 쓰는 이유: 15 → 16 은 두 걸음이고 그 사이에 출발지·도착지가 정해진다. 경로 인자로
@@ -700,7 +706,6 @@ private fun MainNavHost(
             LaunchedEffect(Unit) { activePartyViewModel.refresh() }
             HomeRoute(
                 repository = placeRepository,
-                userName = (userName as? UserNameState.Resolved)?.name,
                 activeRide = activeRide,
                 onActiveRideClick = { activeRide?.let(::navigateToStage) },
                 onSearchClick = {
@@ -740,11 +745,16 @@ private fun MainNavHost(
                 },
             )
         }
-        // 16 은 15 위에 뜨는 모달 — 스크림 탭·닫기로만 닫힌다
+        // 16 은 15 위에 뜨는 모달 — 스크림 탭·닫기로만 닫힌다.
+        //
+        // decorFitsSystemWindows = false (디자인 QA S16-1): 기본값이면 다이얼로그 창이 상태바·제스처 바 **사이**에만
+        // 그려져, 두 바 자리에 다이얼로그의 어두운 딤(rgb 98,99,100)이 띠처럼 남았다. 창을 화면 끝까지 넓히면
+        // 16 의 StatusBarSpacer·NavigationBarSpacer 가 실제 인셋을 받아 그 자리를 흰색으로 칠한다.
         dialog(
             Routes.DESTINATION_CONFIRM,
-            dialogProperties = DialogProperties(usePlatformDefaultWidth = false),
+            dialogProperties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
         ) {
+            DialogLightSystemBars()
             DestinationConfirmRoute(
                 repository = rideRepository,
                 // 핀 조정·GPS 출발지의 좌표를 실주소로 되짚는다 (GET /places/reverse)
@@ -913,7 +923,7 @@ private fun MainNavHost(
         composable(Routes.CHAT) {
             ChatRoute(
                 repository = chatRepository,
-                // 열린 방이 진행 중인 그 방이면 헤더에 「매칭 화면으로 →」가 뜨고 「나가기」가 사라진다.
+                // 열린 방이 진행 중인 그 방이면 헤더에 「매칭 화면으로」 줄이 뜨고 「나가기」가 사라진다.
                 // **판정의 1순위는 채팅방 id 다** — 이 경로의 방은 목록 응답(`GET /chat-rooms/me`)으로
                 // 만든 것이어서 partyId 가 0(모름)이고, 그걸로 비교하면 늘 "내 방이 아니다"가 됐다.
                 activeChatRoomId = activeChatRoomId,
@@ -1107,3 +1117,36 @@ private val SignupDraftSaver = listSaver<SignupDraft, Any>(
         )
     },
 )
+
+/**
+ * 지금 다이얼로그 창의 상태바·내비게이션바 아이콘을 **어두운 색**(light appearance)으로 맞춘다.
+ *
+ * 다이얼로그는 액티비티와 다른 창이라 액티비티의 시스템 바 설정을 물려받지 않는다. 16 처럼 창을 시스템 바
+ * 아래까지 넓혀 흰색으로 칠하면(decorFitsSystemWindows = false) 기본값인 흰 아이콘이 흰 바탕에 묻혀 시계·배터리가
+ * 사라진다. 그래서 그 창에서만 아이콘을 어둡게 바꾼다 — 창이 닫히면 설정도 함께 사라진다.
+ *
+ * androidx.core(`WindowCompat`)를 쓰지 않는 이유: presentation 모듈은 그 의존성을 직접 갖지 않는다.
+ * 플랫폼 API 로 충분하다(30+ 는 `insetsController`, 그 아래는 systemUiVisibility 플래그).
+ */
+@Composable
+private fun DialogLightSystemBars() {
+    val view = LocalView.current
+    SideEffect {
+        val window = (view.parent as? DialogWindowProvider)?.window ?: return@SideEffect
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val mask = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
+                WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+            window.insetsController?.setSystemBarsAppearance(mask, mask)
+        } else {
+            setLegacyLightSystemBars(window.decorView)
+        }
+    }
+}
+
+/** API 29 이하 — `insetsController` 가 없어 옛 systemUiVisibility 플래그로 같은 일을 한다 */
+@Suppress("DEPRECATION")
+private fun setLegacyLightSystemBars(decor: View) {
+    var flags = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) flags = flags or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+    decor.systemUiVisibility = decor.systemUiVisibility or flags
+}

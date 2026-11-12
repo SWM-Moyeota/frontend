@@ -1,11 +1,7 @@
 package com.moyeota.presentation.feature.auth
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -15,43 +11,33 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import com.moyeota.core.designsystem.component.CheckIcon
+import com.moyeota.core.designsystem.component.MoyeotaIconSize
 import com.moyeota.core.designsystem.component.NavigationBarSpacer
 import com.moyeota.core.designsystem.component.PrimaryCtaButton
 import com.moyeota.core.designsystem.component.StatusBarSpacer
+import com.moyeota.core.designsystem.component.TextLinkButton
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.core.designsystem.theme.MoyeotaSpacing
+import com.moyeota.core.designsystem.theme.MoyeotaType
 import com.moyeota.presentation.core.SupportLinks
 import com.moyeota.presentation.core.openWebPage
-
-private val ScreenBackground = Color(0xFFF5F7FA)
-private val TextSlate = Color(0xFF4B5563)
-private val TextFaint = Color(0xFF9AA1AC)
-private val CardShadow = Color(0x0F1B2A4A)
 
 /**
  * 04 시작 화면의 신뢰 불릿 두 줄. 둘 다 서버 동작으로 확인한 사실이다.
@@ -67,7 +53,9 @@ private val CardShadow = Color(0x0F1B2A4A)
  * - 「운행 중 위치를 지인과 공유할 수 있어요」 — **위치 공유 기능이 없다**
  *   (`docs/BACKEND-GAP-CLEANUP.md` §1 에서 보호자 공유·동승자 위치 보고를 전부 제거했다).
  *
- * 불릿은 **두 줄로 유지한다** — 카드 여백이 두 줄 기준으로 맞춰져 있다(아래 주석 참고).
+ * 불릿은 **두 줄로 유지한다** — 화면 높이가 두 줄 기준으로 맞춰져 있다.
+ * (2026-11 디자인 QA A1: 그림자 카드를 걷어내고 페이지 위에 바로 놓았다 — 카드 하나에 두 줄을 담으면
+ * "강조 상자"가 되어 바로 아래 CTA 와 시선을 다툰다.)
  */
 internal val LoginTrustBullets = listOf(
     "휴대폰 인증을 마친 사람만 가입해요",
@@ -100,7 +88,7 @@ internal fun signupConsentNotice(
     append("에 동의하게 돼요")
 }
 
-/** 주소가 있으면 링크로, 없으면 그냥 글자로 붙인다. 11sp 회색 문장에서 링크만 파랑 + 밑줄이다. */
+/** 주소가 있으면 링크로, 없으면 그냥 글자로 붙인다. 12sp 회색 문장에서 링크만 파랑 + 밑줄이다. */
 private fun AnnotatedString.Builder.appendLegalDocument(
     label: String,
     url: String?,
@@ -152,7 +140,7 @@ fun LoginScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(ScreenBackground),
+            .background(MoyeotaColor.SurfaceCanvas),
     ) {
         StatusBarSpacer()
 
@@ -161,49 +149,33 @@ fun LoginScreen(
                 .fillMaxWidth()
                 .weight(1f)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp),
+                .padding(horizontal = MoyeotaSpacing.ScreenGutter),
         ) {
             Spacer(Modifier.height(24.dp))
             Text(
                 text = "모여타",
+                style = MoyeotaType.HeadingMd,
                 color = MoyeotaColor.InkPrimary,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = (-0.3).sp,
             )
 
-            Spacer(Modifier.height(36.dp))
+            Spacer(Modifier.height(32.dp))
             Text(
                 text = "믿을 수 있는 사람과\n택시를 나눠 타요",
+                style = MoyeotaType.DisplayMd,
                 color = MoyeotaColor.InkPrimary,
-                fontSize = 26.sp,
-                fontWeight = FontWeight.Bold,
-                lineHeight = 36.sp,
-                letterSpacing = (-0.52).sp,
             )
 
-            Spacer(Modifier.height(18.dp))
+            Spacer(Modifier.height(16.dp))
             Text(
                 // 학교 이메일 인증은 가입 필수 경로가 아니다(마이페이지에서 나중에 추가하는 컨셉).
                 // 「학생만 · 학교 이메일로 확인」은 이제 사실이 아니라 지웠다.
                 text = "아이디로 간편하게 가입해요",
+                style = MoyeotaType.BodyMd,
                 color = MoyeotaColor.TextMute,
-                fontSize = 14.sp,
-                lineHeight = 20.sp,
-                letterSpacing = (-0.28).sp,
             )
 
-            Spacer(Modifier.height(26.dp))
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .shadow(3.dp, RoundedCornerShape(18.dp), ambientColor = CardShadow, spotColor = CardShadow)
-                    .background(Color.White, RoundedCornerShape(18.dp))
-                    // 불릿이 3개에서 2개로 줄어 카드가 세로로 납작해졌다 —
-                    // 행 간격·상하 여백을 함께 줄여 예전 비율(여백 ≒ 행 간격)을 유지한다
-                    .padding(horizontal = 20.dp, vertical = 20.dp),
-                verticalArrangement = Arrangement.spacedBy(20.dp),
-            ) {
+            Spacer(Modifier.height(24.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 // 「학교 인증을 마친 학생만 매칭돼요」는 삭제 — 가입에 학교 인증 단계가 없어 사실이 아니다
                 LoginTrustBullets.forEach { TrustBulletRow(text = it) }
             }
@@ -217,14 +189,14 @@ fun LoginScreen(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp),
+                .padding(horizontal = MoyeotaSpacing.ScreenGutter),
         ) {
             PrimaryCtaButton(
                 text = "이메일로 시작하기",
                 onClick = onEmailStart,
             )
 
-            Spacer(Modifier.height(18.dp))
+            Spacer(Modifier.height(4.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.Center,
@@ -232,86 +204,51 @@ fun LoginScreen(
             ) {
                 Text(
                     text = "이미 계정이 있어요",
+                    style = MoyeotaType.BodySm,
                     color = MoyeotaColor.TextMute,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                    lineHeight = 19.sp,
-                    letterSpacing = (-0.26).sp,
                 )
-                Spacer(Modifier.size(12.dp))
-                Text(
+                Spacer(Modifier.size(4.dp))
+                // 글자 크기 그대로 눌리던 링크(≈19dp, 눌림 표시 없음)를 48dp 터치 + 물결로 바꿨다(디자인 QA G12)
+                TextLinkButton(
                     text = "로그인",
-                    color = MoyeotaColor.Primary500,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold,
-                    lineHeight = 19.sp,
-                    letterSpacing = (-0.26).sp,
-                    modifier = Modifier.clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = onLogin,
-                    ),
+                    onClick = onLogin,
+                    color = MoyeotaColor.Primary600,
                 )
             }
 
-            Spacer(Modifier.height(11.dp))
+            Spacer(Modifier.height(4.dp))
             // 문구가 두 문서를 **이름으로** 부르므로 그 두 조각만 링크로 만든다. 2026-10-14 까지는
             // 줄 전체에 아무 일도 하지 않는 clickable 이 걸려 있었다(주소가 없어 열 곳이 없었다).
             // 이제 주소가 생겼고, 동의를 안내하는 자리에서 그 문서에 닿지 못하면 안내가 반쪽이다.
+            // 11sp `#9AA1AC`(2.6:1)는 읽혀야 하는 동의 고지에 너무 흐렸다 — 캡션 크기·TextMute 로 올린다
             Text(
                 text = consentNotice,
-                color = TextFaint,
-                fontSize = 11.sp,
-                lineHeight = 16.sp,
-                letterSpacing = (-0.22).sp,
+                style = MoyeotaType.CaptionMd,
+                color = MoyeotaColor.TextMute,
                 modifier = Modifier.align(Alignment.CenterHorizontally),
             )
-            Spacer(Modifier.height(28.dp))
+            Spacer(Modifier.height(24.dp))
         }
 
         NavigationBarSpacer()
     }
 }
 
-// 파란 체크 원 + 안내 문구 한 줄
+/**
+ * 회색 체크 + 안내 문구 한 줄.
+ *
+ * 예전엔 22dp 파란 원 안의 흰 체크였다 — 화면 아래 파란 CTA 와 같은 색 덩어리가 두 개 더 생겨
+ * "어디를 눌러야 하나"가 흐려졌다. 불릿은 누르는 것이 아니라 읽는 것이라 회색 선 아이콘으로 낮춘다.
+ */
 @Composable
 private fun TrustBulletRow(text: String) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(
-            modifier = Modifier
-                .size(22.dp)
-                .background(MoyeotaColor.Primary500, CircleShape),
-            contentAlignment = Alignment.Center,
-        ) {
-            CheckMarkIcon(iconSize = 12.dp, color = Color.White)
-        }
-        Spacer(Modifier.size(12.dp))
+        CheckIcon(size = MoyeotaIconSize.Sm, tint = MoyeotaColor.TextMute)
+        Spacer(Modifier.size(8.dp))
         Text(
             text = text,
-            color = TextSlate,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Medium,
-            lineHeight = 20.sp,
-            letterSpacing = (-0.28).sp,
-        )
-    }
-}
-
-// 아이콘 라이브러리 없이 그리는 체크 표시
-@Composable
-internal fun CheckMarkIcon(iconSize: androidx.compose.ui.unit.Dp, color: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier.size(iconSize)) {
-        val w = size.width
-        val h = size.height
-        val path = Path().apply {
-            moveTo(w * 0.15f, h * 0.55f)
-            lineTo(w * 0.42f, h * 0.8f)
-            lineTo(w * 0.85f, h * 0.25f)
-        }
-        drawPath(
-            path = path,
-            color = color,
-            style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round),
+            style = MoyeotaType.BodyMd,
+            color = MoyeotaColor.TextBody,
         )
     }
 }

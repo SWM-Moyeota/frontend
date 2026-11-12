@@ -16,12 +16,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.core.designsystem.theme.MoyeotaType
 import com.moyeota.domain.model.User
 import com.moyeota.domain.model.WithdrawnMemberNames
 
@@ -152,8 +153,7 @@ internal fun MemberAvatar(user: User, size: Dp = 40.dp, modifier: Modifier = Mod
         if (!imageDrawn) {
             Text(
                 text = initial,
-                fontSize = (size.value * 0.4f).sp,
-                fontWeight = FontWeight.Bold,
+                style = avatarInitialStyle(size),
                 color = if (user.isMe) MoyeotaColor.Primary600 else MoyeotaColor.TextMute,
             )
         }
@@ -180,6 +180,16 @@ internal fun MemberAvatar(user: User, size: Dp = 40.dp, modifier: Modifier = Mod
     }
 }
 
+/**
+ * 이니셜 글자 — 아바타 크기의 40% 를 **타입 표의 가장 가까운 단계**로 맞춘다(디자인 QA G3: 표 밖 크기 금지).
+ * 예전엔 `size × 0.4` 를 그대로 써서 48dp 아바타에 19.2sp 같은 값이 나왔다.
+ */
+private fun avatarInitialStyle(size: Dp): TextStyle = when {
+    size >= 72.dp -> MoyeotaType.DisplayMd.copy(fontWeight = FontWeight.SemiBold)
+    size >= 48.dp -> MoyeotaType.HeadingLg
+    else -> MoyeotaType.HeadingMd
+}
+
 /** 「나」 배지 — 멤버 목록에서 내 줄을 한눈에 찾게 한다(isMe = publicId == 세션 uuid). */
 @Composable
 internal fun MeBadge(modifier: Modifier = Modifier) {
@@ -188,7 +198,7 @@ internal fun MeBadge(modifier: Modifier = Modifier) {
             .background(MoyeotaColor.Primary50, CircleShape)
             .padding(horizontal = 8.dp, vertical = 2.dp),
     ) {
-        Text(text = "나", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MoyeotaColor.Primary600)
+        Text(text = "나", style = MoyeotaType.CaptionSm, fontWeight = FontWeight.SemiBold, color = MoyeotaColor.Primary600)
     }
 }
 
@@ -256,6 +266,6 @@ internal fun HostBadge(modifier: Modifier = Modifier) {
             .background(MoyeotaColor.SurfaceSoft, CircleShape)
             .padding(horizontal = 8.dp, vertical = 2.dp),
     ) {
-        Text(text = "방장", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MoyeotaColor.TextMute)
+        Text(text = "방장", style = MoyeotaType.CaptionSm, fontWeight = FontWeight.SemiBold, color = MoyeotaColor.TextMute)
     }
 }

@@ -6,18 +6,16 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.core.designsystem.theme.MoyeotaShape
 import com.moyeota.core.designsystem.theme.MoyeotaType
 import com.moyeota.domain.model.AuthPolicy
 import com.moyeota.domain.model.Gender
@@ -197,9 +195,6 @@ internal val SignupGenderChoices: List<GenderChoice> = listOfNotNull(
     UndisclosedGenderChoice.takeIf { ServerAcceptsUndisclosedGender },
 )
 
-/** 선택지 칩 안의 글자색 (미선택 상태) */
-private val SlateGray = Color(0xFF4B5563)
-
 /**
  * 가입 폼의 한 줄 선택지 칩 — 성별 3택처럼 값이 몇 개 안 되는 선택에 쓴다.
  * (09 의 통신사 4택에서 쓰던 모양 그대로다)
@@ -212,7 +207,12 @@ private val SlateGray = Color(0xFF4B5563)
  *
  * 높이는 고정이 아니라 **최솟값**이다. 글꼴을 크게 쓰는 기기에서 「선택 안 함」은 두 줄이 되는데
  * 고정 44dp 였다면 둘째 줄이 잘려 「선택」만 남는다 — 선택지의 뜻이 반대로 읽히는 쪽이 칩 높이가
- * 들쭉날쭉한 쪽보다 나쁘다. 기본 배율에서는 셋 다 44dp 그대로다.
+ * 들쭉날쭉한 쪽보다 나쁘다. 기본 배율에서는 셋 다 48dp 그대로다.
+ *
+ * 모양 (디자인 QA G4·G6, 2026-11): 그림자를 걷고 **입력칸과 같은 테두리**(쉬는 칸 [MoyeotaColor.BorderStrong])를
+ * 준다 — 같은 열에 놓인 텍스트 필드와 한 가족으로 읽혀야 하고, 흰 화면 위 그림자 상자는 "떠 있는 카드"가
+ * 된다. 선택은 공용 칩과 같은 옅은 파랑 + 파란 테두리 + 진한 파랑 글자. 글자 굵기를 선택 여부로 바꾸지
+ * 않는다 — 굵기가 바뀌면 글자 폭이 달라져 칩을 누를 때 글자가 흔들린다. 높이 최솟값은 48dp(터치 타깃).
  */
 @Composable
 internal fun SignupChoiceChip(
@@ -221,18 +221,12 @@ internal fun SignupChoiceChip(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val shape = RoundedCornerShape(12.dp)
-    val base = if (selected) {
-        modifier
-            .heightIn(min = 44.dp)
-            .background(MoyeotaColor.Primary50, shape)
-            .border(1.5.dp, MoyeotaColor.Primary500, shape)
-    } else {
-        modifier
-            .heightIn(min = 44.dp)
-            .shadow(2.dp, shape)
-            .background(Color.White, shape)
-    }
+    val shape = MoyeotaShape.Card
+    val base = modifier
+        .heightIn(min = 48.dp)
+        .background(if (selected) MoyeotaColor.Primary50 else MoyeotaColor.SurfaceCanvas, shape)
+        .border(1.dp, if (selected) MoyeotaColor.Primary500 else MoyeotaColor.BorderStrong, shape)
+        .clip(shape)
     Box(
         modifier = base.selectable(
             selected = selected,
@@ -243,13 +237,11 @@ internal fun SignupChoiceChip(
     ) {
         Text(
             text = text,
-            style = MoyeotaType.BodySm.copy(
-                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-            ),
-            color = if (selected) MoyeotaColor.Primary500 else SlateGray,
+            style = MoyeotaType.ButtonMd,
+            color = if (selected) MoyeotaColor.Primary600 else MoyeotaColor.TextBody,
             textAlign = TextAlign.Center,
             // 3분할에서 테두리에 글자가 닿지 않게 한다. 360dp 폭 기준 칩 하나가 104dp 이고
-            // 「선택 안 함」은 13sp 에서 60dp 가 채 안 되므로 기본 배율에서는 한 줄로 들어간다.
+            // 「선택 안 함」은 14sp 에서 65dp 가 채 안 되므로 기본 배율에서는 한 줄로 들어간다.
             maxLines = 2,
             modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
         )

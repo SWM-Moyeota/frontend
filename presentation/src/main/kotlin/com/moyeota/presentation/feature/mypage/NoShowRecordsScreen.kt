@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
@@ -42,6 +41,7 @@ import com.moyeota.core.designsystem.component.SecondaryButton
 import com.moyeota.core.designsystem.component.StatusBadge
 import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.core.designsystem.theme.MoyeotaShape
 import com.moyeota.core.designsystem.theme.MoyeotaType
 import com.moyeota.domain.model.NoShowRecord
 import com.moyeota.domain.model.ObjectionStatus
@@ -188,7 +188,8 @@ internal fun NoShowRecordsScreen(
                         Text(
                             text = notice,
                             style = MoyeotaType.CaptionMd,
-                            color = MoyeotaColor.TextAsh,
+                            // 읽어야 하는 사실(「최근 N건만 보여요」)이라 장식 회색이 아니라 보조 글자색이다
+                            color = MoyeotaColor.TextMute,
                         )
                     }
                 }
@@ -244,7 +245,7 @@ private fun NoShowCard(item: NoShowItem, onObject: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
+            .clip(MoyeotaShape.Card)
             .background(MoyeotaColor.SurfaceCard)
             .padding(16.dp),
     ) {
@@ -281,7 +282,7 @@ private fun NoShowCard(item: NoShowItem, onObject: () -> Unit) {
         }
 
         if (item.note != null) {
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(8.dp))
             Text(text = item.note, style = MoyeotaType.BodySm, color = MoyeotaColor.TextMute)
         }
 
@@ -301,7 +302,7 @@ private fun TimeRow(label: String, value: String) {
         Text(
             text = label,
             style = MoyeotaType.BodySm,
-            color = MoyeotaColor.TextAsh,
+            color = MoyeotaColor.TextMute,
             modifier = Modifier.width(64.dp),
         )
         Text(text = value, style = MoyeotaType.BodySm, color = MoyeotaColor.TextBody)
@@ -359,7 +360,7 @@ private fun ObjectionSheet(
             modifier = Modifier
                 .padding(horizontal = 24.dp)
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(18.dp))
+                .clip(MoyeotaShape.Dialog)
                 .background(MoyeotaColor.SurfaceCanvas)
                 // 시트 안을 눌렀을 때 바깥 클릭(닫기)으로 새지 않게 막는다 — 쓴 글이 사라진다.
                 .clickable(
@@ -392,7 +393,7 @@ private fun ObjectionSheet(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 120.dp)
-                    .background(MoyeotaColor.SurfaceSoft, RoundedCornerShape(12.dp))
+                    .background(MoyeotaColor.SurfaceSoft, MoyeotaShape.Card)
                     .padding(horizontal = 16.dp, vertical = 12.dp),
             ) {
                 BasicTextField(
@@ -410,7 +411,7 @@ private fun ObjectionSheet(
                     Text(
                         text = OBJECTION_INPUT_PLACEHOLDER,
                         style = MoyeotaType.BodyMd,
-                        color = MoyeotaColor.TextAsh,
+                        color = MoyeotaColor.TextPlaceholder,
                     )
                 }
             }
@@ -437,7 +438,7 @@ private fun ObjectionSheet(
             }
 
             Spacer(Modifier.height(20.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 SecondaryButton(
                     text = if (terminal) "닫기" else "취소",
                     onClick = onDismiss,

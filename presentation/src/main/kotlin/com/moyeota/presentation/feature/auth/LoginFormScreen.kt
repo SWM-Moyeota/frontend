@@ -1,8 +1,6 @@
 package com.moyeota.presentation.feature.auth
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -11,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -24,14 +23,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.MoyeotaTextField
 import com.moyeota.core.designsystem.component.MoyeotaTopBar
 import com.moyeota.core.designsystem.component.NavigationBarSpacer
@@ -39,6 +36,7 @@ import com.moyeota.core.designsystem.component.NoticeBanner
 import com.moyeota.core.designsystem.component.NoticeKind
 import com.moyeota.core.designsystem.component.PrimaryCtaButton
 import com.moyeota.core.designsystem.component.StatusBarSpacer
+import com.moyeota.core.designsystem.component.TextLinkButton
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.core.designsystem.theme.MoyeotaTheme
 import com.moyeota.core.designsystem.theme.MoyeotaType
@@ -75,7 +73,7 @@ fun LoginFormScreen(
     // 형식 오류를 필드 에러로 단정하지 않고 CTA 활성 조건으로만 쓴다.
     val canSubmit = loginId.isNotBlank() && password.isNotBlank() && !submitting
 
-    Column(modifier = modifier.fillMaxSize().imePadding().background(MoyeotaColor.SurfaceSoft)) {
+    Column(modifier = modifier.fillMaxSize().imePadding().background(MoyeotaColor.SurfaceCanvas)) {
         StatusBarSpacer()
         MoyeotaTopBar(title = "로그인", onBack = onBack)
 
@@ -91,10 +89,10 @@ fun LoginFormScreen(
                 style = MoyeotaType.DisplayMd,
                 color = MoyeotaColor.InkPrimary,
             )
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(12.dp))
             Text(
                 text = "가입할 때 만든 아이디로 로그인해요",
-                style = MoyeotaType.BodySm.copy(fontSize = 14.sp),
+                style = MoyeotaType.BodySm,
                 color = MoyeotaColor.TextMute,
             )
 
@@ -103,7 +101,7 @@ fun LoginFormScreen(
                 NoticeBanner(kind = NoticeKind.INFO, text = noticeMessage)
             }
 
-            Spacer(Modifier.height(28.dp))
+            Spacer(Modifier.height(32.dp))
             MoyeotaTextField(
                 value = loginId,
                 // 아이디는 영소문자·숫자·_ 만 가능하다 (AuthPolicy.LOGIN_ID_PATTERN).
@@ -135,14 +133,13 @@ fun LoginFormScreen(
                     PasswordVisualTransformation()
                 },
                 trailing = {
-                    Text(
+                    // 글자만 눌리던 토글을 48dp 터치 + 물결로(디자인 QA G12). 글자 끝은 필드 안쪽 여백에 맞춘다
+                    TextLinkButton(
                         text = if (passwordVisible) "숨기기" else "보기",
-                        style = MoyeotaType.CaptionMd.copy(fontWeight = FontWeight.Bold),
+                        onClick = { passwordVisible = !passwordVisible },
                         color = MoyeotaColor.TextMute,
-                        modifier = Modifier.clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                        ) { passwordVisible = !passwordVisible },
+                        style = MoyeotaType.ButtonSm,
+                        modifier = Modifier.offset(x = 8.dp),
                     )
                 },
             )
@@ -153,7 +150,7 @@ fun LoginFormScreen(
                 NoticeBanner(kind = NoticeKind.ERROR, text = errorMessage)
             }
 
-            Spacer(Modifier.height(28.dp))
+            Spacer(Modifier.height(32.dp))
             PrimaryCtaButton(
                 text = "로그인",
                 onClick = { onSubmit(loginId.trim(), password) },
@@ -161,7 +158,7 @@ fun LoginFormScreen(
                 loading = submitting,
             )
 
-            Spacer(Modifier.height(18.dp))
+            Spacer(Modifier.height(4.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.Center,
@@ -172,19 +169,11 @@ fun LoginFormScreen(
                     style = MoyeotaType.BodySm,
                     color = MoyeotaColor.TextMute,
                 )
-                Spacer(Modifier.size(12.dp))
-                Text(
-                    text = "가입하기",
-                    style = MoyeotaType.BodySm.copy(fontWeight = FontWeight.Bold),
-                    color = MoyeotaColor.Primary500,
-                    modifier = Modifier.clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = onSignUp,
-                    ),
-                )
+                Spacer(Modifier.size(4.dp))
+                // 04 시작 화면의 「로그인」과 같은 링크 — 48dp 터치 + 물결(디자인 QA G12)
+                TextLinkButton(text = "가입하기", onClick = onSignUp)
             }
-            Spacer(Modifier.height(28.dp))
+            Spacer(Modifier.height(24.dp))
         }
         NavigationBarSpacer()
     }

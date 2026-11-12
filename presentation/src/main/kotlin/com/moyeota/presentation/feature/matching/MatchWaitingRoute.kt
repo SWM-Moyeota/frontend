@@ -1251,9 +1251,10 @@ internal fun canLeaveParty(ride: Ride): Boolean = isWaitingForMembers(ride.statu
  * 정원이 차면 서버가 배차를 시작해 이 단계가 아예 없었고, 그 분기를 [isMatchFull] 과 함께 지웠다.
  *
  * [canFinishParty] 와 **일부러 갈라 두었다**: 이쪽은 「방이 어떤 단계인가」, 저쪽은 「내가 누를 수
- * 있는가」다. 헤드라인(「같이 탈 사람이 모였어요」)·나가기 문구(「방 나가기」)처럼 방장 여부와
- * 상관없는 표시는 **이쪽**을 봐야 한다 — 저쪽을 보면 정원이 찬 방을 보고 있는 비방장에게
- * 「같이 탈 사람 찾는 중」이라고 거짓말을 하게 된다.
+ * 있는가」다. 나가기 문구(「방 나가기」)처럼 방장 여부와 상관없는 표시는 **이쪽**을 봐야 한다 —
+ * 저쪽을 보면 정원이 찬 방을 보고 있는 비방장에게 「그만 찾기」라고 거짓말을 하게 된다.
+ * (예전엔 머리줄 제목 「같이 탈 사람이 모였어요」도 이 값을 봤지만, 단계를 세 번 되풀이하던 그 제목은
+ * 디자인 QA W1 에서 지웠다.)
  */
 internal fun isFinishStage(status: RideStatus): Boolean = status == RideStatus.MATCHED
 

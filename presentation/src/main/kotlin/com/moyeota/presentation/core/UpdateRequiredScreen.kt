@@ -11,14 +11,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.PrimaryCtaButton
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.core.designsystem.theme.MoyeotaSpacing
 import com.moyeota.core.designsystem.theme.MoyeotaTheme
+import com.moyeota.core.designsystem.theme.MoyeotaType
 
 /**
  * 서버가 「이 버전은 더 못 쓴다」고 답했을 때의 화면([UpdateRequirement.BLOCKED]).
@@ -38,23 +38,22 @@ import com.moyeota.core.designsystem.theme.MoyeotaTheme
 fun UpdateRequiredScreen(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     Box(
-        modifier = modifier.fillMaxSize().background(MoyeotaColor.SurfaceSoft),
+        modifier = modifier.fillMaxSize().background(MoyeotaColor.SurfaceCanvas),
         contentAlignment = Alignment.Center,
     ) {
         Column(
-            modifier = Modifier.padding(horizontal = 24.dp),
+            modifier = Modifier.padding(horizontal = MoyeotaSpacing.ScreenGutter),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(
                 text = "업데이트가 필요해요",
-                fontSize = 22.sp,
-                fontWeight = FontWeight.Bold,
+                style = MoyeotaType.HeadingXl,
                 color = MoyeotaColor.InkPrimary,
             )
             Text(
                 text = "지금 버전으로는 합승을 이어갈 수 없어요\n스토어에서 최신 버전을 받아 주세요",
-                fontSize = 15.sp,
+                style = MoyeotaType.BodyMd,
                 color = MoyeotaColor.TextBody,
                 textAlign = TextAlign.Center,
             )

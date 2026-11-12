@@ -14,6 +14,7 @@ import com.moyeota.domain.model.AuthException
 import com.moyeota.domain.model.ProfileImage
 import com.moyeota.domain.repository.AuthRepository
 import com.moyeota.presentation.core.UserNameState
+import com.moyeota.presentation.core.profileLoginIdOrNull
 import com.moyeota.presentation.feature.auth.NicknameCheckState
 import com.moyeota.presentation.feature.auth.NicknamePolicy
 import com.moyeota.presentation.feature.auth.authUserMessage
@@ -474,6 +475,9 @@ fun ProfileEditRoute(
 
     ProfileEditScreen(
         nickname = state.nickname,
+        // 읽기 전용 — 이 화면의 상태(ViewModel)에 담지 않는다. 바꿀 수 없는 값이라 「저장」 판정과
+        // 무관하고, 35 와 같은 조회 결과([userName])를 그대로 비춘다. null 이면 행이 숨는다.
+        loginId = profileLoginIdOrNull(userName),
         currentNickname = state.currentNickname,
         check = state.check,
         images = state.images,

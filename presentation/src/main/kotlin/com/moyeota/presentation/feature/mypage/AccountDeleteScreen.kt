@@ -1,8 +1,6 @@
 package com.moyeota.presentation.feature.mypage
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -10,22 +8,19 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -36,13 +31,17 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.moyeota.core.designsystem.component.DangerCtaButton
+import com.moyeota.core.designsystem.component.ExternalLinkIcon
+import com.moyeota.core.designsystem.component.MoyeotaConfirmDialog
 import com.moyeota.core.designsystem.component.MoyeotaTextField
 import com.moyeota.core.designsystem.component.MoyeotaTopBar
 import com.moyeota.core.designsystem.component.NavigationBarSpacer
 import com.moyeota.core.designsystem.component.NoticeBanner
 import com.moyeota.core.designsystem.component.NoticeKind
 import com.moyeota.core.designsystem.component.StatusBarSpacer
+import com.moyeota.core.designsystem.component.TextLinkButton
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.core.designsystem.theme.MoyeotaShape
 import com.moyeota.core.designsystem.theme.MoyeotaTheme
 import com.moyeota.core.designsystem.theme.MoyeotaType
 import com.moyeota.presentation.core.SupportLinks
@@ -101,7 +100,8 @@ fun AccountDeleteScreen(
     val canSubmit = canSubmitAccountDeletion(password, submitting)
     val context = LocalContext.current
 
-    Column(modifier = modifier.fillMaxSize().imePadding().background(MoyeotaColor.SurfaceSoft)) {
+    // 입력 화면은 흰 바탕이다(디자인 QA G2) — 회색 바탕에서는 비활성 버튼과 입력칸 테두리가 바탕에 묻힌다
+    Column(modifier = modifier.fillMaxSize().imePadding().background(MoyeotaColor.SurfaceCanvas)) {
         StatusBarSpacer()
         MoyeotaTopBar(title = "회원 탈퇴", onBack = onBack)
 
@@ -130,11 +130,11 @@ fun AccountDeleteScreen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(MoyeotaColor.Danger50, RoundedCornerShape(14.dp))
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                    .background(MoyeotaColor.Danger50, MoyeotaShape.Card)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
             ) {
                 AccountDeletionWarnings.forEachIndexed { index, warning ->
-                    if (index > 0) Spacer(Modifier.height(10.dp))
+                    if (index > 0) Spacer(Modifier.height(8.dp))
                     WarningLine(text = warning)
                 }
             }
@@ -142,26 +142,17 @@ fun AccountDeleteScreen(
             // 경고 카드 바로 아래 — 네 줄의 전문으로 가는 한 줄. 입력란보다 위에 둬서 키보드가
             // 올라와도 밀려 사라지지 않는다(이 화면을 다이얼로그로 만들지 않은 것과 같은 이유다).
             if (guideUrl != null) {
-                Row(
-                    modifier = Modifier
-                        .padding(top = 12.dp)
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                        ) { context.openWebPage(guideUrl) }
-                        // 글자만 눌리면 터치 영역이 20dp 밖에 안 된다 — 위아래로 넓혀 둔다
-                        .padding(vertical = 10.dp, horizontal = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = "지워지는 것과 남는 것 자세히 보기",
-                        style = MoyeotaType.BodySm.copy(fontWeight = FontWeight.Bold),
-                        color = MoyeotaColor.Link,
-                    )
-                    Spacer(Modifier.size(4.dp))
-                    // ↗ = 앱 밖으로 나간다. 35 마이페이지와 같은 기호를 그대로 쓴다.
-                    ExternalLinkIcon(tint = MoyeotaColor.Link)
-                }
+                // 글자 링크는 공용 [TextLinkButton] — 터치 영역 48dp + 눌림 물결(디자인 QA G12). 안쪽 여백
+                // 8dp 만큼 밖으로 당겨 글자 시작을 경고 카드 가장자리에 맞춘다.
+                TextLinkButton(
+                    text = "지워지는 것과 남는 것 자세히 보기",
+                    onClick = { context.openWebPage(guideUrl) },
+                    color = MoyeotaColor.Link,
+                    style = MoyeotaType.BodySm.copy(fontWeight = FontWeight.SemiBold),
+                    modifier = Modifier.padding(top = 4.dp).offset(x = (-8).dp),
+                    // 바깥 화살표 = 앱 밖으로 나간다. 35 마이페이지와 같은 기호(디자인시스템 아이콘)를 쓴다.
+                    trailingIcon = { ExternalLinkIcon(tint = MoyeotaColor.Link) },
+                )
             }
 
             Spacer(Modifier.height(24.dp))
@@ -183,15 +174,15 @@ fun AccountDeleteScreen(
                     PasswordVisualTransformation()
                 },
                 trailing = {
-                    Text(
+                    // 04a 로그인과 같은 기능 — 비밀번호를 못 보고 치다 틀리는 쪽이 더 흔한 사고다.
+                    // 글자만 눌리던 것을 48dp 터치 영역 + 물결이 있는 공용 글자 버튼으로 바꿨다(G12).
+                    TextLinkButton(
                         text = if (passwordVisible) "숨기기" else "보기",
-                        style = MoyeotaType.CaptionMd.copy(fontWeight = FontWeight.Bold),
+                        onClick = { passwordVisible = !passwordVisible },
                         color = MoyeotaColor.TextMute,
-                        // 04a 로그인과 같은 방식 — 비밀번호를 못 보고 치다 틀리는 쪽이 더 흔한 사고다
-                        modifier = Modifier.clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                        ) { passwordVisible = !passwordVisible },
+                        style = MoyeotaType.CaptionMd.copy(fontWeight = FontWeight.SemiBold),
+                        // 칸 안쪽 여백(16dp)과 겹치지 않게 글자 끝을 그 선에 맞춘다
+                        modifier = Modifier.offset(x = 8.dp),
                     )
                 },
             )
@@ -218,32 +209,19 @@ fun AccountDeleteScreen(
     }
 
     if (confirming) {
-        AlertDialog(
-            onDismissRequest = { confirming = false },
-            title = { Text(text = "정말 탈퇴할까요?", style = MoyeotaType.HeadingMd) },
-            text = {
-                Text(
-                    // 다이얼로그는 목록을 되풀이하지 않는다 — 바로 위에서 읽은 것을 다시 읽히면
-                    // 사용자는 둘 중 하나만 읽고 넘긴다. 여기서는 "되돌릴 수 없다" 하나만 말한다.
-                    text = "탈퇴하면 계정과 저장한 정보가 사라지고 되돌릴 수 없어요",
-                    style = MoyeotaType.BodySm,
-                    color = MoyeotaColor.TextBody,
-                )
+        MoyeotaConfirmDialog(
+            title = "정말 탈퇴할까요?",
+            // 다이얼로그는 목록을 되풀이하지 않는다 — 바로 위에서 읽은 것을 다시 읽히면
+            // 사용자는 둘 중 하나만 읽고 넘긴다. 여기서는 "되돌릴 수 없다" 하나만 말한다.
+            body = "탈퇴하면 계정과 저장한 정보가 사라지고 되돌릴 수 없어요",
+            confirmText = "탈퇴하기",
+            onConfirm = {
+                confirming = false
+                onDelete()
             },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirming = false
-                    onDelete()
-                }) {
-                    Text(text = "탈퇴하기", fontWeight = FontWeight.Bold, color = MoyeotaColor.Danger500)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirming = false }) {
-                    Text(text = "취소", color = MoyeotaColor.TextMute)
-                }
-            },
-            containerColor = MoyeotaColor.SurfaceCanvas,
+            onDismiss = { confirming = false },
+            dismissText = "취소",
+            destructive = true,
         )
     }
 }

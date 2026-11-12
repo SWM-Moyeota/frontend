@@ -30,9 +30,27 @@ import com.naver.maps.map.CameraPosition
 import com.naver.maps.map.MapView
 import com.naver.maps.map.NaverMap
 import com.naver.maps.map.NaverMapOptions
+import java.util.Locale
 
-/** 부산 서면 — MVP1 기본 카메라 위치 */
-val MoyeotaDefaultCamera: LatLng = LatLng(35.1578, 129.0594)
+/** 부산 서면 — MVP1 기본 카메라 위치. 좌표는 SDK 를 모르는 계산용 [MoyeotaDefaultGeoPoint] 와 한 값이다. */
+val MoyeotaDefaultCamera: LatLng = LatLng(MoyeotaDefaultGeoPoint.latitude, MoyeotaDefaultGeoPoint.longitude)
+
+/**
+ * 지도 라벨(지명·도로명·POI)의 언어 — **기기 로케일과 무관하게 한국어로 고정한다.**
+ *
+ * 네이버 지도 SDK 는 기본값으로 **기기 로케일**을 따른다. 영어 로케일 기기에서는 라벨이
+ * 「Seomyeon Station 서면역」처럼 영문이 한국어 앞에 붙어, 화면의 다른 글자(「서면역」 목적지·카드
+ * 주소·서버가 준 장소명)와 지도가 **다른 이름**을 쓰게 된다(실기 QA: 영어 로케일 에뮬레이터).
+ * 이 앱의 장소 데이터·검색·주소는 전부 한국어이고 서비스 지역도 국내라, 지도만 다른 언어를 쓸 이유가 없다.
+ *
+ * **이 한 곳에서만 정한다.** 앱의 모든 지도는 [NaverMapView] 를 거쳐 만들어지므로(`RouteMapView`·
+ * `RouteStripMap`·홈·탐색이 전부 이 컴포저블을 감싼다) 여기서 걸면 빠지는 화면이 없다. 새 지도를
+ * `MapView(...)` 로 직접 만들면 이 고정이 빠진다 — 그러지 말고 이 컴포저블을 쓴다.
+ *
+ * `Locale.KOREAN`(언어만)이 아니라 [Locale.KOREA](ko-KR)로 둔다 — 언어·지역을 다 적어 두면 SDK 가
+ * 어느 쪽을 보든 같은 결과가 나온다. iOS 포팅도 같은 값(ko-KR)을 한 곳(지도 생성 공용 지점)에서 건다.
+ */
+val MoyeotaMapLocale: Locale = Locale.KOREA
 
 /**
  * 네이버 지도 뷰 (공용 컴포넌트).
@@ -73,18 +91,29 @@ fun NaverMapView(
     val density = LocalDensity.current
     val layoutDirection = LocalLayoutDirection.current
 
+    // 탭 전환·뒤로가기로 재진입해도 사용자가 보던 위치를 유지한다.
+    // CameraPosition 이 Parcelable 이라 기본 saver 로 저장된다.
+    var savedCamera by rememberSaveable { mutableStateOf<CameraPosition?>(null) }
+
     // 렌더 방식은 생성 시점에만 정할 수 있어 옵션이 바뀌면 MapView 를 새로 만든다
     // (실사용에서는 화면마다 고정값이라 재생성이 일어나지 않는다)
     val mapView = remember(useTextureView) {
-        MapView(context, NaverMapOptions().useTextureView(useTextureView))
+        MapView(
+            context,
+            NaverMapOptions()
+                .useTextureView(useTextureView)
+                // 라벨 언어는 생성 옵션으로 먼저 건다 — 첫 타일이 기기 로케일로 그려졌다가 바뀌는 깜빡임이 없다
+                .locale(MoyeotaMapLocale)
+                // **첫 카메라도 생성 옵션으로 건다.** 예전에는 지도가 준비된 뒤에야 아래 LaunchedEffect 가
+                // 카메라를 옮겨서, 그 사이 SDK 기본 카메라(서울)가 먼저 그려졌다 — 20 합류 확인에서
+                // 「엉뚱한 곳이 잠깐 보인다」로 드러났다. 처음부터 화면이 원하는 자리(복원할 카메라가 있으면
+                // 그 자리)에서 시작하면 SDK 기본값이 한 프레임도 보이지 않는다.
+                .camera(savedCamera ?: CameraPosition(center, zoom)),
+        )
     }
     var map by remember { mutableStateOf<NaverMap?>(null) }
     // 콜백은 최신 참조를 유지 — 이펙트 key 에 넣으면 람다 재생성마다 이펙트가 재실행된다
     val currentOnMapReady by rememberUpdatedState(onMapReady)
-
-    // 탭 전환·뒤로가기로 재진입해도 사용자가 보던 위치를 유지한다.
-    // CameraPosition 이 Parcelable 이라 기본 saver 로 저장된다.
-    var savedCamera by rememberSaveable { mutableStateOf<CameraPosition?>(null) }
     // 보존된 카메라 복원은 최초 1회만. 이후 center/zoom 변경은 그대로 반영돼야 한다
     var cameraInitialized by remember { mutableStateOf(false) }
 
@@ -180,7 +209,12 @@ fun NaverMapView(
     }
 
     LaunchedEffect(map) {
-        map?.let { currentOnMapReady(it) }
+        map?.let {
+            // 생성 옵션([MoyeotaMapLocale])이 어떤 경로로든 빠졌을 때를 위한 두 번째 고정 — 지도
+            // 인스턴스에 직접 건다. 값이 같으면 SDK 가 아무 일도 하지 않으므로 비용이 없다.
+            if (it.locale != MoyeotaMapLocale) it.locale = MoyeotaMapLocale
+            currentOnMapReady(it)
+        }
     }
 
     AndroidView(
