@@ -7,6 +7,7 @@ import com.moyeota.domain.model.ChatRoom
 import com.moyeota.domain.model.ChatRoomMembership
 import com.moyeota.domain.model.ChatRoomStatus
 import com.moyeota.domain.model.MyChatRoom
+import com.moyeota.presentation.core.RoutePlace
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -104,16 +105,58 @@ class ChatRoomTitleTest {
     @Test
     fun `부제는 마지막 메시지가 우선이고 위치 공유는 사람 말로 바꾼다`() {
         val text = ChatRoomListItem(myRoom(1, lastMessageAt = "2026-09-11T03:00:00Z", content = "어디쯤이세요?"), "스모크일")
-        assertEquals("어디쯤이세요?", chatRoomSubtitle(text))
+        assertEquals(ChatRoomSubtitle.Line("어디쯤이세요?"), chatRoomSubtitle(text))
 
         val location = ChatRoomListItem(
             myRoom(1, lastMessageAt = "2026-09-11T03:00:00Z", content = "35.1,129.0", type = ChatMessageType.LOCATION),
             "스모크일",
         )
-        assertEquals("📍 위치를 공유했어요", chatRoomSubtitle(location))
+        assertEquals(ChatRoomSubtitle.Line("📍 위치를 공유했어요"), chatRoomSubtitle(location))
+    }
 
+    /**
+     * 메시지가 없으면 경로를 **두 줄**로 쓴다 — 「출발지: …」·「도착지: …」(오너 UX 피드백 2026-11).
+     * 한 줄 「출발 → 도착」은 장소 이름이 길면 화살표 뒤가 잘려 도착지가 통째로 사라졌다.
+     */
+    @Test
+    fun `메시지가 없으면 출발지와 도착지를 두 줄로 쓴다`() {
         val none = ChatRoomListItem(myRoom(1), "스모크일")
-        assertEquals("출발 → 도착", chatRoomSubtitle(none))
+
+        assertEquals(
+            ChatRoomSubtitle.Route(listOf(RoutePlace("출발지", "출발"), RoutePlace("도착지", "도착"))),
+            chatRoomSubtitle(none),
+        )
+    }
+
+    @Test
+    fun `닫힌 방의 경로 두 줄은 첫 줄에 종료를 붙인다`() {
+        val closed = ChatRoomListItem(myRoom(1, status = ChatRoomStatus.CLOSED), "스모크일")
+
+        assertEquals(
+            ChatRoomSubtitle.Route(listOf(RoutePlace("종료 · 출발지", "출발"), RoutePlace("도착지", "도착"))),
+            chatRoomSubtitle(closed),
+        )
+    }
+
+    /**
+     * ★ 참여자를 못 받은 방은 **제목이 이미 경로**다(「출발 → 도착」) — 그 아래에 출발지·도착지를 또 쓰면
+     * 같은 말이 세 줄이 된다. 그때 부제는 방 상태 한 줄이다.
+     */
+    @Test
+    fun `제목이 경로로 떨어진 방은 경로를 되풀이하지 않는다`() {
+        val noPeers = ChatRoomListItem(myRoom(1), peerTitle = null)
+
+        assertEquals("출발 → 도착", chatRoomListTitle(noPeers))
+        assertEquals(ChatRoomSubtitle.Line("진행 중"), chatRoomSubtitle(noPeers))
+        assertEquals(
+            ChatRoomSubtitle.Line("종료된 방"),
+            chatRoomSubtitle(ChatRoomListItem(myRoom(1, status = ChatRoomStatus.CLOSED), peerTitle = null)),
+        )
+    }
+
+    @Test
+    fun `참여자 이름이 있으면 그것이 제목이다`() {
+        assertEquals("스모크일", chatRoomListTitle(ChatRoomListItem(myRoom(1), "스모크일")))
     }
 
     private fun myRoom(
@@ -122,6 +165,7 @@ class ChatRoomTitleTest {
         lastMessageAt: String? = null,
         content: String = "안녕하세요",
         type: ChatMessageType = ChatMessageType.TEXT,
+        status: ChatRoomStatus = ChatRoomStatus.ACTIVE,
     ) = MyChatRoom(
         room = ChatRoom(
             id = id,
@@ -129,7 +173,7 @@ class ChatRoomTitleTest {
             departure = "출발",
             destination = "도착",
             createdAt = createdAt,
-            status = ChatRoomStatus.ACTIVE,
+            status = status,
         ),
         membership = ChatRoomMembership(
             chatRoomId = id,

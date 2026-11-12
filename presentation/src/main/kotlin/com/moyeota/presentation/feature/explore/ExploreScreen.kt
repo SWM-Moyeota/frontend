@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -25,6 +26,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -82,9 +84,11 @@ import com.moyeota.domain.model.RoomType
 import com.moyeota.domain.model.User
 import com.moyeota.presentation.core.ActiveRideBanner
 import com.moyeota.presentation.core.LoadingBox
+import com.moyeota.presentation.feature.home.ReservationDateStrip
 import com.moyeota.presentation.feature.home.headcountLabel
 import com.moyeota.presentation.feature.home.reservationDateLabel
 import com.moyeota.presentation.feature.home.reservationDates
+import com.moyeota.presentation.feature.home.reservationMonthLabel
 import com.naver.maps.geometry.LatLng
 import com.naver.maps.geometry.LatLngBounds
 import com.naver.maps.map.NaverMap
@@ -190,7 +194,7 @@ data class ReservationPaneUi(
     val destinationName: String? = null,
     val now: Instant = Instant.EPOCH,
 ) {
-    /** 날짜 칩·빈 상태 문구가 함께 쓰는 「오늘」·「11월 9일 (일)」. 날짜가 없으면 null. */
+    /** 접힘 요약·목록 제목·빈 상태 문구가 함께 쓰는 「오늘」·「11월 9일 (일)」. 날짜가 없으면 null. */
     val selectedDateLabel: String?
         get() = selectedDate?.let { reservationDateLabel(it, dates.firstOrNull() ?: it) }
 
@@ -323,12 +327,20 @@ fun ExploreScreen(
      */
     myPartyHidden: Boolean = false,
     /**
-     * 주기 갱신이 **연속으로** 실패해 목록이 낡았는가([ExploreViewModel.UiState.Success.stale]).
+     * 주기 갱신이 **연속으로** 실패해 목록이 낡았는가([ExploreViewModel.UiState.Success.stale] ·
+     * 「곧 출발」은 [ReservationFinderViewModel.UiState.Success.stale]).
      *
      * true 라도 보던 목록·마커는 그대로 둔다 — 지도를 에러 화면으로 바꾸지 않는다는 기존 판단을
      * 지키고, 대신 타이틀 줄에 **비차단 표시**만 올린다. 기본값 false 는 「문제 없음」이다.
      */
     stale: Boolean = false,
+    /**
+     * 지도 오른쪽 아래 **카운트다운 새로고침 버튼**이 그릴 것. **null 이면 버튼이 없다** — 주기 갱신을 하지
+     * 않는 모드(「날짜로 찾기」, [exploreAutoRefreshes])에서 호출부가 null 을 넘긴다.
+     */
+    refresh: ExploreRefreshUi? = null,
+    /** 새로고침 버튼 — 지금 보이는 목록을 즉시 다시 읽고 15초를 처음부터 센다. */
+    onRefreshClick: () -> Unit = {},
     locationGranted: Boolean = true,
     // 기기 실위치. null = 권한 없음 · 아직 fix 없음 → 지도는 기본 카메라 위치에서 시작한다
     myLocation: MyLocationFix? = null,
@@ -375,7 +387,7 @@ fun ExploreScreen(
 
         // 타이틀 행 — **고정 높이**. 단계에 따라 버튼이 생기고 사라지면 행 높이가 흔들려 제목이 움직였다
         Box(
-            modifier = Modifier.fillMaxWidth().height(TitleRowHeight).padding(horizontal = 24.dp),
+            modifier = Modifier.fillMaxWidth().height(TitleRowHeight).padding(horizontal = ExploreHeaderInset),
             contentAlignment = Alignment.CenterStart,
         ) {
             Text(
@@ -388,10 +400,10 @@ fun ExploreScreen(
             // 상태(FULL, 지도가 통째로 가려짐)에서 보이지 않고, 시트 안에 두면 접힘(PEEK) 높이가
             // 흔들린다. 이 자리면 세 단계 모두에서 같은 자리에 보이고 레이아웃도 밀리지 않는다.
             //
-            // **예약 모드에서는 그리지 않는다.** [stale] 은 실시간 주기 조회의 연속 실패 표시인데
-            // (`ExploreViewModel`) 예약 모드에서는 그 조회가 멈춰 있어서, 남아 있던 true 를 그리면
-            // 지금 보고 있는 예약 목록이 낡았다는 **거짓 경고**가 된다.
-            if (stale && !mode.isReservation) {
+            // **주기 갱신이 없는 모드(「날짜로 찾기」)에서는 그리지 않는다.** [stale] 은 주기 조회의 연속
+            // 실패 표시인데 그 모드에서는 주기 조회가 없어서, 남아 있던 true 를 그리면 지금 보고 있는
+            // 목록이 낡았다는 **거짓 경고**가 된다. 「곧 출발」은 15초 주기가 생겨 이제 그린다.
+            if (stale && exploreAutoRefreshes(mode)) {
                 StaleListNotice(modifier = Modifier.align(Alignment.CenterEnd))
             }
         }
@@ -454,6 +466,20 @@ fun ExploreScreen(
                 LocationPermissionNotice(
                     onRequestPermission = onRequestLocationPermission,
                     modifier = Modifier.fillMaxSize(),
+                )
+            }
+
+            // 카운트다운 새로고침 버튼 — 네이버 줌 컨트롤과 같은 세로선([RefreshButtonEndInset]), 시트 윗변
+            // 16dp 위. 시트를 따라 움직이도록 **실측 높이**(드래그·정착 애니메이션 중의 값)를 쓴다.
+            // 시트를 끝까지 올리면(FULL) 지도가 다 가려지므로 버튼도 숨긴다 — 보이지 않는 목록의 갱신
+            // 버튼이 시트 위에 떠 있으면 무엇을 새로 고치는지 알 수 없다. 권한이 없어 지도가 없을 때도 없다.
+            if (refresh != null && locationGranted && sheetState != ExploreSheetState.FULL) {
+                ExploreRefreshButton(
+                    ui = refresh,
+                    onClick = onRefreshClick,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(end = RefreshButtonEndInset, bottom = sheetHeight + 16.dp),
                 )
             }
 
@@ -752,7 +778,17 @@ private fun ListHeaderRow(
  * 필터이고, 지도 카메라·시트 단계는 모드를 바꿔도 그대로다. 디자인시스템의 [MoyeotaChip] 을 쓴다
  * (16 의 `ConditionChip` 은 그 모달의 관습이고, 새 자리는 공용 컴포넌트가 먼저다).
  *
- * 세 칩이 393dp 폭에 들어오지만 큰 글꼴 설정에서는 넘칠 수 있어 가로 스크롤을 둔다.
+ * ### 간격 (2026-11, 오너 UX 피드백 · 디자인 QA 4-8)
+ * 예전에는 칩 줄이 제목 줄과 지도 사이에 위아래 여백 없이 끼어 지도에 맞닿아 있었다.
+ * - **시작선**: 제목과 같은 [ExploreHeaderInset] — 두 줄이 한 머리글로 읽힌다. 상수를 함께 쓰므로 제목의
+ *   여백이 바뀌면(디자인 다듬기의 16dp 거터) 칩도 같이 움직인다
+ * - **칩 사이 8dp**, 제목 아래 **8dp**, 지도 위 **12dp** — 4/8 리듬(`spacing.xs`·`spacing.sm`)
+ * - **터치 타깃 48dp**: 칩의 보이는 높이는 36dp 로 두고 [minimumInteractiveComponentSize] 가 위아래로
+ *   6dp 씩 눌리는 자리를 더한다. 그 6dp 는 투명하므로 위 「8dp·12dp」는 **보이는 칩 테두리 기준**이다
+ *   (줄 여백 2dp·6dp + 터치 여유 6dp)
+ *
+ * 세 칩이 393dp 폭에 들어오지만 큰 글꼴 설정에서는 넘칠 수 있어 가로 스크롤을 둔다. 여백을 스크롤
+ * **안쪽**에 둬서 첫 칩은 제목 선에서 시작하고 스크롤하면 가장자리까지 흐른다.
  */
 @Composable
 private fun ExploreModeRow(selected: ExploreMode, onSelect: (ExploreMode) -> Unit) {
@@ -760,7 +796,7 @@ private fun ExploreModeRow(selected: ExploreMode, onSelect: (ExploreMode) -> Uni
         modifier = Modifier
             .fillMaxWidth()
             .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 24.dp),
+            .padding(start = ExploreHeaderInset, end = ExploreHeaderInset, top = 2.dp, bottom = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -769,21 +805,34 @@ private fun ExploreModeRow(selected: ExploreMode, onSelect: (ExploreMode) -> Uni
                 text = exploreModeLabel(mode),
                 selected = mode == selected,
                 onClick = { onSelect(mode) },
+                modifier = Modifier
+                    .minimumInteractiveComponentSize()
+                    .heightIn(min = ModeChipHeight),
             )
         }
     }
 }
 
+/** 제목 「근처 동승 찾기」와 모드 칩 줄이 **함께 쓰는** 시작 여백 — 둘이 같은 선에 서게 한다. */
+private val ExploreHeaderInset = 24.dp
+
+/** 모드 칩의 보이는 높이. 터치 타깃은 [minimumInteractiveComponentSize] 가 48dp 로 넓힌다. */
+private val ModeChipHeight = 36.dp
+
 /**
- * 「날짜로 찾기」의 날짜 칩(오늘~7일 뒤)과 **도착지 칩**.
+ * 「날짜로 찾기」의 **주간 달력 띠**(오늘~7일 뒤)와 그 아래 **도착지 칩**.
  *
- * 날짜와 도착지를 한 줄에 두는 이유: 둘 다 같은 검색 요청의 입력이고, 도착지는 **있어도 되고 없어도
- * 되는 값**이라 날짜와 떨어뜨리면 왜 거기 있는지 알기 어렵다. 가로 스크롤인 근거는 16 모달의
- * `ScrollableChipRow` 와 같다 — 칩이 8개 + 1개라 좁은 폰의 한 줄에 들어오지 않는다.
+ * 날짜는 16 도착지 확인과 **같은 컴포넌트**다([ReservationDateStrip]) — 같은 8일 창을 두 화면이 다른
+ * 모양(칩 vs 달력)으로 고르면 같은 날이 다르게 보인다(2026-11, 오너 UX 피드백). 띠 위에는 덮는 달을
+ * 한 줄로 적는다([reservationMonthLabel]) — 칸에는 일(日) 숫자만 있다.
  *
- * 도착지 칩은 [onPickDestination] 이 null 이면 **그리지 않는다**: 도착지를 고르는 길(15 목적지)이
- * 아직 배선되지 않았을 수 있고, 그때 칩을 보여 주면 눌러도 아무 일도 일어나지 않는다. 도착지 없이
- * 검색하는 것은 서버가 인정하는 정상 경로다(둘 다 또는 둘 다 아니다).
+ * 도착지 칩은 띠 **아래 자기 줄**(8dp 간격)로 옮겼다 — 예전에는 날짜 칩 끝에 붙어 가로 스크롤 끝까지
+ * 가야 보였다. 둘 다 같은 검색 요청의 입력이라 붙어 있되, 도착지는 **있어도 되고 없어도 되는 값**이라
+ * 날짜와 다른 줄이 낫다. [onPickDestination] 이 null 이면 칩을 **그리지 않는다**: 도착지를 고르는 길
+ * (15 목적지)이 배선되지 않았을 수 있고, 그때 칩을 보여 주면 눌러도 아무 일도 일어나지 않는다.
+ * 도착지 없이 검색하는 것은 서버가 인정하는 정상 경로다(둘 다 또는 둘 다 아니다).
+ *
+ * 「전체」 칸은 없다 — 검색은 하루 단위다(`date` 필수).
  */
 @Composable
 private fun ReservationDateRow(
@@ -794,36 +843,43 @@ private fun ReservationDateRow(
     onPickDestination: (() -> Unit)?,
     onClearDestination: () -> Unit,
 ) {
-    val today = dates.firstOrNull()
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 24.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        dates.forEach { date ->
-            MoyeotaChip(
-                text = reservationDateLabel(date, today ?: date),
-                selected = date == selected,
-                onClick = { onDateSelect(date) },
+    Column(modifier = Modifier.fillMaxWidth()) {
+        reservationMonthLabel(dates)?.let { month ->
+            Text(
+                text = month,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                color = GrayMute,
+                modifier = Modifier.padding(horizontal = 24.dp),
             )
+            Spacer(Modifier.height(4.dp))
         }
-        if (destinationName != null) {
-            // 고른 도착지는 **이름으로** 보여 준다 — 「도착지 1곳」 같은 말로는 어디를 보냈는지
-            // 알 수 없고, 그 좌표가 결과 순서를 바꾼다(가까운 방이 먼저).
-            MoyeotaChip(
-                text = "$destinationName $RESERVATION_CLEAR_DESTINATION_LABEL",
-                selected = true,
-                onClick = onClearDestination,
-            )
-        } else if (onPickDestination != null) {
-            MoyeotaChip(
-                text = RESERVATION_ADD_DESTINATION_LABEL,
-                selected = false,
-                onClick = onPickDestination,
-            )
+        ReservationDateStrip(
+            dates = dates,
+            selected = selected,
+            onSelect = onDateSelect,
+            // 띠의 첫 칸이 시트 본문(24dp)과 같은 선에서 시작한다
+            contentPadding = PaddingValues(horizontal = 24.dp),
+        )
+        if (destinationName != null || onPickDestination != null) {
+            Spacer(Modifier.height(8.dp))
+            Row(modifier = Modifier.padding(horizontal = 24.dp)) {
+                if (destinationName != null) {
+                    // 고른 도착지는 **이름으로** 보여 준다 — 「도착지 1곳」 같은 말로는 어디를 보냈는지
+                    // 알 수 없고, 그 좌표가 결과 순서를 바꾼다(가까운 방이 먼저).
+                    MoyeotaChip(
+                        text = "$destinationName $RESERVATION_CLEAR_DESTINATION_LABEL",
+                        selected = true,
+                        onClick = onClearDestination,
+                    )
+                } else if (onPickDestination != null) {
+                    MoyeotaChip(
+                        text = RESERVATION_ADD_DESTINATION_LABEL,
+                        selected = false,
+                        onClick = onPickDestination,
+                    )
+                }
+            }
         }
     }
 }
@@ -1206,9 +1262,10 @@ private fun LocationPermissionNotice(
 /**
  * 「최신 정보를 받지 못했어요」 — 목록을 **덮지 않는** 표시.
  *
- * 띄우는 조건은 [staleAfterPollFailures] 가 정한다(연속 실패 3회 = 12초). 여기서 하는 일은 그
- * 사실을 조용히 알리는 것뿐이고, 재시도 버튼을 달지 않는다 — 폴링이 4초마다 알아서 다시 읽고
- * 한 번 성공하면 이 표시가 사라진다. 사용자가 할 일이 없는 상태에 누를 것을 주면 더 헷갈린다.
+ * 띄우는 조건은 [staleAfterPollFailures] 가 정한다(연속 실패 2회 = 30초). 여기서 하는 일은 그
+ * 사실을 조용히 알리는 것뿐이고, 이 표시에는 재시도 버튼을 달지 않는다 — 폴링이 15초마다 알아서 다시
+ * 읽고 한 번 성공하면 이 표시가 사라진다. 지금 바로 다시 읽고 싶으면 지도의 새로고침 버튼이 있다
+ * ([ExploreRefreshButton]) — 같은 일을 하는 버튼을 두 자리에 두지 않는다.
  */
 @Composable
 private fun StaleListNotice(modifier: Modifier = Modifier) {
@@ -1563,7 +1620,7 @@ private fun ExploreScreenSoonPreview() {
     )
 }
 
-/** 「날짜로 찾기」 — 날짜 칩·도착지 칩과 「도착지도 1km 안」 배지가 보이는 상태. */
+/** 「날짜로 찾기」 — 주간 달력 띠·도착지 칩과 「도착지도 1km 안」 배지가 보이는 상태. */
 @Preview(showBackground = true, widthDp = 393, heightDp = 852)
 @Composable
 private fun ExploreScreenByDatePreview() {

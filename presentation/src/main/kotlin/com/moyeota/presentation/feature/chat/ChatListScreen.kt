@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -36,6 +37,9 @@ import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.domain.model.ChatMessageType
 import com.moyeota.domain.model.ChatRoomStatus
 import com.moyeota.domain.model.MyChatRoom
+import com.moyeota.presentation.core.RoutePlace
+import com.moyeota.presentation.core.RoutePlaceLine
+import com.moyeota.presentation.core.routePlaces
 
 private val CanvasBg = Color(0xFFF5F7FA)
 private val GrayMute = Color(0xFF8A93A0)
@@ -49,7 +53,7 @@ private val GrayAsh = Color(0xFF9AA1AC)
  * - 하단탭 → 14/17/35 (onTabSelect)
  *
  * 제목은 **참여자 닉네임**([ChatRoomListItem.peerTitle] · `chatRoomPeerTitle`), 부제는 **마지막 메시지**
- * (없으면 경로 — [chatRoomSubtitle]), 우측에 마지막 메시지 시각과 안읽음 점.
+ * (없으면 「출발지:」·「도착지:」 두 줄 — [chatRoomSubtitle]), 우측에 마지막 메시지 시각과 안읽음 점.
  * 정렬은 Route 가 이미 마친 상태로 넘어온다(`chatRoomSortKey` — 마지막 활동 시각 내림차순).
  */
 @Composable
@@ -113,33 +117,59 @@ fun ChatListScreen(
 }
 
 /**
+ * 목록 부제 — 한 줄 글([Line]) 또는 경로 두 줄([Route]).
+ *
+ * 경로를 「강남역 → 판교역」 한 줄로 쓰지 않고 「출발지: 강남역」·「도착지: 판교역」 **두 줄**로 쓴다
+ * (2026-11, 오너 UX 피드백) — 장소 이름이 길면(역지오코딩 실주소) 한 줄의 화살표 뒤가 잘려 도착지가
+ * 통째로 사라졌다([RoutePlace]). 24 채팅방 **헤더**는 그대로 한 줄 경로다(그쪽은 폭이 넉넉하다).
+ */
+internal sealed interface ChatRoomSubtitle {
+    /** 한 줄 — 마지막 메시지 미리보기, 또는 제목이 이미 경로일 때의 방 상태. */
+    data class Line(val text: String) : ChatRoomSubtitle
+
+    /** 경로 두 줄. 닫힌 방이면 첫 줄 이름표 앞에 「종료 · 」가 붙는다. */
+    data class Route(val places: List<RoutePlace>) : ChatRoomSubtitle
+}
+
+/**
  * 목록 부제 — **마지막 메시지 미리보기**가 있으면 그것, 없으면 경로(+종료 여부).
  * 위치 공유 메시지는 본문이 좌표라 사람 말로 바꾼다. 삭제된 메시지는 서버가 이미 「삭제된 메시지입니다」로 준다.
+ *
+ * **제목이 이미 경로면 경로를 또 쓰지 않는다** — 참여자를 못 받은 방은 제목이 「출발 → 도착」으로
+ * 떨어지는데([chatRoomListTitle]), 그 아래에 출발지·도착지 두 줄이 또 오면 같은 말이 세 줄이다.
+ * 그때 부제는 방 상태(「진행 중」·「종료된 방」) 한 줄이다.
  */
-internal fun chatRoomSubtitle(item: ChatRoomListItem): String {
+internal fun chatRoomSubtitle(item: ChatRoomListItem): ChatRoomSubtitle {
     val room = item.room.room
+    val active = room.status == ChatRoomStatus.ACTIVE
     val last = item.room.membership.lastMessage
     if (last != null) {
         val preview = when (last.type) {
             ChatMessageType.LOCATION -> "📍 위치를 공유했어요"
             ChatMessageType.TEXT -> last.content
         }
-        return if (room.status == ChatRoomStatus.ACTIVE) preview else "종료 · $preview"
+        return ChatRoomSubtitle.Line(if (active) preview else "종료 · $preview")
     }
-    val routeLabel = "${room.departure} → ${room.destination}"
-    return when {
-        // 참여자를 못 받은 방은 제목이 경로라, 부제까지 경로면 같은 문장이 두 번이다 — 방 상태를 쓴다
-        item.peerTitle == null -> if (room.status == ChatRoomStatus.ACTIVE) "진행 중" else "종료된 방"
-        room.status == ChatRoomStatus.ACTIVE -> routeLabel
-        else -> "종료 · $routeLabel"
-    }
+    if (item.peerTitle == null) return ChatRoomSubtitle.Line(if (active) "진행 중" else "종료된 방")
+    val places = routePlaces(room.departure, room.destination)
+    return ChatRoomSubtitle.Route(
+        if (active) places else places.mapIndexed { index, place ->
+            if (index == 0) place.copy(label = "종료 · ${place.label}") else place
+        },
+    )
 }
+
+/**
+ * 목록 행 제목 — 참여자 닉네임([ChatRoomListItem.peerTitle]), 못 받았으면 경로 한 줄.
+ * 경로로 떨어질 때 부제는 경로를 되풀이하지 않는다([chatRoomSubtitle]).
+ */
+internal fun chatRoomListTitle(item: ChatRoomListItem): String =
+    item.peerTitle ?: "${item.room.room.departure} → ${item.room.room.destination}"
 
 @Composable
 private fun ChatRoomRow(item: ChatRoomListItem, onClick: () -> Unit) {
-    val room = item.room.room
     val membership = item.room.membership
-    val title = item.peerTitle ?: "${room.departure} → ${room.destination}"
+    val title = chatRoomListTitle(item)
     val subtitle = chatRoomSubtitle(item)
     val timeLabel = membership.lastMessage?.createdAt?.toListTimeLabel()
     val unread = membership.hasUnread
@@ -148,13 +178,15 @@ private fun ChatRoomRow(item: ChatRoomListItem, onClick: () -> Unit) {
             .fillMaxWidth()
             .clickable { onClick() }
             .padding(horizontal = 18.dp, vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
     ) {
         // 제목이 부르는 사람의 얼굴([ChatRoomListItem.peerImageUrl]) — 제목과 **같은 멤버 목록**에서
         // 뽑아 Route 가 실어 보낸다. 참여자를 못 받은 방은 제목이 경로로 떨어지고 여기도 회색 원이다.
-        AvatarCircle(size = 40.dp, imageUrl = item.peerImageUrl)
+        // 부제가 두 줄이 되어 행이 높아져도 아바타는 행 가운데에 선다.
+        AvatarCircle(size = 40.dp, imageUrl = item.peerImageUrl, modifier = Modifier.align(Alignment.CenterVertically))
         Spacer(Modifier.size(10.dp))
-        Column(modifier = Modifier.weight(1f)) {
+        // 글 묶음과 오른쪽 시각은 **제목의 기준선**에 맞춘다 — 부제가 두 줄이 된 행에서 시각이 행 가운데로
+        // 내려가면 어느 줄의 시각인지 흐려진다(디자인 QA 4-10).
+        Column(modifier = Modifier.weight(1f).alignByBaseline()) {
             Text(
                 text = title,
                 fontSize = 14.sp,
@@ -163,18 +195,25 @@ private fun ChatRoomRow(item: ChatRoomListItem, onClick: () -> Unit) {
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text(
-                text = subtitle,
-                fontSize = 12.sp,
-                // 안 읽은 방은 미리보기를 진하게 — 배지와 함께 「새 대화」를 두 신호로 알린다
-                fontWeight = if (unread) FontWeight.SemiBold else FontWeight.Medium,
-                color = if (unread) MoyeotaColor.InkPrimary else GrayMute,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            when (subtitle) {
+                is ChatRoomSubtitle.Line -> Text(
+                    text = subtitle.text,
+                    fontSize = 12.sp,
+                    // 안 읽은 방은 미리보기를 진하게 — 배지와 함께 「새 대화」를 두 신호로 알린다
+                    fontWeight = if (unread) FontWeight.SemiBold else FontWeight.Medium,
+                    color = if (unread) MoyeotaColor.InkPrimary else GrayMute,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                is ChatRoomSubtitle.Route -> subtitle.places.forEachIndexed { index, place ->
+                    // 두 줄 사이 2dp(디자인 QA 4-10)
+                    if (index > 0) Spacer(Modifier.height(2.dp))
+                    RoutePlaceLine(place)
+                }
+            }
         }
         Spacer(Modifier.size(8.dp))
-        Column(horizontalAlignment = Alignment.End) {
+        Column(horizontalAlignment = Alignment.End, modifier = Modifier.alignByBaseline()) {
             if (timeLabel != null) {
                 Text(
                     text = timeLabel,

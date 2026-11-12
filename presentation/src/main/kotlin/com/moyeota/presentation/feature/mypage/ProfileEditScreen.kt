@@ -30,7 +30,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -63,13 +66,23 @@ private val ProfileImageGap = 12.dp
  *
  * 진입: 35 마이페이지 프로필 카드 / 뒤로 → 35 / 「저장」 성공 → 35 (이름·사진 다시 조회)
  *
- * 구성: 상단바 「프로필 수정」 → 닉네임 입력(글자수 · 중복 확인) → 프로필 사진 격자 16장 +
- * 「기본 이미지로 되돌리기」 → 「저장」
+ * 구성: 상단바 「프로필 수정」 → (로컬 로그인 계정만) 「아이디」 읽기 전용 행 → 닉네임 입력
+ * (글자수 · 중복 확인) → 프로필 사진 격자 16장 + 「기본 이미지로 되돌리기」 → 「저장」
  *
  * 바꿀 수 있는 값이 **닉네임과 프로필 사진 둘**인 이유: `PATCH /api/v1/users/me` 가 받는 게 그 둘이고,
  * 사진은 서버가 준비한 16장 중에서 고르는 것뿐이다(업로드 경로가 서버에 없다). 실명 · 생년월일 ·
  * 성별 · 휴대폰 · 이메일은 서버에 수정 경로가 아예 없다. 그래서 「수정 불가」 행을 늘어놓는 대신
  * 바꿀 수 있는 것만 둔다(`docs/BACKEND-GAP-CLEANUP.md` 의 원칙).
+ *
+ * ### 「아이디」 행은 그 원칙의 **유일한 예외**다 (2026-11, 오너 승인)
+ * 바꿀 수 없는 값인데도 두는 이유는 쓰임이 다르기 때문이다: 실명·생년월일은 사용자가 이미 아는 값이지만,
+ * **로그인 아이디는 잊는 값**이고 「내 아이디가 뭐였지」를 확인하러 오는 자리가 바로 여기다. 서버가
+ * `GET /local/users/info` 에 `loginId` 를 실어 주면서(Backend PR #330) 보여 줄 근거가 생겼다.
+ *
+ * - **읽기 전용 행**이지 비활성 입력칸이 아니다([LoginIdRow]) — 흐린 입력칸은 「언젠가 눌러서 바꾼다」로
+ *   읽히는데 아이디는 바꾸는 서버 경로가 없다. 닉네임 필드와 같은 뼈대에 테두리 없는 채움 면이다.
+ * - 로컬 로그인이 없는 계정(서버가 null)·조회 실패·공백이면 **행을 통째로 숨긴다**([loginId] 가 null).
+ *   빈 값 행을 남기면 「아이디가 지워졌다」로 읽힌다.
  *
  * 규칙 · 문구 · 확인 방식은 10 프로필 만들기와 같은 것을 쓴다([NicknamePolicy], [NicknameCheckState],
  * 입력이 멈춘 뒤 자동 중복 확인) — 같은 값을 두 화면이 다른 기준으로 받으면 둘 중 하나는 거짓말이 된다.
@@ -99,11 +112,14 @@ private val ProfileImageGap = 12.dp
  * @param usingDefaultImage 진입 시점의 사진이 기본 이미지인가. 「되돌리기」를 보일지만 정한다.
  * @param errorMessage 저장 실패 사유. 중복 · 형식 오류는 필드가 말하므로 여기엔 오지 않는다.
  *   사진 키 오류(400 `USER112`)는 **여기로** 온다 — 닉네임 필드로 돌리면 거짓이다.
+ * @param loginId 보여 줄 로그인 아이디. **null 이면 「아이디」 행을 그리지 않는다**
+ *   (`profileLoginIdOrNull` 이 공백·미조회·로컬 로그인 없음을 모두 null 로 접어 준다).
  */
 @Composable
 fun ProfileEditScreen(
     nickname: String,
     modifier: Modifier = Modifier,
+    loginId: String? = null,
     currentNickname: String? = null,
     check: NicknameCheckState = NicknameCheckState.Idle,
     images: List<ProfileImage> = emptyList(),
@@ -150,6 +166,13 @@ fun ProfileEditScreen(
                 style = MoyeotaType.BodySm.copy(fontSize = 14.sp),
                 color = MoyeotaColor.TextMute,
             )
+
+            // 「아이디」는 닉네임 **위**다 — 계정의 신원(바뀌지 않는 것)이 먼저, 꾸미는 값이 그다음이다.
+            // 공백·null 이면 행과 그 아래 간격까지 통째로 없다(빈 자리를 남기지 않는다).
+            if (!loginId.isNullOrBlank()) {
+                Spacer(Modifier.height(24.dp))
+                LoginIdRow(loginId = loginId)
+            }
 
             Spacer(Modifier.height(24.dp))
             MoyeotaTextField(
@@ -263,6 +286,53 @@ fun ProfileEditScreen(
         }
         Spacer(Modifier.height(16.dp))
         NavigationBarSpacer()
+    }
+}
+
+/**
+ * 「아이디」 읽기 전용 행 — 닉네임 필드와 **같은 뼈대**(라벨 위 · 8dp · 52dp 줄 · 안쪽 16dp)에
+ * **테두리 없는 `SurfaceSoft` 채움**을 얹는다(디자인 QA 4-1).
+ *
+ * ### 왜 비활성 [MoyeotaTextField] 가 아닌가
+ * 회색으로 죽은 입력칸(흐린 글자 + 테두리)은 「지금은 막혔지만 원래는 고치는 칸」으로 읽힌다 — 사용자는
+ * 어딘가에 잠금을 푸는 길이 있다고 생각하고 찾는다. 아이디는 바꾸는 서버 경로 자체가 없다. 그래서
+ * 이 행은 입력칸의 표지(테두리·포커스·커서)를 하나도 갖지 않고, 값은 **흐리게 하지 않는다**(`BodyMd`
+ * · `InkPrimary` — 비활성처럼 보이는 낮은 대비를 쓰지 않는다). 채움 면은 「값을 담은 칸」이라는 것만
+ * 말한다. 자물쇠·꺾쇠·도움말 글은 두지 않는다 — 누를 것이 없는 줄에 누를 것처럼 보이는 표지를 달지 않는다.
+ *
+ * 뼈대를 닉네임 필드와 맞추는 이유는 두 줄이 **같은 목록의 항목**으로 읽혀야 해서다(높이·여백이 다르면
+ * 서로 다른 종류의 요소로 보인다).
+ *
+ * 스크린리더에는 「아이디, hong123」 한 문장으로 읽힌다 — 따로 읽히면 라벨과 값이 무엇의 짝인지
+ * 끊긴다. 누를 수 있는 것이 없으므로 클릭 의미는 싣지 않는다.
+ * iOS 포팅: 같은 모양에 복사를 허용하려면 `.textSelection(.enabled)`.
+ */
+@Composable
+private fun LoginIdRow(loginId: String) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clearAndSetSemantics { contentDescription = "아이디, $loginId" },
+    ) {
+        Text(text = "아이디", style = MoyeotaType.BodySm, color = MoyeotaColor.TextMute)
+        Spacer(Modifier.height(8.dp))
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(52.dp)
+                .background(MoyeotaColor.SurfaceSoft, RoundedCornerShape(12.dp))
+                .padding(horizontal = 16.dp),
+            contentAlignment = Alignment.CenterStart,
+        ) {
+            Text(
+                text = loginId,
+                style = MoyeotaType.BodyMd,
+                color = MoyeotaColor.InkPrimary,
+                // 아이디는 공백 없는 한 덩어리다 — 길면 줄을 바꾸기보다 끝을 줄인다(전체는 스크린리더가 읽는다)
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 
@@ -435,6 +505,15 @@ private val PreviewProfileImages: List<ProfileImage> = List(16) { index ->
 private fun ProfileEditScreenPreview() {
     MoyeotaTheme {
         ProfileEditScreen(nickname = "성윤", currentNickname = "성윤")
+    }
+}
+
+/** 로컬 로그인 계정 — 닉네임 위에 「아이디」 읽기 전용 행이 붙는다. 360dp 에서 입력칸처럼 보이지 않는지 본다. */
+@Preview(showBackground = true, widthDp = 360, heightDp = 780, name = "아이디 표시")
+@Composable
+private fun ProfileEditScreenLoginIdPreview() {
+    MoyeotaTheme {
+        ProfileEditScreen(nickname = "성윤", currentNickname = "성윤", loginId = "hong123")
     }
 }
 

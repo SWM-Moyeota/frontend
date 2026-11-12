@@ -34,7 +34,9 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.BackArrowIcon
+import com.moyeota.core.designsystem.component.MoyeotaDefaultCamera
 import com.moyeota.core.designsystem.component.RouteStripMap
+import com.moyeota.core.designsystem.component.isUsableMapCoordinate
 import com.moyeota.core.designsystem.component.decodePolyline
 import com.moyeota.core.designsystem.component.latLngOrNull
 import com.moyeota.core.designsystem.component.polylineDistanceMeters
@@ -53,6 +55,7 @@ import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.model.RoomType
 import com.moyeota.domain.model.User
+import com.naver.maps.geometry.LatLng
 import java.time.Instant
 import com.moyeota.presentation.core.MeBadge
 import com.moyeota.presentation.core.MemberAvatar
@@ -73,6 +76,26 @@ private val PillBg = Color(0xFFF1F5FD)
 
 private fun won(amount: Int): String = "%,d원".format(amount)
 
+/** 지도 스트립 높이. */
+private val JoinMapHeight = 172.dp
+
+/** 시트가 시작하는 높이 — 지도 아래 12dp 를 덮는다(그 겹침이 카메라 여백에 더해진다). */
+private val JoinSheetTop = 160.dp
+
+/** 지도 위 소요 시간 칩의 바깥 여백과 높이 — 카메라 위쪽 여백이 이 둘을 더한 만큼 커진다. */
+private val EtaChipMargin = 16.dp
+private val EtaChipHeight = 30.dp
+
+/**
+ * 방 좌표를 하나도 못 쓸 때 20 의 지도가 보여 줄 곳 — **내 위치**, 없으면 **앱 기본 카메라**.
+ *
+ * 반드시 값을 준다(null 을 돌려주지 않는다): [RouteStripMap] 은 이 값이 null 이고 도착지도 없으면
+ * 자리표시자를 그리는데, 20 은 「어디서 타는 방인가」를 보는 화면이라 빈 회색 상자보다 지도가 낫다.
+ * 그리고 끝까지 물러나도 **SDK 기본 카메라(서울)가 아니다**.
+ */
+internal fun joinMapFallback(userPosition: LatLng?): LatLng =
+    userPosition?.takeIf { isUsableMapCoordinate(it.latitude, it.longitude) } ?: MoyeotaDefaultCamera
+
 /**
  * 20 · 합류 확인 [신규]
  *
@@ -89,7 +112,7 @@ private fun won(amount: Int): String = "%,d원".format(amount)
  *
  * 검증·상태 — **판정은 [joinGate] 하나**이고 배지·배너·CTA 가 모두 그 결과를 따른다:
  * - 상태 배지는 [Ride.status] 를 그대로 읽는다([joinStatusBadge]) — 예전에는 문자열 리터럴이라
- *   **취소된 방에도 「모집 중」**이 떠 있었다. 17 목록은 4초 주기라 방을 고르는 사이에 마지막 멤버가
+ *   **취소된 방에도 「모집 중」**이 떠 있었다. 17 목록은 15초 주기라 방을 고르는 사이에 마지막 멤버가
  *   나가 방이 닫힐 수 있다(`Party.leave` → `members.isEmpty()` → `cancel()`)
  * - 모집 중이 아니거나 정원이 찼으면 CTA 비활성 + CTA 위 NoticeBanner(ERROR) **한 줄**
  *   (배너는 **하나만** 띄운다 — 예전에는 「방금 인원이 찼어요」와 서버 실패 문구가 거의 같은 말을
@@ -105,6 +128,11 @@ fun JoinConfirmScreen(
      * 「도보 N분」은 쓰지 않는다 — 보행 속도를 지어내야 하고, 거리와 달리 잰 값이 아니다.
      */
     pickupDistanceMeters: Double? = null,
+    /**
+     * 내 현재 위치. 지도가 방 좌표를 하나도 못 쓸 때(누락·(0,0)·NaN) 「내 주변」으로 물러나는 자리다.
+     * 모르면 null — 그때는 앱 기본 카메라다([joinMapFallback]).
+     */
+    userPosition: LatLng? = null,
     joining: Boolean = false,
     joinErrorMessage: String? = null,
     onDismiss: () -> Unit = {},
@@ -178,19 +206,31 @@ fun JoinConfirmScreen(
         }
 
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            // 경로 지도 스트립
-            Box(modifier = Modifier.fillMaxWidth().height(172.dp)) {
+            // 경로 지도 스트립 — 카메라는 출발·도착(+경로선)이 **가리지 않는 영역**에 다 들어오게 맞춘다
+            // (2026-11, 오너 UX 피드백: 「가끔 엉뚱한 곳, 심지어 해외가 보인다」). 원인은 둘이었다:
+            // ① (0,0) 같은 못 쓸 좌표가 카메라 범위에 섞여 바다 한가운데를 비췄고 ② 지도가 준비된 뒤에야
+            // 카메라를 옮겨 SDK 기본 카메라(서울)가 먼저 보였다. ①은 [routeCameraTarget] 이 좌표를 걸러
+            // 정해진 순서(출발지 → 도착지 → 내 주변 → 앱 기본)로 물러나 막고, ②는 [NaverMapView] 가 첫
+            // 카메라를 생성 옵션으로 걸어 막는다. 방을 다시 읽어 좌표가 바뀌면 그때 다시 맞춘다.
+            //
+            // 여백(디자인 QA 4-7): 좌우 48dp, 위는 소요 시간 칩(16 + 30dp)만큼 더(칩이 있을 때만),
+            // 아래는 시트가 덮는 12dp 만큼 더 — 마커 머리·캡션 높이는 [RouteStripMap] 이 얹는다. 최대 줌 16.
+            Box(modifier = Modifier.fillMaxWidth().height(JoinMapHeight)) {
                 RouteStripMap(
                     modifier = Modifier.fillMaxSize(),
                     originPosition = originPosition,
                     destinationPosition = destinationPosition,
                     routePath = routePath,
+                    fallbackPosition = joinMapFallback(userPosition),
+                    obscuredTop = if (etaLabel != null) EtaChipMargin + EtaChipHeight else 0.dp,
+                    obscuredBottom = JoinMapHeight - JoinSheetTop,
+                    sidePadding = 48.dp,
                 )
                 // 시간·거리 둘 다 없으면 칩을 통째로 감춘다 — 틀린 값보다 없는 편이 낫다
                 if (etaLabel != null) Box(
                     modifier = Modifier
-                        .padding(16.dp)
-                        .height(30.dp)
+                        .padding(EtaChipMargin)
+                        .height(EtaChipHeight)
                         .shadow(4.dp, CircleShape, spotColor = Color(0x141B2A4A))
                         .background(MoyeotaColor.SurfaceCanvas, CircleShape)
                         .padding(horizontal = 16.dp),
@@ -209,7 +249,7 @@ fun JoinConfirmScreen(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(top = 160.dp)
+                    .padding(top = JoinSheetTop)
                     .shadow(14.dp, RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp), spotColor = Color(0x141B2A4A))
                     .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
                     .background(MoyeotaColor.SurfaceCanvas),
@@ -402,7 +442,7 @@ internal data class JoinStatusBadge(val kind: NoticeKind, val text: String)
  * 조용히 남는 일을 막아 주는 것이 여기 분기를 다 적어 둔 이유다.
  *
  * 20 은 모집 중인 방을 고르려고 여는 화면이라, 다른 단계는 모두 **들어갈 수 없는 방**이라는 뜻이다
- * (17 목록이 4초 주기라 고르는 사이에 바뀐다). 그래서 문구를 「… 방」으로 적었다 — 지금 내가 들어갈
+ * (17 목록이 15초 주기라 고르는 사이에 바뀐다). 그래서 문구를 「… 방」으로 적었다 — 지금 내가 들어갈
  * 수 있는 상황이 아니라는 사실이 배지에서 읽혀야 한다.
  */
 internal fun joinStatusBadge(status: RideStatus): JoinStatusBadge = when (status) {

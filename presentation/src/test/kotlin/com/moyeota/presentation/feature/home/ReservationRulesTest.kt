@@ -1,5 +1,6 @@
 package com.moyeota.presentation.feature.home
 
+import com.moyeota.core.designsystem.component.DateStripTone
 import com.moyeota.domain.model.PartyOpenException
 import java.time.Instant
 import java.time.LocalDate
@@ -104,44 +105,67 @@ class ReservationRulesTest {
         assertFalse("어제는 고를 수 없다", isReservationSearchDate(today.minusDays(1), now))
     }
 
-    // ─────────────────────────── 시각 슬롯 ───────────────────────────
+    // ─────────────────────────── 시각 범위(10분 휠) ───────────────────────────
 
+    /** KST 벽시계 시각 → 순간. 테스트가 「한국 시간 몇 시」로 읽히게 한다. */
+    private fun kst(date: LocalDate, hour: Int, minute: Int, second: Int = 0): Instant =
+        date.atTime(hour, minute, second).atZone(ZoneId.of("Asia/Seoul")).toInstant()
+
+    private val monday = LocalDate.of(2026, 11, 9)
+
+    /**
+     * 오늘의 가장 이른 값 = 「지금 + 10분」을 **10분 단위로 올림**. 정확히 경계에 떨어지면(초까지 0) 그대로다
+     * — 그 값이 이미 10분 여유를 품고 있다.
+     */
     @Test
-    fun `오늘 슬롯은 지금보다 뒤이고 10분 여유를 둔다`() {
-        val today = LocalDate.of(2026, 11, 9) // 기준 시각은 KST 13:00
-        val slots = reservationTimeSlots(today, now)
+    fun `오늘은 지금부터 10분 뒤를 10분 단위로 올린 시각부터다`() {
+        val range = reservationTimeRange(monday, now)!! // 기준 시각 KST 13:00:00
 
-        // 13:00 + 10분 = 13:10 **초과**여야 하므로 13:30 이 가장 이르다(13:00 도 13:10 도 아니다)
-        assertEquals(LocalTime.of(13, 30), slots.first())
-        assertEquals(LocalTime.of(23, 30), slots.last())
-        assertFalse("이미 지난 시각", slots.contains(LocalTime.of(12, 30)))
-        // 30분 간격이라 자정 뒤 전부를 세면 하루 48개에서 지난 만큼이 빠진다
-        assertEquals(21, slots.size)
+        assertEquals(LocalTime.of(13, 10), range.earliest)
+        assertEquals(LocalTime.of(23, 50), range.latest)
+        assertFalse("이미 지난 시각", LocalTime.of(12, 50) in range)
+    }
+
+    /** 초가 남아 있으면 분 단위로 먼저 올린다 — 13:00:30 + 10분을 13:10 으로 내리면 여유가 30초 모자란다. */
+    @Test
+    fun `초가 남아 있으면 다음 10분으로 올린다`() {
+        assertEquals(LocalTime.of(13, 20), reservationTimeRange(monday, kst(monday, 13, 0, 30))!!.earliest)
+        assertEquals(LocalTime.of(13, 20), reservationTimeRange(monday, kst(monday, 13, 3))!!.earliest)
+        assertEquals(LocalTime.of(13, 20), reservationTimeRange(monday, kst(monday, 13, 10))!!.earliest)
     }
 
     @Test
-    fun `내일은 자정부터 전부 고를 수 있다`() {
-        val slots = reservationTimeSlots(LocalDate.of(2026, 11, 10), now)
+    fun `내일은 자정부터 23시 50분까지 전부 고를 수 있다`() {
+        val range = reservationTimeRange(monday.plusDays(1), now)!!
 
-        assertEquals(48, slots.size)
-        assertEquals(LocalTime.of(0, 0), slots.first())
-        assertEquals(LocalTime.of(23, 30), slots.last())
+        assertEquals(LocalTime.of(0, 0), range.earliest)
+        assertEquals(LocalTime.of(23, 50), range.latest)
+        assertEquals((0..23).toList(), reservationHourOptions(range))
+        assertEquals(listOf(0, 10, 20, 30, 40, 50), reservationMinuteOptions(range, 18))
     }
 
     /**
-     * ★ **보이지 않는 경계** — 「7일 뒤」 칩은 있는데 그 날 늦은 시각은 창을 넘는다.
+     * ★ **보이지 않는 경계** — 「7일 뒤」 칸은 있는데 그 날 늦은 시각은 창을 넘는다.
      *
-     * 기준 시각이 KST 13:00 이므로 7일 뒤에 허용되는 것은 **그 날 13:00 까지**다. 이 필터가 없으면
-     * 사용자가 7일 뒤 23:30 을 골라 400 `INVALID_DEPARTURE_TIME` 을 만든다.
+     * 기준 시각이 KST 13:00 이므로 7일 뒤에 허용되는 것은 **그 날 13:00 까지**다(경계 포함 — 서버가
+     * `isAfter` 로 본다). 이 경계가 없으면 사용자가 7일 뒤 23:50 을 골라 400 `INVALID_DEPARTURE_TIME` 을 만든다.
      */
     @Test
     fun `7일 뒤는 지금 시각까지만 고를 수 있다`() {
-        val slots = reservationTimeSlots(LocalDate.of(2026, 11, 16), now)
+        val range = reservationTimeRange(LocalDate.of(2026, 11, 16), now)!!
 
-        assertEquals(LocalTime.of(0, 0), slots.first())
-        // 정확히 「지금 + 7일」인 13:00 은 **포함**이다(서버가 그 경계를 받는다)
-        assertEquals(LocalTime.of(13, 0), slots.last())
-        assertFalse(slots.contains(LocalTime.of(13, 30)))
+        assertEquals(LocalTime.of(0, 0), range.earliest)
+        assertEquals(LocalTime.of(13, 0), range.latest)
+        assertEquals((0..13).toList(), reservationHourOptions(range))
+        assertEquals("마지막 시에는 정각만 남는다", listOf(0), reservationMinuteOptions(range, 13))
+    }
+
+    /** 늦은 쪽은 10분 단위로 **내린다** — 13:05 의 7일 뒤 13:10 은 이미 창 밖이다. */
+    @Test
+    fun `7일 뒤의 마지막 값은 10분 단위로 내린다`() {
+        val range = reservationTimeRange(LocalDate.of(2026, 11, 16), kst(monday, 13, 5))!!
+
+        assertEquals(LocalTime.of(13, 0), range.latest)
     }
 
     /** 자정 직후에는 7일 뒤의 선택지가 **자정 한 칸**으로 줄어든다(비지는 않는다). */
@@ -150,24 +174,160 @@ class ReservationRulesTest {
         val justAfterMidnight = Instant.parse("2026-11-08T15:05:00Z") // KST 11-09 00:05
         val lastDay = reservationDates(justAfterMidnight).last() // 11-16
 
-        assertEquals(listOf(LocalTime.of(0, 0)), reservationTimeSlots(lastDay, justAfterMidnight))
+        val range = reservationTimeRange(lastDay, justAfterMidnight)!!
+        assertEquals(LocalTime.of(0, 0), range.earliest)
+        assertEquals(LocalTime.of(0, 0), range.latest)
     }
 
     /**
-     * 늦은 밤에는 **「오늘」에 고를 시각이 없다** — 화면이 안내를 띄우는 상태다
-     * ([RESERVATION_NO_SLOT_NOTICE]). 오늘의 마지막 슬롯이 23:30 이고 10분 여유가 필요하다.
+     * 늦은 밤에는 **「오늘」에 고를 시각이 없다** — 오늘의 마지막 값이 23:50 이고 10분 여유가 필요하다.
+     * 그 날은 띠에서 누를 수 없고([reservationDateCells]) 기본 선택이 다음 날로 옮겨 간다.
      */
     @Test
-    fun `밤 23시 55분에는 오늘 고를 시간이 없다`() {
+    fun `밤 23시 55분에는 오늘 고를 시간이 없고 내일은 00시 10분부터다`() {
         val lateNight = Instant.parse("2026-11-09T14:55:00Z") // KST 23:55
         val today = reservationDates(lateNight).first()
 
-        assertTrue(reservationTimeSlots(today, lateNight).isEmpty())
-        // 내일은 고를 수 있다 — 「고를 수 없다」가 날짜 하나에만 걸린다.
-        // 다만 **자정 칸은 빠진다**(지금부터 5분 뒤라 10분 여유에 걸린다) — 48개가 아니라 47개다.
-        val tomorrow = reservationTimeSlots(today.plusDays(1), lateNight)
-        assertEquals(47, tomorrow.size)
-        assertEquals(LocalTime.of(0, 30), tomorrow.first())
+        assertNull(reservationTimeRange(today, lateNight))
+        // 23:55 + 10분 = 00:05 → 10분 단위로 올려 00:10
+        assertEquals(LocalTime.of(0, 10), reservationTimeRange(today.plusDays(1), lateNight)!!.earliest)
+    }
+
+    @Test
+    fun `밤 23시 40분 정각이면 오늘은 23시 50분 한 칸이 남는다`() {
+        val range = reservationTimeRange(monday, kst(monday, 23, 40))!!
+
+        assertEquals(LocalTime.of(23, 50), range.earliest)
+        assertEquals(LocalTime.of(23, 50), range.latest)
+        assertNull("1분만 지나도 오늘은 끝이다", reservationTimeRange(monday, kst(monday, 23, 41)))
+    }
+
+    @Test
+    fun `시 휠은 범위에 걸치는 시만 담고 분 휠은 그 시 안의 값만 담는다`() {
+        val range = reservationTimeRange(monday, kst(monday, 13, 3))!! // 13:20 ~ 23:50
+
+        assertEquals((13..23).toList(), reservationHourOptions(range))
+        assertEquals("첫 시는 잘린다", listOf(20, 30, 40, 50), reservationMinuteOptions(range, 13))
+        assertEquals(listOf(0, 10, 20, 30, 40, 50), reservationMinuteOptions(range, 14))
+    }
+
+    // ─────────────────────────── 휠의 기본값·접기 ───────────────────────────
+
+    /**
+     * ★ **규칙 변경** — 칩 시절에는 기본 선택이 없었다. 휠은 늘 값을 보여 주므로 손대지 않았으면
+     * **그 날의 가장 이른 시각**이 선택이고, CTA 는 켜진다([reservationSelectedTime] KDoc).
+     */
+    @Test
+    fun `휠을 건드리지 않았으면 그 날의 가장 이른 시각이 선택이다`() {
+        assertEquals(LocalTime.of(13, 10), reservationSelectedTime(null, reservationTimeRange(monday, now)))
+        assertEquals(LocalTime.of(0, 0), reservationSelectedTime(null, reservationTimeRange(monday.plusDays(1), now)))
+    }
+
+    @Test
+    fun `그 날에 시각이 없으면 선택도 없다`() {
+        val lateNight = Instant.parse("2026-11-09T14:55:00Z")
+        assertNull(reservationSelectedTime(LocalTime.of(18, 0), reservationTimeRange(monday, lateNight)))
+    }
+
+    /** 날짜를 바꾸면 보여 줄 값만 그 날의 범위로 접는다 — 고른 값은 다른 날로 돌아가면 살아 있다. */
+    @Test
+    fun `날짜를 바꾸면 고른 시각을 그 날의 범위로 접는다`() {
+        val chosen = LocalTime.of(18, 30)
+        val lastDay = reservationTimeRange(LocalDate.of(2026, 11, 16), now) // ~13:00
+        val today = reservationTimeRange(monday, now) // 13:10~
+
+        assertEquals("7일 뒤로 가면 마지막 값으로", LocalTime.of(13, 0), reservationSelectedTime(chosen, lastDay))
+        assertEquals("오늘 이른 값은 가장 이른 값으로", LocalTime.of(13, 10), reservationSelectedTime(LocalTime.of(9, 0), today))
+        assertEquals("범위 안이면 그대로", chosen, reservationSelectedTime(chosen, today))
+    }
+
+    @Test
+    fun `10분 단위가 아닌 값은 10분 단위로 내려 접는다`() {
+        val tomorrow = reservationTimeRange(monday.plusDays(1), now)
+        assertEquals(LocalTime.of(18, 30), reservationSelectedTime(LocalTime.of(18, 37, 12), tomorrow))
+    }
+
+    /** 시를 굴리면 분은 지키고, 범위를 벗어나면 범위 안으로 올린다. */
+    @Test
+    fun `시를 굴리면 분을 지키되 범위로 접는다`() {
+        val range = reservationTimeRange(monday, kst(monday, 13, 3))!! // 13:20 ~
+
+        assertEquals(LocalTime.of(15, 40), reservationTimeWithHour(LocalTime.of(18, 40), 15, range))
+        assertEquals(LocalTime.of(13, 40), reservationTimeWithHour(LocalTime.of(18, 40), 13, range))
+        assertEquals(LocalTime.of(13, 20), reservationTimeWithHour(LocalTime.of(18, 0), 13, range))
+        assertEquals(LocalTime.of(18, 50), reservationTimeWithMinute(LocalTime.of(18, 0), 50, range))
+    }
+
+    /**
+     * ★ **휠에 보이는 값 = 서버로 가는 값.** 접힌 값으로 ISO 를 만들고, 보내는 자리에서 시계를 다시 읽지
+     * 않는다 — 화면의 시각과 보낸 시각이 어긋나면 약속 시간이 다른 방이 만들어진다(바꿀 수 없다).
+     */
+    @Test
+    fun `보내는 출발 시각은 휠이 보여 주는 값과 같다`() {
+        val shown = reservationSelectedTime(null, reservationTimeRange(monday, now))!!
+        val iso = reservationDepartureIso(monday, shown)
+
+        assertEquals(LocalTime.of(13, 10), shown)
+        assertEquals(Instant.parse("2026-11-09T04:10:00Z"), Instant.parse(iso))
+    }
+
+    @Test
+    fun `휠 글자는 시는 그대로 분은 두 자리다`() {
+        assertEquals("0", reservationHourLabel(0))
+        assertEquals("18", reservationHourLabel(18))
+        assertEquals("00", reservationMinuteLabel(0))
+        assertEquals("50", reservationMinuteLabel(50))
+    }
+
+    // ─────────────────────────── 날짜 띠 ───────────────────────────
+
+    @Test
+    fun `날짜 칸은 요일과 일을 담고 토요일 파랑 일요일 빨강이다`() {
+        val dates = reservationDates(now) // 11-09(월) ~ 11-16(월)
+        val cells = reservationDateCells(dates, dates.first())
+
+        assertEquals(8, cells.size)
+        assertEquals(listOf("월", "화", "수", "목", "금", "토", "일", "월"), cells.map { it.weekday })
+        assertEquals(listOf("9", "10", "11", "12", "13", "14", "15", "16"), cells.map { it.day })
+        assertEquals(DateStripTone.SATURDAY, cells[5].tone)
+        assertEquals(DateStripTone.SUNDAY, cells[6].tone)
+        assertEquals(DateStripTone.WEEKDAY, cells[0].tone)
+        assertEquals("오늘 점은 첫 칸에만", listOf(true) + List(7) { false }, cells.map { it.isToday })
+        assertTrue("기본은 모든 날을 고를 수 있다(17 날짜로 찾기)", cells.all { it.enabled })
+    }
+
+    @Test
+    fun `날짜 칸의 스크린리더 문장은 월과 오늘 내일을 말한다`() {
+        val dates = reservationDates(now)
+        val cells = reservationDateCells(dates, dates.first())
+
+        assertEquals("오늘, 11월 9일 월요일", cells[0].contentDescription)
+        assertEquals("내일, 11월 10일 화요일", cells[1].contentDescription)
+        assertEquals("11월 14일 토요일", cells[5].contentDescription)
+    }
+
+    /** 16 은 「그 날에 남은 시각이 있는가」로 칸을 막는다 — 늦은 밤의 오늘 칸은 누를 수 없다. */
+    @Test
+    fun `고를 시각이 없는 날은 누를 수 없는 칸이 되고 기본 선택은 다음 날로 간다`() {
+        val lateNight = Instant.parse("2026-11-09T14:55:00Z") // KST 23:55
+        val dates = reservationDates(lateNight)
+        val selectable: (LocalDate) -> Boolean = { reservationTimeRange(it, lateNight) != null }
+        val cells = reservationDateCells(dates, dates.first(), selectable)
+
+        assertFalse(cells[0].enabled)
+        assertTrue(cells.drop(1).all { it.enabled })
+        assertEquals(1, reservationSelectableDateIndex(0, dates, selectable))
+        assertEquals("고를 수 있는 날을 고른 것은 그대로", 3, reservationSelectableDateIndex(3, dates, selectable))
+    }
+
+    @Test
+    fun `띠 위의 달 표시는 달을 넘으면 범위로 쓴다`() {
+        assertEquals("11월", reservationMonthLabel(reservationDates(now)))
+        val endOfMonth = Instant.parse("2026-11-27T04:00:00Z") // 11-27 ~ 12-04
+        assertEquals("11–12월", reservationMonthLabel(reservationDates(endOfMonth)))
+        val endOfYear = Instant.parse("2026-12-28T04:00:00Z") // 12-28 ~ 01-04
+        assertEquals("12–1월", reservationMonthLabel(reservationDates(endOfYear)))
+        assertNull(reservationMonthLabel(emptyList()))
     }
 
     // ─────────────────────────── 보내는 값 ───────────────────────────
@@ -388,5 +548,18 @@ class ReservationRulesTest {
         assertEquals("예약 방은 2명부터 만들 수 있어요", RESERVATION_CAPACITY_NOTICE)
         // 혼자 출발 안내와 **함께 뜨지 않는다** — 예약에서 정원은 1 이 될 수 없다
         assertNull(soloCapacityNotice(capacityFor(DepartureMode.SCHEDULED, 1)))
+    }
+
+    @Test
+    fun `지금 출발이면 휠에 시각이 있어도 출발 시각을 싣지 않는다`() {
+        val date = LocalDate.of(2026, 11, 14)
+        val time = LocalTime.of(21, 30)
+        // 휠은 늘 값을 보여 준다 — 그 값을 「지금 출발」에서 실으면 실시간 방 대신 예약 방이 만들어진다
+        assertNull(matchDepartureAt(scheduled = false, date = date, time = time))
+        // 「시간 정하기」면 휠 값 그대로 — 한국 21:30 = UTC 12:30
+        assertEquals(Instant.parse("2026-11-14T12:30:00Z"), Instant.parse(matchDepartureAt(scheduled = true, date = date, time = time)))
+        assertEquals(reservationDepartureIso(date, time), matchDepartureAt(scheduled = true, date = date, time = time))
+        // 고를 시각이 없는 날(늦은 밤의 오늘)은 「시간 정하기」여도 없다 — CTA 가 잠긴다
+        assertNull(matchDepartureAt(scheduled = true, date = date, time = null))
     }
 }

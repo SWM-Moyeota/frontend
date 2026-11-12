@@ -1,9 +1,12 @@
 package com.moyeota.presentation.feature.home
 
+import com.moyeota.core.designsystem.component.DateStripCell
+import com.moyeota.core.designsystem.component.DateStripTone
 import com.moyeota.domain.model.PartyOpenException
 import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalDate
+import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.ZoneId
 import java.time.temporal.ChronoUnit
@@ -13,7 +16,7 @@ import java.time.temporal.ChronoUnit
  *
  * ### 왜 화면에서 떼어 내는가
  * 이 파일의 규칙은 전부 **시계와 달력**에 달려 있다 — 「지금부터 7일 안」·「오늘~7일 뒤」·「예약은
- * 2명부터」. 경계를 한 칸 잘못 잡아도 스크린샷에는 아무것도 보이지 않는다: 7일 뒤 23:30 을 고를 수
+ * 2명부터」. 경계를 한 칸 잘못 잡아도 스크린샷에는 아무것도 보이지 않는다: 7일 뒤 23:50 을 고를 수
  * 있는 화면과 올바른 화면은 눈으로 구분할 수 없고, 그 차이는 **서버 400 `INVALID_DEPARTURE_TIME`**
  * 으로만 드러난다. 그래서 판정을 Compose 를 모르는 순수 함수로 빼고 `now` 를 **인자로** 받는다 —
  * 어느 함수도 안에서 [Instant.now] 를 부르지 않는다(부르면 테스트가 경계를 고정할 수 없다).
@@ -60,19 +63,28 @@ internal val KOREA_ZONE: ZoneId = ZoneId.of("Asia/Seoul")
 internal const val RESERVATION_WINDOW_DAYS = 7L
 
 /**
- * 시각 칩의 간격(분). 30분 단위인 이유는 **고를 수 있는 값의 수**다 — 10분 단위면 하루 144개,
- * 1시간 단위면 약속 시간을 30분 뒤로 미루지도 못한다. 자유 입력(시간 피커)을 두지 않는 근거는
- * `MEETING_PRESET_MINUTES` 와 같다: 피커를 주면 사용자가 **스스로 400 을 만들 수 있다**(지난 시각·
- * 7일 밖). 칩만 두면 고를 수 있는 모든 값이 **구성상** 유효하다.
+ * 시각 휠의 간격(분) — **10분**. 시 휠(0~23)과 분 휠(00·10·20·30·40·50)이 이 간격으로 값을 낸다.
+ *
+ * ### 30분 칩에서 10분 휠로 (2026-11, 오너 UX 피드백)
+ * 예전에는 30분 간격 칩이었다 — 「10분 단위면 하루 144개라 칩으로는 고를 수 없다」가 근거였다.
+ * 휠은 그 제약이 없다: 시(24)와 분(6)을 **두 축으로 나눠** 고르므로 144개를 늘어놓지 않는다.
+ * 그리고 30분 단위는 실제 약속에 너무 거칠었다(「6시 40분에 모이자」를 고를 수 없다).
+ *
+ * 자유 입력(분 단위 키패드)을 두지 않는 근거는 그대로다(`MEETING_PRESET_MINUTES` 와 같은 판단): 휠은
+ * **고를 수 있는 값만** 담는다([reservationHourOptions]·[reservationMinuteOptions]) — 지난 시각·7일 밖이
+ * 목록에 아예 없으므로 고를 수 있는 모든 값이 **구성상** 서버 창 안이다.
  */
-internal const val RESERVATION_SLOT_MINUTES = 30
+internal const val RESERVATION_TIME_STEP_MINUTES = 10
 
 /**
- * 가장 이른 슬롯까지 두는 여유 — **지금부터 10분**.
+ * 가장 이른 출발 시각까지 두는 여유 — **지금부터 10분**(그 뒤 10분 단위로 **올림**한다 —
+ * [reservationTimeRange]).
  *
- * 두 가지를 산다. ① 왕복 시간과 시계 스큐: 「1분 뒤」 슬롯은 요청이 서버에 닿는 사이 과거가 되어
+ * 세 가지를 산다. ① 왕복 시간과 시계 스큐: 「1분 뒤」는 요청이 서버에 닿는 사이 과거가 되어
  * 400 `INVALID_DEPARTURE_TIME` 이 된다(`meetingPresetAt` 이 분 단위로 내림해 여유를 버는 것과 같은
- * 자리다). ② 뜻: 5분 뒤에 타려는 사람에게 필요한 것은 예약 방이 아니라 **지금 출발**이고, 그쪽은
+ * 자리다). ② **모달에 머무는 시간**: 16 은 기준 시각을 열 때 한 번만 읽으므로(`DestinationConfirmModal`
+ * 의 `now`) 사용자가 몇 분 고민하는 사이 그 여유가 줄어든다 — 10분이면 그래도 서버 창 안이다.
+ * ③ 뜻: 5분 뒤에 타려는 사람에게 필요한 것은 예약 방이 아니라 **지금 출발**이고, 그쪽은
  * 경로·요금 추정까지 받는다.
  */
 internal const val RESERVATION_MIN_LEAD_MINUTES = 10L
@@ -165,7 +177,13 @@ internal const val RESERVATION_CAPACITY_NOTICE = "예약 방은 2명부터 만�
  */
 internal const val RESERVATION_NO_ESTIMATE_NOTICE = "예약 방은 예상 요금과 소요 시간을 미리 알 수 없어요"
 
-/** 출발 시각을 아직 고르지 않았다 — 비활성 CTA 옆에 **왜 못 누르는지**를 둔다(빈 비활성 버튼을 두지 않는다). */
+/**
+ * 고를 수 있는 출발 시각이 **없다** — 비활성 CTA 옆에 **왜 못 누르는지**를 둔다(빈 비활성 버튼을 두지 않는다).
+ *
+ * 휠로 바뀐 뒤로는 「아직 안 골랐다」가 없다(휠은 늘 값을 보여 주고 그 값이 기본 선택이다 —
+ * [reservationSelectedTime]). 그래서 이 줄이 뜨는 경우는 하나뿐이다: 고른 날에 남은 시각이 없을 때
+ * (늦은 밤의 「오늘」 — [RESERVATION_NO_SLOT_NOTICE] 가 카드 안에서 같은 사실을 길게 말한다).
+ */
 internal const val RESERVATION_NEEDS_TIME_NOTICE = "출발 시각을 골라 주세요"
 
 /**
@@ -197,14 +215,14 @@ internal fun reservationCommitmentNotice(joining: Boolean): String {
 }
 
 /**
- * 그 날에 고를 수 있는 시각이 하나도 없다 — **늦은 밤의 「오늘」 칩**에서 나온다.
+ * 그 날에 고를 수 있는 시각이 하나도 없다 — **늦은 밤의 「오늘」**에서 나온다.
  *
- * 오늘의 마지막 슬롯은 23:30 이고 가장 이른 슬롯은 「지금 + 10분」보다 뒤여야 하므로
- * ([RESERVATION_MIN_LEAD_MINUTES]) 23:20 을 넘기면 오늘 고를 수 있는 시각이 없다. 그때는
- * 「내일」부터 고르면 되고, 이 줄이 그 사실을 말한다 — 자리를 비워 두면 칩이 사라진 이유를 모른다.
+ * 오늘의 마지막 값은 23:50 이고 가장 이른 값은 「지금 + 10분」을 10분 단위로 올린 시각이므로
+ * ([reservationTimeRange]) 23:40 을 넘기면 오늘 고를 수 있는 시각이 없다. 그때는 「내일」부터 고르면
+ * 되고, 이 줄이 그 사실을 말한다 — 휠 자리를 비워 두면 휠이 사라진 이유를 모른다.
  *
- * 반대쪽 끝(7일 뒤)은 **비지는 않지만 짧아진다**: 그 날은 자정부터 「지금 시각」까지만 고를 수 있다
- * ([reservationTimeSlots] 의 둘째 경계).
+ * 반대쪽 끝(7일 뒤)은 **비지는 않지만 짧아진다**: 그 날은 자정부터 「지금 시각(10분 단위 내림)」까지만
+ * 고를 수 있다([reservationTimeRange] 의 둘째 경계).
  */
 internal const val RESERVATION_NO_SLOT_NOTICE = "이 날은 고를 수 있는 시간이 없어요. 다른 날을 골라 주세요"
 
@@ -245,38 +263,234 @@ internal fun isReservationSearchDate(date: LocalDate, now: Instant, zone: ZoneId
 }
 
 /**
- * 그 날짜에 고를 수 있는 시각들 — **[RESERVATION_SLOT_MINUTES] 간격, 지금+[RESERVATION_MIN_LEAD_MINUTES]
- * 보다 뒤, 지금+[RESERVATION_WINDOW_DAYS]일 보다 앞**.
+ * 그 날짜에 고를 수 있는 출발 시각의 **범위**(양 끝 포함, [RESERVATION_TIME_STEP_MINUTES] 단위).
+ * 하나도 없으면 null.
  *
  * 두 경계가 각각 서버의 거절 하나를 지운다.
  *
- * | 경계 | 없으면 |
- * |---|---|
- * | 지금 + 10분 보다 뒤 | 오늘 날짜에서 **이미 지난 시각**과 몇 분 뒤가 고를 수 있게 된다 → 400 `INVALID_DEPARTURE_TIME` |
- * | 지금 + 7일 보다 앞 | 7일 뒤 날짜의 **늦은 시각**이 창을 넘는다(지금이 09:00 이면 7일 뒤 09:30 은 이미 밖이다) → 같은 400 |
+ * | 경계 | 값 | 없으면 |
+ * |---|---|---|
+ * | 가장 이른 | 「지금 + [RESERVATION_MIN_LEAD_MINUTES]분」을 10분 단위로 **올림** | 오늘 날짜에서 **이미 지난 시각**과 몇 분 뒤가 골라진다 → 400 `INVALID_DEPARTURE_TIME` |
+ * | 가장 늦은 | 「지금 + [RESERVATION_WINDOW_DAYS]일」을 10분 단위로 **내림** | 7일 뒤 날짜의 **늦은 시각**이 창을 넘는다(지금이 09:05 면 7일 뒤 09:10 은 이미 밖이다) → 같은 400 |
  *
- * 둘째 경계가 눈에 안 보이는 쪽이다: 「7일 뒤」가 칩에 있으니 그 날은 아무 시각이나 될 것처럼
- * 보이는데, 실제로 허용되는 건 그 날 **자정부터 지금 시각까지**다. 그래서 마지막 날의 칩 목록은
- * 짧고, 아주 이른 시각(지금이 00:10 이전)에는 **비어 있다**([RESERVATION_NO_SLOT_NOTICE]).
+ * 둘째 경계가 눈에 안 보이는 쪽이다: 「7일 뒤」가 날짜 띠에 있으니 그 날은 아무 시각이나 될 것처럼
+ * 보이는데, 실제로 허용되는 건 그 날 **자정부터 지금 시각까지**다.
  *
- * 경계는 **포함**이다: 정확히 「지금+7일」인 슬롯은 유효하다(서버가 `isAfter` 로 본다). 반대로
- * 여유 시간 쪽은 **초과**여야 한다 — 「지금+10분」 정각 슬롯은 왕복 시간에 먹힌다.
+ * ### 올림·내림의 방향
+ * 둘 다 **창 안쪽으로** 깎는다 — 올림은 「지금+10분」보다 이르지 않게, 내림은 「지금+7일」보다 늦지
+ * 않게. 정확히 경계에 떨어진 값(초까지 0)은 그대로 쓴다: 앞쪽은 이미 10분 여유를 품은 값이고,
+ * 뒤쪽은 서버가 `isAfter` 로 보므로 경계 자체를 받는다. 초·나노초가 남아 있으면 분 단위로 먼저 올리고
+ * (앞쪽) 버린다(뒤쪽) — 13:00:30 + 10분을 13:10 으로 내리면 여유가 30초 모자란다.
+ *
+ * 계산은 **그 시간대의 벽시계**로 한다(UTC 순간으로 반올림하지 않는다). 한국 시간대는 정시 오프셋이라
+ * 결과가 같지만, 30분·45분 오프셋 시간대에서 UTC 로 반올림하면 휠의 「10분 단위」가 어긋난다.
+ *
+ * @param now 지금 시각. **호출부가 넘긴다** — 안에서 시계를 읽으면 경계를 테스트할 수 없다
  */
-internal fun reservationTimeSlots(
+internal fun reservationTimeRange(
     date: LocalDate,
     now: Instant,
     zone: ZoneId = KOREA_ZONE,
-    stepMinutes: Int = RESERVATION_SLOT_MINUTES,
-): List<LocalTime> {
-    val step = stepMinutes.coerceAtLeast(1)
-    val earliest = now.plus(RESERVATION_MIN_LEAD_MINUTES, ChronoUnit.MINUTES)
-    val latest = now.plus(RESERVATION_WINDOW_DAYS, ChronoUnit.DAYS)
-    return (0 until 24 * 60 step step)
-        .map { LocalTime.of(it / 60, it % 60) }
-        .filter { time ->
-            val at = date.atTime(time).atZone(zone).toInstant()
-            at.isAfter(earliest) && !at.isAfter(latest)
-        }
+): ReservationTimeRange? {
+    val step = RESERVATION_TIME_STEP_MINUTES
+    val earliest = ceilToMinuteStep(
+        now.plus(RESERVATION_MIN_LEAD_MINUTES, ChronoUnit.MINUTES).atZone(zone).toLocalDateTime(),
+        step,
+    )
+    val latest = floorToMinuteStep(
+        now.plus(RESERVATION_WINDOW_DAYS, ChronoUnit.DAYS).atZone(zone).toLocalDateTime(),
+        step,
+    )
+    val dayFirst = date.atStartOfDay()
+    val dayLast = date.atTime(LocalTime.of(23, 60 - step))
+    val from = maxOf(dayFirst, earliest)
+    val to = minOf(dayLast, latest)
+    if (from.isAfter(to)) return null
+    return ReservationTimeRange(earliest = from.toLocalTime(), latest = to.toLocalTime())
+}
+
+/**
+ * 한 날짜 안에서 고를 수 있는 시각의 양 끝(포함). 두 값 모두 [RESERVATION_TIME_STEP_MINUTES] 의 배수다.
+ * 만드는 길은 [reservationTimeRange] 하나다 — 경계를 직접 지어내지 않는다.
+ */
+internal data class ReservationTimeRange(val earliest: LocalTime, val latest: LocalTime) {
+    operator fun contains(time: LocalTime): Boolean = !time.isBefore(earliest) && !time.isAfter(latest)
+}
+
+/** [t] 이상인 가장 이른 [step] 분 단위 시각. 초·나노초가 남아 있으면 먼저 다음 분으로 올린다. */
+internal fun ceilToMinuteStep(t: LocalDateTime, step: Int): LocalDateTime {
+    val minutes = t.truncatedTo(ChronoUnit.MINUTES)
+    val base = if (minutes == t) minutes else minutes.plusMinutes(1)
+    val remainder = base.minute % step
+    return if (remainder == 0) base else base.plusMinutes((step - remainder).toLong())
+}
+
+/** [t] 이하인 가장 늦은 [step] 분 단위 시각. 초·나노초는 버린다. */
+internal fun floorToMinuteStep(t: LocalDateTime, step: Int): LocalDateTime {
+    val minutes = t.truncatedTo(ChronoUnit.MINUTES)
+    return minutes.minusMinutes((minutes.minute % step).toLong())
+}
+
+/**
+ * 시 휠에 보일 값 — 범위 안에 한 칸이라도 걸치는 시(時)만. **범위 밖의 시는 아예 없다**(흐리게 남기지
+ * 않는다 — 손가락이 거기서 멈추면 「고를 수 없는 값을 고른」 순간이 생긴다).
+ */
+internal fun reservationHourOptions(range: ReservationTimeRange): List<Int> =
+    (range.earliest.hour..range.latest.hour).toList()
+
+/**
+ * 분 휠에 보일 값 — 고른 [hour] 안에서 범위에 드는 10분 단위만(00·10·…·50 중 일부).
+ *
+ * 오늘의 첫 시(예: 13:20 이 가장 이르면 13시)와 7일 뒤의 마지막 시에서만 줄어든다 — 그 밖의 시는
+ * 여섯 칸이 다 있다.
+ */
+internal fun reservationMinuteOptions(range: ReservationTimeRange, hour: Int): List<Int> =
+    (0 until 60 step RESERVATION_TIME_STEP_MINUTES).filter { minute ->
+        LocalTime.of(hour.coerceIn(0, 23), minute) in range
+    }
+
+/**
+ * 휠이 **지금 보여 줄(= 서버에 보낼) 출발 시각** — 고른 날의 범위로 접은 값. 그 날에 시각이 없으면 null.
+ *
+ * ### 기본 선택이 생겼다 ★ 규칙 변경 (2026-11, 오너 승인)
+ * 칩 시절에는 **기본 선택을 두지 않았다** — 날짜마다 첫 칩의 뜻이 달라(오늘은 「가장 빠른 시각」,
+ * 다른 날은 자정) 자동으로 골라 두면 아무도 원하지 않은 00:00 예약이 한 번의 탭으로 만들어진다는
+ * 근거였다. 휠은 **늘 어떤 값을 가운데에 보여 준다** — 「안 골랐다」를 그릴 방법이 없고, 빈 휠은 고장으로
+ * 읽힌다. 그래서 아직 손대지 않았으면([stored] 가 null) **그 날의 가장 이른 시각**을 선택으로 보고 CTA 를
+ * 켠다. 00:00 사고에 대한 방어는 자리를 옮겼다:
+ * - 휠의 가운데 줄이 그 값을 크게 보여 주고(굴려야만 바뀐다),
+ * - CTA 바로 위 줄이 날짜와 함께 되읽어 준다(「내일 오전 12:00 출발」 — [reservationDepartureSummary]).
+ *
+ * ### 날짜를 바꾸면 접는다
+ * 고른 값([stored])은 지우지 않고 **보여 줄 값만** 그 날의 범위로 접는다 — 7일 뒤로 가서 18:00 이
+ * 13:00 으로 접혀도 다른 날로 돌아오면 18:00 이 살아 있다(정원의 [capacityFor] 와 같은 처방).
+ * 10분 단위가 아닌 값이 들어오면 먼저 10분 단위로 내린다(휠에 없는 값을 보내지 않는다).
+ *
+ * **이 함수가 돌려준 값이 곧 보내는 값이다** — 화면은 이 값으로 휠을 그리고, 같은 값으로
+ * [reservationDepartureIso] 를 만든다. 시계를 두 번 읽지 않는다(기준 시각 `now` 는 모달이 한 번 읽는다).
+ *
+ * @param stored 사용자가 휠로 고른 시각. 아직 손대지 않았으면 null
+ */
+internal fun reservationSelectedTime(stored: LocalTime?, range: ReservationTimeRange?): LocalTime? {
+    range ?: return null
+    stored ?: return range.earliest
+    val snapped = stored.withSecond(0).withNano(0)
+        .minusMinutes((stored.minute % RESERVATION_TIME_STEP_MINUTES).toLong())
+    return when {
+        snapped.isBefore(range.earliest) -> range.earliest
+        snapped.isAfter(range.latest) -> range.latest
+        else -> snapped
+    }
+}
+
+/**
+ * 시 휠을 [hour] 로 굴렸을 때의 새 시각 — **분은 지키되 범위 안으로 접는다.**
+ *
+ * 18:40 에서 시만 13 으로 굴렸는데 오늘은 13:20 부터라면 13:40 이 된다(범위 안이니 그대로). 13:00
+ * 이었다면 13:20 으로 올라간다 — 시를 바꿨다고 분까지 0 으로 되돌리면 사용자가 맞춰 둔 분을 잃는다.
+ */
+internal fun reservationTimeWithHour(current: LocalTime, hour: Int, range: ReservationTimeRange): LocalTime =
+    reservationSelectedTime(LocalTime.of(hour.coerceIn(0, 23), current.minute), range) ?: current
+
+/** 분 휠을 [minute] 로 굴렸을 때의 새 시각. 분 휠은 범위 안 값만 담으므로 대개 그대로지만 한 번 더 접는다. */
+internal fun reservationTimeWithMinute(current: LocalTime, minute: Int, range: ReservationTimeRange): LocalTime =
+    reservationSelectedTime(LocalTime.of(current.hour, minute.coerceIn(0, 59)), range) ?: current
+
+/** 시 휠의 글자 — 24시간제 그대로(0~23). 오전·오후는 CTA 위 되읽기 줄([reservationTimeLabel])이 말한다. */
+internal fun reservationHourLabel(hour: Int): String = hour.toString()
+
+/**
+ * 분 휠의 글자 — 두 자리(`00`·`10`). 시 휠은 0~23 을 그대로 쓴다([reservationHourLabel]).
+ * 분을 한 자리로 쓰면 「6 시 0 분」처럼 읽혀 휠이 흔들려 보인다.
+ */
+internal fun reservationMinuteLabel(minute: Int): String = "%02d".format(minute)
+
+/**
+ * 날짜 띠([com.moyeota.core.designsystem.component.WeekDateStrip])의 칸들 — 16 예약 날짜와 17 「날짜로
+ * 찾기」가 **같은 함수**로 만든다(같은 8일을 두 화면이 다르게 그리지 않게).
+ *
+ * 칸 = 위에 요일 한 글자, 아래에 일. 토요일은 파랑, 일요일은 빨강([DateStripTone]) — 달력의 관습이고,
+ * 색은 덧붙인 단서일 뿐 요일 글자가 늘 함께 있다. 오늘은 [DateStripCell.isToday] 로 작은 점이 찍힌다.
+ *
+ * 「오늘」·「내일」을 칸에 **글자로 쓰지 않는다** — 칸 폭(48dp)에 두 글자 요일 자리를 만들면 다른 칸과
+ * 모양이 갈린다. 대신 스크린리더 문장과 CTA 위 되읽기 줄([reservationDepartureSummary])이 「오늘」을 말한다.
+ *
+ * 고를 시각이 없는 날(16 의 늦은 밤 「오늘」)은 **칸을 남기되 누르지 못하게** 한다([isSelectable]) — 칸을
+ * 지우면 요일 줄이 밀려 오늘을 찾을 수 없다. 17 「날짜로 찾기」는 검색이라 모든 날이 눌린다(기본값).
+ *
+ * @param today [reservationDates] 의 첫 원소 — **같은 시간대로 셈한 오늘**이어야 점이 맞는 칸에 찍힌다
+ * @param isSelectable 그 날을 고를 수 있는가. 16 은 `reservationTimeRange(date, now) != null` 을 넘긴다
+ */
+internal fun reservationDateCells(
+    dates: List<LocalDate>,
+    today: LocalDate,
+    isSelectable: (LocalDate) -> Boolean = { true },
+): List<DateStripCell> =
+    dates.map { date ->
+        val weekday = KoreanDayOfWeek.getValue(date.dayOfWeek)
+        DateStripCell(
+            weekday = weekday,
+            day = date.dayOfMonth.toString(),
+            tone = when (date.dayOfWeek) {
+                DayOfWeek.SATURDAY -> DateStripTone.SATURDAY
+                DayOfWeek.SUNDAY -> DateStripTone.SUNDAY
+                else -> DateStripTone.WEEKDAY
+            },
+            isToday = date == today,
+            contentDescription = reservationDateCellDescription(date, today),
+            enabled = isSelectable(date),
+        )
+    }
+
+/**
+ * 16 이 **실제로 고른 것으로 볼 날짜**의 인덱스 — 저장된 [storedIndex] 가 고를 수 없는 날이면 고를 수 있는
+ * 첫 날로 옮긴다. 고를 수 있는 날이 하나도 없으면(일어나지 않지만) 저장값을 범위로 접어 그대로 쓴다.
+ *
+ * 왜 필요한가: 기본 선택은 「오늘」(0)인데, 밤 23:40 이 넘으면 오늘은 고를 시각이 없어 띠에서 **누를 수
+ * 없는 칸**이 된다([reservationDateCells] 의 `isSelectable`). 그 칸이 선택된 채로 열리면 휠 자리에는
+ * 「이 날은 고를 수 있는 시간이 없어요」만 남고 CTA 는 꺼진다 — 사용자가 고친 적 없는 기본값 때문에
+ * 화면이 막힌 것처럼 보인다. 저장값은 바꾸지 않는다 — 정원·시각과 같은 「고른 값은 지우지 않고 보여 줄
+ * 값만 접는다」 규칙이다.
+ */
+internal fun reservationSelectableDateIndex(
+    storedIndex: Int,
+    dates: List<LocalDate>,
+    isSelectable: (LocalDate) -> Boolean,
+): Int {
+    if (dates.isEmpty()) return 0
+    val clamped = storedIndex.coerceIn(0, dates.lastIndex)
+    if (isSelectable(dates[clamped])) return clamped
+    return dates.indexOfFirst(isSelectable).takeIf { it >= 0 } ?: clamped
+}
+
+/**
+ * 날짜 띠 위의 **달 표시** — `11월`, 달을 넘으면 `11–12월`(해를 넘으면 `12–1월`). 날짜가 없으면 null.
+ *
+ * 칸에는 일(日) 숫자만 있어서 띠만 보면 「1, 2, 3」이 몇 월인지 알 수 없다 — 특히 월말에 띠가 다음 달로
+ * 넘어가는 주에 「30 · 1」이 나란히 서면 혼란스럽다. 그래서 띠가 덮는 달을 한 줄로 적는다.
+ */
+internal fun reservationMonthLabel(dates: List<LocalDate>): String? {
+    val first = dates.firstOrNull() ?: return null
+    val last = dates.last()
+    return if (first.monthValue == last.monthValue && first.year == last.year) {
+        "${first.monthValue}월"
+    } else {
+        "${first.monthValue}–${last.monthValue}월"
+    }
+}
+
+/**
+ * 날짜 칸의 스크린리더 문장 — `오늘, 11월 12일 목요일` · `11월 14일 토요일`.
+ *
+ * 칸에는 요일 한 글자와 숫자만 있어 그대로 읽히면 「토, 14」가 된다. 몇 월인지와 오늘·내일을 말로 채운다.
+ */
+internal fun reservationDateCellDescription(date: LocalDate, today: LocalDate): String {
+    val base = "${date.monthValue}월 ${date.dayOfMonth}일 ${KoreanDayOfWeek.getValue(date.dayOfWeek)}요일"
+    return when (date) {
+        today -> "오늘, $base"
+        today.plusDays(1) -> "내일, $base"
+        else -> base
+    }
 }
 
 /**
@@ -296,6 +510,19 @@ internal fun reservationDepartureIso(
     zone: ZoneId = KOREA_ZONE,
 ): String = date.atTime(time).atZone(zone).toInstant().toString()
 
+/**
+ * 16 이 [MatchConditions.departureAt] 에 싣는 출발 시각 — **「시간 정하기」일 때만** 있다.
+ *
+ * 이 값이 있으면 CTA 가 `POST /matching/reservations` 로 가고, 없으면 `POST /matching/rooms` 로 간다
+ * (`MatchConditions` KDoc). 그런데 시각 휠은 **늘 값을 보여 준다**(기본 = 그 날의 가장 이른 시각,
+ * [reservationSelectedTime]) — 모드와 상관없이 휠 값을 실으면 「지금 출발」의 「같이 탈 사람 찾기」가
+ * 전부 예약 방이 된다. 칩 시절에도 시각을 골랐다가 「지금 출발」로 되돌리면 같은 일이 났다.
+ * 그래서 모드가 이 값의 유무를 정한다 — 모드를 되돌려도 휠에 고른 시각은 남고(다시 「시간 정하기」를
+ * 누르면 그대로 보인다), 보내지만 않는다.
+ */
+internal fun matchDepartureAt(scheduled: Boolean, date: LocalDate, time: LocalTime?): String? =
+    if (scheduled) time?.let { reservationDepartureIso(date, it) } else null
+
 /** 요일 한 글자. `java.time` 의 로케일 표기에 맡기지 않는다 — 기기 로케일이 영어면 「Sun」이 섞인다. */
 private val KoreanDayOfWeek = mapOf(
     DayOfWeek.MONDAY to "월",
@@ -308,7 +535,8 @@ private val KoreanDayOfWeek = mapOf(
 )
 
 /**
- * 날짜 칩의 문구 — 오늘·내일은 **이름으로**, 그 뒤는 `11월 9일 (일)`.
+ * 날짜의 문구 — 오늘·내일은 **이름으로**, 그 뒤는 `11월 9일 (일)`. CTA 위 되읽기 줄([reservationDepartureSummary])
+ * ·17 의 접힘 요약·예약 카드가 쓴다(고르는 자리는 주간 달력 띠다 — [reservationDateCells]).
  *
  * 요일을 붙이는 이유: 7일 창에서 사람이 고르는 기준은 날짜 숫자가 아니라 「토요일 저녁」 같은
  * 요일이다. 반대로 오늘·내일에 숫자를 함께 적지 않는 건 칩 폭 때문이다 — 가로 스크롤 칩 8개가
@@ -324,7 +552,7 @@ internal fun reservationDateLabel(date: LocalDate, today: LocalDate): String = w
 }
 
 /**
- * 시각 칩·카드의 시각 문구 — `오후 6:30`.
+ * 되읽기 줄·카드의 시각 문구 — `오후 6:30`(휠은 24시간제 숫자를 쓰고, 오전·오후는 이 문구가 말한다).
  *
  * 0시·12시가 12 가 되어야 한다(`hour % 12` 만 쓰면 자정이 「오전 0:30」이 된다 — `meetingTimeLabel`·
  * `rideHistoryDateLabel` 과 같은 함정·같은 처방).
@@ -338,7 +566,7 @@ internal fun reservationTimeLabel(time: LocalTime): String {
 /**
  * 고른 출발 시각을 CTA 앞에서 **되읽어 준다** — `오늘 오후 6:30` · `11월 9일 (일) 오후 6:30`.
  *
- * 날짜 칩과 시각 칩이 각각 떨어진 줄에 있어서, 두 선택이 합쳐져 무엇이 되는지 확인할 기회가 누르기
+ * 날짜 띠와 시각 휠이 각각 떨어진 줄에 있어서, 두 선택이 합쳐져 무엇이 되는지 확인할 기회가 누르기
  * 직전의 이 한 줄뿐이다(`meetingConfirmTitle` 이 프리셋 「10분」을 시각으로 되읽어 주는 것과 같은
  * 이유). 예약 방은 만든 뒤 시간을 바꿀 수 없으므로 더 그렇다.
  */

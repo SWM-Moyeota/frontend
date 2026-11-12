@@ -3,7 +3,6 @@ package com.moyeota.presentation.feature.home
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,7 +16,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.IconButton
@@ -35,11 +33,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
@@ -59,13 +54,16 @@ import com.moyeota.core.designsystem.component.NoticeKind
 import com.moyeota.core.designsystem.component.decodePolyline
 import com.moyeota.core.designsystem.component.fitMapCamera
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.core.designsystem.theme.MoyeotaType
+import com.moyeota.presentation.core.KoreanParagraphText
 import com.naver.maps.geometry.LatLng
 import java.time.Instant
+import java.time.LocalDate
+import java.time.LocalTime
 import kotlin.math.roundToInt
 
 private val ChipBlueBg = Color(0xFFF1F5FD)
 private val GraySlate = Color(0xFF4B5563)
-private val GrayDeep = Color(0xFF54637D)
 private val GrayMute = Color(0xFF8A93A0)
 private val GrayAsh = Color(0xFF9AA1AC)
 
@@ -120,9 +118,11 @@ data class MatchConditions(
  *   「시간 정하기」는 `POST /matching/reservations`([MatchConditions.departureAt]).
  *
  * 선택 규칙(디스크립션):
- * - **출발 시각: 「지금 출발」(기본) / 「시간 정하기」.** 뒤쪽을 고르면 날짜(오늘~7일 뒤)와
- *   30분 단위 시각 칩이 열린다 — 고를 수 있는 모든 조합이 **구성상** 서버 창(지금~7일) 안이다
- *   ([reservationTimeSlots]). 자유 입력 피커를 두지 않는 근거는 그 함수의 KDoc 에 있다
+ * - **출발 시각: 「지금 출발」(기본) / 「시간 정하기」.** 뒤쪽을 고르면 날짜 띠(오늘~7일 뒤,
+ *   [ReservationDateStrip])와 10분 단위 시·분 휠([ReservationTimeWheel])이 열린다 — 휠은 그 날의 범위
+ *   ([reservationTimeRange]) 안 값만 담아 고를 수 있는 모든 조합이 **구성상** 서버 창(지금~7일) 안이다.
+ *   휠은 늘 값을 보여 주므로 **기본 선택은 그 날의 가장 이른 시각**이고 CTA 는 켜져 있다
+ *   ([reservationSelectedTime] — 칩 시절의 「기본 선택 없음」 규칙을 바꾼 근거가 거기 있다)
  * - 인원(나 포함) → 예상 1인 요금 재계산 ([RoutePreviewUi.estimatedFare] ÷ 인원, [farePerPersonWon]).
  *   기본값 3명. **범위가 모드에 따라 다르다** — 실시간 1~3, **예약은 2~3**([capacityChoices]).
  *   1 을 고른 채 「시간 정하기」로 바꾸면 보낼 수 없는 상태가 되므로 전송·표시 값만 2 로 접고
@@ -203,29 +203,43 @@ fun DestinationConfirmModal(
     val canAdjust = destinationPosition != null || originPosition != null
 
     // 예약 날짜·시각 계산의 기준 시각. **한 번만 읽는다** — 매 리컴포지션마다 시계를 읽으면
-    // 칩 목록이 1초마다 다시 만들어지고(지난 슬롯이 사라지며) 고른 칩이 손가락 아래에서 움직인다.
-    // 이 모달은 몇 분 안에 닫히는 화면이라 그 사이 기준이 낡아도 가장 이른 슬롯이 10분 여유를
-    // 갖고 있어([RESERVATION_MIN_LEAD_MINUTES]) 서버 창을 벗어나지 않는다.
+    // 휠의 범위가 1초마다 다시 만들어지고(지난 값이 사라지며) 고른 칸이 손가락 아래에서 움직인다.
+    // 이 모달은 몇 분 안에 닫히는 화면이라 그 사이 기준이 낡아도 가장 이른 값이 10분 여유를
+    // 갖고 있어([RESERVATION_MIN_LEAD_MINUTES]) 서버 창을 벗어나지 않는다. 그리고 보내는 시각은
+    // **휠에 보이는 값 그대로**다(아래 departureAt) — 보내는 순간 시계를 다시 읽어 고치지 않는다.
     val now = remember { Instant.now() }
     val dateOptions = remember(now) { reservationDates(now) }
     val today = dateOptions.first()
+    // 그 날에 고를 시각이 남아 있는가 — 늦은 밤의 「오늘」만 false 다. 띠는 그 칸을 누르지 못하게 그린다.
+    val dateSelectable: (LocalDate) -> Boolean = remember(now) { { date -> reservationTimeRange(date, now) != null } }
     // 고른 날짜는 **오늘로부터의 일수**로 들고 있는다 — LocalDate 는 Parcelable 이 아니라
     // rememberSaveable 에 그대로 담을 수 없고, 일수는 Int 라 구성 변경에도 살아남는다.
     var dateOffset by rememberSaveable { mutableIntStateOf(0) }
-    val selectedDate = dateOptions[dateOffset.coerceIn(0, dateOptions.lastIndex)]
-    val timeSlots = remember(selectedDate, now) { reservationTimeSlots(selectedDate, now) }
-    // -1 = 아직 고르지 않았다. **기본 선택을 두지 않는다** — 날짜마다 첫 슬롯이 다른 뜻이라
-    // (오늘은 「가장 빠른 시각」, 다른 날은 자정) 자동 선택하면 아무도 원하지 않은 00:00 예약이
-    // 한 번의 탭으로 만들어진다. 고르지 않은 동안 CTA 는 잠기고 이유를 적는다.
+    // 기본값(오늘)이 고를 수 없는 날이면 **고를 수 있는 첫 날**로 본다 — 누를 수 없는 칸이 선택된 채
+    // 열리면 휠 자리에 「고를 시간이 없어요」만 남는다([reservationSelectableDateIndex]).
+    val selectedDate = dateOptions[reservationSelectableDateIndex(dateOffset, dateOptions, dateSelectable)]
+    val timeRange = remember(selectedDate, now) { reservationTimeRange(selectedDate, now) }
+    // 휠로 고른 시각(하루의 분). -1 = 아직 휠을 건드리지 않았다 → **그 날의 가장 이른 시각이 기본 선택**이다.
+    //
+    // 칩 시절에는 기본 선택이 없었다(아무도 원하지 않은 00:00 예약이 한 번의 탭으로 만들어진다는 이유).
+    // 휠은 늘 값을 보여 주므로 「안 골랐다」를 그릴 수 없고, 그래서 규칙을 바꿨다 — 근거와 대신 세운
+    // 방어(크게 보이는 휠 값 + CTA 위 되읽기 줄)는 [reservationSelectedTime] KDoc 에 있다.
     var selectedMinuteOfDay by rememberSaveable { mutableIntStateOf(-1) }
-    // 날짜를 바꾸면 그 날에 없는 시각이 될 수 있다(오늘 10:00 → 7일 뒤에는 없는 슬롯).
-    // 그때는 **선택이 사라진다** — 없는 시각을 고른 것처럼 보여 주지 않는다.
-    val selectedTime = timeSlots.firstOrNull { it.hour * 60 + it.minute == selectedMinuteOfDay }
+    // 날짜를 바꾸면 **보여 줄 값만** 그 날의 범위로 접는다(고른 값은 남는다 — 정원의 [capacityFor] 와
+    // 같은 처방). 이 값이 휠에 보이는 값이자 서버로 가는 값이다.
+    val selectedTime = reservationSelectedTime(
+        stored = selectedMinuteOfDay.takeIf { it >= 0 }?.let { LocalTime.of(it / 60, it % 60) },
+        range = timeRange,
+    )
 
     val scheduled = departureMode == DepartureMode.SCHEDULED
     // 보낼 수 있는 정원. 모드가 바뀌어도 [peopleCount] 는 그대로 둔다 — 되돌리면 고른 값이 살아 있다
     val capacity = capacityFor(departureMode, peopleCount)
-    val departureAt = selectedTime?.let { reservationDepartureIso(selectedDate, it) }
+    // 서버로 가는 출발 시각 = **휠에 보이는 그 값**(selectedTime)과 띠에 칠해진 그 날(selectedDate).
+    // 누르는 순간 시계를 다시 읽거나 값을 다시 접지 않는다 — 화면과 보낸 값이 1분이라도 어긋나면 표시된
+    // 약속 시간과 실제 약속 시간이 다른 방이 만들어지고, 예약 방은 시간을 바꿀 수 없다.
+    // **「지금 출발」이면 싣지 않는다** — 휠은 늘 값이 있어 실으면 실시간 방이 예약 방이 된다([matchDepartureAt]).
+    val departureAt = matchDepartureAt(scheduled, selectedDate, selectedTime)
 
     // 1인 요금 = 미터기 추정 총액 ÷ 인원, 10원 단위 반올림 ([farePerPersonWon] — 20 합류·22 상세가 쓰는
     // 서버 값 계산식과 **같은 규칙**이다). 추정이 아직 없거나 실패했으면 null — 문구를 감추되 CTA 는 살려둔다.
@@ -294,8 +308,9 @@ fun DestinationConfirmModal(
                         fontWeight = FontWeight.Bold,
                         color = MoyeotaColor.InkPrimary,
                     )
-                    Spacer(Modifier.weight(1f))
-                    ShieldIcon()
+                    // 오른쪽 방패 아이콘은 지웠다(2026-11, 오너 UX 피드백) — 누를 수도 없고 가리키는
+                    // 기능도 없는 장식이었다. 안전 기능(원터치 신고)은 2차 범위라 이 화면에 그 약속을
+                    // 그려 둘 근거가 없다(DESIGN-moyeota.md: 방패는 비상 신고 진입점에만 쓴다).
                 }
             }
 
@@ -414,6 +429,11 @@ fun DestinationConfirmModal(
                 sheetDetail = {
                     // 상세 영역은 시트가 접히면 높이 0 이 된다 — 좌우 여백은 여기서 준다
                     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                        // 「도착지」 배지 줄(sheetTop)과 아래 경로 카드 사이의 숨 쉴 자리 — 예전에는 둘이
+                        // 맞닿아 배지 줄이 카드의 머리처럼 보였다(오너 UX 피드백). 12dp 는 4/8 리듬의
+                        // `spacing.sm` 이다. **상세 영역 안에** 두는 이유: 시트를 접으면 상세가 통째로
+                        // 0 이 되므로 이 간격도 함께 사라져 접힘 높이(176dp 추정치)가 흔들리지 않는다.
+                        Spacer(Modifier.height(12.dp))
                         // 경로 카드
                         Column(
                             modifier = Modifier
@@ -518,30 +538,31 @@ fun DestinationConfirmModal(
                             }
 
                             if (scheduled) {
-                                // 날짜·시각은 칩이 8개·최대 48개라 [ConditionRow] 의 「라벨 + 오른쪽
-                                // 정렬 칩」에 들어가지 않는다 — 라벨을 윗줄로 올리고 가로 스크롤한다.
-                                ScrollableChipRow(label = "날짜") {
-                                    dateOptions.forEachIndexed { index, date ->
-                                        ConditionChip(
-                                            text = reservationDateLabel(date, today),
-                                            selected = dateOffset == index,
-                                            onClick = { dateOffset = index },
-                                        )
-                                    }
+                                // 날짜는 **주간 달력 띠**, 시각은 **시·분 휠**이다(2026-11, 오너 UX 피드백) —
+                                // 예전 칩(「오늘·내일·11월 14일 (토)」 8개 + 30분 시각 칩 최대 48개)은 가로로
+                                // 길게 밀어야 해서 요일을 한눈에 볼 수 없었고, 30분 단위는 약속에 거칠었다.
+                                // 두 조각은 17 「날짜로 찾기」와 **같은 컴포넌트**다([ReservationDateStrip]).
+                                PickerSection(label = "날짜", trailing = reservationMonthLabel(dateOptions)) {
+                                    ReservationDateStrip(
+                                        dates = dateOptions,
+                                        selected = selectedDate,
+                                        onSelect = { date -> dateOffset = dateOptions.indexOf(date).coerceAtLeast(0) },
+                                        isSelectable = dateSelectable,
+                                    )
                                 }
-                                if (timeSlots.isEmpty()) {
-                                    // 늦은 밤(23:20 이후)의 「오늘」에만 닿는다 — 오늘의 마지막 슬롯이
-                                    // 23:30 이고 10분 여유가 필요하다([RESERVATION_NO_SLOT_NOTICE]).
+                                val range = timeRange
+                                if (range == null || selectedTime == null) {
+                                    // 고를 수 있는 날이 하나도 없을 때만 닿는다 — 늦은 밤의 「오늘」은 띠가 누를 수
+                                    // 없게 그리고 기본 선택도 다음 날로 옮긴다([reservationSelectableDateIndex]).
+                                    // 그래도 이 길을 남겨 두는 이유: 빈 휠보다 사실을 말하는 한 줄이 낫다.
                                     ConditionNotice(RESERVATION_NO_SLOT_NOTICE)
                                 } else {
-                                    ScrollableChipRow(label = "시각") {
-                                        timeSlots.forEach { slot ->
-                                            ConditionChip(
-                                                text = reservationTimeLabel(slot),
-                                                selected = selectedTime == slot,
-                                                onClick = { selectedMinuteOfDay = slot.hour * 60 + slot.minute },
-                                            )
-                                        }
+                                    PickerSection(label = "시각") {
+                                        ReservationTimeWheel(
+                                            range = range,
+                                            selected = selectedTime,
+                                            onSelect = { time -> selectedMinuteOfDay = time.hour * 60 + time.minute },
+                                        )
                                     }
                                 }
                             }
@@ -652,8 +673,10 @@ fun DestinationConfirmModal(
                     // 요금을 다시 계산한다.
                     //
                     // 예약은 이 자리가 **두 줄**이 된다: 고른 시각을 되읽어 주는 줄
-                    // ([reservationDepartureSummary] — 날짜 칩과 시각 칩이 떨어져 있어 둘이 합쳐져
-                    // 무엇이 되는지 확인할 마지막 기회다)과 요금·소요 시간이 **없다는 사실**
+                    // ([reservationDepartureSummary] — 날짜 띠와 시각 휠이 떨어져 있어 둘이 합쳐져
+                    // 무엇이 되는지 확인할 마지막 기회다. 휠에 **기본값이 생긴 뒤로는** 손대지 않은 값이
+                    // 무엇인지 알려 주는 자리이기도 하다 — 그래서 `BodyStrong` 으로 눈에 띄게 둔다)과
+                    // 요금·소요 시간이 **없다는 사실**
                     // ([RESERVATION_NO_ESTIMATE_NOTICE]). 접힘 높이가 한 줄만큼 커지지만 시트 높이는
                     // 콘텐츠가 정하므로([MapSheetScaffold]) 잘리는 것은 없다.
                     if (scheduled) {
@@ -661,8 +684,9 @@ fun DestinationConfirmModal(
                             text = selectedTime
                                 ?.let { "${reservationDepartureSummary(selectedDate, it, today)} 출발" }
                                 ?: RESERVATION_NEEDS_TIME_NOTICE,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold,
+                            // body-strong(15/600) — 디자인 QA 4-4 의 되읽기 줄
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
                             color = MoyeotaColor.InkPrimary,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
@@ -696,15 +720,19 @@ fun DestinationConfirmModal(
                     // 실시간 방은 「그만 찾기」로 빠져나올 수 있어서 사용자는 방에 들어가는 일을
                     // 되돌릴 수 있는 선택으로 배워 왔고, 예약은 **같은 모양의 버튼으로 전혀 다른
                     // 약속**을 하게 만든다. 요금 문구와 달리 두 줄을 허용한다(잘리면 뜻이 반쪽이 된다).
+                    //
+                    // **가운데 정렬 + 어절 단위 줄바꿈**(2026-11, 오너 UX 피드백): 예전에는 왼쪽 정렬에
+                    // 음절 단위로 끊겨 마지막 「요」 한 글자가 혼자 둘째 줄을 차지했다 — 버튼 바로 위라
+                    // 오류처럼 보였다. 문구는 한 글자도 바꾸지 않는다([KoreanParagraphText] 가 줄바꿈만 바꾼다).
+                    // 모양은 `BodySm` · `TextMute`, 최대 두 줄, CTA 위 8dp(디자인 QA 4-5) — 경고가 아니라
+                    // 알아 둘 사실이라 조용한 보조 글이다.
                     if (scheduled) {
                         Spacer(Modifier.height(6.dp))
-                        Text(
+                        KoreanParagraphText(
                             text = reservationCommitmentNotice(joining = false),
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = GraySlate,
+                            style = MoyeotaType.BodySm.copy(color = MoyeotaColor.TextMute),
                             maxLines = 2,
-                            modifier = Modifier.padding(horizontal = 16.dp),
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                         )
                     }
                     if (errorMessage != null) {
@@ -715,7 +743,8 @@ fun DestinationConfirmModal(
                             modifier = Modifier.padding(horizontal = 16.dp),
                         )
                     }
-                    Spacer(Modifier.height(12.dp))
+                    // 예약 안내가 CTA 바로 위에 올 때는 8dp 로 붙인다 — 그 안내는 이 버튼에 대한 말이다
+                    Spacer(Modifier.height(if (scheduled && errorMessage == null) 8.dp else 12.dp))
                     PrimaryCtaButton(
                         // 예약은 **무엇이 만들어지는지** 적는다 — 「같이 탈 사람 찾기」는 지금
                         // 모집을 시작하는 말이라, 시간을 정해 둔 방에는 맞지 않는다.
@@ -723,8 +752,9 @@ fun DestinationConfirmModal(
                         onClick = {
                             onFindCompanions(MatchConditions(capacity = capacity, departureAt = departureAt))
                         },
-                        // 시각을 고르지 않은 예약은 보낼 수 없다 — 비활성 버튼 위에 **왜 못 누르는지**를
-                        // 적어 둔다([RESERVATION_NEEDS_TIME_NOTICE]). 비활성 버튼만 두면 이유를 모른다.
+                        // 시각이 없는 예약은 보낼 수 없다 — 휠이 늘 값을 주므로 고른 날에 남은 시각이 없을
+                        // 때만 꺼진다. 그때 비활성 버튼 위에 **왜 못 누르는지**를 적어 둔다
+                        // ([RESERVATION_NEEDS_TIME_NOTICE]). 비활성 버튼만 두면 이유를 모른다.
                         enabled = !scheduled || departureAt != null,
                         loading = creating,
                         modifier = Modifier.padding(horizontal = 16.dp),
@@ -948,34 +978,36 @@ private fun ConditionNotice(text: String) {
 }
 
 /**
- * 라벨을 **윗줄**로 올리고 칩을 가로 스크롤하는 조건 행 — 예약의 날짜(8개)·시각(최대 48개)이 쓴다.
+ * 라벨을 **윗줄**로 올리고 그 아래에 고르는 조각(날짜 띠·시각 휠)을 놓는 조건 행.
  *
- * [ConditionRow] 를 쓸 수 없는 이유는 그 레이아웃이 「라벨 + 남는 폭에 오른쪽 정렬」이라는 데 있다:
- * 칩이 폭을 넘기면 **잘린다**(좁은 폰에서 칩 3개가 카드 밖으로 밀린 전례가 그 주석에 있다).
- * 여기서는 칩 수가 날짜·시각에 따라 변하고 애초에 한 줄에 들어오지 않으므로, 넘치는 것을 **스크롤**로
- * 받는다. 세로로 줄바꿈(FlowRow)하지 않는 이유는 시각 칩 48개가 카드를 화면 몇 개 분량으로 늘리기
- * 때문이다 — 가로 스크롤이면 높이가 한 줄로 고정된다.
+ * [ConditionRow] 의 「라벨 + 남는 폭에 오른쪽 정렬」은 칩 서너 개짜리 모양이라 띠(8칸)·휠(두 개)을 담지
+ * 못한다 — 그래서 라벨을 위로 올리고 조각이 카드 폭을 다 쓰게 한다. 예전 이름은 `ScrollableChipRow`
+ * 였다(날짜·시각이 가로 스크롤 칩이던 시절).
  *
- * 오늘의 시각 칩 목록은 **가장 이른 시각부터** 시작하므로([reservationTimeSlots]) 스크롤을 처음
- * 위치에 두면 사용자가 가장 자주 고르는 값이 바로 보인다 — 자동 스크롤을 넣지 않는 근거다.
+ * @param trailing 라벨 줄 오른쪽 끝의 보조 글(날짜 띠 위의 「11월」 — [reservationMonthLabel]). 없으면 null
  */
 @Composable
-private fun ScrollableChipRow(label: String, chips: @Composable () -> Unit) {
+private fun PickerSection(label: String, trailing: String? = null, content: @Composable () -> Unit) {
     Column(modifier = Modifier.fillMaxWidth().padding(bottom = 11.dp)) {
-        Text(
-            text = label,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Bold,
-            color = MoyeotaColor.InkPrimary,
-        )
-        Spacer(Modifier.height(8.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            chips()
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = label,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                color = MoyeotaColor.InkPrimary,
+                modifier = Modifier.weight(1f),
+            )
+            if (trailing != null) {
+                Text(
+                    text = trailing,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MoyeotaColor.TextMute,
+                )
+            }
         }
+        Spacer(Modifier.height(8.dp))
+        content()
     }
 }
 
@@ -1052,25 +1084,6 @@ private fun DashedVerticalLine(modifier: Modifier = Modifier, color: Color = Col
     }
 }
 
-@Composable
-private fun ShieldIcon(modifier: Modifier = Modifier, color: Color = GrayDeep) {
-    Canvas(modifier = modifier.size(22.dp)) {
-        val w = size.width
-        val h = size.height
-        val strokeWidth = 1.6.dp.toPx()
-        val path = Path().apply {
-            moveTo(w * 0.5f, h * 0.08f)
-            lineTo(w * 0.85f, h * 0.22f)
-            quadraticTo(w * 0.85f, h * 0.62f, w * 0.5f, h * 0.92f)
-            quadraticTo(w * 0.15f, h * 0.62f, w * 0.15f, h * 0.22f)
-            close()
-        }
-        drawPath(path, color, style = Stroke(strokeWidth, join = StrokeJoin.Round))
-        drawLine(color, Offset(w * 0.35f, h * 0.48f), Offset(w * 0.46f, h * 0.6f), strokeWidth, StrokeCap.Round)
-        drawLine(color, Offset(w * 0.46f, h * 0.6f), Offset(w * 0.66f, h * 0.36f), strokeWidth, StrokeCap.Round)
-    }
-}
-
 @Preview(showBackground = true, widthDp = 393, heightDp = 852)
 @Composable
 private fun DestinationConfirmModalPreview() {
@@ -1082,7 +1095,7 @@ private fun DestinationConfirmModalPreview() {
 }
 
 /**
- * 예약 상태 — 날짜·시각 칩이 열리고, **요금·경로 요약이 사라진 자리에 그 이유가 적혀 있는지**를
+ * 예약 상태 — 날짜 띠·시각 휠이 열리고, **요금·경로 요약이 사라진 자리에 그 이유가 적혀 있는지**를
  * 눈으로 확인하는 미리보기다. 경로 추정은 일부러 채워 둔다(`routePreview`): 값이 있어도 예약에서는
  * 숨겨야 하므로, 비워 두면 「없어서 안 보이는 것」과 구별되지 않는다.
  */

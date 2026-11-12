@@ -103,8 +103,13 @@ private val HomeCollapsedSheetHeight = 226.dp
  * - 비어 있으면 카드 대신 「즐겨찾기를 등록하면…」 안내 문구 (등록은 15 의 ★)
  *
  * 레이아웃: 와이어프레임 B1「풀스크린 지도」 — 네이버 지도가 배경 레이어이고
- * 홈 UI 는 그 위 **드래그 시트**([MapSheetScaffold])다. 핸들·검색 카드는 항상 보이고,
- * 아래로 내리면 즐겨찾기 목록이 접혀 지도가 검색 카드 위까지 전부 드러난다.
+ * 홈 UI 는 그 위 **드래그 시트**([MapSheetScaffold])다. 앵커가 **셋**이다:
+ * - 펼침(기본) — 인사·검색 카드 + 즐겨찾기 목록
+ * - 접힘 — 즐겨찾기가 접혀 지도가 검색 카드 위까지 드러난다
+ * - **손잡이만**(2026-11, 오너 UX 피드백) — 한 번 더 끌어내리면 시트가 하단탭 뒤로 내려가고 손잡이 줄만
+ *   남아 **지도가 전부** 보인다. 예전에는 인사·검색 카드가 늘 떠 있어 지도를 다 볼 길이 없었다.
+ *   손잡이를 끌어올리거나 **누르면** 접힘으로 돌아온다(누르기는 끌 수 없는 사용자를 위한 길이다).
+ *   검색 진입(「목적지 검색」 바 → 15)은 그대로다 — 손잡이만 남은 동안에는 바가 보이지 않을 뿐이다.
  */
 @Composable
 fun HomeScreen(
@@ -162,6 +167,10 @@ fun HomeScreen(
             modifier = Modifier.weight(1f).fillMaxWidth(),
             mapRevealHeight = HomeMapRevealHeight,
             collapsedSheetHeight = HomeCollapsedSheetHeight,
+            // 손잡이 줄만 남기는 세 번째 앵커 — 지도를 다 보고 싶은 사람의 길(위 KDoc). 지도의
+            // contentPadding 은 시트가 손잡이 줄 높이를 알려 주므로(settledSheetHeight) 따로 손대지 않는다.
+            hideable = true,
+            hiddenHandleLabel = "검색 패널 펼치기",
             background = { sheet ->
                 // 진행 배너(상태바 포함) 높이 — 지도 top contentPadding 으로 넘겨 줌 컨트롤(+/−)이
                 // 배너 아래로 내려가게 한다(작은 폰에서 배너와 줌 버튼이 겹치던 문제)
