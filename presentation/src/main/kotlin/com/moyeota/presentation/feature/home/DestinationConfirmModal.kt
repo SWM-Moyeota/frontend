@@ -208,7 +208,9 @@ fun DestinationConfirmModal(
     // 이 모달은 몇 분 안에 닫히는 화면이라 그 사이 기준이 낡아도 가장 이른 값이 10분 여유를
     // 갖고 있어([RESERVATION_MIN_LEAD_MINUTES]) 서버 창을 벗어나지 않는다. 그리고 보내는 시각은
     // **휠에 보이는 값 그대로**다(아래 departureAt) — 보내는 순간 시계를 다시 읽어 고치지 않는다.
-    val now = remember { Instant.now() }
+    // 단, **보내기 직전에는 지금 시계로 다시 잰다**(아래 CTA) — 오래 열어 둬 기본값(가장 이른 시각)이 여유를
+    // 잃었으면 이 기준을 지금으로 옮겨 휠을 새 범위로 접는다([reservationTimeStillValid]).
+    var now by remember { mutableStateOf(Instant.now()) }
     val dateOptions = remember(now) { reservationDates(now) }
     val today = dateOptions.first()
     // 그 날에 고를 시각이 남아 있는가 — 늦은 밤의 「오늘」만 false 다. 띠는 그 칸을 누르지 못하게 그린다.
@@ -705,7 +707,18 @@ fun DestinationConfirmModal(
                         // 모집을 시작하는 말이라, 시간을 정해 둔 방에는 맞지 않는다.
                         text = if (scheduled) "이 시간으로 예약 방 만들기" else "같이 탈 사람 찾기",
                         onClick = {
-                            onFindCompanions(MatchConditions(capacity = capacity, departureAt = departureAt))
+                            // 휠은 기본값(그 날의 가장 이른 시각)이 늘 있어 한 번도 안 건드려도 보낼 수 있다. 모달을
+                            // 연 채 오래 머물면 그 값이 이미 지났거나 여유가 없을 수 있다 — 그대로 보내면 서버가 400
+                            // `INVALID_DEPARTURE_TIME` 으로 막고, 안내는 「7일 안이어야 해요」라 원인과 어긋난다.
+                            // 그래서 **지금 시계로 다시 재고, 범위를 벗어났으면 보내지 않고 기준만 옮긴다** — 휠이
+                            // 새 범위로 접혀 보이는 값이 바뀌고, 사용자는 바뀐 시각을 보고 다시 누른다
+                            // (보이는 값 = 보내는 값 원칙은 그대로다).
+                            val fresh = Instant.now()
+                            if (scheduled && !reservationTimeStillValid(selectedDate, selectedTime, fresh)) {
+                                now = fresh
+                            } else {
+                                onFindCompanions(MatchConditions(capacity = capacity, departureAt = departureAt))
+                            }
                         },
                         // 시각이 없는 예약은 보낼 수 없다 — 휠이 늘 값을 주므로 고른 날에 남은 시각이 없을
                         // 때만 꺼진다. 그때 비활성 버튼 위에 **왜 못 누르는지**를 적어 둔다

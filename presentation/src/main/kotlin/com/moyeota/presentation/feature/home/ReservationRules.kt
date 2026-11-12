@@ -317,6 +317,20 @@ internal data class ReservationTimeRange(val earliest: LocalTime, val latest: Lo
     operator fun contains(time: LocalTime): Boolean = !time.isBefore(earliest) && !time.isAfter(latest)
 }
 
+/**
+ * 16 이 보내려는 예약 시각이 **지금 기준으로도** 고를 수 있는 범위 안인가 — 보내기 직전에 한 번 잰다.
+ *
+ * 휠의 범위는 모달을 연 순간의 시계로 정해진다(매 프레임 시계를 읽으면 휠이 손가락 아래에서 움직인다).
+ * 그런데 휠은 늘 기본값(가장 이른 시각)이 있어 열어 둔 채 오래 머문 뒤 바로 누를 수 있고, 그때 그 값은
+ * 이미 지났거나 [RESERVATION_MIN_LEAD_MINUTES] 여유를 잃었을 수 있다. false 면 보내지 않고 기준을
+ * 지금으로 옮긴다(호출부). 시각이 없으면(고를 시각이 없는 날) 보낼 것이 없으니 false.
+ */
+internal fun reservationTimeStillValid(date: LocalDate, time: LocalTime?, now: Instant): Boolean {
+    time ?: return false
+    val range = reservationTimeRange(date, now) ?: return false
+    return time in range
+}
+
 /** [t] 이상인 가장 이른 [step] 분 단위 시각. 초·나노초가 남아 있으면 먼저 다음 분으로 올린다. */
 internal fun ceilToMinuteStep(t: LocalDateTime, step: Int): LocalDateTime {
     val minutes = t.truncatedTo(ChronoUnit.MINUTES)

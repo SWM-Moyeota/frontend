@@ -12,8 +12,8 @@ import org.junit.Test
  * 한 번 걷어내도 새 화면이 같은 방식으로 값을 들이면 금방 돌아온다. lint/detekt 규칙을 새로 들이는 대신
  * (의존성을 늘리지 않는다) 이 테스트가 그 문을 닫는다.
  *
- * - 색은 `MoyeotaColor` 만 — `Color(0x…)` 금지
- * - 글자 크기는 `MoyeotaType` 만 — `fontSize =` 금지
+ * - 색은 `MoyeotaColor` 만 — `Color(0x…)`·`Color(255, …)` 금지
+ * - 글자 크기는 `MoyeotaType` 만 — `fontSize =`·`13.sp` 금지
  *
  * 걸리면: 가장 가까운 토큰으로 바꾼다. 토큰에 없는 값이 정말 필요하면 디자인시스템에 토큰을 먼저 만든다.
  */
@@ -28,7 +28,14 @@ class DesignTokenGuardTest {
             .filter { it.isFile && it.extension == "kt" }
             .flatMap { file ->
                 file.readLines().mapIndexedNotNull { index, line ->
-                    val code = line.substringBefore("//")
+                    // 줄 주석·KDoc 줄은 건너뛰고, 코드 뒤 주석은 잘라 낸다 — 단 `"https://…"` 같은 문자열 안의
+                    // `//` 는 주석이 아니다(앞이 `:` 인 `//` 는 남긴다). 예전엔 거기서 잘려 뒤쪽을 못 봤다.
+                    val trimmed = line.trimStart()
+                    val code = if (trimmed.startsWith("//") || trimmed.startsWith("*") || trimmed.startsWith("/*")) {
+                        ""
+                    } else {
+                        line.replace(Regex("""(?<!:)//.*$"""), "")
+                    }
                     if (pattern.containsMatchIn(code)) "${file.relativeTo(sourceRoot)}:${index + 1}: ${line.trim()}" else null
                 }
             }
@@ -37,14 +44,14 @@ class DesignTokenGuardTest {
 
     @Test
     fun `화면 코드는 색을 직접 정의하지 않는다`() {
-        val found = violations(Regex("""Color\(0x"""))
+        val found = violations(Regex("""Color\((0x|\d)"""))
 
         assertTrue("MoyeotaColor 토큰을 쓴다:\n" + found.joinToString("\n"), found.isEmpty())
     }
 
     @Test
     fun `화면 코드는 글자 크기를 직접 정하지 않는다`() {
-        val found = violations(Regex("""fontSize\s*="""))
+        val found = violations(Regex("""fontSize\s*=|\d\s*\.sp\b"""))
 
         assertTrue("MoyeotaType 토큰을 쓴다:\n" + found.joinToString("\n"), found.isEmpty())
     }

@@ -562,4 +562,18 @@ class ReservationRulesTest {
         // 고를 시각이 없는 날(늦은 밤의 오늘)은 「시간 정하기」여도 없다 — CTA 가 잠긴다
         assertNull(matchDepartureAt(scheduled = true, date = date, time = null))
     }
+
+    @Test
+    fun `오래 열어 둬 여유를 잃은 기본 시각은 보내기 전에 다시 잰다`() {
+        val opened = Instant.parse("2026-11-14T04:00:30Z") // 한국 13:00:30
+        val today = LocalDate.of(2026, 11, 14)
+        val earliest = reservationTimeRange(today, opened)!!.earliest
+        assertEquals(LocalTime.of(13, 20), earliest) // 13:10:30 → 10분 단위로 올림
+        // 1분 뒤에 누르면 그대로 보낸다
+        assertTrue(reservationTimeStillValid(today, earliest, opened.plusSeconds(60)))
+        // 10분 넘게 머물면 13:20 은 여유가 없다 — 보내지 않고 기준을 옮긴다
+        assertFalse(reservationTimeStillValid(today, earliest, opened.plusSeconds(10 * 60 + 1)))
+        // 고를 시각이 없으면 보낼 것이 없다
+        assertFalse(reservationTimeStillValid(today, null, opened))
+    }
 }
