@@ -2,6 +2,30 @@
 
 > `_` 로 시작하므로 S3 배포 대상이 아니다(README 의 `--exclude "_*"`).
 
+## 2026-11-12 — iPhone 앱 구글 광고 성과 측정(Google 애널리틱스 for Firebase) 추가
+
+고친 문서: `privacy/index.html`
+안 고친 것: `account-deletion/index.html`(계정과 연결되지 않는 정보라 메타 때와 같이 넣지 않음), `index.html`, `terms/index.html`
+
+iOS 1.0.4(frontend-ios `feat/firebase-analytics`)가 `FirebaseAnalyticsCore` 를 링크해 자동 이벤트(first_open 등)를 Google 로 보낸다.
+구글 광고 iOS 캠페인의 설치를 세기 위해서다. 그 빌드가 App Store 에 나가기 전에 처리방침이 먼저 맞아야 한다.
+
+| 자리 | 조치 |
+|---|---|
+| 머리말 | 시행일·최종 수정일 2026-11-12 |
+| 제1조 표3 | 「광고 성과 측정 정보(Google, iPhone 앱)」 행 추가 |
+| 제2조 | 광고 성과 측정에 Google(구글 광고) 추가, notice 에 Google 전달 명시 |
+| 제6조 표5 | 보관 기간 행 추가(Google 정책 + GA 보관 설정, 탈퇴로 안 지워짐) |
+| 제7조 표6·5항 | Google(애널리틱스 for Firebase) 행 추가, 광고 목적 제공 예외에 Google 추가 |
+| 제8조 2항 | 예외를 네 가지로 |
+| **제9조 5항 신설** | 무엇을 왜 보내고 무엇을 안 보내는지(IDFA·IDFV 안 보냄, 화면 자동 기록·광고 개인화 신호 끔), 끄는 설정 없음 |
+| 제9조 1·6·7항, 제10조, 제11조 | 제5항 참조 추가 |
+| 제16조 | 개정 이력 행 추가. 30일 공지 미준수를 적었다 |
+
+근거: `Info.plist` 의 `FirebaseAutomaticScreenReportingEnabled`·`GOOGLE_ANALYTICS_DEFAULT_ALLOW_AD_PERSONALIZATION_SIGNALS`·
+`GOOGLE_ANALYTICS_IDFV_COLLECTION_ENABLED` = false, Release 빌드의 GoogleAppMeasurement·FirebaseAnalytics 프레임워크에 AdSupport 링크와
+`ASIdentifierManager` 참조 0건(otool·strings 로 확인).
+
 ## 2026-11-05 — iPhone 앱 이용 기록(Mixpanel) 수집 항목 추가
 
 고친 문서: `privacy/index.html`, `account-deletion/index.html`
