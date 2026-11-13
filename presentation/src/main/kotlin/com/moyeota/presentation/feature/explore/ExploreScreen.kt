@@ -93,7 +93,6 @@ import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.model.RoomType
 import com.moyeota.domain.model.User
 import com.moyeota.presentation.core.ActiveRideBanner
-import com.moyeota.presentation.core.LoadingBox
 import com.moyeota.presentation.core.RoutePlace
 import com.moyeota.presentation.core.RoutePlaceLine
 import com.moyeota.presentation.feature.home.ReservationDateStrip
@@ -180,6 +179,9 @@ data class MapBounds(
  *
  * @param items 서버가 준 **순서 그대로**. 화면도 ViewModel 도 재정렬하지 않는다
  *   ([ReservationFinderViewModel.UiState.Success])
+ * @param loading **새 목록**(날짜·도착지·모드)을 아직 읽지 못했다. [items] 는 비어 있고(앞 날짜의 줄을 남기지
+ *   않는다) 목록 자리는 비워 둔다 — 가운데 스피너 없이 새로고침 버튼의 도는 고리만 기다림을 보여 준다.
+ *   같은 목록을 다시 읽을 때(주기·버튼·지도 이동·복귀)는 false 다(보던 목록을 그대로 둔다)
  * @param locating 「날짜로 찾기」인데 아직 내 좌표가 없다 — 조회를 **못 한 것**이지 실패가 아니다
  * @param destinationName 검색에 **실어 보낸** 도착지의 이름. null 이면 도착지 없이 검색했다
  *   (그때 서버는 `destinationNearby` 를 주지 않는다)
@@ -293,6 +295,9 @@ private const val SheetFlingVelocity = 400f
  */
 private val ListHeaderGap = 12.dp
 
+/** 시트 아래 「새 동승 방 만들기」 줄의 위아래 여백 — 새로고침 버튼이 FULL 에서 CTA 윗변을 잴 때도 쓴다. */
+private val SheetCtaPadding = MoyeotaSpacing.Xs
+
 /**
  * 17·18·19 · 근처 동승 찾기 [V07/V07b/V07c]
  *
@@ -322,6 +327,9 @@ private val ListHeaderGap = 12.dp
  *   맨 위 진행 중 방 배너 한 번이고, 목록 카드는 20 을 거치는 더 긴 우회로였다
  * - 진행 중 탑승 없으면 상단 배너 숨김 ([activeRide] 가 null). 배너가 있으면 지도 줌 컨트롤이 그 아래로 내려간다
  * - 정원 찬 방(3/3)은 「합류」 비활성 + 「마감」 표기
+ * - 15초 카운트다운 새로고침 버튼은 세 모드·세 시트 단계 모두에 있다([refreshButtonPlacement]). **목록 가운데에
+ *   스피너를 두지 않는다** — 같은 목록을 다시 읽을 때는 보던 목록을 그대로 두고, 새 목록을 읽는 동안은 자리를 비우고
+ *   헤더에 개수를 적지 않는다. 기다림은 버튼의 도는 고리 하나로만 보인다
  */
 @Composable
 fun ExploreScreen(
@@ -352,8 +360,18 @@ fun ExploreScreen(
      */
     stale: Boolean = false,
     /**
-     * 지도 오른쪽 아래 **카운트다운 새로고침 버튼**이 그릴 것. **null 이면 버튼이 없다** — 주기 갱신을 하지
-     * 않는 모드(「날짜로 찾기」, [exploreAutoRefreshes])에서 호출부가 null 을 넘긴다.
+     * 실시간 목록을 **아직 읽지 못했다**(첫 조회·에러 화면의 「다시 시도」, [ExploreViewModel.UiState.Loading]).
+     *
+     * 이 화면은 그동안에도 지도와 빈 목록을 그린다 — 가운데 스피너를 두지 않고, 기다림은 새로고침 버튼의 도는
+     * 고리 하나로만 보인다. 헤더는 개수를 적지 않고([exploreHeaderCount]) 빈 목록 문구(「이 근처엔 동승이
+     * 없어요」)도 그리지 않는다 — 아직 묻지도 못한 것을 「없다」고 말하지 않는다. 예약 모드는
+     * `reservations.loading` 을 본다.
+     */
+    loading: Boolean = false,
+    /**
+     * **카운트다운 새로고침 버튼**이 그릴 것. **null 이면 버튼이 없다** — 주기 갱신을 하지 않는 모드
+     * ([exploreAutoRefreshes], 지금은 없다)이거나 물어볼 것이 없을 때(「날짜로 찾기」가 내 위치를 기다리는 중)
+     * 호출부가 null 을 넘긴다. 세 시트 단계 모두에서 보이고 자리는 [refreshButtonPlacement] 가 정한다.
      */
     refresh: ExploreRefreshUi? = null,
     /** 새로고침 버튼 — 지금 보이는 목록을 즉시 다시 읽고 15초를 처음부터 센다. */
@@ -399,6 +417,12 @@ fun ExploreScreen(
     // (`ReservationFinder.kt` 표) 섞이면 「지도에 보이는데 목록에 없는 방」이 생긴다.
     val shownRides = if (mode.isReservation) reservations.items.map { it.ride } else parties
     val shownCount = shownRides.size
+    // 헤더의 N — 목록을 아직 읽지 못했으면 적지 않는다(「0개」는 「없다」로 읽힌다)
+    val headerCount = if (mode.isReservation) {
+        exploreHeaderCount(shownCount, loading = reservations.loading, locating = reservations.locating, failed = reservations.failed)
+    } else {
+        exploreHeaderCount(shownCount, loading = loading, locating = false, failed = false)
+    }
     Column(modifier = Modifier.fillMaxSize().background(MoyeotaColor.SurfaceCanvas)) {
         StatusBarSpacer()
 
@@ -409,9 +433,8 @@ fun ExploreScreen(
         // 상태(FULL, 지도가 통째로 가려짐)에서 보이지 않고, 시트 안에 두면 접힘(PEEK) 높이가
         // 흔들린다. 이 자리면 세 단계 모두에서 같은 자리에 보이고 레이아웃도 밀리지 않는다.
         //
-        // **주기 갱신이 없는 모드(「날짜로 찾기」)에서는 그리지 않는다.** [stale] 은 주기 조회의 연속
-        // 실패 표시인데 그 모드에서는 주기 조회가 없어서, 남아 있던 true 를 그리면 지금 보고 있는
-        // 목록이 낡았다는 **거짓 경고**가 된다. 「곧 출발」은 15초 주기가 생겨 이제 그린다.
+        // **주기 갱신이 없는 모드에서는 그리지 않는다**([exploreAutoRefreshes] — 지금은 세 모드 모두 돈다).
+        // [stale] 은 갱신의 연속 실패 표시라, 갱신이 없는 목록에 남아 있던 true 를 그리면 **거짓 경고**가 된다.
         val showStale = stale && exploreAutoRefreshes(mode)
         MoyeotaTabHeader(
             title = "근처 동승 찾기",
@@ -485,19 +508,26 @@ fun ExploreScreen(
                 )
             }
 
-            // 카운트다운 새로고침 버튼 — 네이버 줌 컨트롤과 같은 세로선([RefreshButtonEndInset]), 시트 윗변
-            // 16dp 위. 시트를 따라 움직이도록 **실측 높이**(드래그·정착 애니메이션 중의 값)를 쓴다.
-            // 시트를 끝까지 올리면(FULL) 지도가 다 가려지므로 버튼도 숨긴다 — 보이지 않는 목록의 갱신
-            // 버튼이 시트 위에 떠 있으면 무엇을 새로 고치는지 알 수 없다. 권한이 없어 지도가 없을 때도 없다.
-            if (refresh != null && locationGranted && sheetState != ExploreSheetState.FULL) {
-                ExploreRefreshButton(
-                    ui = refresh,
-                    onClick = onRefreshClick,
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(end = RefreshButtonEndInset, bottom = sheetHeight + 16.dp),
-                )
-            }
+            // 하단 CTA(「새 동승 방 만들기」)의 실측 높이 — FULL 에서 새로고침 버튼을 그 16dp 위에 띄운다
+            var ctaHeightPx by remember { mutableIntStateOf(0) }
+            val refreshPlacement = refreshButtonPlacement(
+                sheetState = sheetState,
+                containerHeight = containerHeight,
+                sheetHeight = sheetHeight,
+                // CTA 는 접힘에서는 없다. 있으면 아래 여백 + 버튼 높이가 그 윗변이다
+                bottomCtaTop = if (sheetState == ExploreSheetState.PEEK) {
+                    null
+                } else {
+                    SheetCtaPadding + with(density) { ctaHeightPx.toDp() }
+                },
+            )
+            // 버튼이 목록 위에 떠 있으면 목록 끝에 그만큼 여백을 둔다 — 끝까지 내린 마지막 줄의 「합류」가 버튼 밑에 깔리지 않게
+            val listBottomPadding =
+                if (refresh != null && locationGranted && refreshPlacement.spot == RefreshButtonSpot.OVER_LIST) {
+                    RefreshButtonListClearance
+                } else {
+                    0.dp
+                }
 
             if (activeRide != null) {
                 ActiveRideBanner(
@@ -561,14 +591,14 @@ fun ExploreScreen(
                                     failed = reservations.failed,
                                 )
                             } else {
-                                null
+                                NEARBY_LOADING_TEXT.takeIf { loading }
                             },
                             onRaise = { sheetState = ExploreSheetState.HALF },
                         )
                     } else {
                         ListHeaderRow(
                             mode = mode,
-                            count = shownCount,
+                            count = headerCount,
                             dateLabel = reservations.selectedDateLabel,
                             destinationSent = reservations.destinationSent,
                             mapShown = sheetState == ExploreSheetState.HALF,
@@ -615,14 +645,17 @@ fun ExploreScreen(
                             myPartyHidden = myPartyHidden,
                             onJoin = onJoinParty,
                             onRetry = onRetryReservations,
+                            bottomPadding = listBottomPadding,
                             modifier = Modifier.weight(1f),
                         )
                     } else {
                         PartyList(
                             parties = parties,
+                            loading = loading,
                             myPartyHidden = myPartyHidden,
                             onJoinParty = onJoinParty,
                             showEndOfList = sheetState == ExploreSheetState.FULL,
+                            bottomPadding = listBottomPadding,
                             modifier = Modifier.weight(1f),
                         )
                     }
@@ -636,9 +669,27 @@ fun ExploreScreen(
                     PrimaryCtaButton(
                         text = "새 동승 방 만들기",
                         onClick = onCreateRoomClick,
-                        modifier = Modifier.padding(horizontal = MoyeotaSpacing.ScreenGutter, vertical = 8.dp),
+                        modifier = Modifier
+                            .padding(horizontal = MoyeotaSpacing.ScreenGutter, vertical = SheetCtaPadding)
+                            // 여백 안쪽(버튼 자체)을 잰다 — 새로고침 버튼을 이 윗변 16dp 위에 띄운다
+                            .onSizeChanged { ctaHeightPx = it.height },
                     )
                 }
+            }
+
+            // 카운트다운 새로고침 버튼 — **세 시트 단계 모두에서 보인다**(2026-11, 오너 UX 피드백 2차).
+            // 접힘·반펼침은 네이버 줌 컨트롤과 같은 세로선, 시트 윗변 16dp 위(지도 위)이고, 지도가 다 가려지는
+            // FULL 에서는 목록 위 오른쪽 아래에 뜬다(CTA 16dp 위). 자리는 [refreshButtonPlacement] 가 정하고,
+            // 시트를 따라 움직이도록 **실측 높이**(드래그·정착 애니메이션 중의 값)를 넘긴다. 목록 위에 뜨므로
+            // 시트 **뒤에** 그린다. 권한이 없어 지도가 없을 때는 다시 읽을 지도 범위가 없어 그리지 않는다.
+            if (refresh != null && locationGranted) {
+                ExploreRefreshButton(
+                    ui = refresh,
+                    onClick = onRefreshClick,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(end = refreshPlacement.end, bottom = refreshPlacement.bottom),
+                )
             }
         }
 
@@ -677,6 +728,14 @@ private fun settleTarget(
 private fun emptyListCopy(myPartyHidden: Boolean): Pair<String, String> =
     if (myPartyHidden) "지금은 내 방뿐이에요" to "지도를 움직여 다른 방을 찾아보세요"
     else "이 근처엔 동승이 없어요" to "지도를 움직여 보세요"
+
+/**
+ * 실시간 목록을 아직 읽지 못했다 — 접힘 요약 한 줄이 쓴다(예약의 [RESERVATION_LOADING_TEXT] 와 같은 자리).
+ *
+ * 0건을 「이 근처엔 동승이 없어요」로 말하지 않기 위한 문구다. 목록 쪽은 글도 스피너도 두지 않고 자리를
+ * 비워 둔다 — 기다림은 새로고침 버튼의 도는 고리가 보여 준다.
+ */
+internal const val NEARBY_LOADING_TEXT = "동승 목록을 불러오는 중이에요"
 
 /**
  * 17 접힘 요약 — 「주변 합승 N개」. N 은 헤더·마커와 같은 목록의 방 수다.
@@ -770,7 +829,8 @@ private fun PeekSummaryRow(
 @Composable
 private fun ListHeaderRow(
     mode: ExploreMode,
-    count: Int,
+    /** null 이면 개수를 적지 않는다 — 목록을 아직 읽지 못했다([exploreHeaderCount]) */
+    count: Int?,
     dateLabel: String?,
     destinationSent: Boolean,
     mapShown: Boolean,
@@ -908,23 +968,29 @@ private fun ReservationDateRow(
 
 // ─── 공용 조각 ──────────────────────────────────────────────────────────────
 
+/**
+ * @param loading 아직 읽지 못했다 — 빈 목록 문구를 그리지 않고 자리를 비워 둔다(기다림은 새로고침 버튼이 보여 준다)
+ * @param bottomPadding 목록 끝 여백 — 새로고침 버튼이 목록 위에 떠 있을 때 마지막 줄이 그 밑에 깔리지 않게
+ */
 @Composable
 private fun PartyList(
     parties: List<Ride>,
+    loading: Boolean,
     myPartyHidden: Boolean,
     onJoinParty: (Ride) -> Unit,
     showEndOfList: Boolean,
+    bottomPadding: Dp,
     modifier: Modifier = Modifier,
 ) {
     // 카드 더미가 아니라 **목록 줄**이다(디자인 QA E5) — 흰 시트 안에 흰 테두리 카드를 쌓으면 반펼침에서
     // 두 장 남짓만 보였다. 줄은 화면 폭을 다 쓰고 줄 사이는 안쪽으로 들인 헤어라인 하나다.
-    LazyColumn(modifier = modifier.fillMaxWidth()) {
+    LazyColumn(modifier = modifier.fillMaxWidth(), contentPadding = PaddingValues(bottom = bottomPadding)) {
         items(parties.size) { index ->
             if (index > 0) ListRowDivider()
             PartyCard(ride = parties[index], onJoin = onJoinParty)
         }
         if (parties.isEmpty()) {
-            item { EmptyListNotice(myPartyHidden = myPartyHidden) }
+            if (!loading) item { EmptyListNotice(myPartyHidden = myPartyHidden) }
         } else if (showEndOfList) {
             // 스펙 19: 마지막 페이지면 목록의 끝을 알린다 (범위 기준)
             item {
@@ -962,9 +1028,11 @@ private fun ReservationList(
     myPartyHidden: Boolean,
     onJoin: (Ride) -> Unit,
     onRetry: () -> Unit,
+    /** 목록 끝 여백 — 새로고침 버튼이 목록 위에 떠 있을 때 마지막 줄이 그 밑에 깔리지 않게 */
+    bottomPadding: Dp,
     modifier: Modifier = Modifier,
 ) {
-    LazyColumn(modifier = modifier.fillMaxWidth()) {
+    LazyColumn(modifier = modifier.fillMaxWidth(), contentPadding = PaddingValues(bottom = bottomPadding)) {
         items(pane.items.size) { index ->
             if (index > 0) ListRowDivider()
             ReservationCard(item = pane.items[index], now = pane.now, onJoin = onJoin)
@@ -980,7 +1048,7 @@ private fun ReservationList(
  *
  * | 상태 | 뜻 | 사용자가 할 일 |
  * |---|---|---|
- * | 조회 중 | 아직 모른다 | 기다린다 |
+ * | 조회 중 | 아직 모른다 | 기다린다 — 자리를 **비워 둔다**. 기다림은 새로고침 버튼의 도는 고리가 보여 준다(가운데 스피너 없음) |
  * | 내 위치 확인 중 | **아직 묻지도 못했다**(1km 의 중심이 없다) | 기다린다 |
  * | 실패 | 못 물어봤다 | 다시 시도 |
  * | 0건 | 물어봤고 **없다** | 날짜를 바꾸거나 지도를 옮긴다 |
@@ -991,7 +1059,9 @@ private fun ReservationList(
 @Composable
 private fun ReservationEmptyState(pane: ReservationPaneUi, myPartyHidden: Boolean, onRetry: () -> Unit) {
     when {
-        pane.loading -> LoadingBox(modifier = Modifier.fillMaxWidth().height(120.dp))
+        // 비워 둔다 — 예전의 가운데 스피너(`LoadingBox`)는 「날짜로 찾기」에서 날짜를 바꿀 때마다 목록 한가운데를
+        // 차지했다(2026-11, 오너 UX 피드백 2차). 헤더도 개수를 적지 않는다([exploreHeaderCount])
+        pane.loading -> Unit
         pane.locating -> ReservationNotice(text = RESERVATION_LOCATING_TEXT)
         pane.failed -> ReservationNotice(text = RESERVATION_LOAD_FAILED_TEXT, onRetry = onRetry)
         else -> {
