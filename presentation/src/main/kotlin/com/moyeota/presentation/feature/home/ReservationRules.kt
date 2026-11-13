@@ -227,6 +227,40 @@ internal fun reservationCommitmentNotice(joining: Boolean): String {
 internal const val RESERVATION_NO_SLOT_NOTICE = "이 날은 고를 수 있는 시간이 없어요. 다른 날을 골라 주세요"
 
 /**
+ * 16 CTA 직전 다시 재기([reservationTimeStillValid])가 실패해 **보내지 않고 휠만 옮겼을 때** CTA 위에 남기는 한 줄 —
+ * 날짜는 그대로이고 시각만 그 날의 가장 이른 값으로 접혔다.
+ *
+ * 이 줄이 없으면 버튼을 눌렀는데 아무 일도 없고 휠 숫자만 슬쩍 바뀐다(리뷰 반영 2차, PR #99) — 사용자는 「안 눌렸다」로
+ * 읽고 한 번 더 눌러, **보지 않은 시각**으로 예약 방을 만든다(예약 방은 시간을 바꿀 수 없다). 그래서 무엇이 왜
+ * 바뀌었는지와 할 일(확인하고 다시 누르기)을 함께 말한다.
+ *
+ * 「가장 빠른 시각」이 사실인 이유: 날짜가 그대로면 범위의 끝(가장 늦은 값)은 시간이 갈수록 늘기만 하므로, 다시 재기가
+ * 실패한 값은 늘 새 범위의 앞쪽 밖이고 [reservationSelectedTime] 이 그것을 가장 이른 값으로 접는다.
+ */
+internal const val RESERVATION_TIME_MOVED_NOTICE = "시간이 지나 가장 빠른 시각으로 바꿨어요. 확인하고 다시 눌러 주세요"
+
+/**
+ * [RESERVATION_TIME_MOVED_NOTICE] 의 **날짜까지 바뀐** 경우 — 보던 날에 남은 시각이 없어졌거나(늦은 밤의 「오늘」)
+ * 자정을 넘겨 띠에서 빠져 고를 수 있는 첫 날로 옮겨졌다([reservationDateOffsetAfterClockMove]).
+ *
+ * 여기서는 「가장 빠른 시각」이라고 말하지 않는다 — 새 날에는 사용자가 휠로 골라 둔 값이 범위 안이라 그대로 살아날
+ * 수 있다([reservationSelectedTime]). 그래서 날짜와 시각을 **둘 다** 확인하라고만 한다.
+ */
+internal const val RESERVATION_DATE_MOVED_NOTICE = "시간이 지나 다른 날로 바꿨어요. 날짜와 시각을 확인하고 다시 눌러 주세요"
+
+/**
+ * 다시 재기가 실패해 휠을 옮긴 뒤의 안내 — 띠에 칠해진 날짜가 바뀌었으면 [RESERVATION_DATE_MOVED_NOTICE], 아니면
+ * [RESERVATION_TIME_MOVED_NOTICE].
+ *
+ * 오류가 아니라 **안내**다 — 빨강(`NoticeKind.ERROR`)으로 칠하지 않는다(`DestinationConfirmModal` 의
+ * `RESERVATION_CLOCK_MOVED_NOTICE_KIND`). 휠이나 날짜 띠를 만지거나 CTA 를 다시 누르면 걷힌다.
+ *
+ * @param dateChanged 옮기기 전과 뒤에 띠에 칠해진 날짜가 다르다
+ */
+internal fun reservationClockMovedNotice(dateChanged: Boolean): String =
+    if (dateChanged) RESERVATION_DATE_MOVED_NOTICE else RESERVATION_TIME_MOVED_NOTICE
+
+/**
  * 고를 수 있는 날짜 — **오늘부터 7일 뒤까지 8개**(한국 달력).
  *
  * 검색(`GET /matching/reservations/search`)의 `date` 범위와 생성의 출발 시각 창이 같은 7일이라

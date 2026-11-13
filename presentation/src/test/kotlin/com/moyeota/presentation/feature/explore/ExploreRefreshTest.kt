@@ -1,6 +1,8 @@
 package com.moyeota.presentation.feature.explore
 
 import androidx.compose.ui.unit.dp
+import com.moyeota.domain.diagnostics.Diagnostics
+import com.moyeota.domain.diagnostics.FailureSite
 import com.moyeota.domain.model.ReservationDestination
 import com.moyeota.domain.model.ReservationSearchResult
 import com.moyeota.domain.model.Ride
@@ -253,6 +255,43 @@ class ExploreRefreshTest {
         // 권한 거부 경로 그대로: 그릴 것(15초 버튼)은 있어도 권한이 없으면 버튼이 없고, 그래서 목록이 스피너를 맡는다
         val shownWithoutPermission = refreshButtonShown(ExploreRefreshUi(refreshing = true), locationGranted = false)
         assertTrue(showListLoadingFallback(loading = true, refreshButtonShown = shownWithoutPermission))
+    }
+
+    // ─────────────────────────── 망가진 조회 ───────────────────────────
+
+    /**
+     * ★ 리뷰 반영 2차(PR #99): [ExploreRefreshCycle] 의 `load` 는 던지지 않기로 했지만 `viewModelScope` 의 자식으로
+     * 돈다 — 어기고 새는 예외 하나가 프로세스를 죽였다. 이제 시계가 받아 삼키고(종류만 진단 보고) 다음 0 에서 다시 읽는다.
+     */
+    @Test
+    fun `조회가 약속을 어기고 던져도 시계는 살아 있고 다음 0 에서 다시 읽는다`() = runTest(mainDispatcher) {
+        val reported = mutableListOf<Pair<FailureSite, Throwable>>()
+        Diagnostics.install { site, throwable -> reported += site to throwable }
+        try {
+            val reads = mutableListOf<String>()
+            val cycle = ExploreRefreshCycle<String>(backgroundScope) { query ->
+                reads += query
+                if (reads.size == 1) throw IllegalStateException("상태 정리에서 터진 결함")
+            }
+            cycle.update("범위", ExploreLoadTiming.NOW)
+            cycle.setVisible(true)
+            runCurrent()
+
+            assertEquals(1, reads.size)
+            assertEquals("조회 칸이 비고 버튼이 숫자로 돌아온다", ExploreRefreshUi(secondsLeft = 15), cycle.ui.value)
+            assertEquals(FailureSite.EXPLORE_REFRESH, reported.single().first)
+            assertTrue(reported.single().second is IllegalStateException)
+
+            advance(15_000)
+            assertEquals("다음 0 에서 다시 읽는다", 2, reads.size)
+
+            cycle.refreshNow()
+            runCurrent()
+            assertEquals("버튼도 그대로 듣는다", 3, reads.size)
+            assertEquals("두 번째부터는 멀쩡한 조회라 보고가 늘지 않는다", 1, reported.size)
+        } finally {
+            Diagnostics.reset()
+        }
     }
 
     // ─────────────────────────── 실시간 (ExploreViewModel) ───────────────────────────
@@ -689,6 +728,75 @@ class ExploreRefreshTest {
         advance(10_000)
         assertEquals(2, repository.searchCalls)
         assertEquals("자동 갱신은 최신 위치로 읽는다", 35.2304 to 129.0806, repository.searchedFrom.last())
+
+        viewModel.onScreenStop()
+        runCurrent()
+    }
+
+    /**
+     * ★ 리뷰 반영 2차(PR #99): 보여 줄 목록이 없으면(실패 화면) 새 위치를 다음 자동 갱신까지 묵히지 않는다 — 디바운스
+     * 뒤에 그 위치로 읽는다. 「곧 출발」의 「목록이 없으면 늦추지 않는다」와 같은 판단이다. 카운트다운은 그대로다.
+     */
+    @Test
+    fun `날짜로 찾기가 실패 화면이면 새 위치를 디바운스 뒤에 바로 읽는다`() = runTest(mainDispatcher) {
+        val repository = CountingRepository()
+        repository.failReservations = true
+        val viewModel = ReservationFinderViewModel(repository)
+        record(viewModel)
+        viewModel.request(byDate(lat = 35.23, lng = 129.08))
+        viewModel.onScreenStart()
+        runCurrent()
+        assertEquals(ReservationFinderViewModel.UiState.Failed, viewModel.uiState.value)
+        assertEquals(1, repository.searchCalls)
+
+        repository.failReservations = false
+        advance(3_000)
+        viewModel.request(byDate(lat = 35.2302, lng = 129.0803))
+        advance(BOUNDS_DEBOUNCE_MS - 1)
+        assertEquals("디바운스 동안은 기다린다", 1, repository.searchCalls)
+        advance(1)
+
+        assertEquals("15초를 기다리지 않는다", 2, repository.searchCalls)
+        assertEquals(35.2302 to 129.0803, repository.searchedFrom.last())
+        assertTrue(viewModel.uiState.value is ReservationFinderViewModel.UiState.Success)
+        assertEquals("카운트다운은 그대로", 12, viewModel.refresh.value.secondsLeft)
+
+        viewModel.onScreenStop()
+        runCurrent()
+    }
+
+    /**
+     * 빈 자리로 조회가 **오는 중**이면 위치가 1초마다 흔들려도 그 조회를 끊고 다시 보내지 않는다 — 끊으면 응답이
+     * 「다음 위치까지 남은 시간」보다 느린 망에서 조회가 영영 끝나지 않는다([reservationLoadTiming] KDoc).
+     */
+    @Test
+    fun `날짜로 찾기의 빈 자리로 조회가 오는 중이면 위치가 흔들려도 끊지 않는다`() = runTest(mainDispatcher) {
+        val repository = CountingRepository()
+        val gate = CompletableDeferred<Unit>()
+        repository.reservationGate = gate
+        val viewModel = ReservationFinderViewModel(repository)
+        record(viewModel)
+        viewModel.request(byDate(lat = 35.23, lng = 129.08))
+        viewModel.onScreenStart()
+        runCurrent()
+        assertEquals(ReservationFinderViewModel.UiState.Loading, viewModel.uiState.value)
+
+        listOf(35.2301, 35.2302, 35.2303).forEach { lat ->
+            advance(1_000)
+            viewModel.request(byDate(lat = lat, lng = 129.08))
+            runCurrent()
+        }
+        advance(BOUNDS_DEBOUNCE_MS)
+        assertEquals("오는 중인 조회를 끊고 다시 보내지 않는다", 1, repository.searchCalls)
+        assertTrue(viewModel.refresh.value.refreshing)
+
+        repository.reservationGate = null
+        gate.complete(Unit)
+        runCurrent()
+        assertTrue(viewModel.uiState.value is ReservationFinderViewModel.UiState.Success)
+
+        advance(15_000 - 3_000 - BOUNDS_DEBOUNCE_MS)
+        assertEquals("다음 자동 갱신이 최신 위치로 읽는다", 35.2303 to 129.08, repository.searchedFrom.last())
 
         viewModel.onScreenStop()
         runCurrent()

@@ -44,9 +44,12 @@ import com.moyeota.core.designsystem.theme.MoyeotaSpacing
 import com.moyeota.core.designsystem.theme.MoyeotaType
 import com.moyeota.core.designsystem.theme.mapOverlayShadow
 import com.moyeota.core.designsystem.theme.tabularNums
+import com.moyeota.domain.diagnostics.Diagnostics
+import com.moyeota.domain.diagnostics.FailureSite
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
@@ -185,8 +188,8 @@ internal enum class ExploreLoadTiming {
 
     /**
      * 지금은 읽지 않는다 — **다음 자동 갱신이 새 입력으로 읽는다.** 「날짜로 찾기」의 내 위치가 조금
-     * 움직였을 때다: GPS 는 1초마다 몇 m 씩 흔들리는데, 그때마다 읽으면 1km 검색이 1초마다 나가고 응답이
-     * 1초보다 느리면 영영 끝나지 않는다([reservationLoadTiming])
+     * 움직였는데 목록이 보이거나 빈 자리로 조회가 오는 중일 때다: GPS 는 1초마다 몇 m 씩 흔들리는데, 그때마다
+     * 읽으면 1km 검색이 1초마다 나가고 응답이 1초보다 느리면 영영 끝나지 않는다([reservationLoadTiming])
      */
     NEXT_TICK,
 }
@@ -208,9 +211,20 @@ internal enum class ExploreLoadTiming {
  *
  * 모든 호출은 메인 스레드에서 온다(ViewModel 메서드와 [scope] 의 코루틴) — 필드에 잠금이 없는 이유다.
  *
+ * ### [load] 가 약속을 어기고 던지면 — 삼키고 시계를 살린다 (리뷰 반영 2차, PR #99)
+ * 조회는 `viewModelScope` 의 자식으로 돈다. 그 스코프는 실패를 위로 올리지 않는 대신 처리되지 않은 예외를 스레드의
+ * 기본 처리기로 넘기고, 안드로이드에서 그것은 **프로세스 종료**다. 그래서 취소가 아닌 예외는 조회 코루틴 안에서
+ * 받아 버리고 [Diagnostics] 로 **종류와 위치만** 보고한다(메시지를 싣지 않는다 — 조회 입력은 지도 범위·내 좌표다).
+ * `finally` 의 정리(조회 칸 비우기·버튼 숫자 되돌리기)는 그대로 돌아 다음 0 이 평소처럼 읽는다.
+ *
+ * 삼킨 예외는 「낡음」의 연속 실패로 **세지 않는다.** 그 계수기는 ViewModel 의 [load] 안에 있고, 서버 조회의
+ * 실패는 이미 거기서 받아 센다(그래서 [load] 는 던지지 않는다). 그 밖으로 새는 것은 **세고 난 뒤의 상태 정리**에서
+ * 터진 결함이다 — 여기서 다시 세게 하려면 시계가 모르는 ViewModel 계수기에 두 번째 통로를 내야 하고, 터진 자리가
+ * `failures++` 뒤라면 같은 실패를 두 번 센다. 결함은 「낡음」이 아니라 진단 보고로 드러낸다.
+ *
  * @param scope 세션의 코루틴이 사는 곳(`viewModelScope`)
  * @param load 조회 하나를 읽어 화면 상태에 반영한다. **실패는 안에서 처리하고 던지지 않는다** — 던지는 것은
- *   취소뿐이어야 한다
+ *   취소뿐이어야 한다. 어겨도 앱은 죽지 않는다(위)
  */
 internal class ExploreRefreshCycle<Q : Any>(
     private val scope: CoroutineScope,
@@ -234,6 +248,12 @@ internal class ExploreRefreshCycle<Q : Any>(
 
     /** 세션이 돌고 있는가 — 보이고, 물어볼 것이 있다. false 면 [retry]·[refreshNow] 는 아무 일도 하지 않는다. */
     val isRunning: Boolean get() = countdown != null
+
+    /**
+     * 조회가 나가 있는가 — 「날짜로 찾기」가 빈 목록 자리로 오는 중인 조회를 GPS 흔들림으로 끊지 않게 본다
+     * ([reservationLoadTiming]).
+     */
+    val isFetching: Boolean get() = fetch != null
 
     /** 화면이 보이기 시작했다(true) · 가려졌다(false). 보이기 시작하면 즉시 읽고 **15부터 새로** 센다. */
     fun setVisible(shown: Boolean) {
@@ -345,6 +365,12 @@ internal class ExploreRefreshCycle<Q : Any>(
         val job = scope.launch(start = CoroutineStart.LAZY) {
             try {
                 load(q)
+            } catch (e: CancellationException) {
+                // 더 새 입력·가려짐·버튼으로 끊긴 것 — 취소는 그대로 흘려 보낸다
+                throw e
+            } catch (e: Exception) {
+                // [load] 가 약속을 어겼다 — 앱을 죽이지 않고 종류만 보고한다(클래스 KDoc). 시계는 계속 돈다
+                Diagnostics.report(FailureSite.EXPLORE_REFRESH, e)
             } finally {
                 if (generation == fetchGeneration) {
                     fetch = null

@@ -367,15 +367,54 @@ class ReservationFinderTest {
         val soon = ReservationQuery.Soon(bounds)
         val movedSoon = ReservationQuery.Soon(MapBounds(swLat = 35.3, swLng = 129.1, neLat = 35.4, neLng = 129.2))
 
-        assertEquals("처음", ExploreLoadTiming.NOW, reservationLoadTiming(null, soon, listShown = false))
-        assertEquals("모드를 바꿈", ExploreLoadTiming.NOW, reservationLoadTiming(soon, byDate(), listShown = true))
-        assertEquals("날짜를 바꿈", ExploreLoadTiming.NOW, reservationLoadTiming(byDate(), byDate(date = "2026-11-18"), listShown = true))
-        assertEquals("지도 이동", ExploreLoadTiming.DEBOUNCED, reservationLoadTiming(soon, movedSoon, listShown = true))
-        assertEquals("보여 줄 목록이 없으면 늦출 이득이 없다", ExploreLoadTiming.NOW, reservationLoadTiming(soon, movedSoon, listShown = false))
+        assertEquals("처음", ExploreLoadTiming.NOW, reservationLoadTiming(null, soon, listShown = false, fetching = false))
+        assertEquals("모드를 바꿈", ExploreLoadTiming.NOW, reservationLoadTiming(soon, byDate(), listShown = true, fetching = false))
+        assertEquals(
+            "날짜를 바꿈",
+            ExploreLoadTiming.NOW,
+            reservationLoadTiming(byDate(), byDate(date = "2026-11-18"), listShown = true, fetching = true),
+        )
+        assertEquals("지도 이동", ExploreLoadTiming.DEBOUNCED, reservationLoadTiming(soon, movedSoon, listShown = true, fetching = false))
+        assertEquals(
+            "보여 줄 목록이 없으면 늦출 이득이 없다",
+            ExploreLoadTiming.NOW,
+            reservationLoadTiming(soon, movedSoon, listShown = false, fetching = false),
+        )
         assertEquals(
             "GPS 흔들림",
             ExploreLoadTiming.NEXT_TICK,
-            reservationLoadTiming(byDate(), byDate(lat = 35.2302), listShown = true),
+            reservationLoadTiming(byDate(), byDate(lat = 35.2302), listShown = true, fetching = false),
+        )
+    }
+
+    /**
+     * ★ 리뷰 반영 2차(PR #99): 「날짜로 찾기」의 위치 흔들림은 **목록이 보일 때만** 다음 갱신에 맡긴다. 목록이 없으면
+     * (실패 화면) 「곧 출발」처럼 늦추지 않되 1초마다 오는 위치를 묶도록 디바운스한다. 빈 자리로 조회가 오는 중이면
+     * 그것을 끊지 않는다 — 느린 망에서 끊고 다시 보내기를 되풀이하면 조회가 끝나지 않는다.
+     */
+    @Test
+    fun `날짜로 찾기의 위치 흔들림은 목록이 있으면 다음 갱신 없으면 디바운스다`() {
+        val wobble = byDate(lat = 35.2302)
+
+        assertEquals(
+            "목록이 보인다",
+            ExploreLoadTiming.NEXT_TICK,
+            reservationLoadTiming(byDate(), wobble, listShown = true, fetching = false),
+        )
+        assertEquals(
+            "목록이 보이고 갱신도 나가 있다",
+            ExploreLoadTiming.NEXT_TICK,
+            reservationLoadTiming(byDate(), wobble, listShown = true, fetching = true),
+        )
+        assertEquals(
+            "보여 줄 목록이 없다(실패 화면)",
+            ExploreLoadTiming.DEBOUNCED,
+            reservationLoadTiming(byDate(), wobble, listShown = false, fetching = false),
+        )
+        assertEquals(
+            "빈 자리로 조회가 오는 중이다(로딩)",
+            ExploreLoadTiming.NEXT_TICK,
+            reservationLoadTiming(byDate(), wobble, listShown = false, fetching = true),
         )
     }
 
