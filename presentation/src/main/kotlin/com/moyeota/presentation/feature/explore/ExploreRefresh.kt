@@ -472,6 +472,35 @@ internal fun refreshButtonPlacement(
 }
 
 /**
+ * 카운트다운 새로고침 버튼을 **그리는가** — 그릴 것([refresh])이 있고 위치 권한이 있을 때.
+ *
+ * 권한이 없으면 지도 대신 권한 안내가 깔리지만 조회는 그대로 돈다(기준 범위로 첫 조회, 15초 주기 — `ExploreRoute`).
+ * 그래도 **버튼은 그리지 않는다**:
+ * - 버튼의 자리([refreshButtonPlacement] — 줌 컨트롤 세로선, 시트 윗변 16dp 위)는 지도 위를 전제로 정한 것이다.
+ *   권한 안내 위에서는 그 화면의 유일한 행동인 「위치 권한 허용」 곁에 뜻 모를 원이 하나 더 생긴다
+ * - 다시 읽는 범위가 눈에 보이지 않는 기준 범위라, 무엇을 새로 고치는지 화면이 말해 주지 못한다
+ *
+ * 버튼이 없을 때의 기다림은 목록의 대체 로딩 표시가 맡는다([showListLoadingFallback]).
+ */
+internal fun refreshButtonShown(refresh: ExploreRefreshUi?, locationGranted: Boolean): Boolean =
+    refresh != null && locationGranted
+
+/**
+ * 목록 자리에 **대체 로딩 표시**(작은 스피너)를 그리는가 — 새 목록을 읽는 중인데([loading]) 새로고침 버튼이
+ * 없을 때([refreshButtonShown] 이 false). 세 모드 모두 같은 규칙이다.
+ *
+ * 목록 가운데 스피너를 걷은 근거는 「기다림은 버튼의 도는 고리가 보여 준다」였다(2026-11, 오너 UX 피드백 2차). 그
+ * 근거는 버튼이 **있을 때만** 선다. 버튼이 없으면(위치 권한 없음 · 물어볼 것이 없음 · 주기 갱신이 없는 모드) 첫 조회와
+ * 에러 화면의 「다시 시도」 동안 목록은 비어 있고 — 아직 묻지 못한 것을 「없다」고 말하지 않으려 빈 목록 문구도
+ * 그리지 않는다 — 도는 것이 하나도 없어 **빈 화면**으로 보인다.
+ *
+ * 버튼이 있으면 그리지 않는다 — 기다림을 두 자리에서 보이지 않는다. 접힘(PEEK)에는 목록이 없고 요약 줄이
+ * 「불러오는 중」 문구를 적으므로 이 판정은 반펼침·FULL 의 목록에만 쓰인다.
+ */
+internal fun showListLoadingFallback(loading: Boolean, refreshButtonShown: Boolean): Boolean =
+    loading && !refreshButtonShown
+
+/**
  * 지도 오른쪽 아래의 **카운트다운 새로고침 버튼** — 오너가 준 네이버 지도 참고 그대로: 짙은 원에
  * 원형 화살표 고리, 가운데에 남은 초. 자리는 시트 단계가 정한다([refreshButtonPlacement]).
  *

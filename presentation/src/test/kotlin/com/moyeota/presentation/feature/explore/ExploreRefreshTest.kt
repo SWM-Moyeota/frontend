@@ -224,6 +224,37 @@ class ExploreRefreshTest {
         assertTrue(RefreshButtonListClearance > coveredAboveListBottom)
     }
 
+    // ─────────────────────────── 버튼이 없을 때의 기다림 ───────────────────────────
+
+    /**
+     * 권한이 없으면 지도 대신 권한 안내가 깔리고 버튼도 없다 — 조회는 기준 범위로 그대로 돈다(`ExploreRoute`).
+     * 그릴 것이 없을 때(「날짜로 찾기」가 내 위치를 기다리는 중)도 없다.
+     */
+    @Test
+    fun `새로고침 버튼은 그릴 것이 있고 위치 권한이 있을 때만 보인다`() {
+        assertTrue(refreshButtonShown(ExploreRefreshUi(), locationGranted = true))
+        assertFalse(refreshButtonShown(ExploreRefreshUi(), locationGranted = false))
+        assertFalse(refreshButtonShown(null, locationGranted = true))
+        assertFalse(refreshButtonShown(null, locationGranted = false))
+    }
+
+    /**
+     * ★ 리뷰 반영(PR #99): 목록 가운데 스피너를 걷은 뒤 기다림을 보이는 것은 버튼뿐이었다. 권한을 거부하면 버튼이
+     * 없어, 첫 조회와 에러 화면의 「다시 시도」 동안 목록이 빈 채 아무것도 돌지 않았다. 버튼이 없을 때만 목록에
+     * 작은 스피너를 둔다 — 버튼이 있으면 두 자리에서 기다림을 보이지 않는다. 세 모드 모두 같은 규칙이다.
+     */
+    @Test
+    fun `읽는 중인데 버튼이 없을 때만 목록에 대체 로딩 표시를 둔다`() {
+        assertTrue(showListLoadingFallback(loading = true, refreshButtonShown = false))
+        assertFalse("버튼의 도는 고리가 이미 기다림을 보인다", showListLoadingFallback(loading = true, refreshButtonShown = true))
+        assertFalse(showListLoadingFallback(loading = false, refreshButtonShown = false))
+        assertFalse(showListLoadingFallback(loading = false, refreshButtonShown = true))
+
+        // 권한 거부 경로 그대로: 그릴 것(15초 버튼)은 있어도 권한이 없으면 버튼이 없고, 그래서 목록이 스피너를 맡는다
+        val shownWithoutPermission = refreshButtonShown(ExploreRefreshUi(refreshing = true), locationGranted = false)
+        assertTrue(showListLoadingFallback(loading = true, refreshButtonShown = shownWithoutPermission))
+    }
+
     // ─────────────────────────── 실시간 (ExploreViewModel) ───────────────────────────
 
     @Test

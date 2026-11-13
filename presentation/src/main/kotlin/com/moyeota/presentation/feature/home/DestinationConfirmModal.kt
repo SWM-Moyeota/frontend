@@ -16,8 +16,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -210,7 +212,12 @@ fun DestinationConfirmModal(
     // **휠에 보이는 값 그대로**다(아래 departureAt) — 보내는 순간 시계를 다시 읽어 고치지 않는다.
     // 단, **보내기 직전에는 지금 시계로 다시 잰다**(아래 CTA) — 오래 열어 둬 기본값(가장 이른 시각)이 여유를
     // 잃었으면 이 기준을 지금으로 옮겨 휠을 새 범위로 접는다([reservationTimeStillValid]).
-    var now by remember { mutableStateOf(Instant.now()) }
+    //
+    // 기준은 고른 날짜(`dateOffset`)와 **함께 저장한다**(epoch ms). 일수는 이 기준의 「오늘」로부터 센 값이라, 다시
+    // 들어올 때 기준만 새로 읽고 일수를 그대로 두면 그 사이 자정을 넘긴 경우 다른 날을 가리킨다. 기준을 옮기는 길은
+    // 아래 `moveClock` 하나다 — 고른 달력 날짜를 지킨다([reservationDateOffsetAfterClockMove]).
+    var nowMillis by rememberSaveable { mutableLongStateOf(System.currentTimeMillis()) }
+    val now = Instant.ofEpochMilli(nowMillis)
     val dateOptions = remember(now) { reservationDates(now) }
     val today = dateOptions.first()
     // 그 날에 고를 시각이 남아 있는가 — 늦은 밤의 「오늘」만 false 다. 띠는 그 칸을 누르지 못하게 그린다.
@@ -222,6 +229,18 @@ fun DestinationConfirmModal(
     // 열리면 휠 자리에 「고를 시간이 없어요」만 남는다([reservationSelectableDateIndex]).
     val selectedDate = dateOptions[reservationSelectableDateIndex(dateOffset, dateOptions, dateSelectable)]
     val timeRange = remember(selectedDate, now) { reservationTimeRange(selectedDate, now) }
+    // 기준을 [fresh] 로 옮긴다 — 일수를 새 띠에서 **보던 날짜의 자리**로 다시 셈한다. 일수만 두면 자정을 넘긴 기준에서
+    // 「내일」이 「모레」가 된다(리뷰 반영, PR #99). 보던 날이 범위를 벗어났으면 고를 수 있는 첫 날이다.
+    fun moveClock(fresh: Instant) {
+        dateOffset = reservationDateOffsetAfterClockMove(selectedDate, reservationDates(fresh)) { date ->
+            reservationTimeRange(date, fresh) != null
+        }
+        nowMillis = fresh.toEpochMilli()
+    }
+    // 들어올 때마다(처음 · 위에 쌓인 화면에서 돌아옴 · 구성 변경) 기준을 지금으로 다시 읽는다 — 덮인 동안의 낡은 기준이
+    // 남으면 이미 지난 시각을 고를 수 있다. 예전에는 기준이 `remember` 라 저절로 다시 읽혔고, 그때 일수는 그대로 남아
+    // 자정을 넘기면 날짜가 밀렸다.
+    LaunchedEffect(Unit) { moveClock(Instant.now()) }
     // 휠로 고른 시각(하루의 분). -1 = 아직 휠을 건드리지 않았다 → **그 날의 가장 이른 시각이 기본 선택**이다.
     //
     // 칩 시절에는 기본 선택이 없었다(아무도 원하지 않은 00:00 예약이 한 번의 탭으로 만들어진다는 이유).
@@ -713,9 +732,10 @@ fun DestinationConfirmModal(
                             // 그래서 **지금 시계로 다시 재고, 범위를 벗어났으면 보내지 않고 기준만 옮긴다** — 휠이
                             // 새 범위로 접혀 보이는 값이 바뀌고, 사용자는 바뀐 시각을 보고 다시 누른다
                             // (보이는 값 = 보내는 값 원칙은 그대로다).
+                            // 기준을 옮길 때 고른 날짜는 지킨다(`moveClock`) — 자정을 넘겨도 「내일」이 「모레」가 되지 않는다.
                             val fresh = Instant.now()
                             if (scheduled && !reservationTimeStillValid(selectedDate, selectedTime, fresh)) {
-                                now = fresh
+                                moveClock(fresh)
                             } else {
                                 onFindCompanions(MatchConditions(capacity = capacity, departureAt = departureAt))
                             }

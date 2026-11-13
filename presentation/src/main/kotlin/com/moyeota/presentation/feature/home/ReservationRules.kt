@@ -478,6 +478,34 @@ internal fun reservationSelectableDateIndex(
 }
 
 /**
+ * 16 의 기준 시각(`now`)을 옮긴 뒤 저장할 **날짜 인덱스** — 고른 **달력 날짜**를 그대로 지킨다.
+ *
+ * 고른 날짜는 「오늘로부터의 일수」(`dateOffset`)로 저장되고 날짜 띠는 `reservationDates(now)` 에서 나온다. 기준을
+ * 옮기면서(CTA 직전의 다시 재기, 화면 복귀) 자정을 넘기면 **같은 일수가 다음 날을 가리킨다** — 23:58 에 「내일」을
+ * 고르고 00:05 에 누르면 다시 재기가 실패해 기준이 옮겨지고, 띠가 「모레」로 넘어간다. 바뀐 시각을 보고 다시
+ * 누르면 고르지 않은 날로 예약 방이 만들어진다(예약 방은 시간을 바꿀 수 없다).
+ *
+ * 그래서 옮긴 범위([newDates] = `reservationDates(fresh)`)에서 **보던 날짜의 자리**를 다시 찾는다.
+ *
+ * | 경우 | 결과 |
+ * |---|---|
+ * | 보던 날짜가 새 범위에 있다 | 그 자리 — 고를 수 없는 날이 됐으면(늦은 밤의 오늘) 보여 줄 때 [reservationSelectableDateIndex] 가 접는다 |
+ * | 범위를 벗어났다(자정을 넘겨 「어제」가 됐다) | 고를 수 있는 첫 날([reservationSelectableDateIndex]) |
+ *
+ * @param selectedDate 옮기기 **전에** 띠에 칠해져 있던 날짜(접힌 뒤의 값 — 사용자가 보던 그 날)
+ * @param newDates 옮긴 기준의 날짜 띠(`reservationDates(fresh)`)
+ * @param isSelectable 옮긴 기준에서 그 날을 고를 수 있는가(`reservationTimeRange(date, fresh) != null`)
+ */
+internal fun reservationDateOffsetAfterClockMove(
+    selectedDate: LocalDate,
+    newDates: List<LocalDate>,
+    isSelectable: (LocalDate) -> Boolean,
+): Int {
+    val index = newDates.indexOf(selectedDate)
+    return if (index >= 0) index else reservationSelectableDateIndex(0, newDates, isSelectable)
+}
+
+/**
  * 날짜 띠 위의 **달 표시** — `11월`, 달을 넘으면 `11–12월`(해를 넘으면 `12–1월`). 날짜가 없으면 null.
  *
  * 칸에는 일(日) 숫자만 있어서 띠만 보면 「1, 2, 3」이 몇 월인지 알 수 없다 — 특히 월말에 띠가 다음 달로

@@ -75,7 +75,8 @@ class ExploreViewModel(private val repository: RideRepository) : ViewModel() {
     sealed interface UiState {
         /**
          * 아직 한 번도 읽지 못했다(첫 조회·에러 화면의 「다시 시도」). 화면은 지도와 빈 목록을 그리고
-         * 새로고침 버튼의 도는 고리만으로 기다리게 한다 — 가운데 스피너를 두지 않는다.
+         * 새로고침 버튼의 도는 고리만으로 기다리게 한다 — 가운데 스피너를 두지 않는다(버튼이 없는 위치 권한 거부
+         * 경로는 목록 맨 위의 작은 스피너, `showListLoadingFallback`).
          */
         data object Loading : UiState
 
@@ -414,7 +415,8 @@ fun ExploreRoute(
         }
         // **실시간 첫 조회도 이 화면으로 그린다**(2026-11, 오너 UX 피드백 2차) — 예전에는 가운데 스피너
         // 한 장(`LoadingBox`)이 지도·모드 칩까지 덮었다. 지금은 지도와 빈 목록을 바로 그리고, 기다림은 새로고침
-        // 버튼의 도는 고리 하나로만 보인다(예약 모드의 새 조회와 같은 규칙). 전체 화면으로 남는 것은 에러뿐이다.
+        // 버튼의 도는 고리 하나로만 보인다(예약 모드의 새 조회와 같은 규칙 — 버튼이 없는 위치 권한 거부 경로는 목록 맨
+        // 위의 작은 스피너, `showListLoadingFallback`). 전체 화면으로 남는 것은 에러뿐이다.
         else -> ExploreScreen(
             parties = list.parties,
             loading = current is ExploreViewModel.UiState.Loading,
