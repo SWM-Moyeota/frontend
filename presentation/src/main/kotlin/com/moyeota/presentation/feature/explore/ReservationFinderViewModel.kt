@@ -248,21 +248,19 @@ internal fun ReservationQuery.sameListAs(other: ReservationQuery): Boolean = whe
  * | 바뀐 것 | 언제 | 이유 |
  * |---|---|---|
  * | 처음이거나 다른 목록([sameListAs]: 모드·날짜·도착지) | [ExploreLoadTiming.NOW] | 사용자가 방금 고른 것이다 — 기다리면 고른 게 먹지 않은 것처럼 보인다 |
- * | 「날짜로 찾기」의 내 위치 · 목록이 보이는 중 | [ExploreLoadTiming.NEXT_TICK] | 위치는 1초마다 몇 m 씩 흔들린다. 그때마다 읽으면 1km 검색이 1초마다 나가고 응답이 그보다 느리면 끝나지 않는다 — 다음 자동 갱신(길어야 15초)이 새 위치로 읽는다 |
- * | 「날짜로 찾기」의 내 위치 · 보여 줄 목록이 없다 · 조회가 오는 중 | [ExploreLoadTiming.NEXT_TICK] | 빈 자리는 곧 그 조회가 채운다. 끊고 다시 보내면 아래 줄의 굶김이 생긴다 |
- * | 「날짜로 찾기」의 내 위치 · 보여 줄 목록이 없다 | [ExploreLoadTiming.DEBOUNCED] | 실패 화면에서 새 위치를 15초씩 묵히지 않는다 — 「곧 출발」의 「목록이 없으면 늦추지 않는다」와 같은 판단이다 |
+ * | 「날짜로 찾기」의 내 위치 (목록 유무와 상관없이) | [ExploreLoadTiming.NEXT_TICK] | 위치는 1초마다 몇 m 씩 흔들린다. 그때마다 읽으면 1km 검색이 1초마다 나간다 — 다음 자동 갱신(길어야 15초)이 새 위치로 읽는다 |
  * | 「곧 출발」의 지도 범위 · 목록이 보이는 중 | [ExploreLoadTiming.DEBOUNCED] | 팬·줌 연타의 중간 범위마다 서버를 때리지 않는다(실시간과 같은 디바운스) |
  * | 「곧 출발」의 지도 범위 · 보여 줄 목록이 없다 | [ExploreLoadTiming.NOW] | 늦출 이득이 없다 |
  *
- * ### 목록이 없을 때 「날짜로 찾기」가 NOW 가 아니라 DEBOUNCED 이고, 오는 조회는 끊지 않는 이유 (리뷰 반영 2차, PR #99)
- * 「곧 출발」의 지도 범위는 손을 뗄 때만 바뀌지만 내 위치는 **1초마다** 바뀐다. 디바운스([BOUNDS_DEBOUNCE_MS])는
- * 그보다 빠른 연타만 묶으므로, NOW 든 DEBOUNCED 든 새 위치마다 앞 조회를 끊고 다시 보내면 응답이 「다음 위치까지
- * 남은 시간」(≈ 1초 − 디바운스)보다 느릴 때 **조회가 영영 끝나지 않는다** — 실패 화면은 흔히 망이 느려서 생기므로
- * 바로 그때 복구가 막힌다. 그래서 디바운스로 읽되, 빈 자리로 **오는 중인 조회가 있으면**([fetching]) 그것을
- * 끊지 않고 기다린다. 그 조회가 실패해 다시 비면 다음 위치가 곧(1초 안) 디바운스 뒤에 읽는다.
+ * ### 목록이 없을 때(실패 화면)도 「날짜로 찾기」의 위치 변화는 다음 갱신에 맡기는 이유 (리뷰 반영 3차, PR #99)
+ * 2차에서 실패 화면은 새 위치를 디바운스 뒤에 바로 읽게 했었다. 그런데 내 위치는 **1초마다** 바뀌어서, 망이 **빨리
+ * 실패하는** 때(오프라인 등)에는 실패 → 빈 자리 → 다음 위치 → 다시 조회가 15초 주기와 상관없이 약 1초마다 되풀이됐다.
+ * 그래서 목록 유무와 상관없이 다음 자동 갱신(길어야 15초)에 맡긴다. 실패 화면에서 바로 다시 읽고 싶으면 사용자가
+ * 「다시 시도」나 새로고침 버튼을 누른다 — 그 길은 그대로 바로 읽는다.
  *
  * @param listShown 지금 이 목록을 보여 주고 있는가([ReservationFinderViewModel.UiState.Success])
- * @param fetching 조회가 나가 있는가([ExploreRefreshCycle.isFetching]) — 「날짜로 찾기」에서 목록이 없을 때만 본다
+ * @param fetching 조회가 나가 있는가([ExploreRefreshCycle.isFetching]). 지금 규칙은 보지 않는다 — 2차 규칙의 흔적이고,
+ *   호출부와 테스트가 같은 모양으로 남아 있어 다시 갈래가 필요할 때 쓰도록 둔다
  */
 internal fun reservationLoadTiming(
     previous: ReservationQuery?,
@@ -271,8 +269,7 @@ internal fun reservationLoadTiming(
     fetching: Boolean,
 ): ExploreLoadTiming = when {
     previous == null || !previous.sameListAs(next) -> ExploreLoadTiming.NOW
-    next is ReservationQuery.ByDate ->
-        if (listShown || fetching) ExploreLoadTiming.NEXT_TICK else ExploreLoadTiming.DEBOUNCED
+    next is ReservationQuery.ByDate -> ExploreLoadTiming.NEXT_TICK
     listShown -> ExploreLoadTiming.DEBOUNCED
     else -> ExploreLoadTiming.NOW
 }

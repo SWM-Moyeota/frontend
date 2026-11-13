@@ -734,11 +734,11 @@ class ExploreRefreshTest {
     }
 
     /**
-     * ★ 리뷰 반영 2차(PR #99): 보여 줄 목록이 없으면(실패 화면) 새 위치를 다음 자동 갱신까지 묵히지 않는다 — 디바운스
-     * 뒤에 그 위치로 읽는다. 「곧 출발」의 「목록이 없으면 늦추지 않는다」와 같은 판단이다. 카운트다운은 그대로다.
+     * ★ 리뷰 반영 3차(PR #99): 실패 화면이어도 새 위치는 **다음 자동 갱신에** 읽는다. 위치는 1초마다 오므로, 실패 화면에서
+     * 바로 읽게 하면 빨리 실패하는 망(오프라인)에서 실패 → 다음 위치 → 다시 조회가 1초마다 되풀이된다.
      */
     @Test
-    fun `날짜로 찾기가 실패 화면이면 새 위치를 디바운스 뒤에 바로 읽는다`() = runTest(mainDispatcher) {
+    fun `날짜로 찾기가 실패 화면이어도 새 위치는 다음 자동 갱신에 읽는다`() = runTest(mainDispatcher) {
         val repository = CountingRepository()
         repository.failReservations = true
         val viewModel = ReservationFinderViewModel(repository)
@@ -749,17 +749,20 @@ class ExploreRefreshTest {
         assertEquals(ReservationFinderViewModel.UiState.Failed, viewModel.uiState.value)
         assertEquals(1, repository.searchCalls)
 
-        repository.failReservations = false
-        advance(3_000)
-        viewModel.request(byDate(lat = 35.2302, lng = 129.0803))
-        advance(BOUNDS_DEBOUNCE_MS - 1)
-        assertEquals("디바운스 동안은 기다린다", 1, repository.searchCalls)
-        advance(1)
+        // 오프라인처럼 빨리 실패하는 망에서 위치가 1초마다 흔들린다 — 그때마다 보내지 않는다
+        for (i in 1..5) {
+            advance(1_000)
+            viewModel.request(byDate(lat = 35.23 + i * 0.0001, lng = 129.08))
+        }
+        advance(BOUNDS_DEBOUNCE_MS)
+        assertEquals("위치가 흔들려도 다시 보내지 않는다", 1, repository.searchCalls)
 
-        assertEquals("15초를 기다리지 않는다", 2, repository.searchCalls)
-        assertEquals(35.2302 to 129.0803, repository.searchedFrom.last())
+        // 다음 자동 갱신(처음부터 15초)이 마지막 위치로 읽는다
+        repository.failReservations = false
+        advance(15_000 - 5_000 - BOUNDS_DEBOUNCE_MS)
+        assertEquals("다음 갱신에 읽는다", 2, repository.searchCalls)
+        assertEquals(35.23 + 5 * 0.0001 to 129.08, repository.searchedFrom.last())
         assertTrue(viewModel.uiState.value is ReservationFinderViewModel.UiState.Success)
-        assertEquals("카운트다운은 그대로", 12, viewModel.refresh.value.secondsLeft)
 
         viewModel.onScreenStop()
         runCurrent()
