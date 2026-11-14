@@ -68,6 +68,41 @@ class LoginMethodsTest {
         time = 60_001; vm.sendCode()
         assertEquals(2, sends)
     }
+    @Test fun `발송이 쿨다운으로 거절되면 서버가 알려 준 시간만큼 타이머를 세운다`() {
+        var failure: AuthException? = AuthException(AuthError.SMS_COOLDOWN, retryAfterSeconds = 42)
+        val cooling = object : AuthRepository by repo {
+            override suspend fun sendLoginMethodCode() { failure?.let { throw it }; sends++ }
+        }
+        val vm = LoginMethodsViewModel(cooling, { time })
+        vm.sendCode()
+        assertEquals(42, vm.state.value.resendSeconds)
+        assertFalse(vm.state.value.codeSent)
+        assertTrue(vm.state.value.error!!.contains("남은 시간"))
+        // 남은 시간 동안은 서버에 다시 묻지 않고, 끝나면 다시 보낼 수 있다
+        failure = null
+        time = 41_999; vm.sendCode()
+        assertEquals(0, sends)
+        time = 42_000; vm.sendCode()
+        assertEquals(1, sends)
+        assertTrue(vm.state.value.codeSent)
+    }
+    @Test fun `쿨다운 거절에 Retry-After 가 없으면 1분으로 세운다`() {
+        val cooling = object : AuthRepository by repo {
+            override suspend fun sendLoginMethodCode() { throw AuthException(AuthError.SMS_COOLDOWN) }
+        }
+        val vm = LoginMethodsViewModel(cooling, { time })
+        vm.sendCode()
+        assertEquals(60, vm.state.value.resendSeconds)
+    }
+    @Test fun `쿨다운이 아닌 발송 실패는 타이머를 세우지 않는다`() {
+        val failing = object : AuthRepository by repo {
+            override suspend fun sendLoginMethodCode() { throw AuthException(AuthError.SMS_UNAVAILABLE) }
+        }
+        val vm = LoginMethodsViewModel(failing, { time })
+        vm.sendCode()
+        assertEquals(0, vm.state.value.resendSeconds)
+        assertNotNull(vm.state.value.error)
+    }
     @Test fun `소셜 전용 회원 탈퇴는 비밀번호 없는 API를 사용한다`() {
         var socialDeletes = 0
         val deletionRepo = object : AuthRepository by repo {

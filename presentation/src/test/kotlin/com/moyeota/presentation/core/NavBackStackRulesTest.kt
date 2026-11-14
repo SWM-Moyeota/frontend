@@ -210,4 +210,57 @@ class NavBackStackRulesTest {
                 .containsMatchIn(source("feature/mypage/AccountDeleteRoute.kt")),
         )
     }
+
+    // ─────────────── 5. 소셜 가입 재시작 안내 ───────────────
+
+    /**
+     * 12 가 구글 로그인으로 되돌려 보내는 사유는 둘이다 — 대기표 만료(USER402)와 이미 가입된 계정(USER403).
+     * 로그인 화면 안내를 고정 문구로 세우면 이미 가입된 사람에게 「가입 시간이 지났어요」라고 말한다.
+     */
+    @Test
+    fun `소셜 가입 재시작 안내는 실패 사유의 문구를 그대로 쓴다`() {
+        val restart = destinationBlock(navGraph(), "MANNER_PLEDGE")
+            .substringAfter("onRestartSocial = {").substringBefore("}")
+        assertTrue(
+            "onRestartSocial 이 넘겨받은 문구를 안내로 세우지 않는다: $restart",
+            Regex("""^\s*message\s*->[\s\S]*socialNotice\s*=\s*message""").containsMatchIn(restart),
+        )
+        assertTrue(
+            "12 가 실패 문구를 onRestartSocial 에 넘기지 않는다",
+            Regex("""onRestartSocial\(state\.errorMessage""")
+                .containsMatchIn(source("feature/auth/SignupSubmitRoute.kt")),
+        )
+    }
+
+    // ─────────────── 6. 로그인 상태의 비밀번호 재설정 ───────────────
+
+    /**
+     * 서버는 재설정에 성공하면 그 회원의 리프레시 토큰을 전부 취소한다. 로그인한 채(35 로그인 수단 관리)
+     * 들어온 재설정을 로그아웃 없이 로그인 폼으로 보내면 저장 토큰과 Authenticated 가 남는다.
+     * 로그아웃 상태에서 들어온 재설정은 예전대로 안내만 세우고 04a 로 돌아간다.
+     */
+    @Test
+    fun `로그인 상태에서 비밀번호를 재설정하면 로그아웃시킨다`() {
+        val navGraph = navGraph()
+        val completed = destinationBlock(navGraph, "PASSWORD_RESET").substringAfter("onCompleted = {")
+        assertTrue(
+            "로그인 상태의 재설정 완료가 로그아웃을 요청하지 않는다",
+            Regex("""if\s*\(loggedIn\)\s*\{[\s\S]*?passwordResetSignOut\s*=\s*true\s*requestLogout\(\)\s*\}\s*else\s*\{\s*signOutNotice\s*=\s*PASSWORD_RESET_DONE_NOTICE\s*returnToLoginForm\(\)""")
+                .containsMatchIn(completed),
+        )
+        // 마이페이지 로그아웃과 같은 길 — 로컬 세션 정리(logout)와 Credential Manager 정리를 함께 한다.
+        val logout = navGraph.substringAfter("fun requestLogout() {").substringBefore("var accountDeleteRequested")
+        assertTrue(
+            "requestLogout 이 logoutRequested 를 먼저 세우고 logout·clearCredentialState 를 부르지 않는다",
+            Regex("""logoutRequested\s*=\s*true[\s\S]*authRepository\.logout\(\)[\s\S]*clearCredentialState\(\)""")
+                .containsMatchIn(logout),
+        )
+        assertTrue("마이페이지 로그아웃이 같은 길을 쓰지 않는다", navGraph.contains("onLogout = ::requestLogout"))
+        val notice = navGraph.substringAfter("signOutNotice = when {").substringBefore("}")
+        assertTrue(
+            "재설정으로 인한 로그아웃이 「새 비밀번호로 로그인」 안내보다 무안내(logoutRequested)에 먼저 걸린다: $notice",
+            Regex("""passwordResetSignOut\s*->\s*PASSWORD_RESET_DONE_NOTICE[\s\S]*logoutRequested\s*->\s*null""")
+                .containsMatchIn(notice),
+        )
+    }
 }

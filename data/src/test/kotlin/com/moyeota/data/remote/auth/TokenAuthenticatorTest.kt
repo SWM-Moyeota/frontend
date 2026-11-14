@@ -24,6 +24,35 @@ class TokenAuthenticatorTest {
         assertEquals(0, tokens.sessionExpiredCount)
     }
 
+    @Test fun `공급자 토큰 거절과 인증 요청 무효 401도 재발급 없이 호출부로 넘긴다`() {
+        listOf("USER401", "USER407").forEach { code ->
+            val tokens = FakeTokenHolder("access", "refresh")
+            val refresher = FakeRefresher(RefreshResult.Rejected)
+            val response = unauthorized("access").newBuilder()
+                .body("""{"code":"$code","message":"rejected"}""".toResponseBody()).build()
+            assertNull(code, TokenAuthenticator(tokens, refresher).authenticate(null, response))
+            assertEquals(code, 0, refresher.callCount.get())
+            assertEquals(code, 0, tokens.sessionExpiredCount)
+            assertEquals(code, "access", tokens.accessToken)
+        }
+    }
+
+    @Test fun `연결 경로라도 액세스 토큰 만료 401이면 정상 재발급한다`() {
+        val tokens = FakeTokenHolder("old.access", "old.refresh")
+        val refresher = FakeRefresher(rotated("new.access", "new.refresh"))
+        val request = Request.Builder().url("http://localhost:8080/api/v1/users/me/login-methods/google")
+            .header("Authorization", "Bearer old.access").build()
+        val response = unauthorized("old.access").newBuilder().request(request)
+            .body("""{"code":"USER002","message":"expired"}""".toResponseBody()).build()
+
+        val retry = TokenAuthenticator(tokens, refresher).authenticate(null, response)
+
+        assertEquals("Bearer new.access", retry?.header("Authorization"))
+        assertEquals("http://localhost:8080/api/v1/users/me/login-methods/google", retry?.url.toString())
+        assertEquals(1, refresher.callCount.get())
+        assertEquals("new.refresh", tokens.refreshToken)
+        assertEquals(0, tokens.sessionExpiredCount)
+    }
 
     @Test
     fun `401 이면 재발급한 액세스 토큰으로 원요청을 재시도한다`() {

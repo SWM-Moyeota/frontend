@@ -71,7 +71,17 @@ class LoginMethodsViewModel(
     fun changeCode(value: String) { if (!_state.value.busy) _state.update { it.copy(code = value.filter(Char::isDigit).take(6), error = null) } }
     fun sendCode() = action {
         if (now() < resendAt) return@action
-        repository.sendLoginMethodCode()
+        try { repository.sendLoginMethodCode() }
+        catch (e: AuthException) {
+            // 가입용 문자와 쿨다운(1분)을 같이 쓴다 — 가입 직후에는 여기서 처음 눌러도 429 USER202 가 온다.
+            // 타이머를 세우지 않으면 버튼이 바로 살아나 「버튼의 남은 시간이 끝나면」이라는 안내가 거짓이 된다.
+            if (e.error == AuthError.SMS_COOLDOWN) {
+                val seconds = e.retryAfterSeconds ?: 60
+                resendAt = now() + seconds * 1000L
+                _state.update { it.copy(resendSeconds = seconds) }
+            }
+            throw e
+        }
         verificationToken = null
         resendAt = now() + 60_000
         _state.update { it.copy(codeSent = true, code = "", verified = false, resendSeconds = 60,
