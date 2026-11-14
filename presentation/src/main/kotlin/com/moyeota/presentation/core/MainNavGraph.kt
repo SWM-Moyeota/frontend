@@ -144,6 +144,9 @@ private val TabRoutes = listOf(Routes.HOME, Routes.EXPLORE, Routes.CHAT, Routes.
 // 안내 문구 하나뿐이고(화면 이동은 어차피 일어난다), 실제로는 한두 프레임이면 결론이 난다.
 // 끝내 못 기다리면 「탈퇴됐다」도 「세션이 만료됐다」도 말하지 않는다(둘 중 하나는 거짓말이다).
 private const val ACCOUNT_DELETE_RESULT_WAIT_MS = 200L
+
+// 04c 를 마치고 04a 에 띄우는 안내. 로그아웃 상태의 재설정과 로그인 상태의 재설정이 같은 말을 한다.
+private const val PASSWORD_RESET_DONE_NOTICE = "비밀번호를 바꿨어요. 새 비밀번호로 로그인해 주세요"
 private const val ACCOUNT_DELETE_RESULT_POLL_MS = 16L
 
 // v15 와이어프레임 35화면 이동 규칙을 한곳에서 배선한다.
@@ -287,6 +290,20 @@ private fun MainNavHost(
         }
     }
     var logoutRequested by remember { mutableStateOf(false) }
+    // 로그인한 채로 04c 비밀번호 재설정을 마쳐 로그아웃시키는 중이다. 아래 전이가 「세션이 만료됐어요」나
+    // 무안내 대신 「새 비밀번호로 로그인」을 말하게 하는 근거다.
+    var passwordResetSignOut by remember { mutableStateOf(false) }
+
+    // 사용자가 일으킨 로그아웃의 한 길. logout() 은 실패하지 않는다(서버 호출이 실패해도 로컬 세션은 먼저
+    // 비운다) — 상태 전이는 아래 LaunchedEffect 가 받아 04a 로 보낸다.
+    // logoutRequested 를 먼저 세워 두면 그 전이를 세션 만료로 오해하지 않는다.
+    fun requestLogout() {
+        logoutRequested = true
+        scope.launch {
+            authRepository.logout()
+            runCatching { googleCredentialProvider.clearCredentialState() }
+        }
+    }
     // ── 37 탈퇴의 두 표시 ──
     //
     // 하나로 두면 안 된다. 예전에는 **요청을 보내기 직전에** 세우는 플래그 하나였는데, 그 값은
@@ -515,12 +532,15 @@ private fun MainNavHost(
                 // 요청은 보냈는데 결과를 끝내 못 봤다 — **아무 말도 하지 않는다.** 둘 중 하나는
                 // 거짓말이고(탈퇴됐는지 모른다), 사용자가 할 일은 어느 쪽이든 로그인 시도뿐이다.
                 accountDeleteRequested -> null
+                // 로그인한 채 비밀번호를 바꿨다 — 로그아웃 상태의 재설정과 같은 안내를 준다
+                passwordResetSignOut -> PASSWORD_RESET_DONE_NOTICE
                 logoutRequested -> null
                 else -> "세션이 만료됐어요. 다시 로그인해 주세요"
             }
             accountDeleted = false
             accountDeleteRequested = false
             logoutRequested = false
+            passwordResetSignOut = false
             // 로컬 기억은 남긴다(계정에 매인 값이라 같은 계정 재로그인 시 되살아나야 한다) —
             // 화면이 들고 있던 값만 버린다. 탈퇴는 예외로 디스크 기억까지 지우는데, 그건 여기가 아니라
             // AuthRepository.deleteAccount 가 세션을 비우면서 함께 한다(계정이 사라져 되살아날 길이 없다).
@@ -692,8 +712,17 @@ private fun MainNavHost(
                     recoveredLoginId = loginId
                     // 성공해도 서버는 토큰을 주지 않는다 — 새 비밀번호로 직접 로그인해야 한다는 걸 04a 에서 말한다.
                     // 세션 만료 안내와 같은 자리(noticeMessage)라 로그인에 성공하면 함께 지워진다.
-                    signOutNotice = "비밀번호를 바꿨어요. 새 비밀번호로 로그인해 주세요"
-                    returnToLoginForm()
+                    if (loggedIn) {
+                        // 35 로그인 수단 관리에서 들어온 재설정. 서버가 이 회원의 리프레시 토큰을 전부
+                        // 취소했으므로 이 기기의 세션도 끝난 것이다 — 그대로 두면 저장 토큰과 Authenticated 가
+                        // 남은 채 로그인 폼에 서고, 다음 재발급에서 「세션이 만료됐어요」로 쫓겨난다.
+                        // 로그아웃 전이가 스택을 비우고 04a 로 보내며 안내도 거기서 세운다.
+                        passwordResetSignOut = true
+                        requestLogout()
+                    } else {
+                        signOutNotice = PASSWORD_RESET_DONE_NOTICE
+                        returnToLoginForm()
+                    }
                 },
             )
         }
@@ -738,9 +767,11 @@ private fun MainNavHost(
                 repository = authRepository,
                 draft = if (socialFlow) socialSignup.draft else signupDraft,
                 signupToken = if (socialFlow) socialSignup.ticket?.signupToken else null,
-                onRestartSocial = {
+                // 문구는 실패 사유가 정한다 — 만료(USER402)면 「가입 시간이 지났어요」, 이미 가입(USER403)이면
+                // 「이미 가입된 구글 계정이에요」. 고정 문구를 쓰면 이미 가입된 사람에게 시간이 지났다고 말한다.
+                onRestartSocial = { message ->
                     socialSignup.clear(); socialFlow = false
-                    socialNotice = "가입 시간이 지났어요. 구글 로그인부터 다시 해 주세요"
+                    socialNotice = message
                     resetTo(Routes.LOGIN)
                 },
                 onBack = ::back,
@@ -1120,15 +1151,7 @@ private fun MainNavHost(
                 userName = userName,
                 onEditProfile = { navController.navigate(Routes.PROFILE_EDIT) },
                 onRideHistory = { navController.navigate(Routes.RIDE_HISTORY) },
-                // logout() 은 실패하지 않는다 — 상태 전이는 위 LaunchedEffect 가 받아 04a 로 보낸다.
-                // logoutRequested 를 먼저 세워 두면 그 전이를 세션 만료로 오해하지 않는다.
-                onLogout = {
-                    logoutRequested = true
-                    scope.launch {
-                        authRepository.logout()
-                        runCatching { googleCredentialProvider.clearCredentialState() }
-                    }
-                },
+                onLogout = ::requestLogout,
                 onLoginMethods = { navController.navigate(Routes.LOGIN_METHODS) },
                 onDeleteAccount = { navController.navigate(Routes.ACCOUNT_DELETE) },
                 onTabSelect = ::navigateTab,

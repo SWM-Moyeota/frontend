@@ -129,7 +129,8 @@ fun MannerPledgeRoute(
     onEditNickname: () -> Unit = {},
     onReverifyPhone: () -> Unit = {},
     signupToken: String? = null,
-    onRestartSocial: () -> Unit = {},
+    /** 인자는 로그인 화면에 띄울 사유 문구다 — 만료(USER402)와 이미 가입(USER403)의 안내가 다르다. */
+    onRestartSocial: (String) -> Unit = {},
 ) {
     val viewModel: SignupViewModel = viewModel(factory = SignupViewModel.factory(repository))
     val state by viewModel.uiState.collectAsState()
@@ -138,7 +139,11 @@ fun MannerPledgeRoute(
         if (state.done) onCompleted()
     }
 
-    LaunchedEffect(state.socialExpired) { if (state.socialExpired) onRestartSocial() }
+    LaunchedEffect(state.socialExpired) {
+        if (state.socialExpired) {
+            onRestartSocial(state.errorMessage ?: authErrorMessage(AuthError.SOCIAL_SIGNUP_EXPIRED))
+        }
+    }
 
     MannerPledgeScreen(
         onBack = onBack,

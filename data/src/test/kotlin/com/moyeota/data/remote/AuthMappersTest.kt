@@ -805,6 +805,30 @@ class AuthMappersTest {
     }
 
     /**
+     * 계정 연결 코드 셋. 409 하나·401 둘이라 폴백이면 「이미 사용 중인 아이디예요」와 「다시 로그인」이 뜬다 —
+     * 연결 화면에는 아이디 입력도 없고 세션도 멀쩡하다.
+     */
+    @Test
+    fun `연결 세 코드는 폴백이 아니라 각자의 사유로 갈린다`() {
+        val mapped = listOf(
+            409 to """{"code":"USER405","message":"이미 연결된 계정입니다."}""",
+            401 to """{"code":"USER406","message":"연결 인증이 만료되었습니다."}""",
+            401 to """{"code":"USER407","message":"인증 요청이 유효하지 않습니다."}""",
+        ).map { (status, body) -> httpException(status, body).toAuthException().error }
+
+        assertEquals(
+            listOf(
+                AuthError.SOCIAL_LINK_CONFLICT,
+                AuthError.SOCIAL_LINK_VERIFICATION_EXPIRED,
+                AuthError.SOCIAL_CHALLENGE_INVALID,
+            ),
+            mapped,
+        )
+        listOf(AuthError.SESSION_EXPIRED, AuthError.LOGIN_ID_DUPLICATED, AuthError.UNKNOWN)
+            .forEach { assertFalse("연결 코드가 $it 로 떨어졌다: $mapped", it in mapped) }
+    }
+
+    /**
      * 가입 대기표 저장소 장애는 문자 인증 장애와 **합치지 않았다** — 구글 로그인 버튼 자리에서도 나므로
      * 「문자 인증이 안 된다」는 안내가 거짓이 된다. 합친 것으로 되돌리려면 여기부터 고쳐야 한다.
      */

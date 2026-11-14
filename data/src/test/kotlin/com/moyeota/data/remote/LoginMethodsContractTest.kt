@@ -36,6 +36,7 @@ class LoginMethodsContractTest {
         assertEquals(LoginMethodStatus.REVOKED, methods.methods[1].status)
         assertEquals(listOf("/api/v1/users/me/login-methods", "/api/v1/users/me/login-methods/sms/send",
             "/api/v1/users/me/login-methods/sms/verify", "/api/v1/users/me/login-methods/google"), requests.map { it.url.encodedPath })
+        assertEquals(listOf("GET", "POST", "POST", "POST"), requests.map { it.method })
         assertEquals(0L, requests[1].body?.contentLength())
         fun body(index: Int) = Buffer().also { requests[index].body!!.writeTo(it) }.readUtf8()
         assertEquals("""{"code":"123456"}""", body(2))

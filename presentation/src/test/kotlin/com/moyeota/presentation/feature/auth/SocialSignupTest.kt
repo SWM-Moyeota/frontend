@@ -39,6 +39,26 @@ class SocialSignupTest {
         assertFalse(vm.uiState.value.phoneNotVerified)
         assertFalse(vm.uiState.value.done)
     }
+    @Test fun `이미 가입된 구글 계정은 만료가 아니라 이미 가입 문구로 구글 로그인 재시작에 넘긴다`() {
+        val repo = object : AuthRepository by FakeAuthRepository() {
+            override suspend fun registerSocial(newUser: NewSocialUser): String = throw AuthException(AuthError.SOCIAL_ALREADY_REGISTERED)
+        }
+        val vm = SignupViewModel(repo)
+        vm.submit(draft, "signup-proof")
+        assertTrue(vm.uiState.value.socialExpired)
+        // 이 문구가 그대로 로그인 화면 안내가 된다(MannerPledgeRoute → onRestartSocial)
+        assertEquals(authErrorMessage(AuthError.SOCIAL_ALREADY_REGISTERED), vm.uiState.value.errorMessage)
+        assertTrue(vm.uiState.value.errorMessage!!.contains("이미 가입된"))
+        assertFalse(vm.uiState.value.errorMessage!!.contains("가입 시간이 지났어요"))
+    }
+    @Test fun `가입 대기표 만료의 재시작 문구는 그대로 가입 시간 만료다`() {
+        val repo = object : AuthRepository by FakeAuthRepository() {
+            override suspend fun registerSocial(newUser: NewSocialUser): String = throw AuthException(AuthError.SOCIAL_SIGNUP_EXPIRED)
+        }
+        val vm = SignupViewModel(repo)
+        vm.submit(draft, "expired")
+        assertEquals("가입 시간이 지났어요. 구글 로그인부터 다시 해 주세요", vm.uiState.value.errorMessage)
+    }
     @Test fun `문자 인증 없는 소셜 가입은 전송하지 않는다`() {
         assertNull(draft.copy(verificationToken = "").toNewSocialUser("proof"))
         assertNull(draft.toNewSocialUser(""))
