@@ -233,6 +233,9 @@ private class FakeUserApi(private val failure: Throwable? = null) : UserApi {
     override suspend fun deleteAccount(request: AccountDeletionRequest): Unit =
         throw UnsupportedOperationException("푸시 토큰 등록과 무관하다")
 
+    override suspend fun deleteSocialAccount(): Unit =
+        throw UnsupportedOperationException("푸시 토큰 등록과 무관하다")
+
     // UserApi 에 탑승 기록 조회(GET /users/me/parties)가 들어와 생긴 구현. 이 테스트와 무관하다.
     override suspend fun getMyRideRecords(cursor: Long?, size: Int): RideRecordPageResponse =
         throw UnsupportedOperationException("푸시 토큰 등록과 무관하다")

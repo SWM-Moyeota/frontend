@@ -30,6 +30,8 @@ data class UserProfileResponse(
     val uuid: String = "",
     val name: String? = null,
     val imageUrl: String? = null,
+    // 로그인 아이디(Backend #330). 로컬 로그인이 없는 계정(소셜 전용)이면 null 이다
+    val loginId: String? = null,
 )
 
 /**

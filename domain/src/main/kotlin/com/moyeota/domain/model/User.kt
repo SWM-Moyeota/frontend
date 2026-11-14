@@ -109,4 +109,30 @@ data class UserProfileInfo(
      * ([ProfileImage] KDoc). 「기본 이미지로 되돌리기」를 켤지 끌지가 이 구분에 달려 있다.
      */
     val imageUrl: String? = null,
-)
+    /**
+     * 로그인 아이디(Backend PR #330). **로컬 로그인(아이디·비밀번호)이 없는 계정이면 null** 이다
+     * — 그때 36 프로필 수정은 「아이디」 행을 통째로 숨긴다.
+     *
+     * **표시 전용이다.** 아이디를 바꾸는 서버 경로가 없고, 이 값으로 인증·식별을 하지 않는다
+     * (식별은 [uuid] 다). 공백뿐인 값은 매퍼가 null 로 접어 온다 — 도메인의 「없음」은 null 하나다.
+     * 기본값 null 은 PR #330 이전 서버(키 자체가 없다) 대비용이다.
+     */
+    val loginId: String? = null,
+) {
+    /**
+     * **소셜(구글) 회원인가** — 아이디·비밀번호가 없는 계정인가.
+     *
+     * 서버가 따로 알려 주는 칸은 없고 [loginId] 가 null 인 것이 곧 그 뜻이다(서버 `MyProfileResponse` 는
+     * 로컬 로그인 행이 없으면 `loginId` 를 null 로 준다. `http/social-login.http` 5번이 같은 판별을 쓴다).
+     * 화면마다 `loginId == null` 을 직접 쓰지 않게 이름을 붙여 둔다 — 판별 근거가 바뀌면 여기만 고친다.
+     *
+     * 갈리는 화면은 지금 하나다: **회원 탈퇴.** 소셜 회원은 비밀번호가 없어 입력란을 띄우면 안 되고
+     * [AuthRepository.deleteSocialAccount][com.moyeota.domain.repository.AuthRepository.deleteSocialAccount] 를,
+     * 로컬 회원은 [AuthRepository.deleteAccount][com.moyeota.domain.repository.AuthRepository.deleteAccount] 를 부른다.
+     *
+     * **프로필을 받기 전에는 판별할 수 없다** — 이 값은 조회 결과에만 있다. 조회에 실패했을 때 「아이디가
+     * 없으니 소셜」로 넘겨짚지 말 것: 잘못 짚어도 계정이 엉뚱하게 지워지지는 않지만(로컬 회원의 본문 없는
+     * 탈퇴는 서버가 400 으로 막는다) 사용자는 이유 모를 실패를 본다.
+     */
+    val isSocialAccount: Boolean get() = loginId == null
+}

@@ -19,6 +19,7 @@ internal fun UserProfileResponse.toDomain(): UserProfileInfo = UserProfileInfo(
     uuid = uuid,
     name = name?.takeIf { it.isNotBlank() },
     imageUrl = imageUrl?.takeIf { it.isNotBlank() },
+    loginId = loginId?.takeIf { it.isNotBlank() },
 )
 
 /**

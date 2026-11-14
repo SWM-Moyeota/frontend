@@ -164,8 +164,11 @@ enum class AuthError {
     /**
      * 400 `USER111` PASSWORD_MISMATCH — 탈퇴 본인 확인 비밀번호가 틀렸다.
      *
-     * 서버는 비밀번호가 없는 계정(소셜)에도 같은 코드를 쓴다 — 지금은 로컬 가입만 있어 실제로는
-     * 오타뿐이다. 로그인 실패([LOGIN_FAILED], 401)와 달리 **세션은 그대로 살아 있다**:
+     * 소셜 회원에게는 나지 않는다 — 비밀번호가 없어 서버가 로그인 토큰만으로 본인 확인을 끝낸다
+     * ([AuthRepository.deleteSocialAccount][com.moyeota.domain.repository.AuthRepository.deleteSocialAccount]).
+     * 서버가 이 코드를 비밀번호 없이도 내는 경우가 하나 남아 있다: 로컬·소셜 로그인 수단이 **둘 다 없는**
+     * 계정(본인 확인을 할 방법이 없다)인데, 정상 가입 경로로는 생기지 않는다.
+     * 로그인 실패([LOGIN_FAILED], 401)와 달리 **세션은 그대로 살아 있다**:
      * [SESSION_EXPIRED] 로 뭉치면 멀쩡한 사용자를 로그인 화면으로 쫓아낸다.
      *
      * 화면은 이 하나만 **입력란 오류**로 그리고, 나머지 실패는 배너로 돌린다 — 고칠 곳이 입력란에 있는
@@ -228,6 +231,59 @@ enum class AuthError {
      * 확인 단계에서는 「5번 틀렸다」는 뜻이다 — 그 접수로는 더 못 넣는다.
      */
     PASSWORD_RESET_RATE_LIMITED,
+
+    /**
+     * 401 `USER401` SOCIAL_TOKEN_INVALID — 서버가 구글 `idToken` 을 받아들이지 않았다.
+     *
+     * 위조·만료·**다른 앱용 토큰**(aud 불일치)·토큰에 email 이 없는 경우가 한 코드로 온다.
+     * 사용자가 고칠 입력이 없다 — 할 일은 「구글 로그인을 다시 누른다」 하나다.
+     *
+     * **세션 만료와 같은 401 이라 코드를 보지 않으면 구분되지 않는다.** 401 폴백이 [SESSION_EXPIRED] 라
+     * 놓치면 로그인도 안 한 사람에게 「다시 로그인해 주세요」가 뜬다. [LOGIN_FAILED] 와도 합치지 않는다 —
+     * 그쪽 문구는 「아이디 또는 비밀번호」를 말하는데 구글 로그인에는 둘 다 없다.
+     *
+     * 반복해서 난다면 사용자 탓이 아니라 **앱 설정 탓일 가능성이 높다**: idToken 을 요청할 때 넣는
+     * 서버용(웹) 클라이언트 ID 가 서버의 `GOOGLE_CLIENT_IDS` 에 없으면 모든 토큰이 이 코드로 거절된다.
+     */
+    SOCIAL_TOKEN_INVALID,
+
+    /**
+     * 401 `USER402` SOCIAL_SIGNUP_EXPIRED — 가입 대기표(`signupToken`)가 없거나 만료됐다
+     * ([AuthPolicy.SOCIAL_SIGNUP_TOKEN_TTL_SECONDS][com.moyeota.domain.model.AuthPolicy.SOCIAL_SIGNUP_TOKEN_TTL_SECONDS]초).
+     *
+     * 입력을 고쳐서 풀리지 않는다 — **구글 로그인부터 다시** 해야 한다. 문자 인증 단계로 되돌리는
+     * [PHONE_NOT_VERIFIED] 와 헷갈리지 말 것: 그쪽은 문자 인증만 다시 받으면 되지만 여기서는 그 앞 단계가
+     * 죽었다. 서버가 대기표를 문자 인증보다 **먼저** 확인하므로 둘 다 죽었으면 이 코드가 온다.
+     * 다시 받은 대기표로 가입할 때 문자 인증 토큰이 아직 살아 있으면(둘의 수명은 따로 센다) 그대로 쓸 수 있다.
+     *
+     * 이것도 401 이라 폴백에 맡기면 [SESSION_EXPIRED] 가 된다 — 가입 도중인 사람에게 세션 이야기가 뜬다.
+     */
+    SOCIAL_SIGNUP_EXPIRED,
+
+    /**
+     * 409 `USER403` SOCIAL_ALREADY_REGISTERED — 그 구글 계정은 이미 가입돼 있다.
+     *
+     * 대기표를 받은 뒤 가입을 끝내기 전에 **같은 구글 계정으로 다른 곳에서 먼저 가입을 마친** 경우다
+     * (기기 두 대, 또는 가입 제출이 성공했는데 응답을 못 받고 다시 누른 경우). 실패처럼 보이지만
+     * 사용자가 원한 상태에는 이미 와 있다 — **구글 로그인을 다시 부르면 이번에는 로그인된다**
+     * ([GoogleLoginResult.LoggedIn]).
+     *
+     * [PHONE_NUMBER_DUPLICATED] 와 합치지 않는다: 그쪽은 「그 번호를 쓰는 **다른** 계정이 있다」이고
+     * 여기는 「**이** 계정이 이미 있다」다. 409 폴백은 [LOGIN_ID_DUPLICATED] 라 놓치면 아이디가 없는
+     * 가입 화면에 「이미 사용 중인 아이디예요」가 뜬다.
+     */
+    SOCIAL_ALREADY_REGISTERED,
+
+    /**
+     * 503 `USER404` SOCIAL_UNAVAILABLE — 지금은 소셜 로그인·가입을 진행할 수 없다(가입 대기표 저장소 장애).
+     *
+     * 사용자 입력 문제가 아니고 잠시 뒤 재시도뿐이다. 대응은 [SMS_UNAVAILABLE] 과 같지만 **합치지 않는다** —
+     * 그쪽 문구는 「문자 인증이 안 된다」인데 이 코드는 구글 로그인 버튼을 누른 자리에서도 나므로,
+     * 문자를 요청한 적도 없는 사람에게 문자 이야기가 뜨게 된다.
+     *
+     * 번호가 404 처럼 생겼지만 **HTTP 404 가 아니라 503 이다**(`USER404` 는 코드 문자열일 뿐이다).
+     */
+    SOCIAL_UNAVAILABLE,
 
     /**
      * 400 INVALID_REQUEST — 서버 검증 실패. 서버 message 가 "필드: 사유" 형태라
