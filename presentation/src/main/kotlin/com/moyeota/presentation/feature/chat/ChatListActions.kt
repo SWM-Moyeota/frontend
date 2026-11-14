@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -19,7 +21,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.isTraversalGroup
+import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import com.moyeota.core.designsystem.component.BellOffIcon
@@ -139,21 +144,42 @@ private const val ARRIVED_CANNOT_LEAVE = "출발지에 도착했다고 누른 �
 /** 길게 누르기 메뉴의 알림 항목 — 지금 상태의 **반대**를 적는다 */
 internal fun chatMuteActionLabel(muted: Boolean): String = if (muted) "알림 켜기" else "알림 끄기"
 
+/** 나가기 실패 뒤 다시 할 일 — 판정과 요청 사이에 방 상태가 바뀐 경우다 */
+internal enum class ChatLeaveRetry {
+    /** 다시 할 것 없음 — 문구만 보여 준다 */
+    NONE,
+
+    /** 409 `PARTY_CLOSED` — 그사이 방이 끝났다. 다시 판정하면 「채팅방만 나가기」가 된다 */
+    REPLAN,
+
+    /** 409 `ARRIVED_MEMBER_CANNOT_LEAVE` — 그사이 도착을 눌렀다. 막힌 이유를 확인창으로 보여 준다 */
+    BLOCKED,
+}
+
 /**
- * 나가기 실패 → 사용자 문구. 서버 코드 문자열은 develop 기준이다(`ARRIVED_MEMBER_CANNOT_LEAVE`·`PARTY_CLOSED`).
- * 판정과 요청 사이에 상태가 바뀐 경우라 목록을 다시 읽게 안내한다.
+ * 동승 나가기([ChatLeavePlan.LeaveParty])의 실패만 다시 판정한다. 서버 코드 문자열은 develop 기준이다 —
+ * 도메인의 [PartyLeaveException] 에는 아직 이 두 코드의 뜻 플래그가 없다.
  */
-internal fun chatListLeaveFailureMessage(e: Throwable): String {
-    val code = (e as? PartyLeaveException)?.code
-    return when (code) {
-        "ARRIVED_MEMBER_CANNOT_LEAVE" -> ARRIVED_CANNOT_LEAVE
-        "PARTY_CLOSED" -> "이미 끝난 방이에요. 목록을 새로 불러와 주세요"
-        else -> "나가지 못했어요. 잠시 뒤 다시 시도해 주세요"
+internal fun chatListLeaveRetry(plan: ChatLeavePlan, e: Throwable): ChatLeaveRetry {
+    if (plan !is ChatLeavePlan.LeaveParty) return ChatLeaveRetry.NONE
+    return when ((e as? PartyLeaveException)?.code) {
+        "PARTY_CLOSED" -> ChatLeaveRetry.REPLAN
+        "ARRIVED_MEMBER_CANNOT_LEAVE" -> ChatLeaveRetry.BLOCKED
+        else -> ChatLeaveRetry.NONE
     }
 }
 
-/** 채팅방 나가기의 403(참여자 아님)은 **이미 나간 것**이다 — 사용자가 할 일이 같아 성공으로 친다 */
-internal fun isAlreadyOutOfChat(e: Throwable): Boolean = (e as? ChatException)?.isNotParticipant == true
+/** 동승 나가기 실패 문구. 다시 판정하는 두 코드([chatListLeaveRetry])는 여기까지 오지 않는다 */
+internal const val LEAVE_PARTY_FAILED_MESSAGE = "나가지 못했어요. 잠시 뒤 다시 시도해 주세요"
+
+/**
+ * 채팅방 나가기가 **이미 나간 것**인가 — 403(참여자 아님)과 404(채팅방 없음). 사용자가 할 일이 같아 성공으로 친다.
+ * 404 를 빼면 채팅방 상세가 404 라 「채팅방만 나가기」로 판정된 방이 영영 목록에서 안 빠진다.
+ */
+internal fun isAlreadyOutOfChat(e: Throwable): Boolean {
+    val chat = e as? ChatException ?: return false
+    return chat.isNotParticipant || chat.isRoomNotFound
+}
 
 /**
  * 채팅 목록 행을 길게 눌렀을 때 뜨는 메뉴 — 알림 끄기/켜기 · 나가기 · 취소.
@@ -180,7 +206,10 @@ internal fun ChatRoomActionSheet(
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
-            ) { onDismiss() },
+                onClickLabel = "메뉴 닫기",
+            ) { onDismiss() }
+            // 앱은 시스템 바 뒤까지 그린다 — 3버튼 내비게이션에서 「취소」가 시스템 버튼에 가리지 않게 한다
+            .navigationBarsPadding(),
         contentAlignment = Alignment.BottomCenter,
     ) {
         Column(
@@ -194,7 +223,12 @@ internal fun ChatRoomActionSheet(
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
-                ) { },
+                ) { }
+                // 스크린리더가 메뉴가 열렸음을 알리고 메뉴 안을 한 묶음으로 훑게 한다
+                .semantics {
+                    paneTitle = "$title 채팅방 메뉴"
+                    isTraversalGroup = true
+                },
         ) {
             Text(
                 text = title,
@@ -236,9 +270,25 @@ private fun ActionRow(
         color = color,
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(enabled = enabled) { onClick() }
+            .clickable(enabled = enabled, role = Role.Button) { onClick() }
             .padding(horizontal = MoyeotaSpacing.Md, vertical = MoyeotaSpacing.Md),
     )
+}
+
+/** 나가기 요청 중 — 목록과 하단탭을 막고 돌고 있음을 보인다. 요청은 보통 1초 안에 끝난다 */
+@Composable
+internal fun LeavingOverlay() {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MoyeotaColor.Scrim)
+            // 뒤쪽 목록·탭을 누를 수 없게 받기만 한다
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { }
+            .semantics { contentDescription = "나가는 중이에요" },
+        contentAlignment = Alignment.Center,
+    ) {
+        CircularProgressIndicator(color = MoyeotaColor.Primary500)
+    }
 }
 
 /** 목록 행 제목 오른쪽의 「알림 꺼짐」 표시 — 켜진 방은 아무것도 붙이지 않는다. 스크린리더에도 읽힌다 */

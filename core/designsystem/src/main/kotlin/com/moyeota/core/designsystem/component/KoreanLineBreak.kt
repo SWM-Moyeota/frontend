@@ -62,14 +62,31 @@ fun keepKoreanWordsTogether(text: String): String {
     val lastSpace = text.indexOfLast { it == ' ' }
     val out = StringBuilder(text.length * 2)
     text.forEachIndexed { index, char ->
-        if (index > 0) {
-            val previous = text[index - 1]
-            if (!previous.isWhitespace() && !char.isWhitespace()) out.append(WORD_JOINER)
-        }
+        if (index > 0 && joinable(text[index - 1], char)) out.append(WORD_JOINER)
         out.append(if (index == lastSpace) NO_BREAK_SPACE else char)
     }
     return out.toString()
 }
+
+/**
+ * 두 UTF-16 글자 사이에 [WORD_JOINER] 를 넣어도 되는가 — 띄어쓰기 옆이 아니고, **한 글자의 조각 사이도 아니다**.
+ * 이모지(서로게이트 짝)·이음 표시(ZWJ)·이체 선택자(U+FE0F 등)·결합 부호 앞뒤에 넣으면 글자가 깨진다(리뷰).
+ */
+private fun joinable(previous: Char, char: Char): Boolean {
+    if (previous.isWhitespace() || char.isWhitespace()) return false
+    if (previous.isHighSurrogate() && char.isLowSurrogate()) return false
+    if (previous == ZERO_WIDTH_JOINER || char == ZERO_WIDTH_JOINER) return false
+    if (char in VARIATION_SELECTORS) return false
+    return Character.getType(char).toByte() !in COMBINING_MARK_TYPES
+}
+
+private const val ZERO_WIDTH_JOINER: Char = '\u200D'
+private val VARIATION_SELECTORS: CharRange = '\uFE00'..'\uFE0F'
+private val COMBINING_MARK_TYPES: Set<Byte> = setOf(
+    Character.NON_SPACING_MARK,
+    Character.ENCLOSING_MARK,
+    Character.COMBINING_SPACING_MARK,
+)
 
 /**
  * 이 기기에서 실제로 그릴 문자열 — API 33 이상은 원문 그대로(프레임워크가 구 단위로 끊는다),

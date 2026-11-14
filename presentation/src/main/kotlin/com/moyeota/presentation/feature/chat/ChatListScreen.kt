@@ -22,6 +22,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
@@ -73,6 +76,16 @@ fun ChatListScreen(
     Column(modifier = Modifier.fillMaxSize().background(MoyeotaColor.SurfaceCanvas)) {
         StatusBarSpacer()
         MoyeotaTabHeader(title = "채팅")
+        // 스크롤 밖 머리 아래에 둔다 — 아래쪽 행에서 메뉴를 썼어도 보이고, 스크린리더가 바로 읽는다
+        if (notice != null) {
+            NoticeBanner(
+                kind = NoticeKind.ERROR,
+                text = notice,
+                modifier = Modifier
+                    .padding(horizontal = MoyeotaSpacing.ScreenGutter, vertical = MoyeotaSpacing.Xs)
+                    .semantics { liveRegion = LiveRegionMode.Polite },
+            )
+        }
 
         Column(
             modifier = Modifier
@@ -81,13 +94,6 @@ fun ChatListScreen(
                 .verticalScroll(rememberScrollState()),
         ) {
             Spacer(Modifier.size(MoyeotaSpacing.Xs))
-            if (notice != null) {
-                NoticeBanner(
-                    kind = NoticeKind.ERROR,
-                    text = notice,
-                    modifier = Modifier.padding(horizontal = MoyeotaSpacing.ScreenGutter, vertical = MoyeotaSpacing.Xs),
-                )
-            }
             if (rooms.isEmpty()) {
                 Text(
                     text = "아직 참여 중인 채팅방이 없어요. 동승에 합류하면 채팅방이 열려요",

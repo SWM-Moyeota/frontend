@@ -10,6 +10,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -44,12 +45,12 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.time.Instant
@@ -238,9 +239,14 @@ class ChatListViewModel(
     private val _notice = MutableStateFlow<String?>(null)
     val notice: StateFlow<String?> = _notice.asStateFlow()
 
-    /** 나가기가 끝났다 — 진행 중인 방 기억(홈 배너·「채팅 열기」)을 고쳐야 해서 화면 밖으로 알린다 */
-    private val _left = MutableSharedFlow<ChatLeavePlan>(extraBufferCapacity = 1)
-    val left: SharedFlow<ChatLeavePlan> = _left.asSharedFlow()
+    /**
+     * 나가기가 끝났다 — 진행 중인 방 기억(홈 배너·「채팅 열기」)을 고쳐야 해서 화면 밖으로 알린다.
+     *
+     * 채널에 담아 둔다 — 받는 쪽(목록 화면)이 그 순간 없어도(화면 회전 등) 다시 붙으면 받는다. `SharedFlow` 는
+     * 구독자가 없으면 버려 나간 방을 홈 배너가 계속 붙들었다(리뷰).
+     */
+    private val _left = Channel<ChatLeavePlan>(Channel.BUFFERED)
+    val left: Flow<ChatLeavePlan> = _left.receiveAsFlow()
 
     private var planJob: Job? = null
 
@@ -271,7 +277,8 @@ class ChatListViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                setMutedInList(roomId, !target)
+                // 그사이 다시 눌러 값이 바뀌었으면 되돌리지 않는다 — 앞 요청의 실패가 뒤 선택을 덮으면 안 된다
+                if (isMutedInList(roomId) == target) setMutedInList(roomId, !target)
                 _notice.value = e.toChatMessage("알림 설정을 바꾸지 못했어요")
             }
         }
@@ -313,13 +320,23 @@ class ChatListViewModel(
                 }
                 // 서버의 채팅방 정리는 이벤트로 늦게 돈다 — 바로 다시 읽으면 나간 방이 잠깐 남아 보여 목록에서 먼저 뺀다
                 removeFromList(confirm.item.room.room.id)
-                _left.tryEmit(plan)
+                _left.trySend(plan)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _notice.value = when (plan) {
-                    is ChatLeavePlan.LeaveParty -> chatListLeaveFailureMessage(e)
-                    else -> e.toChatMessage("채팅방에서 나가지 못했어요")
+                when (chatListLeaveRetry(plan, e)) {
+                    // 판정과 요청 사이에 방이 끝났다 — 다시 판정해 「채팅방만 나가기」 확인창으로 넘긴다
+                    ChatLeaveRetry.REPLAN -> {
+                        _notice.value = "그사이 방이 끝났어요. 채팅방만 나갈지 다시 확인해 주세요"
+                        _action.value = RoomAction.Menu(confirm.item, leaveTapped = true)
+                        resolvePlan(confirm.item)
+                    }
+                    // 그사이 도착을 눌렀다 — 막힌 이유를 확인창으로 보여 준다
+                    ChatLeaveRetry.BLOCKED -> _action.value = RoomAction.Confirm(confirm.item, ChatLeavePlan.Blocked)
+                    ChatLeaveRetry.NONE -> _notice.value = when (plan) {
+                        is ChatLeavePlan.LeaveParty -> LEAVE_PARTY_FAILED_MESSAGE
+                        else -> e.toChatMessage("채팅방에서 나가지 못했어요")
+                    }
                 }
             } finally {
                 if (_action.value is RoomAction.Leaving) _action.value = null
@@ -386,6 +403,9 @@ class ChatListViewModel(
             )
         }
     }
+
+    private fun isMutedInList(chatRoomId: Long): Boolean? =
+        (_uiState.value as? UiState.Success)?.rooms?.firstOrNull { it.room.room.id == chatRoomId }?.room?.membership?.notificationMuted
 
     private fun removeFromList(chatRoomId: Long) {
         _uiState.update { state ->
@@ -1236,16 +1256,19 @@ private fun ChatListRoute(
 
     // 방에 들어갔다 돌아오면 안읽음 배지가 갱신돼야 해서 매 진입마다 다시 읽는다
     LaunchedEffect(Unit) { viewModel.refresh() }
+    // 이펙트는 다시 시작하지 않으므로 콜백은 늘 최신 것을 부르게 한다
+    val currentOnLeftParty by rememberUpdatedState(onLeftParty)
+    val currentOnLeftChatRoom by rememberUpdatedState(onLeftChatRoom)
     LaunchedEffect(viewModel) {
         viewModel.left.collect { plan ->
             when (plan) {
-                is ChatLeavePlan.LeaveParty -> onLeftParty(plan.partyId)
-                is ChatLeavePlan.ChatOnly -> onLeftChatRoom(plan.chatRoomId)
+                is ChatLeavePlan.LeaveParty -> currentOnLeftParty(plan.partyId)
+                is ChatLeavePlan.ChatOnly -> currentOnLeftChatRoom(plan.chatRoomId)
                 ChatLeavePlan.Blocked -> Unit
             }
         }
     }
-    // 메뉴·확인창이 떠 있으면 시스템 뒤로가기는 그것만 닫는다
+    // 메뉴·확인창이 떠 있으면 시스템 뒤로가기는 그것만 닫는다. 나가는 중에는 아무것도 하지 않는다(요청을 끝까지 본다)
     BackHandler(enabled = action != null) { viewModel.dismissAction() }
 
     // 로딩·에러에서도 하단탭 유지 (QA F-1)
@@ -1285,7 +1308,10 @@ private fun ChatListRoute(
                         destructive = copy.destructive,
                     )
                 }
-                is ChatListViewModel.RoomAction.Leaving, null -> Unit
+                // 나가는 중 — 목록·하단탭을 막고 돌고 있음을 보인다. 그사이 다른 방에 들어가거나 탭을 옮기면
+                // 결과를 받을 화면이 사라져 진행 중인 방 기억이 늦게 고쳐진다(리뷰)
+                is ChatListViewModel.RoomAction.Leaving -> LeavingOverlay()
+                null -> Unit
             }
         }
     }

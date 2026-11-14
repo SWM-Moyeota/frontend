@@ -10,6 +10,7 @@ import com.moyeota.domain.model.ChatRoom
 import com.moyeota.domain.model.ChatRoomMembership
 import com.moyeota.domain.model.ChatRoomStatus
 import com.moyeota.domain.model.MyChatRoom
+import com.moyeota.domain.model.PartyLeaveException
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.model.User
@@ -151,16 +152,104 @@ class ChatListMenuTest {
     @Test
     fun `나가기가 실패하면 목록에 남기고 이유를 알린다`() = runTest(analytics.dispatcher) {
         rides.detail = { ride(RideStatus.RECRUITING, me(), other()) }
-        rides.leave = {
-            throw com.moyeota.domain.model.PartyLeaveException(code = "PARTY_CLOSED", serverMessage = null, httpStatus = 409)
-        }
+        rides.leave = { error("network") }
         val viewModel = loaded()
 
         leave(viewModel, item(7))
 
         assertEquals(listOf(8L, 7L), rooms(viewModel).map { it.room.room.id })
-        assertEquals("이미 끝난 방이에요. 목록을 새로 불러와 주세요", viewModel.notice.value)
+        assertEquals(LEAVE_PARTY_FAILED_MESSAGE, viewModel.notice.value)
         assertNull(viewModel.action.value)
+    }
+
+    @Test
+    fun `그사이 방이 끝났으면 다시 판정해 채팅방만 나가기 확인창으로 간다`() = runTest(analytics.dispatcher) {
+        var status = RideStatus.RECRUITING
+        rides.detail = { ride(status, me(), other()) }
+        rides.leave = {
+            status = RideStatus.COMPLETED
+            throw PartyLeaveException(code = "PARTY_CLOSED", serverMessage = null, httpStatus = 409)
+        }
+        val viewModel = loaded()
+
+        leave(viewModel, item(7))
+
+        val confirm = viewModel.action.value as ChatListViewModel.RoomAction.Confirm
+        assertEquals(ChatLeavePlan.ChatOnly(7), confirm.plan)
+        assertEquals("그사이 방이 끝났어요. 채팅방만 나갈지 다시 확인해 주세요", viewModel.notice.value)
+        assertTrue(chat.leftChatRooms.isEmpty())
+    }
+
+    @Test
+    fun `그사이 도착을 눌렀으면 막힌 이유를 확인창으로 보여 준다`() = runTest(analytics.dispatcher) {
+        rides.detail = { ride(RideStatus.MATCHED, me(), other(), other("c")) }
+        rides.leave = { throw PartyLeaveException(code = "ARRIVED_MEMBER_CANNOT_LEAVE", serverMessage = null, httpStatus = 409) }
+        val viewModel = loaded()
+
+        leave(viewModel, item(7))
+
+        val confirm = viewModel.action.value as ChatListViewModel.RoomAction.Confirm
+        assertEquals(ChatLeavePlan.Blocked, confirm.plan)
+        assertTrue(analytics.only<AnalyticsEvent.MatchCanceled>().isEmpty())
+    }
+
+    @Test
+    fun `채팅방이 없다는 답도 이미 나간 것으로 친다`() = runTest(analytics.dispatcher) {
+        chat.getRoomError = ChatException(code = "CHAT_ROOM_NOT_FOUND", serverMessage = null, httpStatus = 404)
+        chat.leaveError = ChatException(code = "CHAT_ROOM_NOT_FOUND", serverMessage = null, httpStatus = 404)
+        val viewModel = loaded()
+
+        leave(viewModel, item(7))
+
+        assertEquals(listOf(8L), rooms(viewModel).map { it.room.room.id })
+        assertNull(viewModel.notice.value)
+    }
+
+    @Test
+    fun `나간 결과는 받는 화면이 그 순간 없어도 다시 붙으면 받는다`() = runTest(analytics.dispatcher) {
+        rides.detail = { ride(RideStatus.RECRUITING, me(), other()) }
+        val viewModel = loaded()
+
+        leave(viewModel, item(7))
+        val left = mutableListOf<ChatLeavePlan>()
+        backgroundScope.launch { viewModel.left.collect { left += it } }
+        runCurrent()
+
+        assertTrue(left.single() is ChatLeavePlan.LeaveParty)
+    }
+
+    @Test
+    fun `앞 방의 판정이 늦게 와도 다른 방 메뉴에 섞이지 않는다`() = runTest(analytics.dispatcher) {
+        val gate = CompletableDeferred<Unit>()
+        chat.beforeGetRoom = { gate.await() }
+        rides.detail = { ride(RideStatus.RECRUITING, me(), other()) }
+        val viewModel = loaded()
+
+        viewModel.openMenu(item(7))
+        runCurrent()
+        viewModel.dismissAction()
+        chat.beforeGetRoom = {}
+        viewModel.openMenu(item(8))
+        runCurrent()
+        gate.complete(Unit)
+        runCurrent()
+
+        val menu = viewModel.action.value as ChatListViewModel.RoomAction.Menu
+        assertEquals(8L, menu.item.room.room.id)
+        assertEquals(8L, (menu.plan as ChatLeavePlan.LeaveParty).chatRoomId)
+    }
+
+    @Test
+    fun `나가기를 누른 뒤 판정이 실패하면 메뉴를 닫고 알린다`() = runTest(analytics.dispatcher) {
+        rides.detail = { error("network") }
+        val viewModel = loaded()
+
+        viewModel.openMenu(item(7))
+        viewModel.requestLeave()
+        runCurrent()
+
+        assertNull(viewModel.action.value)
+        assertEquals("방 상태를 확인하지 못했어요. 잠시 뒤 다시 시도해 주세요", viewModel.notice.value)
     }
 
     @Test

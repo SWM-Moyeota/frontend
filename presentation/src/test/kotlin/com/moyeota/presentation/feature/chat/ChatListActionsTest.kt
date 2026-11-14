@@ -197,26 +197,25 @@ class ChatListActionsTest {
     // ─────────────────────── 실패 문구 ───────────────────────
 
     @Test
-    fun `도착 뒤 나가기 거절은 이유를 말한다`() {
-        val e = PartyLeaveException(code = "ARRIVED_MEMBER_CANNOT_LEAVE", serverMessage = null, httpStatus = 409)
-        assertEquals("출발지에 도착했다고 누른 뒤에는 방에서 나갈 수 없어요", chatListLeaveFailureMessage(e))
+    fun `동승 나가기 중 방이 끝났으면 다시 판정하고 도착했으면 막는다`() {
+        val closed = PartyLeaveException(code = "PARTY_CLOSED", serverMessage = null, httpStatus = 409)
+        val arrived = PartyLeaveException(code = "ARRIVED_MEMBER_CANNOT_LEAVE", serverMessage = null, httpStatus = 409)
+        assertEquals(ChatLeaveRetry.REPLAN, chatListLeaveRetry(leave(), closed))
+        assertEquals(ChatLeaveRetry.BLOCKED, chatListLeaveRetry(leave(), arrived))
+        assertEquals(ChatLeaveRetry.NONE, chatListLeaveRetry(leave(), IllegalStateException()))
     }
 
     @Test
-    fun `이미 끝난 방이면 그렇게 말한다`() {
-        val e = PartyLeaveException(code = "PARTY_CLOSED", serverMessage = null, httpStatus = 409)
-        assertEquals("이미 끝난 방이에요. 목록을 새로 불러와 주세요", chatListLeaveFailureMessage(e))
+    fun `채팅방만 나가기의 실패는 다시 판정하지 않는다`() {
+        val closed = PartyLeaveException(code = "PARTY_CLOSED", serverMessage = null, httpStatus = 409)
+        assertEquals(ChatLeaveRetry.NONE, chatListLeaveRetry(ChatLeavePlan.ChatOnly(7), closed))
     }
 
     @Test
-    fun `모르는 실패는 기본 문구`() {
-        assertEquals("나가지 못했어요. 잠시 뒤 다시 시도해 주세요", chatListLeaveFailureMessage(IllegalStateException()))
-    }
-
-    @Test
-    fun `채팅방 참여자가 아니라는 답은 이미 나간 것이다`() {
-        val gone = ChatException(code = "CHAT_NOT_PARTICIPANT", serverMessage = null, httpStatus = 403)
-        assertTrue(isAlreadyOutOfChat(gone))
-        assertFalse(isAlreadyOutOfChat(ChatException(code = "CHAT_ROOM_NOT_FOUND", serverMessage = null, httpStatus = 404)))
+    fun `채팅방 참여자가 아니거나 채팅방이 없다는 답은 이미 나간 것이다`() {
+        assertTrue(isAlreadyOutOfChat(ChatException(code = "CHAT_NOT_PARTICIPANT", serverMessage = null, httpStatus = 403)))
+        assertTrue(isAlreadyOutOfChat(ChatException(code = "CHAT_ROOM_NOT_FOUND", serverMessage = null, httpStatus = 404)))
+        assertFalse(isAlreadyOutOfChat(ChatException(code = "CHAT_ROOM_CLOSED", serverMessage = null, httpStatus = 409)))
+        assertFalse(isAlreadyOutOfChat(IllegalStateException()))
     }
 }
