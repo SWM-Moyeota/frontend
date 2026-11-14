@@ -1,6 +1,7 @@
 package com.moyeota.presentation.feature.home
 
 import com.moyeota.core.designsystem.component.DateStripTone
+import com.moyeota.core.designsystem.component.NoticeKind
 import com.moyeota.domain.model.PartyOpenException
 import java.time.Instant
 import java.time.LocalDate
@@ -320,6 +321,74 @@ class ReservationRulesTest {
         assertEquals("고를 수 있는 날을 고른 것은 그대로", 3, reservationSelectableDateIndex(3, dates, selectable))
     }
 
+    // ─────────────────────────── 기준 시각을 옮길 때 ───────────────────────────
+
+    private fun selectableAt(now: Instant): (LocalDate) -> Boolean = { reservationTimeRange(it, now) != null }
+
+    /**
+     * ★ 리뷰 반영(PR #99): 23:58 에 「내일」을 고르고 00:05 에 누르면 다시 재기가 실패해 기준이 옮겨진다. 일수(1)를
+     * 그대로 두면 새 띠에서 「모레」를 가리킨다 — 보던 **달력 날짜**의 자리를 다시 찾는다.
+     */
+    @Test
+    fun `자정을 넘겨 기준을 옮겨도 고른 날짜는 그대로다`() {
+        val opened = Instant.parse("2026-11-09T14:58:00Z") // KST 11-09 23:58
+        val tomorrow = LocalDate.of(2026, 11, 10)
+        val openedDates = reservationDates(opened)
+        assertEquals(tomorrow, openedDates[1])
+        // 「내일」의 기본 시각(가장 이른 00:10)은 00:05 에 누르면 여유를 잃었다 — 기준을 옮기는 길이다
+        val defaultTime = reservationTimeRange(tomorrow, opened)!!.earliest
+        assertEquals(LocalTime.of(0, 10), defaultTime)
+        val fresh = Instant.parse("2026-11-09T15:05:00Z") // KST 11-10 00:05
+        assertFalse(reservationTimeStillValid(tomorrow, defaultTime, fresh))
+
+        val freshDates = reservationDates(fresh)
+        val offset = reservationDateOffsetAfterClockMove(tomorrow, freshDates, selectableAt(fresh))
+
+        assertEquals(0, offset)
+        assertEquals(tomorrow, freshDates[reservationSelectableDateIndex(offset, freshDates, selectableAt(fresh))])
+        assertEquals("예전처럼 일수를 그대로 두면 「모레」가 된다", LocalDate.of(2026, 11, 11), freshDates[1])
+    }
+
+    /** 자정을 넘기지 않으면 일수는 그대로다 — 날짜 띠가 움직이지 않았다. */
+    @Test
+    fun `같은 날 안에서 기준을 옮기면 일수는 그대로다`() {
+        val opened = now // KST 13:00
+        val picked = reservationDates(opened)[3]
+        val fresh = opened.plusSeconds(15 * 60) // KST 13:15
+        assertEquals(3, reservationDateOffsetAfterClockMove(picked, reservationDates(fresh), selectableAt(fresh)))
+    }
+
+    /**
+     * 「오늘」을 골라 둔 채 자정을 넘기면 그 날은 **어제**가 돼 띠에서 사라진다 — 고를 수 있는 첫 날로 간다.
+     * 고를 수 있는 날을 판정으로 고르는지는 가짜 판정으로 따로 본다(실제로는 자정 직후의 오늘은 늘 고를 수 있다).
+     */
+    @Test
+    fun `고른 날짜가 범위를 벗어나면 고를 수 있는 첫 날로 간다`() {
+        val today = LocalDate.of(2026, 11, 9)
+        val fresh = Instant.parse("2026-11-09T15:05:00Z") // KST 11-10 00:05 — 11-09 는 띠에서 빠졌다
+        val freshDates = reservationDates(fresh)
+        assertFalse(today in freshDates)
+
+        assertEquals(0, reservationDateOffsetAfterClockMove(today, freshDates, selectableAt(fresh)))
+        assertEquals(1, reservationDateOffsetAfterClockMove(today, freshDates) { it != freshDates[0] })
+    }
+
+    /**
+     * 범위 안이지만 고를 수 없게 된 날(밤 23:40 을 넘긴 「오늘」)은 그 자리를 저장한다 — 보여 줄 때
+     * [reservationSelectableDateIndex] 가 다음 날로 접는다(「고른 값은 지우지 않고 보여 줄 값만 접는다」).
+     */
+    @Test
+    fun `범위 안이지만 고를 수 없게 된 날은 그 자리를 두고 보여 줄 때 접는다`() {
+        val today = LocalDate.of(2026, 11, 9)
+        val fresh = Instant.parse("2026-11-09T14:45:00Z") // KST 23:45 — 오늘은 고를 시각이 없다
+        val freshDates = reservationDates(fresh)
+
+        val offset = reservationDateOffsetAfterClockMove(today, freshDates, selectableAt(fresh))
+
+        assertEquals(0, offset)
+        assertEquals(1, reservationSelectableDateIndex(offset, freshDates, selectableAt(fresh)))
+    }
+
     @Test
     fun `띠 위의 달 표시는 달을 넘으면 범위로 쓴다`() {
         assertEquals("11월", reservationMonthLabel(reservationDates(now)))
@@ -561,5 +630,72 @@ class ReservationRulesTest {
         assertEquals(reservationDepartureIso(date, time), matchDepartureAt(scheduled = true, date = date, time = time))
         // 고를 시각이 없는 날(늦은 밤의 오늘)은 「시간 정하기」여도 없다 — CTA 가 잠긴다
         assertNull(matchDepartureAt(scheduled = true, date = date, time = null))
+    }
+
+    @Test
+    fun `오래 열어 둬 여유를 잃은 기본 시각은 보내기 전에 다시 잰다`() {
+        val opened = Instant.parse("2026-11-14T04:00:30Z") // 한국 13:00:30
+        val today = LocalDate.of(2026, 11, 14)
+        val earliest = reservationTimeRange(today, opened)!!.earliest
+        assertEquals(LocalTime.of(13, 20), earliest) // 13:10:30 → 10분 단위로 올림
+        // 1분 뒤에 누르면 그대로 보낸다
+        assertTrue(reservationTimeStillValid(today, earliest, opened.plusSeconds(60)))
+        // 10분 넘게 머물면 13:20 은 여유가 없다 — 보내지 않고 기준을 옮긴다
+        assertFalse(reservationTimeStillValid(today, earliest, opened.plusSeconds(10 * 60 + 1)))
+        // 고를 시각이 없으면 보낼 것이 없다
+        assertFalse(reservationTimeStillValid(today, null, opened))
+    }
+
+    // ─────────────────────────── 다시 재기 안내 ───────────────────────────
+
+    /**
+     * ★ 리뷰 반영 2차(PR #99): 다시 재기가 실패하면 보내지 않고 휠만 옮기는데, 예전에는 그 사실을 말하지 않아 「안
+     * 눌렸다」로 읽혔다. 날짜가 그대로면 「가장 빠른 시각」, 날짜도 바뀌었으면 날짜와 시각을 둘 다 확인하라고 한다.
+     * 오류가 아니라 안내라 빨강으로 칠하지 않는다.
+     */
+    @Test
+    fun `다시 재기로 휠을 옮기면 날짜가 바뀌었는지에 따라 다른 안내를 남긴다`() {
+        assertEquals(
+            "시간이 지나 가장 빠른 시각으로 바꿨어요. 확인하고 다시 눌러 주세요",
+            reservationClockMovedNotice(dateChanged = false),
+        )
+        assertEquals(
+            "시간이 지나 다른 날로 바꿨어요. 날짜와 시각을 확인하고 다시 눌러 주세요",
+            reservationClockMovedNotice(dateChanged = true),
+        )
+        listOf(RESERVATION_TIME_MOVED_NOTICE, RESERVATION_DATE_MOVED_NOTICE).forEach { notice ->
+            assertTrue("할 일을 말한다: $notice", notice.endsWith("다시 눌러 주세요"))
+            assertFalse("실패가 아니다: $notice", notice.contains("못") || notice.contains("실패") || notice.contains("오류"))
+        }
+        assertTrue("오류 빨강이 아니다", RESERVATION_CLOCK_MOVED_NOTICE_KIND != NoticeKind.ERROR)
+    }
+
+    /**
+     * 안내가 가르는 「날짜가 바뀌었나」는 모달의 `moveClock` 이 하는 접기 그대로다 — 저장 일수를 새 띠에서 다시 찾고
+     * ([reservationDateOffsetAfterClockMove]) 고를 수 없는 날이면 첫 날로 접는다([reservationSelectableDateIndex]).
+     */
+    @Test
+    fun `같은 날 안에서 여유를 잃으면 시각 안내고 그 날의 시각이 다 지나면 날짜 안내다`() {
+        val today = LocalDate.of(2026, 11, 14)
+        fun shownAfterMove(selected: LocalDate, fresh: Instant): LocalDate {
+            val dates = reservationDates(fresh)
+            val selectable: (LocalDate) -> Boolean = { reservationTimeRange(it, fresh) != null }
+            return dates[reservationSelectableDateIndex(reservationDateOffsetAfterClockMove(selected, dates, selectable), dates, selectable)]
+        }
+
+        // 13:00:30 에 열고 13:10:31 에 누름 — 오늘은 아직 고를 시각이 있다. 휠은 그 날의 가장 이른 값으로 접힌다
+        val afternoon = Instant.parse("2026-11-14T04:10:31Z")
+        assertEquals(today, shownAfterMove(today, afternoon))
+        assertEquals(
+            LocalTime.of(13, 30),
+            reservationSelectedTime(LocalTime.of(13, 20), reservationTimeRange(today, afternoon)),
+        )
+        assertEquals(RESERVATION_TIME_MOVED_NOTICE, reservationClockMovedNotice(dateChanged = today != shownAfterMove(today, afternoon)))
+
+        // 23:41 에 누름 — 오늘은 고를 시각이 없어 띠가 내일로 접힌다
+        val lateNight = Instant.parse("2026-11-14T14:41:00Z")
+        val shown = shownAfterMove(today, lateNight)
+        assertEquals(today.plusDays(1), shown)
+        assertEquals(RESERVATION_DATE_MOVED_NOTICE, reservationClockMovedNotice(dateChanged = today != shown))
     }
 }

@@ -37,18 +37,30 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.core.designsystem.theme.MoyeotaSpacing
 import com.moyeota.core.designsystem.theme.MoyeotaType
 import com.moyeota.core.designsystem.theme.mapOverlayShadow
 import com.moyeota.core.designsystem.theme.tabularNums
+import com.moyeota.domain.diagnostics.Diagnostics
+import com.moyeota.domain.diagnostics.FailureSite
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 
 /**
- * 17 탐색 목록의 **주기 새로고침 + 카운트다운 버튼** — 판정과 숫자를 한 곳에 모은다.
+ * 17 탐색 목록의 **주기 새로고침 + 카운트다운 버튼** — 판정과 숫자, 그리고 그 시계([ExploreRefreshCycle])를 한 곳에 모은다.
  *
  * ### 4초 → 15초 (2026-11, 오너 UX 피드백)
  * 예전에는 화면이 보이는 동안 **4초마다** 같은 범위를 다시 읽었다. 목록이 4초마다 바뀌면 카드를 읽는
@@ -60,18 +72,41 @@ import kotlinx.coroutines.delay
  * 초를 세는 원형 버튼([ExploreRefreshButton])을 두고, 누르면 그 자리에서 다시 읽고 15초를 새로 센다.
  * 주기가 길어진 만큼 「지금 보고 있는 게 최신인가」를 사용자가 직접 정할 수 있어야 한다.
  *
- * ### 어느 모드에서 도는가 — [exploreAutoRefreshes]
+ * ### 세 모드 모두 돈다 — [exploreAutoRefreshes] (2026-11, 오너 UX 피드백 2차)
  * | 모드 | 주기 갱신·버튼 | 이유 |
  * |---|---|---|
  * | 실시간 | 있음 | 방이 **지금** 차고 빈다 — 낡은 목록이 곧 「사라진 방의 합류」다 |
  * | 곧 출발 | 있음 | 30분 안에 출발하는 방이라 실시간만큼 빨리 낡는다(곧 떠나 목록에서 빠진다) |
- * | 날짜로 찾기 | **없음** | 날짜 하나로 묻는 **한 번의 검색**이다. 며칠 뒤 출발 시각은 바뀌지 않고, 화면에 돌아오거나 날짜·도착지를 바꾸면 다시 읽는다 |
+ * | 날짜로 찾기 | 있음 | 출발 시각은 바뀌지 않아도 **자리는 바뀐다** — 남의 합류·나감·취소로 마지막 자리가 차고, 낡은 카드의 「합류」는 20 에서야 거절된다 |
+ *
+ * 「날짜로 찾기」는 예전에 **한 번의 검색**이라 돌지 않았다(「며칠 뒤 출발 시각은 바뀌지 않는다」). 그 근거는
+ * 시각에만 맞고 자리에는 맞지 않았고, 오너 확인에서 이 탭만 버튼이 없어 「언제 읽은 목록인가」를 알 수 없다는
+ * 지적이 나왔다. 그래서 세 탭이 **같은 버튼·같은 주기·같은 「낡음」 규칙**을 갖는다.
+ *
+ * ### 카운트다운은 지도와 따로 돈다 ★ (2026-11, 오너 UX 피드백 2차)
+ * 예전에는 「조회 하나 = 패스 하나」였다. 지도를 움직이면 새 범위라 새 패스가 열리고 카운트다운이 15부터 다시
+ * 셌다 — 지도를 조금씩 옮기며 보는 사람에게는 숫자가 끝까지 내려가지 않아, 버튼이 「언제 갱신되는가」를
+ * 말하지 못했다. 지금은 **시계와 조회를 떼어 둔다**([ExploreRefreshCycle]):
+ *
+ * | 일 | 조회 | 카운트다운 |
+ * |---|---|---|
+ * | 화면이 보이기 시작함 | 즉시 | **15부터 새로** |
+ * | 0 에 닿음(자동 갱신) | 그 순간의 **최신 입력**(범위·날짜·도착지)으로 | 15부터 다시 |
+ * | 버튼을 누름 | 즉시 | **15부터 다시** |
+ * | 지도를 움직임 | [BOUNDS_DEBOUNCE_MS] 뒤 | 그대로 센다 |
+ * | 날짜·도착지·모드를 바꿈 | 즉시 | 그대로 센다 |
+ * | 「다시 시도」 | 즉시 | 그대로 센다 |
+ * | 화면이 가려짐 | 멈춤(나가 있던 조회도 끊는다) | 멈춤 — 남은 초를 기억하지 않는다 |
+ *
+ * 숫자를 15로 되돌리는 것은 **버튼과 화면 복귀뿐**이다. 버튼은 사용자가 「지금 읽었다」를 직접 만든 것이고,
+ * 복귀는 가려진 동안 시계가 멈춰 있었기 때문이다. 조회가 나가 있는 동안 버튼은 도는 고리를 그리고 눌리지
+ * 않지만 **초는 밑에서 계속 줄어든다** — 조회가 끝나면 그 사이 줄어든 숫자부터 이어 보인다. 0 은 조회가
+ * 끝나기를 기다리지 않고 바로 다음 15초를 센다(고정 15초 주기 — 응답이 느려도 주기가 늘지 않는다).
  *
  * ### 시계는 `delay` 하나다 — 테스트가 가상 시간으로 돌린다
- * 카운트다운은 [countDownToNextRefresh] 가 1초씩 `delay` 하며 남은 초를 알리는 것이 전부다. 벽시계를
- * 읽지 않으므로 `kotlinx-coroutines-test` 의 가상 시간(`advanceTimeBy`)이 곧 이 화면의 시계다
- * (`ExploreRefreshTest`). 화면이 가려지면 그 코루틴이 통째로 취소되고(가시성 게이트), 돌아오면 즉시
- * 1회 조회한 뒤 15부터 다시 센다 — 가려진 동안 줄어든 초를 이어 세지 않는다.
+ * 카운트다운은 [countDownToNextRefresh] 가 1초씩 `delay` 하며 남은 초를 알리는 것이 전부이고, 지도 디바운스도
+ * `delay` 다. 벽시계를 읽지 않으므로 `kotlinx-coroutines-test` 의 가상 시간(`advanceTimeBy`)이 곧 이 화면의
+ * 시계다(`ExploreRefreshTest`).
  */
 
 /** 주기 갱신 간격 — **15초**. 근거는 이 파일 머리말. */
@@ -84,9 +119,19 @@ internal const val REFRESH_TICK_MS = 1_000L
 internal val REFRESH_COUNTDOWN_SECONDS: Int = ((NEARBY_POLL_INTERVAL_MS + REFRESH_TICK_MS - 1) / REFRESH_TICK_MS).toInt()
 
 /**
+ * 카메라가 멈춘 뒤 조회까지 두는 여유.
+ *
+ * 팬·줌을 연타하면 idle 이 연달아 들어오는데, 중간 범위마다 서버를 때릴 이유가 없다.
+ * 손을 뗀 직후의 체감 지연으로 느껴지지 않을 만큼만 둔다. 실시간과 「곧 출발」이 같은 값을 쓴다
+ * ([ExploreLoadTiming.DEBOUNCED]).
+ */
+internal const val BOUNDS_DEBOUNCE_MS = 400L
+
+/**
  * 새로고침 버튼이 그릴 것.
  *
- * @param secondsLeft 다음 자동 갱신까지 남은 초(15 → 1). [refreshing] 이면 쓰이지 않는다
+ * @param secondsLeft 다음 자동 갱신까지 남은 초(15 → 1). [refreshing] 이어도 밑에서 계속 줄어든다 — 조회가
+ *   끝나면 그 숫자부터 이어 보인다
  * @param refreshing 조회가 나가 있다 — 버튼은 숫자 대신 도는 고리를 그리고 눌리지 않는다(연타가
  *   같은 조회를 겹쳐 보내지 않게)
  */
@@ -98,21 +143,22 @@ data class ExploreRefreshUi(
 )
 
 /**
- * 이 모드가 **주기 갱신과 새로고침 버튼을 갖는가** — 위 표의 판정이다.
+ * 이 모드가 **주기 갱신과 새로고침 버튼을 갖는가** — 위 표의 판정이다. 지금은 세 모드 모두 그렇다.
  *
  * `when` 으로 적어 [ExploreMode] 가 늘면 컴파일이 깨지게 한다(새 탭이 주기 갱신을 할지 그 자리에서 정한다).
+ * 두 ViewModel 의 시계([ExploreRefreshCycle])는 모드를 모르고 **조회가 있으면 돈다** — 어느 모드가 false 가
+ * 되면 그 모드의 조회가 시계에 들어가지 않게 하는 일도 함께 해야 한다(지금은 화면이 버튼만 숨긴다).
  */
 internal fun exploreAutoRefreshes(mode: ExploreMode): Boolean = when (mode) {
-    ExploreMode.REALTIME, ExploreMode.SOON -> true
-    ExploreMode.BY_DATE -> false
+    ExploreMode.REALTIME, ExploreMode.SOON, ExploreMode.BY_DATE -> true
 }
 
 /**
  * 다음 자동 갱신까지 **1초씩 세며 기다린다** — [onTick] 으로 15, 14, …, 1 을 차례로 알리고, 1 을 알린 뒤
  * 1초가 더 지나면 돌아온다(합계 [intervalMs]). 돌아오면 호출부가 조회한다.
  *
- * 취소되면(화면이 가려짐·범위가 바뀜·사용자가 버튼을 누름) 그 자리에서 멈춘다 — 남은 초를 기억하지
- * 않는다. 새 패스는 늘 즉시 조회 후 처음부터 센다.
+ * 취소되면(화면이 가려짐·사용자가 버튼을 누름) 그 자리에서 멈춘다 — 남은 초를 기억하지 않는다.
+ * 지도 이동·날짜 변경은 이 대기를 건드리지 않는다([ExploreRefreshCycle]).
  */
 internal suspend fun countDownToNextRefresh(
     onTick: (secondsLeft: Int) -> Unit,
@@ -127,6 +173,236 @@ internal suspend fun countDownToNextRefresh(
         remainingMs -= step
     }
 }
+
+/**
+ * 조회 입력이 바뀌었을 때 **언제 읽는가** — 카운트다운은 어느 쪽이든 건드리지 않는다.
+ *
+ * 판정은 목록마다 다르고(실시간 [nearbyLoadTiming] · 예약 [reservationLoadTiming]) 시계는 그 결과만 따른다.
+ */
+internal enum class ExploreLoadTiming {
+    /** 지금 읽는다 — 새 목록(첫 조회·날짜·도착지·모드)이거나, 보여 줄 목록이 없어 늦출 이득이 없다 */
+    NOW,
+
+    /** [BOUNDS_DEBOUNCE_MS] 뒤에 읽는다 — 지도를 움직였다. 팬·줌 연타의 중간 범위마다 서버를 때리지 않는다 */
+    DEBOUNCED,
+
+    /**
+     * 지금은 읽지 않는다 — **다음 자동 갱신이 새 입력으로 읽는다.** 「날짜로 찾기」의 내 위치가 조금
+     * 움직였는데 목록이 보이거나 빈 자리로 조회가 오는 중일 때다: GPS 는 1초마다 몇 m 씩 흔들리는데, 그때마다
+     * 읽으면 1km 검색이 1초마다 나가고 응답이 1초보다 느리면 영영 끝나지 않는다([reservationLoadTiming])
+     */
+    NEXT_TICK,
+}
+
+/**
+ * 탐색 목록 하나(실시간 · 예약)의 **갱신 시계와 조회 칸** — 이 파일 머리말의 표를 그대로 옮긴 것이다.
+ *
+ * 두 ViewModel 이 같은 규칙으로 돌아야 해서 한 곳에 둔다. ViewModel 은 **무엇을 어떻게 읽어 보여 줄지**만
+ * [load] 로 넘기고(결과·실패 처리·「낡음」 판정은 그쪽 몫이다), 언제 읽는지는 이 클래스가 정한다.
+ *
+ * ### 세 가지가 따로 돈다
+ * - **세션** — 화면이 보이고([setVisible]) 물어볼 것([update])이 있는 동안. 시작하면 즉시 한 번 읽고 15부터 센다.
+ *   끝나면(가려짐·조회 없음) 카운트다운·디바운스·나가 있는 조회를 모두 끊는다
+ * - **카운트다운** — 15 → 1 을 세고 0 에서 **그 순간의 최신 입력**을 읽은 뒤 곧바로 다시 15부터 센다.
+ *   버튼([refreshNow])과 세션 시작만 이것을 처음부터 다시 돌린다
+ * - **조회 칸** — 나가 있는 조회는 하나뿐이다. 다른 입력의 조회가 오면 앞 것을 끊는다(늦은 앞 범위 응답이 새
+ *   범위 목록을 덮지 않게). 자동 갱신·「다시 시도」 때 **같은 입력의 조회가 이미 나가 있으면 그것을 이번
+ *   조회로 친다** — 응답이 15초보다 느려도 같은 요청을 겹쳐 보내거나 끊었다 다시 보내지 않는다
+ *
+ * 모든 호출은 메인 스레드에서 온다(ViewModel 메서드와 [scope] 의 코루틴) — 필드에 잠금이 없는 이유다.
+ *
+ * ### [load] 가 약속을 어기고 던지면 — 삼키고 시계를 살린다 (리뷰 반영 2차, PR #99)
+ * 조회는 `viewModelScope` 의 자식으로 돈다. 그 스코프는 실패를 위로 올리지 않는 대신 처리되지 않은 예외를 스레드의
+ * 기본 처리기로 넘기고, 안드로이드에서 그것은 **프로세스 종료**다. 그래서 취소가 아닌 예외는 조회 코루틴 안에서
+ * 받아 버리고 [Diagnostics] 로 **종류와 위치만** 보고한다(메시지를 싣지 않는다 — 조회 입력은 지도 범위·내 좌표다).
+ * `finally` 의 정리(조회 칸 비우기·버튼 숫자 되돌리기)는 그대로 돌아 다음 0 이 평소처럼 읽는다.
+ *
+ * 삼킨 예외는 「낡음」의 연속 실패로 **세지 않는다.** 그 계수기는 ViewModel 의 [load] 안에 있고, 서버 조회의
+ * 실패는 이미 거기서 받아 센다(그래서 [load] 는 던지지 않는다). 그 밖으로 새는 것은 **세고 난 뒤의 상태 정리**에서
+ * 터진 결함이다 — 여기서 다시 세게 하려면 시계가 모르는 ViewModel 계수기에 두 번째 통로를 내야 하고, 터진 자리가
+ * `failures++` 뒤라면 같은 실패를 두 번 센다. 결함은 「낡음」이 아니라 진단 보고로 드러낸다.
+ *
+ * @param scope 세션의 코루틴이 사는 곳(`viewModelScope`)
+ * @param load 조회 하나를 읽어 화면 상태에 반영한다. **실패는 안에서 처리하고 던지지 않는다** — 던지는 것은
+ *   취소뿐이어야 한다. 어겨도 앱은 죽지 않는다(위)
+ */
+internal class ExploreRefreshCycle<Q : Any>(
+    private val scope: CoroutineScope,
+    private val load: suspend (Q) -> Unit,
+) {
+    // 첫 조회 전에는 「조회 중」으로 시작한다 — 화면이 열리자마자 즉시 1회 읽기 때문이다.
+    private val _ui = MutableStateFlow(ExploreRefreshUi(refreshing = true))
+    val ui: StateFlow<ExploreRefreshUi> = _ui.asStateFlow()
+
+    private var query: Q? = null
+    private var visible = false
+    private var secondsLeft = REFRESH_COUNTDOWN_SECONDS
+
+    private var countdown: Job? = null
+    private var debounce: Job? = null
+    private var fetch: Job? = null
+    private var fetchQuery: Q? = null
+
+    /** 끊긴 조회가 뒤늦게 `finally` 를 돌 때 지금 조회의 표시를 지우지 않게 하는 번호 */
+    private var fetchGeneration = 0
+
+    /** 세션이 돌고 있는가 — 보이고, 물어볼 것이 있다. false 면 [retry]·[refreshNow] 는 아무 일도 하지 않는다. */
+    val isRunning: Boolean get() = countdown != null
+
+    /**
+     * 조회가 나가 있는가 — 「날짜로 찾기」가 빈 목록 자리로 오는 중인 조회를 GPS 흔들림으로 끊지 않게 본다
+     * ([reservationLoadTiming]).
+     */
+    val isFetching: Boolean get() = fetch != null
+
+    /** 화면이 보이기 시작했다(true) · 가려졌다(false). 보이기 시작하면 즉시 읽고 **15부터 새로** 센다. */
+    fun setVisible(shown: Boolean) {
+        if (visible == shown) return
+        visible = shown
+        if (shown) start() else stop()
+    }
+
+    /**
+     * 조회 입력이 바뀌었다. **null 이면 물어볼 것이 없다**(세션을 멈춘다).
+     *
+     * 세션이 돌고 있으면 [timing] 대로 읽고 **카운트다운은 건드리지 않는다.** 아직 돌지 않았으면(첫 조회·
+     * 다른 모드에서 넘어옴) 세션을 시작한다 — 보이는 동안만이다. 가려져 있으면 입력만 받아 두고, 보이면 그
+     * 입력으로 즉시 읽는다.
+     */
+    fun update(next: Q?, timing: ExploreLoadTiming) {
+        query = next
+        when {
+            next == null -> stop()
+            !visible -> Unit
+            !isRunning -> start()
+            else -> when (timing) {
+                ExploreLoadTiming.NOW -> read(joinSame = false)
+                ExploreLoadTiming.DEBOUNCED -> readAfterDebounce()
+                ExploreLoadTiming.NEXT_TICK -> Unit
+            }
+        }
+    }
+
+    /**
+     * 새로고침 버튼 — **즉시 읽고 15부터 다시 센다.** 조회가 나가 있는 동안 들어온 탭은 버린다(버튼은
+     * 그동안 비활성이지만, 탭과 상태 변경이 엇갈려 들어온 것이 같은 조회를 겹쳐 보내게 두지 않는다).
+     */
+    fun refreshNow() {
+        if (!isRunning || fetch != null) return
+        read(joinSame = false)
+        restartCountdown()
+    }
+
+    /** 「다시 시도」 — 즉시 읽는다. 카운트다운은 그대로다(숫자를 되돌리는 것은 새로고침 버튼뿐이다). */
+    fun retry() {
+        if (!isRunning) return
+        read(joinSame = true)
+    }
+
+    private fun start() {
+        if (query == null) return
+        read(joinSame = false)
+        restartCountdown()
+    }
+
+    private fun stop() {
+        countdown?.cancel()
+        countdown = null
+        debounce?.cancel()
+        debounce = null
+        cancelFetch()
+        secondsLeft = REFRESH_COUNTDOWN_SECONDS
+        publish()
+    }
+
+    private fun restartCountdown() {
+        countdown?.cancel()
+        secondsLeft = REFRESH_COUNTDOWN_SECONDS
+        publish()
+        // LAZY 로 띄워 필드에 먼저 적는다 — 메인 즉시 디스패처는 몸통을 그 자리에서 돌리기 시작한다.
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            while (true) {
+                countDownToNextRefresh(onTick = { left ->
+                    secondsLeft = left
+                    publish()
+                })
+                // 0 — 그 순간의 최신 입력으로 읽고, 끝나기를 기다리지 않고 다시 15부터 센다
+                read(joinSame = true)
+            }
+        }
+        countdown = job
+        job.start()
+    }
+
+    private fun readAfterDebounce() {
+        debounce?.cancel()
+        // 앞 입력의 조회는 끊는다 — 그 결과는 이제 다른 동네의 목록이다
+        cancelFetch()
+        publish()
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            delay(BOUNDS_DEBOUNCE_MS)
+            debounce = null
+            read(joinSame = false)
+        }
+        debounce = job
+        job.start()
+    }
+
+    /**
+     * 지금 입력([query])으로 읽는다. 기다리던 디바운스는 이 조회가 대신한다.
+     *
+     * @param joinSame 같은 입력의 조회가 이미 나가 있으면 그것을 이번 조회로 친다(자동 갱신·「다시 시도」)
+     */
+    private fun read(joinSame: Boolean) {
+        val q = query ?: return
+        debounce?.cancel()
+        debounce = null
+        if (fetch != null) {
+            if (joinSame && fetchQuery == q) return
+            cancelFetch()
+        }
+        val generation = ++fetchGeneration
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            try {
+                load(q)
+            } catch (e: CancellationException) {
+                // 더 새 입력·가려짐·버튼으로 끊긴 것 — 취소는 그대로 흘려 보낸다
+                throw e
+            } catch (e: Exception) {
+                // [load] 가 약속을 어겼다 — 앱을 죽이지 않고 종류만 보고한다(클래스 KDoc). 시계는 계속 돈다
+                Diagnostics.report(FailureSite.EXPLORE_REFRESH, e)
+            } finally {
+                if (generation == fetchGeneration) {
+                    fetch = null
+                    fetchQuery = null
+                    publish()
+                }
+            }
+        }
+        fetch = job
+        fetchQuery = q
+        publish()
+        job.start()
+    }
+
+    private fun cancelFetch() {
+        fetch?.cancel()
+        fetch = null
+        fetchQuery = null
+        fetchGeneration++
+    }
+
+    private fun publish() {
+        _ui.value = ExploreRefreshUi(secondsLeft = secondsLeft, refreshing = fetch != null)
+    }
+}
+
+/**
+ * 실시간 목록의 지도 이동을 **언제 읽는가** — 보여 주던 목록이 있으면 디바운스 뒤, 없으면(첫 조회·에러
+ * 화면) 늦출 이득이 없으니 지금.
+ */
+internal fun nearbyLoadTiming(listShown: Boolean): ExploreLoadTiming =
+    if (listShown) ExploreLoadTiming.DEBOUNCED else ExploreLoadTiming.NOW
 
 /** 새로고침 버튼의 스크린리더 이름. */
 internal const val REFRESH_BUTTON_LABEL = "목록 새로고침"
@@ -153,12 +429,110 @@ internal val RefreshButtonSize = 48.dp
  */
 internal val RefreshButtonEndInset = 9.dp
 
+/** 버튼과 그 아래(시트 윗변 · 하단 CTA) 사이 — 16dp. */
+internal val RefreshButtonGap: Dp = MoyeotaSpacing.Md
+
+/**
+ * 목록 위에 뜬 버튼([RefreshButtonSpot.OVER_LIST])이 마지막 줄을 가리지 않게 목록 끝에 더하는 여백.
+ *
+ * 버튼은 CTA 위 16dp 에서 48dp 를 차지하고, 목록의 아래 끝은 CTA 줄의 위 여백(8dp)만큼 CTA 보다 위다 —
+ * 그래서 버튼은 목록 아래 끝에서 8~56dp 를 덮는다. 버튼 + 간격(64dp)을 두면 끝까지 내린 마지막 줄이 버튼
+ * 위 8dp 에서 끝나 「합류」 터치 영역이 버튼 밑에 깔리지 않는다.
+ */
+internal val RefreshButtonListClearance: Dp = RefreshButtonSize + RefreshButtonGap
+
+/** 새로고침 버튼이 서는 자리 — [refreshButtonPlacement] 의 판정. */
+internal enum class RefreshButtonSpot {
+    /** 지도 위 — 시트 윗변 16dp 위, 네이버 줌 컨트롤과 같은 세로선(접힘·반펼침) */
+    ABOVE_SHEET,
+
+    /** 목록 위에 뜬다 — 끝에서 16dp, 하단 CTA 16dp 위(지도가 다 가려진 FULL · 지도에 자리가 없을 때) */
+    OVER_LIST,
+}
+
+/**
+ * 버튼의 자리와 여백. 둘 다 **컨테이너(지도+시트 영역)의 오른쪽 아래 모서리**에서 잰다.
+ *
+ * @param end 오른쪽 끝에서 버튼까지
+ * @param bottom 컨테이너 아래 끝에서 버튼 아래 끝까지
+ */
+internal data class RefreshButtonPlacement(
+    val spot: RefreshButtonSpot,
+    val end: Dp,
+    val bottom: Dp,
+)
+
+/**
+ * 새로고침 버튼을 **어디에 세우는가** — 세 시트 단계 모두에서 보인다(2026-11, 오너 UX 피드백 2차).
+ *
+ * 예전에는 FULL 에서 숨겼다(「지도가 다 가려졌으니 무엇을 새로 고치는지 알 수 없다」). 하지만 FULL 은 목록을
+ * 읽는 상태이고, 그 목록도 15초마다 바뀐다 — 언제 바뀌는지 알려 주는 버튼이 가장 필요한 자리에서 사라졌다.
+ *
+ * | 조건 | 자리 |
+ * |---|---|
+ * | FULL 이 아니고 시트 위 지도에 버튼 + 16dp 가 들어간다 | [RefreshButtonSpot.ABOVE_SHEET] — 시트 윗변 16dp 위, 줌 컨트롤과 같은 세로선([RefreshButtonEndInset]) |
+ * | 그 밖(FULL · 끝까지 끌어 올리는 중) | [RefreshButtonSpot.OVER_LIST] — 끝에서 16dp([MoyeotaSpacing.ScreenGutter]), 하단 CTA 16dp 위(CTA 가 없으면 아래 끝에서 16dp) |
+ *
+ * 높이는 **실측 시트 높이**(드래그·정착 애니메이션 중의 값)로 판정한다 — 끌어 올리는 동안 버튼이 지도 밖으로
+ * 밀려나지 않고, 들어갈 자리가 없어지는 순간 목록 위로 내려온다.
+ *
+ * @param bottomCtaTop 컨테이너 아래 끝에서 하단 CTA(「새 동승 방 만들기」) 윗변까지. null 이면 CTA 가 없다(접힘)
+ */
+internal fun refreshButtonPlacement(
+    sheetState: ExploreSheetState,
+    containerHeight: Dp,
+    sheetHeight: Dp,
+    bottomCtaTop: Dp?,
+): RefreshButtonPlacement {
+    val fitsAboveSheet = sheetState != ExploreSheetState.FULL &&
+        containerHeight - sheetHeight - RefreshButtonGap >= RefreshButtonSize
+    return if (fitsAboveSheet) {
+        RefreshButtonPlacement(RefreshButtonSpot.ABOVE_SHEET, end = RefreshButtonEndInset, bottom = sheetHeight + RefreshButtonGap)
+    } else {
+        RefreshButtonPlacement(
+            RefreshButtonSpot.OVER_LIST,
+            end = MoyeotaSpacing.ScreenGutter,
+            bottom = (bottomCtaTop ?: 0.dp) + RefreshButtonGap,
+        )
+    }
+}
+
+/**
+ * 카운트다운 새로고침 버튼을 **그리는가** — 그릴 것([refresh])이 있고 위치 권한이 있을 때.
+ *
+ * 권한이 없으면 지도 대신 권한 안내가 깔리지만 조회는 그대로 돈다(기준 범위로 첫 조회, 15초 주기 — `ExploreRoute`).
+ * 그래도 **버튼은 그리지 않는다**:
+ * - 버튼의 자리([refreshButtonPlacement] — 줌 컨트롤 세로선, 시트 윗변 16dp 위)는 지도 위를 전제로 정한 것이다.
+ *   권한 안내 위에서는 그 화면의 유일한 행동인 「위치 권한 허용」 곁에 뜻 모를 원이 하나 더 생긴다
+ * - 다시 읽는 범위가 눈에 보이지 않는 기준 범위라, 무엇을 새로 고치는지 화면이 말해 주지 못한다
+ *
+ * 버튼이 없을 때의 기다림은 목록의 대체 로딩 표시가 맡는다([showListLoadingFallback]).
+ */
+internal fun refreshButtonShown(refresh: ExploreRefreshUi?, locationGranted: Boolean): Boolean =
+    refresh != null && locationGranted
+
+/**
+ * 목록 자리에 **대체 로딩 표시**(작은 스피너)를 그리는가 — 새 목록을 읽는 중인데([loading]) 새로고침 버튼이
+ * 없을 때([refreshButtonShown] 이 false). 세 모드 모두 같은 규칙이다.
+ *
+ * 목록 가운데 스피너를 걷은 근거는 「기다림은 버튼의 도는 고리가 보여 준다」였다(2026-11, 오너 UX 피드백 2차). 그
+ * 근거는 버튼이 **있을 때만** 선다. 버튼이 없으면(위치 권한 없음 · 물어볼 것이 없음 · 주기 갱신이 없는 모드) 첫 조회와
+ * 에러 화면의 「다시 시도」 동안 목록은 비어 있고 — 아직 묻지 못한 것을 「없다」고 말하지 않으려 빈 목록 문구도
+ * 그리지 않는다 — 도는 것이 하나도 없어 **빈 화면**으로 보인다.
+ *
+ * 버튼이 있으면 그리지 않는다 — 기다림을 두 자리에서 보이지 않는다. 접힘(PEEK)에는 목록이 없고 요약 줄이
+ * 「불러오는 중」 문구를 적으므로 이 판정은 반펼침·FULL 의 목록에만 쓰인다.
+ */
+internal fun showListLoadingFallback(loading: Boolean, refreshButtonShown: Boolean): Boolean =
+    loading && !refreshButtonShown
+
 /**
  * 지도 오른쪽 아래의 **카운트다운 새로고침 버튼** — 오너가 준 네이버 지도 참고 그대로: 짙은 원에
- * 원형 화살표 고리, 가운데에 남은 초.
+ * 원형 화살표 고리, 가운데에 남은 초. 자리는 시트 단계가 정한다([refreshButtonPlacement]).
  *
  * - 누르면 즉시 다시 읽고 15부터 다시 센다([onClick]). 조회가 나가 있는 동안은 숫자 대신 **고리가 돈다**
- *   (눌리지 않는다)
+ *   (눌리지 않는다). 이 화면의 **유일한 로딩 표시**다 — 새 날짜·도착지·모드를 읽는 동안에도 목록 가운데에
+ *   스피너를 두지 않는다
  * - **움직임 줄이기**(개발자 옵션·접근성의 「애니메이션 삭제」 = 애니메이터 배율 0)가 켜져 있으면 돌리지
  *   않고 고리를 흐리게만 한다 — 도는 표시는 장식이고, 상태는 「새로고침 중」으로 이미 읽힌다
  * - 색: 짙은 원(`InkPrimary`)에 흰 글자 — 지도 타일 위 어디서나 대비가 선다. 그림자는 지도 위 알약과

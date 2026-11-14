@@ -227,6 +227,40 @@ internal fun reservationCommitmentNotice(joining: Boolean): String {
 internal const val RESERVATION_NO_SLOT_NOTICE = "이 날은 고를 수 있는 시간이 없어요. 다른 날을 골라 주세요"
 
 /**
+ * 16 CTA 직전 다시 재기([reservationTimeStillValid])가 실패해 **보내지 않고 휠만 옮겼을 때** CTA 위에 남기는 한 줄 —
+ * 날짜는 그대로이고 시각만 그 날의 가장 이른 값으로 접혔다.
+ *
+ * 이 줄이 없으면 버튼을 눌렀는데 아무 일도 없고 휠 숫자만 슬쩍 바뀐다(리뷰 반영 2차, PR #99) — 사용자는 「안 눌렸다」로
+ * 읽고 한 번 더 눌러, **보지 않은 시각**으로 예약 방을 만든다(예약 방은 시간을 바꿀 수 없다). 그래서 무엇이 왜
+ * 바뀌었는지와 할 일(확인하고 다시 누르기)을 함께 말한다.
+ *
+ * 「가장 빠른 시각」이 사실인 이유: 날짜가 그대로면 범위의 끝(가장 늦은 값)은 시간이 갈수록 늘기만 하므로, 다시 재기가
+ * 실패한 값은 늘 새 범위의 앞쪽 밖이고 [reservationSelectedTime] 이 그것을 가장 이른 값으로 접는다.
+ */
+internal const val RESERVATION_TIME_MOVED_NOTICE = "시간이 지나 가장 빠른 시각으로 바꿨어요. 확인하고 다시 눌러 주세요"
+
+/**
+ * [RESERVATION_TIME_MOVED_NOTICE] 의 **날짜까지 바뀐** 경우 — 보던 날에 남은 시각이 없어졌거나(늦은 밤의 「오늘」)
+ * 자정을 넘겨 띠에서 빠져 고를 수 있는 첫 날로 옮겨졌다([reservationDateOffsetAfterClockMove]).
+ *
+ * 여기서는 「가장 빠른 시각」이라고 말하지 않는다 — 새 날에는 사용자가 휠로 골라 둔 값이 범위 안이라 그대로 살아날
+ * 수 있다([reservationSelectedTime]). 그래서 날짜와 시각을 **둘 다** 확인하라고만 한다.
+ */
+internal const val RESERVATION_DATE_MOVED_NOTICE = "시간이 지나 다른 날로 바꿨어요. 날짜와 시각을 확인하고 다시 눌러 주세요"
+
+/**
+ * 다시 재기가 실패해 휠을 옮긴 뒤의 안내 — 띠에 칠해진 날짜가 바뀌었으면 [RESERVATION_DATE_MOVED_NOTICE], 아니면
+ * [RESERVATION_TIME_MOVED_NOTICE].
+ *
+ * 오류가 아니라 **안내**다 — 빨강(`NoticeKind.ERROR`)으로 칠하지 않는다(`DestinationConfirmModal` 의
+ * `RESERVATION_CLOCK_MOVED_NOTICE_KIND`). 휠이나 날짜 띠를 만지거나 CTA 를 다시 누르면 걷힌다.
+ *
+ * @param dateChanged 옮기기 전과 뒤에 띠에 칠해진 날짜가 다르다
+ */
+internal fun reservationClockMovedNotice(dateChanged: Boolean): String =
+    if (dateChanged) RESERVATION_DATE_MOVED_NOTICE else RESERVATION_TIME_MOVED_NOTICE
+
+/**
  * 고를 수 있는 날짜 — **오늘부터 7일 뒤까지 8개**(한국 달력).
  *
  * 검색(`GET /matching/reservations/search`)의 `date` 범위와 생성의 출발 시각 창이 같은 7일이라
@@ -315,6 +349,20 @@ internal fun reservationTimeRange(
  */
 internal data class ReservationTimeRange(val earliest: LocalTime, val latest: LocalTime) {
     operator fun contains(time: LocalTime): Boolean = !time.isBefore(earliest) && !time.isAfter(latest)
+}
+
+/**
+ * 16 이 보내려는 예약 시각이 **지금 기준으로도** 고를 수 있는 범위 안인가 — 보내기 직전에 한 번 잰다.
+ *
+ * 휠의 범위는 모달을 연 순간의 시계로 정해진다(매 프레임 시계를 읽으면 휠이 손가락 아래에서 움직인다).
+ * 그런데 휠은 늘 기본값(가장 이른 시각)이 있어 열어 둔 채 오래 머문 뒤 바로 누를 수 있고, 그때 그 값은
+ * 이미 지났거나 [RESERVATION_MIN_LEAD_MINUTES] 여유를 잃었을 수 있다. false 면 보내지 않고 기준을
+ * 지금으로 옮긴다(호출부). 시각이 없으면(고를 시각이 없는 날) 보낼 것이 없으니 false.
+ */
+internal fun reservationTimeStillValid(date: LocalDate, time: LocalTime?, now: Instant): Boolean {
+    time ?: return false
+    val range = reservationTimeRange(date, now) ?: return false
+    return time in range
 }
 
 /** [t] 이상인 가장 이른 [step] 분 단위 시각. 초·나노초가 남아 있으면 먼저 다음 분으로 올린다. */
@@ -461,6 +509,34 @@ internal fun reservationSelectableDateIndex(
     val clamped = storedIndex.coerceIn(0, dates.lastIndex)
     if (isSelectable(dates[clamped])) return clamped
     return dates.indexOfFirst(isSelectable).takeIf { it >= 0 } ?: clamped
+}
+
+/**
+ * 16 의 기준 시각(`now`)을 옮긴 뒤 저장할 **날짜 인덱스** — 고른 **달력 날짜**를 그대로 지킨다.
+ *
+ * 고른 날짜는 「오늘로부터의 일수」(`dateOffset`)로 저장되고 날짜 띠는 `reservationDates(now)` 에서 나온다. 기준을
+ * 옮기면서(CTA 직전의 다시 재기, 화면 복귀) 자정을 넘기면 **같은 일수가 다음 날을 가리킨다** — 23:58 에 「내일」을
+ * 고르고 00:05 에 누르면 다시 재기가 실패해 기준이 옮겨지고, 띠가 「모레」로 넘어간다. 바뀐 시각을 보고 다시
+ * 누르면 고르지 않은 날로 예약 방이 만들어진다(예약 방은 시간을 바꿀 수 없다).
+ *
+ * 그래서 옮긴 범위([newDates] = `reservationDates(fresh)`)에서 **보던 날짜의 자리**를 다시 찾는다.
+ *
+ * | 경우 | 결과 |
+ * |---|---|
+ * | 보던 날짜가 새 범위에 있다 | 그 자리 — 고를 수 없는 날이 됐으면(늦은 밤의 오늘) 보여 줄 때 [reservationSelectableDateIndex] 가 접는다 |
+ * | 범위를 벗어났다(자정을 넘겨 「어제」가 됐다) | 고를 수 있는 첫 날([reservationSelectableDateIndex]) |
+ *
+ * @param selectedDate 옮기기 **전에** 띠에 칠해져 있던 날짜(접힌 뒤의 값 — 사용자가 보던 그 날)
+ * @param newDates 옮긴 기준의 날짜 띠(`reservationDates(fresh)`)
+ * @param isSelectable 옮긴 기준에서 그 날을 고를 수 있는가(`reservationTimeRange(date, fresh) != null`)
+ */
+internal fun reservationDateOffsetAfterClockMove(
+    selectedDate: LocalDate,
+    newDates: List<LocalDate>,
+    isSelectable: (LocalDate) -> Boolean,
+): Int {
+    val index = newDates.indexOf(selectedDate)
+    return if (index >= 0) index else reservationSelectableDateIndex(0, newDates, isSelectable)
 }
 
 /**

@@ -907,7 +907,7 @@ internal fun shouldObservePartyEvents(visible: Boolean, streamEnded: Boolean): B
 
 /**
  * 폴백 폴링 패스 하나가 할 일 — [fallbackPollStep] 의 판정 결과.
- * (17 탐색 `NearbyPollStep` 과 같은 자리·같은 모양이다.)
+ * (17 탐색이 예전에 쓰던 `NearbyPollStep` 과 같은 모양이다 — 17 은 지금 시계 `ExploreRefreshCycle` 의 세션이 가시성을 본다.)
  */
 internal enum class FallbackStep {
     /** 아무것도 하지 않고 다음 신호를 기다린다 — 안 보이거나, 루프가 이미 끝났다 */
@@ -923,7 +923,7 @@ internal enum class FallbackStep {
 /**
  * 폴백 루프를 **돌릴지, 첫 조회를 미룰지, 아예 멈출지.**
  *
- * 폴링을 화면 가시성에 묶는 판정을 이 한 곳에 모은다(17 탐색 `nearbyPollStep` 과 같은 역할).
+ * 폴링을 화면 가시성에 묶는 판정을 이 한 곳에 모은다(17 탐색에서는 `ExploreRefreshCycle` 의 세션이 같은 역할을 한다).
  * 위에서부터 읽는다 — 앞의 조건이 뒤를 가린다.
  *
  * | 판정 | 조건 | 이유 |

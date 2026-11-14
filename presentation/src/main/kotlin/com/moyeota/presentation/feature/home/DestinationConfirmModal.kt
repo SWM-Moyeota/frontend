@@ -16,8 +16,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -208,7 +210,14 @@ fun DestinationConfirmModal(
     // 이 모달은 몇 분 안에 닫히는 화면이라 그 사이 기준이 낡아도 가장 이른 값이 10분 여유를
     // 갖고 있어([RESERVATION_MIN_LEAD_MINUTES]) 서버 창을 벗어나지 않는다. 그리고 보내는 시각은
     // **휠에 보이는 값 그대로**다(아래 departureAt) — 보내는 순간 시계를 다시 읽어 고치지 않는다.
-    val now = remember { Instant.now() }
+    // 단, **보내기 직전에는 지금 시계로 다시 잰다**(아래 CTA) — 오래 열어 둬 기본값(가장 이른 시각)이 여유를
+    // 잃었으면 이 기준을 지금으로 옮겨 휠을 새 범위로 접는다([reservationTimeStillValid]).
+    //
+    // 기준은 고른 날짜(`dateOffset`)와 **함께 저장한다**(epoch ms). 일수는 이 기준의 「오늘」로부터 센 값이라, 다시
+    // 들어올 때 기준만 새로 읽고 일수를 그대로 두면 그 사이 자정을 넘긴 경우 다른 날을 가리킨다. 기준을 옮기는 길은
+    // 아래 `moveClock` 하나다 — 고른 달력 날짜를 지킨다([reservationDateOffsetAfterClockMove]).
+    var nowMillis by rememberSaveable { mutableLongStateOf(System.currentTimeMillis()) }
+    val now = Instant.ofEpochMilli(nowMillis)
     val dateOptions = remember(now) { reservationDates(now) }
     val today = dateOptions.first()
     // 그 날에 고를 시각이 남아 있는가 — 늦은 밤의 「오늘」만 false 다. 띠는 그 칸을 누르지 못하게 그린다.
@@ -220,12 +229,29 @@ fun DestinationConfirmModal(
     // 열리면 휠 자리에 「고를 시간이 없어요」만 남는다([reservationSelectableDateIndex]).
     val selectedDate = dateOptions[reservationSelectableDateIndex(dateOffset, dateOptions, dateSelectable)]
     val timeRange = remember(selectedDate, now) { reservationTimeRange(selectedDate, now) }
+    // 기준을 [fresh] 로 옮긴다 — 일수를 새 띠에서 **보던 날짜의 자리**로 다시 셈한다. 일수만 두면 자정을 넘긴 기준에서
+    // 「내일」이 「모레」가 된다(리뷰 반영, PR #99). 보던 날이 범위를 벗어났으면 고를 수 있는 첫 날이다.
+    // 돌려주는 값은 옮긴 뒤 띠에 **칠해질** 날짜다(위 `selectedDate` 와 같은 접기) — CTA 의 안내가 날짜도 바뀌었는지 가른다.
+    fun moveClock(fresh: Instant): LocalDate {
+        val freshDates = reservationDates(fresh)
+        val freshSelectable: (LocalDate) -> Boolean = { date -> reservationTimeRange(date, fresh) != null }
+        dateOffset = reservationDateOffsetAfterClockMove(selectedDate, freshDates, freshSelectable)
+        nowMillis = fresh.toEpochMilli()
+        return freshDates[reservationSelectableDateIndex(dateOffset, freshDates, freshSelectable)]
+    }
+    // 들어올 때마다(처음 · 위에 쌓인 화면에서 돌아옴 · 구성 변경) 기준을 지금으로 다시 읽는다 — 덮인 동안의 낡은 기준이
+    // 남으면 이미 지난 시각을 고를 수 있다. 예전에는 기준이 `remember` 라 저절로 다시 읽혔고, 그때 일수는 그대로 남아
+    // 자정을 넘기면 날짜가 밀렸다.
+    LaunchedEffect(Unit) { moveClock(Instant.now()) }
     // 휠로 고른 시각(하루의 분). -1 = 아직 휠을 건드리지 않았다 → **그 날의 가장 이른 시각이 기본 선택**이다.
     //
     // 칩 시절에는 기본 선택이 없었다(아무도 원하지 않은 00:00 예약이 한 번의 탭으로 만들어진다는 이유).
     // 휠은 늘 값을 보여 주므로 「안 골랐다」를 그릴 수 없고, 그래서 규칙을 바꿨다 — 근거와 대신 세운
     // 방어(크게 보이는 휠 값 + CTA 위 되읽기 줄)는 [reservationSelectedTime] KDoc 에 있다.
     var selectedMinuteOfDay by rememberSaveable { mutableIntStateOf(-1) }
+    // CTA 직전 다시 재기가 실패해 휠을 옮겼다는 안내([reservationClockMovedNotice]). null 이면 없다.
+    // 휠·날짜 띠를 만지거나 CTA 를 다시 누르면 걷는다 — 사용자가 바뀐 값을 보고 손을 댔다는 뜻이다.
+    var clockMovedNotice by rememberSaveable { mutableStateOf<String?>(null) }
     // 날짜를 바꾸면 **보여 줄 값만** 그 날의 범위로 접는다(고른 값은 남는다 — 정원의 [capacityFor] 와
     // 같은 처방). 이 값이 휠에 보이는 값이자 서버로 가는 값이다.
     val selectedTime = reservationSelectedTime(
@@ -482,7 +508,10 @@ fun DestinationConfirmModal(
                                     ReservationDateStrip(
                                         dates = dateOptions,
                                         selected = selectedDate,
-                                        onSelect = { date -> dateOffset = dateOptions.indexOf(date).coerceAtLeast(0) },
+                                        onSelect = { date ->
+                                            dateOffset = dateOptions.indexOf(date).coerceAtLeast(0)
+                                            clockMovedNotice = null
+                                        },
                                         isSelectable = dateSelectable,
                                     )
                                 }
@@ -497,7 +526,10 @@ fun DestinationConfirmModal(
                                         ReservationTimeWheel(
                                             range = range,
                                             selected = selectedTime,
-                                            onSelect = { time -> selectedMinuteOfDay = time.hour * 60 + time.minute },
+                                            onSelect = { time ->
+                                                selectedMinuteOfDay = time.hour * 60 + time.minute
+                                                clockMovedNotice = null
+                                            },
                                         )
                                     }
                                 }
@@ -690,7 +722,17 @@ fun DestinationConfirmModal(
                             modifier = Modifier.fillMaxWidth().padding(horizontal = MoyeotaSpacing.ScreenGutter),
                         )
                     }
-                    if (errorMessage != null) {
+                    // CTA 위 안내 자리 하나를 둘이 나눠 쓴다. 다시 재기 안내가 먼저다 — 방금 누른 것에 대한 답이고,
+                    // 서버 오류는 그 앞의 시도에 대한 말이다. 다시 재기 안내는 예약 휠 이야기라 예약일 때만 보인다.
+                    val clockNotice = clockMovedNotice.takeIf { scheduled }
+                    if (clockNotice != null) {
+                        Spacer(Modifier.height(12.dp))
+                        NoticeBanner(
+                            kind = RESERVATION_CLOCK_MOVED_NOTICE_KIND,
+                            text = clockNotice,
+                            modifier = Modifier.padding(horizontal = MoyeotaSpacing.ScreenGutter),
+                        )
+                    } else if (errorMessage != null) {
                         Spacer(Modifier.height(12.dp))
                         NoticeBanner(
                             kind = NoticeKind.ERROR,
@@ -698,14 +740,31 @@ fun DestinationConfirmModal(
                             modifier = Modifier.padding(horizontal = MoyeotaSpacing.ScreenGutter),
                         )
                     }
+                    val bannerShown = clockNotice != null || errorMessage != null
                     // 예약 안내가 CTA 바로 위에 올 때는 8dp 로 붙인다 — 그 안내는 이 버튼에 대한 말이다
-                    Spacer(Modifier.height(if (scheduled && errorMessage == null) 8.dp else 12.dp))
+                    Spacer(Modifier.height(if (scheduled && !bannerShown) 8.dp else 12.dp))
                     PrimaryCtaButton(
                         // 예약은 **무엇이 만들어지는지** 적는다 — 「같이 탈 사람 찾기」는 지금
                         // 모집을 시작하는 말이라, 시간을 정해 둔 방에는 맞지 않는다.
                         text = if (scheduled) "이 시간으로 예약 방 만들기" else "같이 탈 사람 찾기",
                         onClick = {
-                            onFindCompanions(MatchConditions(capacity = capacity, departureAt = departureAt))
+                            // 휠은 기본값(그 날의 가장 이른 시각)이 늘 있어 한 번도 안 건드려도 보낼 수 있다. 모달을
+                            // 연 채 오래 머물면 그 값이 이미 지났거나 여유가 없을 수 있다 — 그대로 보내면 서버가 400
+                            // `INVALID_DEPARTURE_TIME` 으로 막고, 안내는 「7일 안이어야 해요」라 원인과 어긋난다.
+                            // 그래서 **지금 시계로 다시 재고, 범위를 벗어났으면 보내지 않고 기준만 옮긴다** — 휠이
+                            // 새 범위로 접혀 보이는 값이 바뀌고, 사용자는 바뀐 시각을 보고 다시 누른다
+                            // (보이는 값 = 보내는 값 원칙은 그대로다).
+                            // 기준을 옮길 때 고른 날짜는 지킨다(`moveClock`) — 자정을 넘겨도 「내일」이 「모레」가 되지 않는다.
+                            // 옮겼으면 CTA 위에 **왜 안 보냈는지** 한 줄 남긴다(리뷰 반영 2차) — 휠 숫자만 슬쩍 바뀌면
+                            // 「안 눌렸다」로 읽혀 바뀐 값을 보지 않고 다시 누른다. 다시 누르면 먼저 걷는다.
+                            clockMovedNotice = null
+                            val fresh = Instant.now()
+                            if (scheduled && !reservationTimeStillValid(selectedDate, selectedTime, fresh)) {
+                                val shownDate = moveClock(fresh)
+                                clockMovedNotice = reservationClockMovedNotice(dateChanged = shownDate != selectedDate)
+                            } else {
+                                onFindCompanions(MatchConditions(capacity = capacity, departureAt = departureAt))
+                            }
                         },
                         // 시각이 없는 예약은 보낼 수 없다 — 휠이 늘 값을 주므로 고른 날에 남은 시각이 없을
                         // 때만 꺼진다. 그때 비활성 버튼 위에 **왜 못 누르는지**를 적어 둔다
@@ -739,6 +798,15 @@ fun DestinationConfirmModal(
         }
     }
 }
+
+/**
+ * CTA 직전 다시 재기 안내([reservationClockMovedNotice])의 배너 종류 — **회색 안내(INFO)**.
+ *
+ * 오류가 아니다: 아무것도 실패하지 않았고, 앱이 시간이 지난 값을 고쳐 두고 확인을 부탁할 뿐이다. 빨강(ERROR)은
+ * 서버가 거절한 일에 쓰는 색이라 여기 쓰면 「방을 못 만들었다」로 읽힌다. 호박(WAITING)은 「기다리는 중」이라는 뜻을
+ * 싣는 색이라(매칭 대기) 맞지 않는다 — 뜻이 없는 회색 안내가 이 말의 무게다([NoticeKind] KDoc).
+ */
+internal val RESERVATION_CLOCK_MOVED_NOTICE_KIND = NoticeKind.INFO
 
 /**
  * 「걸어서 가까운 방」 추천 목록. **후보가 있을 때만** 불린다(빈 목록은 호출부가 거른다).
