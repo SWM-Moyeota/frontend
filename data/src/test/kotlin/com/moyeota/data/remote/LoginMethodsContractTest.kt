@@ -43,4 +43,14 @@ class LoginMethodsContractTest {
         assertEquals("""{"idToken":"google-token","verificationToken":"proof"}""", body(3))
         assertFalse(requests.any { it.url.toString().contains("token") || it.url.query != null })
     }
+
+    @Test fun `모르는 provider는 건너뛰고 모르는 status는 재인증 필요로 읽는다`() {
+        val dto = Json.decodeFromString<LoginMethodsDto>(
+            """{"hasPassword":true,"methods":[{"provider":"KAKAO","status":"ACTIVE"},{"provider":"GOOGLE","status":"ACTIVE"},""" +
+                """{"provider":"APPLE","status":"SUSPENDED"},{"provider":"NAVER","status":"PENDING"}]}""")
+        val methods = dto.toDomain()
+        assertTrue(methods.hasPassword)
+        assertEquals(listOf(LoginMethod(SocialProvider.GOOGLE, LoginMethodStatus.ACTIVE),
+            LoginMethod(SocialProvider.APPLE, LoginMethodStatus.REVOKED)), methods.methods)
+    }
 }
