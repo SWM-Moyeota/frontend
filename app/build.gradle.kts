@@ -66,6 +66,21 @@ val moyeotaBaseUrl: String =
 val mixpanelToken: String = buildSetting("MIXPANEL_TOKEN", default = "")
 
 /**
+ * Amplitude·PostHog — Mixpanel 과 **같은 이벤트**를 함께 받는다(docs/ANALYTICS.md). 규칙도 같다:
+ * local.properties 또는 환경변수에서 읽고, 비어 있으면 그 도구의 리포터가 SDK 를 켜지 않는다. 키는 커밋하지 않는다
+ * (CI 는 secrets.AMPLITUDE_API_KEY · secrets.POSTHOG_API_KEY).
+ *
+ * 리전은 **프로젝트를 만든 곳과 같아야** 이벤트가 들어간다 — 다르면 SDK 는 조용히 실패한다.
+ * - AMPLITUDE_SERVER_ZONE: US(기본) / EU
+ * - POSTHOG_HOST: https://us.i.posthog.com(기본) / https://eu.i.posthog.com
+ * 리전은 비밀이 아니다. EU 로 만들었으면 아래 기본값을 바꿔 커밋하는 게 시크릿을 하나 더 두는 것보다 낫다.
+ */
+val amplitudeApiKey: String = buildSetting("AMPLITUDE_API_KEY", default = "")
+val amplitudeServerZone: String = buildSetting("AMPLITUDE_SERVER_ZONE", default = "US")
+val posthogApiKey: String = buildSetting("POSTHOG_API_KEY", default = "")
+val posthogHost: String = buildSetting("POSTHOG_HOST", default = "https://us.i.posthog.com")
+
+/**
  * Meta(Facebook) 광고 설치 측정. 앱 ID 는 메타 앱 「모여타」의 **공개 값**이라 기본값으로 둔다(iOS Base.xcconfig 와 같은 값).
  * 클라이언트 토큰은 저장소에 두지 않는다 — local.properties 또는 환경변수 FACEBOOK_CLIENT_TOKEN(CI 는 secrets).
  * 개발자 센터 → 앱 설정 → 고급 → 보안에 있다.
@@ -113,6 +128,10 @@ android {
         manifestPlaceholders["naverMapsClientId"] = naverMapsClientId
         buildConfigField("String", "BASE_URL", "\"$moyeotaBaseUrl\"")
         buildConfigField("String", "MIXPANEL_TOKEN", "\"$mixpanelToken\"")
+        buildConfigField("String", "AMPLITUDE_API_KEY", "\"$amplitudeApiKey\"")
+        buildConfigField("String", "AMPLITUDE_SERVER_ZONE", "\"$amplitudeServerZone\"")
+        buildConfigField("String", "POSTHOG_API_KEY", "\"$posthogApiKey\"")
+        buildConfigField("String", "POSTHOG_HOST", "\"$posthogHost\"")
 
         // manifestPlaceholders 가 아니라 문자열 리소스로 넘긴다. meta-data 에 숫자만 있는 값을 직접 쓰면
         // 플랫폼이 Integer/Float 로 읽어 버리고, SDK 는 숫자형 앱 ID 를 거부한다(FacebookSdk.loadDefaultsFromMetadata).
@@ -202,10 +221,14 @@ dependencies {
     implementation(libs.firebase.crashlytics)
     // 행동 이벤트 전송. Mixpanel 을 아는 파일은 MixpanelAnalyticsReporter 하나다.
     implementation(libs.mixpanel.android)
+    // 같은 이벤트를 Amplitude·PostHog 로도 보낸다. 각 SDK 를 아는 파일은 리포터 하나씩이다(docs/ANALYTICS.md).
+    implementation(libs.amplitude.android)
+    implementation(libs.posthog.android)
     // 메타 광고 설치 측정. 코드에서 부르지 않는다 — SDK 의 초기화 ContentProvider 가 매니페스트 값으로 켜고,
     // 자동 앱 이벤트(설치·실행)만 보낸다. 설정은 AndroidManifest.xml 의 com.facebook.sdk.* meta-data.
     implementation(libs.facebook.core)
     testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.junit)
 }

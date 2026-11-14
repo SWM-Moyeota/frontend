@@ -29,6 +29,9 @@ playServicesLocation = "21.4.0"
 firebaseBom = "34.17.0"
 # 2026-11-04 기준 Maven Central 최신 안정판(2026-10-30 배포)
 mixpanel = "8.12.0"
+# 2026-11-14 기준 Maven Central 최신 안정판. 둘 다 kotlin-stdlib 가 2.2.10 아래다(amplitude 1.9.25 · posthog 2.1.21, pom 확인).
+amplitude = "1.37.1"
+posthog = "3.77.1"
 # Meta(Facebook) 광고 설치 측정. 2026-11-04 Maven Central 배포. kotlin-stdlib 1.8.20 을 끌고 와 Kotlin 2.2.10 과 충돌하지 않는다(pom 확인).
 facebookSdk = "19.0.1"
 junit = "4.13.2"
@@ -73,6 +76,8 @@ firebase-messaging = { group = "com.google.firebase", name = "firebase-messaging
 # 버전을 적지 않는다 — BOM 34.17.0 이 firebase-crashlytics 20.1.0 으로 고정한다(BOM pom 실측).
 firebase-crashlytics = { group = "com.google.firebase", name = "firebase-crashlytics" }
 mixpanel-android = { group = "com.mixpanel.android", name = "mixpanel-android", version.ref = "mixpanel" }
+amplitude-android = { group = "com.amplitude", name = "analytics-android", version.ref = "amplitude" }
+posthog-android = { group = "com.posthog", name = "posthog-android", version.ref = "posthog" }
 # facebook-android-sdk 전체가 아니라 core 만 — 로그인·공유 없이 앱 이벤트(설치 측정)만 쓴다.
 facebook-core = { group = "com.facebook.android", name = "facebook-core", version.ref = "facebookSdk" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }

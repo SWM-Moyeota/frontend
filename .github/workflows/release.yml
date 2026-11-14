@@ -105,6 +105,9 @@ jobs:
           # Mixpanel 토큰. 비어 있으면 리포터가 SDK 를 켜지 않아 스토어 빌드의 이벤트가 **조용히 꺼진다** —
           # build.yml(디버그)과 같은 시크릿을 여기에도 넣어야 운영 이벤트가 올라간다.
           MIXPANEL_TOKEN: ${{ secrets.MIXPANEL_TOKEN }}
+          # Mixpanel 과 같은 이벤트를 받는다. 비면 그 도구만 꺼지고 빌드는 된다(docs/ANALYTICS.md).
+          AMPLITUDE_API_KEY: ${{ secrets.AMPLITUDE_API_KEY }}
+          POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           # 메타 광고 설치 측정. 비면 SDK 가 켜지지 않아 설치가 메타로 안 간다(docs/ANALYTICS.md).
           FACEBOOK_CLIENT_TOKEN: ${{ secrets.FACEBOOK_CLIENT_TOKEN }}
           # 스텝 수준 env 에서는 runner 컨텍스트를 쓸 수 있다. rootProject.file() 은 절대 경로를
