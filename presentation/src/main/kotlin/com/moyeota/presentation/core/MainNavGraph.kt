@@ -923,6 +923,7 @@ private fun MainNavHost(
         composable(Routes.CHAT) {
             ChatRoute(
                 repository = chatRepository,
+                rideRepository = rideRepository,
                 // 열린 방이 진행 중인 그 방이면 헤더에 「매칭 화면으로」 줄이 뜨고 「나가기」가 사라진다.
                 // **판정의 1순위는 채팅방 id 다** — 이 경로의 방은 목록 응답(`GET /chat-rooms/me`)으로
                 // 만든 것이어서 partyId 가 0(모름)이고, 그걸로 비교하면 늘 "내 방이 아니다"가 됐다.
@@ -933,6 +934,20 @@ private fun MainNavHost(
                     // 나간 방 id 를 진행 화면이 들고 있으면 「채팅 열기」가 죽은 방으로 간다 — 캐시를 버린다
                     activePartyViewModel.forgetChatRoom()
                     navigateTab(MoyeotaTab.HOME)
+                },
+                // 목록 길게 누르기로 동승에서 나갔다 — 그 방이 진행 중인 방이면 기억을 지우고, 아니면(예약 방 등)
+                // 진행 중인 방을 다시 찾는다. 홈 배너와 「채팅 열기」가 나간 방을 붙들고 있지 않게 한다
+                // 방 id 는 숫자로 비교한다 — 문자열 표기(앞자리 0 등)가 달라도 같은 방이다(`needsDetailAfterRemember` 와 같은 이유)
+                onLeftParty = { partyId ->
+                    if (activeRide?.id?.toLongOrNull() == partyId) activePartyViewModel.clearParty()
+                    else activePartyViewModel.refresh()
+                },
+                // 채팅방만 나간 방은 끝난 방이다 — 그 채팅방을 들고 있었다면 버리고, 끝난 방 기억도 다시 확인해 지운다
+                onLeftChatRoom = { chatRoomId ->
+                    if (chatRoomId == activeChatRoomId) {
+                        activePartyViewModel.forgetChatRoom()
+                        activePartyViewModel.refresh()
+                    }
                 },
                 onNotParticipant = activePartyViewModel::forgetChatRoom,
                 onTabSelect = ::navigateTab,

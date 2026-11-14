@@ -1,7 +1,7 @@
 package com.moyeota.presentation.feature.chat
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.defaultMinSize
@@ -20,6 +20,11 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
@@ -28,6 +33,8 @@ import com.moyeota.core.designsystem.component.AvatarCircle
 import com.moyeota.core.designsystem.component.MoyeotaBottomBar
 import com.moyeota.core.designsystem.component.MoyeotaTab
 import com.moyeota.core.designsystem.component.MoyeotaTabHeader
+import com.moyeota.core.designsystem.component.NoticeBanner
+import com.moyeota.core.designsystem.component.NoticeKind
 import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.core.designsystem.theme.MoyeotaSpacing
@@ -45,16 +52,22 @@ import com.moyeota.presentation.core.routePlaces
  *
  * 이동:
  * - 방 행 탭 → 24 채팅방 (onRoomClick)
+ * - 방 행 길게 누르기 → 알림 끄기/켜기 · 나가기 메뉴 (onRoomLongClick — [ChatRoomActionSheet])
  * - 하단탭 → 14/17/35 (onTabSelect)
  *
  * 제목은 **참여자 닉네임**([ChatRoomListItem.peerTitle] · `chatRoomPeerTitle`), 부제는 **마지막 메시지**
  * (없으면 「출발지:」·「도착지:」 두 줄 — [chatRoomSubtitle]), 우측에 마지막 메시지 시각과 안읽음 점.
  * 정렬은 Route 가 이미 마친 상태로 넘어온다(`chatRoomSortKey` — 마지막 활동 시각 내림차순).
+ * 알림을 끈 방은 제목 옆에 사선 그은 종이 붙는다([MutedMark]) — 켜진 방은 아무것도 붙지 않는다.
+ *
+ * @param notice 길게 누르기 메뉴의 동작이 실패했을 때 목록 위에 띄우는 한 줄
  */
 @Composable
 fun ChatListScreen(
     rooms: List<ChatRoomListItem> = emptyList(),
+    notice: String? = null,
     onRoomClick: (MyChatRoom) -> Unit = {},
+    onRoomLongClick: (ChatRoomListItem) -> Unit = {},
     onTabSelect: (MoyeotaTab) -> Unit = {},
 ) {
     // 흰 바탕 위 꽉 찬 행 목록(디자인 QA C1). 예전엔 회색 화면 위에 그림자 진 큰 카드 하나를 띄우고 그 안에
@@ -63,6 +76,16 @@ fun ChatListScreen(
     Column(modifier = Modifier.fillMaxSize().background(MoyeotaColor.SurfaceCanvas)) {
         StatusBarSpacer()
         MoyeotaTabHeader(title = "채팅")
+        // 스크롤 밖 머리 아래에 둔다 — 아래쪽 행에서 메뉴를 썼어도 보이고, 스크린리더가 바로 읽는다
+        if (notice != null) {
+            NoticeBanner(
+                kind = NoticeKind.ERROR,
+                text = notice,
+                modifier = Modifier
+                    .padding(horizontal = MoyeotaSpacing.ScreenGutter, vertical = MoyeotaSpacing.Xs)
+                    .semantics { liveRegion = LiveRegionMode.Polite },
+            )
+        }
 
         Column(
             modifier = Modifier
@@ -80,7 +103,11 @@ fun ChatListScreen(
                 )
             } else {
                 rooms.forEachIndexed { index, item ->
-                    ChatRoomRow(item = item, onClick = { onRoomClick(item.room) })
+                    ChatRoomRow(
+                        item = item,
+                        onClick = { onRoomClick(item.room) },
+                        onLongClick = { onRoomLongClick(item) },
+                    )
                     if (index != rooms.lastIndex) {
                         HorizontalDivider(
                             color = MoyeotaColor.Hairline,
@@ -155,8 +182,9 @@ internal fun chatRoomListTitle(item: ChatRoomListItem): String =
     item.peerTitle ?: "${item.room.room.departure} → ${item.room.room.destination}"
 
 @Composable
-private fun ChatRoomRow(item: ChatRoomListItem, onClick: () -> Unit) {
+private fun ChatRoomRow(item: ChatRoomListItem, onClick: () -> Unit, onLongClick: () -> Unit) {
     val membership = item.room.membership
+    val haptic = LocalHapticFeedback.current
     val title = chatRoomListTitle(item)
     val subtitle = chatRoomSubtitle(item)
     val timeLabel = membership.lastMessage?.createdAt?.toListTimeLabel()
@@ -164,7 +192,15 @@ private fun ChatRoomRow(item: ChatRoomListItem, onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onClick() }
+            // 길게 누르면 메뉴(카카오톡과 같은 손버릇). 손끝에 진동을 줘 메뉴가 「눌러서」 열렸음을 알린다
+            .combinedClickable(
+                onClick = onClick,
+                onLongClickLabel = "채팅방 메뉴",
+                onLongClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onLongClick()
+                },
+            )
             .padding(horizontal = MoyeotaSpacing.ScreenGutter, vertical = MoyeotaSpacing.Sm),
     ) {
         // 제목이 부르는 사람의 얼굴([ChatRoomListItem.peerImageUrl]) — 제목과 **같은 멤버 목록**에서
@@ -175,13 +211,18 @@ private fun ChatRoomRow(item: ChatRoomListItem, onClick: () -> Unit) {
         // 글 묶음과 오른쪽 시각은 **제목의 기준선**에 맞춘다 — 부제가 두 줄이 된 행에서 시각이 행 가운데로
         // 내려가면 어느 줄의 시각인지 흐려진다(디자인 QA 4-10).
         Column(modifier = Modifier.weight(1f).alignByBaseline()) {
-            Text(
-                text = title,
-                style = MoyeotaType.HeadingMd,
-                color = MoyeotaColor.InkPrimary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // 제목이 길어도 종이 밀려나지 않게 제목만 줄어든다(fill = false — 짧은 제목 바로 옆에 붙는다)
+                Text(
+                    text = title,
+                    style = MoyeotaType.HeadingMd,
+                    color = MoyeotaColor.InkPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                if (membership.notificationMuted) MutedMark()
+            }
             Spacer(Modifier.height(2.dp))
             when (subtitle) {
                 is ChatRoomSubtitle.Line -> Text(
