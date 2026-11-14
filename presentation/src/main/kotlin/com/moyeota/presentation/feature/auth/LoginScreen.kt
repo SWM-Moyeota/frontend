@@ -346,8 +346,7 @@ internal fun GoogleContinueButton(busy: Boolean, onClick: () -> Unit) {
         modifier = Modifier.fillMaxWidth().height(52.dp),
         enabled = !busy,
         shape = androidx.compose.foundation.shape.CircleShape,
-        border = androidx.compose.foundation.BorderStroke(
-            1.dp, if (!busy) MoyeotaColor.BorderStrong else MoyeotaColor.Border),
+        border = androidx.compose.foundation.BorderStroke(1.dp, MoyeotaColor.Hairline),
         colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(contentColor = MoyeotaColor.InkPrimary),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 24.dp),
     ) {
@@ -357,7 +356,7 @@ internal fun GoogleContinueButton(busy: Boolean, onClick: () -> Unit) {
                 imageVector = GoogleLogo, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(10.dp))
         }
-        Text(text = if (busy) "로그인 중…" else "Google로 계속하기", style = MoyeotaType.ButtonLg)
+        Text(text = if (busy) "로그인 중…" else "Google로 계속하기", style = com.moyeota.core.designsystem.theme.MoyeotaType.ButtonLg)
     }
 }
 
