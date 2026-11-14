@@ -267,7 +267,7 @@ fun MyPageScreen(
         AlertDialog(
             onDismissRequest = { logoutConfirming = false },
             title = { Text(text = "로그아웃할까요?", fontSize = 17.sp, fontWeight = FontWeight.Bold) },
-            text = { Text(text = "다시 이용하려면 아이디로 로그인해야 해요", fontSize = 14.sp) },
+            text = { Text(text = "다시 이용하려면 로그인해야 해요", fontSize = 14.sp) },
             confirmButton = {
                 TextButton(onClick = {
                     logoutConfirming = false
