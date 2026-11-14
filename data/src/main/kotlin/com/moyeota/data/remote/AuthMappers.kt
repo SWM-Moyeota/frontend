@@ -231,6 +231,9 @@ internal fun Throwable.toAuthException(): AuthException = when (this) {
             "USER402" -> AuthError.SOCIAL_SIGNUP_EXPIRED
             "USER403" -> AuthError.SOCIAL_ALREADY_REGISTERED
             "USER404" -> AuthError.SOCIAL_UNAVAILABLE
+            "USER405" -> AuthError.SOCIAL_LINK_CONFLICT
+            "USER406" -> AuthError.SOCIAL_LINK_VERIFICATION_EXPIRED
+            "USER407" -> AuthError.SOCIAL_CHALLENGE_INVALID
             // 문자 인증. 둘(201/208)만 합치고 나머지는 그대로 남긴다 — 위 표 아래 주석에 근거.
             "USER201", "USER208" -> AuthError.SMS_UNAVAILABLE
             "USER202" -> AuthError.SMS_COOLDOWN

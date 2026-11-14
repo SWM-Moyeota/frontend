@@ -1368,6 +1368,11 @@ private class FakeUserApi(
     private val profileImagesFailure: Throwable? = null,
     private val resetProfileImageFailure: Throwable? = null,
 ) : UserApi {
+    override suspend fun getLoginMethods() = com.moyeota.data.remote.dto.LoginMethodsDto(true, emptyList())
+    override suspend fun sendLoginMethodCode() = Unit
+    override suspend fun verifyLoginMethodCode(request: com.moyeota.data.remote.dto.LinkCodeDto) = com.moyeota.data.remote.dto.LinkVerificationDto("link-test", 300)
+    override suspend fun linkGoogle(request: com.moyeota.data.remote.dto.GoogleLinkDto) = Unit
+
     /** 푸시 토큰 호출이 **일어난 순서**. 어떤 호출이 실제로 나갔는지를 그대로 남긴다. */
     val fcmCalls = mutableListOf<String>()
 
@@ -1444,6 +1449,11 @@ private class FakeUserApi(
  * "세션 정리보다 먼저 해제했는가"는 호출 횟수로는 알 수 없고, 이렇게 시점을 찍어야만 드러난다.
  */
 private class TokenProbingUserApi(private val accessToken: () -> String?) : UserApi {
+    override suspend fun getLoginMethods() = com.moyeota.data.remote.dto.LoginMethodsDto(true, emptyList())
+    override suspend fun sendLoginMethodCode() = Unit
+    override suspend fun verifyLoginMethodCode(request: com.moyeota.data.remote.dto.LinkCodeDto) = com.moyeota.data.remote.dto.LinkVerificationDto("link-test", 300)
+    override suspend fun linkGoogle(request: com.moyeota.data.remote.dto.GoogleLinkDto) = Unit
+
     var accessTokenAtDelete: String? = null
         private set
     var deleteCount = 0
@@ -1488,6 +1498,11 @@ private class TokenProbingUserApi(private val accessToken: () -> String?) : User
  * 비껴갈 수 있어 회귀 테스트로서 믿을 수 없다.
  */
 private class SuspendingFcmUserApi(private val entered: CompletableDeferred<Unit>) : UserApi {
+    override suspend fun getLoginMethods() = com.moyeota.data.remote.dto.LoginMethodsDto(true, emptyList())
+    override suspend fun sendLoginMethodCode() = Unit
+    override suspend fun verifyLoginMethodCode(request: com.moyeota.data.remote.dto.LinkCodeDto) = com.moyeota.data.remote.dto.LinkVerificationDto("link-test", 300)
+    override suspend fun linkGoogle(request: com.moyeota.data.remote.dto.GoogleLinkDto) = Unit
+
     override suspend fun getMyProfile(): UserProfileResponse =
         throw UnsupportedOperationException("로그아웃 취소 검증 전용 페이크다")
 

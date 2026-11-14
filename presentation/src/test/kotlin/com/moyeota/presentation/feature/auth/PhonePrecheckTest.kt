@@ -209,6 +209,11 @@ private class FakePhonePrecheckRepository(
     private val failure: Throwable? = null,
     private val blockSend: Boolean = false,
 ) : AuthRepository {
+    override suspend fun getLoginMethods() = com.moyeota.domain.model.LoginMethods(true, emptyList())
+    override suspend fun sendLoginMethodCode() = Unit
+    override suspend fun verifyLoginMethodCode(code: String) = com.moyeota.domain.model.LinkVerification("link-test", 300)
+    override suspend fun linkGoogle(idToken: String, verificationToken: String) = Unit
+
 
     override val authState: StateFlow<AuthState> = MutableStateFlow(AuthState.Unauthenticated)
 

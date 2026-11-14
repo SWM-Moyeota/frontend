@@ -140,6 +140,7 @@ fun MyPageScreen(
     onRideHistory: () -> Unit = {},          // → 34 지난 탑승 기록
     onNoShowRecords: () -> Unit = {},        // → 38 노쇼 기록·이의 신청
     onLogout: () -> Unit = {},               // → 04a 로그인 (세션 정리 후)
+    onLoginMethods: () -> Unit = {},
     onDeleteAccount: () -> Unit = {},        // → 37 회원 탈퇴
     onTabSelect: (MoyeotaTab) -> Unit = {},  // → 14 / 17 / 24
     // 「안내」 카드가 여는 주소. 기본값은 운영 값이고, 프리뷰·테스트가 빈 상태를 넣어 본다.
@@ -172,6 +173,7 @@ fun MyPageScreen(
             is MyPageAction.SendMail -> context.openSupportEmail(action.address)
             MyPageAction.RideHistory -> onRideHistory()
             MyPageAction.NoShowRecords -> onNoShowRecords()
+            MyPageAction.LoginMethods -> onLoginMethods()
             MyPageAction.Logout -> logoutConfirming = true
             MyPageAction.DeleteAccount -> onDeleteAccount()
         }

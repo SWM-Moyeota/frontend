@@ -86,6 +86,7 @@ import com.moyeota.presentation.core.openWebPage
 @Composable
 fun AccountDeleteScreen(
     password: String,
+    hasPassword: Boolean = true,
     modifier: Modifier = Modifier,
     submitting: Boolean = false,
     passwordError: String? = null,
@@ -97,7 +98,7 @@ fun AccountDeleteScreen(
 ) {
     var confirming by remember { mutableStateOf(false) }
     var passwordVisible by remember { mutableStateOf(false) }
-    val canSubmit = canSubmitAccountDeletion(password, submitting)
+    val canSubmit = !submitting && (!hasPassword || canSubmitAccountDeletion(password, submitting))
     val context = LocalContext.current
 
     // 입력 화면은 흰 바탕이다(디자인 QA G2) — 회색 바탕에서는 비활성 버튼과 입력칸 테두리가 바탕에 묻힌다
@@ -119,7 +120,7 @@ fun AccountDeleteScreen(
             )
             Spacer(Modifier.height(8.dp))
             Text(
-                text = "아래 내용을 확인한 뒤 비밀번호를 입력해 주세요",
+                text = if (hasPassword) "아래 내용을 확인한 뒤 비밀번호를 입력해 주세요" else "아래 내용을 확인한 뒤 탈퇴를 진행해 주세요",
                 style = MoyeotaType.BodySm,
                 color = MoyeotaColor.TextMute,
             )
@@ -156,7 +157,7 @@ fun AccountDeleteScreen(
             }
 
             Spacer(Modifier.height(24.dp))
-            MoyeotaTextField(
+            if (hasPassword) MoyeotaTextField(
                 value = password,
                 onValueChange = onPasswordChange,
                 label = "비밀번호",

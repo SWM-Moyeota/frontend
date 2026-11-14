@@ -66,6 +66,19 @@ class RemoteAuthRepository(
     private val fcmTokenRegistrar: FcmTokenRegistrar,
     private val activePartyStorage: ActivePartyStorage,
 ) : AuthRepository {
+    override suspend fun getLoginMethods() = authCall { userApi.getLoginMethods() }.toDomain()
+    override suspend fun sendLoginMethodCode() { authCall { userApi.sendLoginMethodCode() } }
+    override suspend fun verifyLoginMethodCode(code: String): com.moyeota.domain.model.LinkVerification {
+        val response = authCall { userApi.verifyLoginMethodCode(com.moyeota.data.remote.dto.LinkCodeDto(code.trim())) }
+        if (response.verificationToken.isBlank() || response.expiresInSeconds <= 0) {
+            throw AuthException(AuthError.UNKNOWN, "문자 인증 응답을 확인할 수 없습니다.")
+        }
+        return com.moyeota.domain.model.LinkVerification(response.verificationToken, response.expiresInSeconds)
+    }
+    override suspend fun linkGoogle(idToken: String, verificationToken: String) {
+        authCall { userApi.linkGoogle(com.moyeota.data.remote.dto.GoogleLinkDto(idToken, verificationToken)) }
+    }
+
 
     // 세션 상태의 실체는 SessionManager 다. 여기서 별도 상태를 들면 두 출처가 어긋난다.
     override val authState: StateFlow<AuthState> = session.authState

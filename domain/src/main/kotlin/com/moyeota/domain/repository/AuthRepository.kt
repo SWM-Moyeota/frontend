@@ -15,6 +15,11 @@ import kotlinx.coroutines.flow.StateFlow
  * 모든 실패는 [com.moyeota.domain.model.AuthException] 으로 던진다.
  */
 interface AuthRepository {
+    suspend fun getLoginMethods(): com.moyeota.domain.model.LoginMethods
+    suspend fun sendLoginMethodCode()
+    suspend fun verifyLoginMethodCode(code: String): com.moyeota.domain.model.LinkVerification
+    suspend fun linkGoogle(idToken: String, verificationToken: String)
+
 
     /**
      * 로그인 상태의 단일 출처. 화면 진입 라우팅(스플래시 → 로그인/홈)의 근거이자,

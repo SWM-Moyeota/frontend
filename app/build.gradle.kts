@@ -111,6 +111,7 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         manifestPlaceholders["naverMapsClientId"] = naverMapsClientId
+        buildConfigField("String", "GOOGLE_SERVER_CLIENT_ID", "\"${buildSetting("GOOGLE_SERVER_CLIENT_ID", "568416567998-gd5lf8u4ohshrar4bjj18nrp8va01vrv.apps.googleusercontent.com")}\"")
         buildConfigField("String", "BASE_URL", "\"$moyeotaBaseUrl\"")
         buildConfigField("String", "MIXPANEL_TOKEN", "\"$mixpanelToken\"")
 
@@ -175,6 +176,9 @@ android {
 }
 
 dependencies {
+    implementation("androidx.credentials:credentials:1.6.0")
+    implementation("androidx.credentials:credentials-play-services-auth:1.6.0")
+    implementation("com.google.android.libraries.identity.googleid:googleid:1.2.0")
     coreLibraryDesugaring(libs.desugar.jdk.libs)
     implementation(project(":presentation"))
     implementation(project(":domain"))

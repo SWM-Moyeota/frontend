@@ -40,7 +40,7 @@ import kotlinx.coroutines.withContext
  * (서버에 물어봐야 아는 값이고, 눌렀을 때 [AuthError.ONGOING_PARTY_EXISTS] 로 온다).
  */
 internal val AccountDeletionWarnings: List<String> = listOf(
-    "지금 아이디와 비밀번호로는 다시 로그인할 수 없어요",
+    "지금 계정으로는 다시 로그인할 수 없어요",
     "참여 중인 채팅방에서 모두 나가고, 함께 탄 사람들에게는 「탈퇴한 사용자」로 보여요",
     "저장해 둔 자주 가는 곳이 지워져요",
     "같은 휴대폰 번호로는 ${AuthPolicy.REJOIN_RESTRICTED_DAYS}일 동안 다시 가입할 수 없어요",
@@ -95,6 +95,8 @@ class AccountDeleteViewModel(private val repository: AuthRepository) : ViewModel
 
     data class UiState(
         val password: String = "",
+        val hasPassword: Boolean? = null,
+        val loadingMethods: Boolean = true,
         val submitting: Boolean = false,
         /** 비밀번호 입력란 아래 오류. [AccountDeleteErrorSlot.PASSWORD_FIELD] 로 분류된 실패만 온다. */
         val passwordError: String? = null,
@@ -104,6 +106,17 @@ class AccountDeleteViewModel(private val repository: AuthRepository) : ViewModel
 
     private val _uiState = MutableStateFlow(UiState())
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
+    init { loadMethods() }
+    fun loadMethods() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(loadingMethods = true, bannerError = null) }
+            try {
+                val methods = repository.getLoginMethods()
+                _uiState.update { it.copy(hasPassword = methods.hasPassword, loadingMethods = false) }
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e
+            } catch (e: Exception) { _uiState.update { it.copy(loadingMethods = false, bannerError = e.authUserMessage()) } }
+        }
+    }
 
     /**
      * 고치는 순간 직전 오류를 지운다 — 빨간 입력란을 들고 타이핑하게 두지 않는다.
@@ -141,13 +154,14 @@ class AccountDeleteViewModel(private val repository: AuthRepository) : ViewModel
      */
     fun delete(onSubmitting: () -> Unit = {}, onDeleted: () -> Unit = {}, onKept: () -> Unit = {}) {
         val state = _uiState.value
-        if (!canSubmitAccountDeletion(state.password, state.submitting)) return
+        if (state.hasPassword == null || state.loadingMethods || state.submitting) return
+        if (state.hasPassword && !canSubmitAccountDeletion(state.password, state.submitting)) return
         viewModelScope.launch {
             _uiState.update { it.copy(submitting = true, passwordError = null, bannerError = null) }
             onSubmitting()
             withContext(NonCancellable) {
                 try {
-                    repository.deleteAccount(state.password)
+                    if (state.hasPassword) repository.deleteAccount(state.password) else repository.deleteSocialAccount()
                     // 204 를 받은 **이 자리**가 탈퇴를 말할 수 있는 지점이다
                     onDeleted()
                     // 세션이 곧 사라지며 리포터가 사용자 연결을 끊는다(reset) — 그 전에 기록해야 탈퇴한 사람의
@@ -207,7 +221,15 @@ fun AccountDeleteRoute(
         viewModel(factory = AccountDeleteViewModel.factory(repository))
     val state by viewModel.uiState.collectAsState()
 
+    if (state.hasPassword == null) {
+        com.moyeota.presentation.core.BackStateScaffold(title = "회원 탈퇴", onBack = onBack) {
+            if (state.loadingMethods) com.moyeota.presentation.core.LoadingBox()
+            else com.moyeota.presentation.core.ErrorBox(state.bannerError ?: "로그인 수단을 확인하지 못했어요", viewModel::loadMethods)
+        }
+        return
+    }
     AccountDeleteScreen(
+        hasPassword = state.hasPassword == true,
         password = state.password,
         submitting = state.submitting,
         passwordError = state.passwordError,
