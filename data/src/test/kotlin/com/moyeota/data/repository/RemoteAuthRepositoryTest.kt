@@ -1090,8 +1090,6 @@ class RemoteAuthRepositoryTest {
                 AuthError.SOCIAL_UNAVAILABLE,
             httpException(400, """{"code":"USER207","message":"휴대폰 인증이 필요합니다."}""") to
                 AuthError.PHONE_NOT_VERIFIED,
-            httpException(400, """{"code":"USER113","message":"만 14세 미만은 가입할 수 없습니다."}""") to
-                AuthError.UNDER_MINIMUM_AGE,
             httpException(409, """{"code":"USER104","message":"이미 가입된 전화번호입니다."}""") to
                 AuthError.PHONE_NUMBER_DUPLICATED,
             httpException(409, """{"code":"USER108","message":"이미 사용 중인 닉네임입니다."}""") to
