@@ -2,9 +2,7 @@ package com.moyeota.presentation.feature.explore
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -16,15 +14,16 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -43,11 +42,11 @@ import androidx.compose.runtime.Stable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -64,27 +63,44 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.Orientation
-import androidx.compose.ui.unit.sp
-import com.moyeota.core.designsystem.component.AvatarCircle
+import com.moyeota.core.designsystem.component.ChevronDirection
+import com.moyeota.core.designsystem.component.ChevronIcon
+import com.moyeota.core.designsystem.component.CompactPillButton
 import com.moyeota.core.designsystem.component.MoyeotaBottomBar
 import com.moyeota.core.designsystem.component.MoyeotaChip
 import com.moyeota.core.designsystem.component.MoyeotaDefaultCamera
+import com.moyeota.core.designsystem.component.MoyeotaIconSize
 import com.moyeota.core.designsystem.component.MoyeotaTab
+import com.moyeota.core.designsystem.component.MoyeotaTabHeader
 import com.moyeota.core.designsystem.component.MyLocationOverlay
 import com.moyeota.core.designsystem.component.NaverMapView
+import com.moyeota.core.designsystem.component.NoticeKind
+import com.moyeota.core.designsystem.component.PrimaryCtaButton
+import com.moyeota.core.designsystem.component.SectionLabel
 import com.moyeota.core.designsystem.component.SheetHandle
+import com.moyeota.core.designsystem.component.StatusBadge
 import com.moyeota.core.designsystem.component.StatusBarSpacer
+import com.moyeota.core.designsystem.component.TextLinkButton
 import com.moyeota.core.designsystem.component.latLngOrNull
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.core.designsystem.theme.MoyeotaShape
+import com.moyeota.core.designsystem.theme.MoyeotaSpacing
+import com.moyeota.core.designsystem.theme.MoyeotaType
+import com.moyeota.core.designsystem.theme.sheetShadow
+import com.moyeota.core.designsystem.theme.tabularNums
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.model.RoomType
 import com.moyeota.domain.model.User
 import com.moyeota.presentation.core.ActiveRideBanner
 import com.moyeota.presentation.core.LoadingBox
+import com.moyeota.presentation.core.RoutePlace
+import com.moyeota.presentation.core.RoutePlaceLine
+import com.moyeota.presentation.feature.home.ReservationDateStrip
 import com.moyeota.presentation.feature.home.headcountLabel
 import com.moyeota.presentation.feature.home.reservationDateLabel
 import com.moyeota.presentation.feature.home.reservationDates
+import com.moyeota.presentation.feature.home.reservationMonthLabel
 import com.naver.maps.geometry.LatLng
 import com.naver.maps.geometry.LatLngBounds
 import com.naver.maps.map.NaverMap
@@ -92,13 +108,6 @@ import com.naver.maps.map.overlay.Marker
 import com.naver.maps.map.util.MarkerIcons
 import java.time.Instant
 import java.time.LocalDate
-
-// 와이어프레임 그레이 (core token 미정의 색 — 화면 재현용)
-private val CanvasBg = Color(0xFFF5F7FA)
-private val GrayMute = Color(0xFF8A93A0)
-private val GrayAsh = Color(0xFF9AA1AC)
-private val ChipBorder = Color(0xFFE2E7EE)
-private val BadgeGrayBg = Color(0xFFF3F6FA)
 
 /** 바텀시트 3단계 — 17 지도(peek) / 18 지도+리스트(half) / 19 리스트(full) */
 enum class ExploreSheetState { PEEK, HALF, FULL }
@@ -190,7 +199,7 @@ data class ReservationPaneUi(
     val destinationName: String? = null,
     val now: Instant = Instant.EPOCH,
 ) {
-    /** 날짜 칩·빈 상태 문구가 함께 쓰는 「오늘」·「11월 9일 (일)」. 날짜가 없으면 null. */
+    /** 접힘 요약·목록 제목·빈 상태 문구가 함께 쓰는 「오늘」·「11월 9일 (일)」. 날짜가 없으면 null. */
     val selectedDateLabel: String?
         get() = selectedDate?.let { reservationDateLabel(it, dates.firstOrNull() ?: it) }
 
@@ -255,8 +264,20 @@ private val DefaultParties = listOf(
     Ride("ride-5", "온천장역", "서면역", "12분 후 출발 예정 · 7.3km", 2, listOf(dummyUser("u8", "윤OO")), 4800, 9600, RideStatus.RECRUITING),
 )
 
-/** 접힘(17) 시트 높이 — 핸들 + 한 줄 요약 */
+/**
+ * 접힘(17) 시트 높이 — 손잡이 줄 + 요약.
+ *
+ * 디자인 다듬기(2026-11)에서 다시 쟀다: 손잡이 줄 28dp([PeekHandleZone]) + 제목 `HeadingLg` 한 줄(18sp×1.35 ≈ 24dp)
+ * + 부제 `BodySm` 최대 두 줄(13sp×1.5×2 = 39dp) = 91dp → 4/8 격자로 올려 **96dp 그대로**다.
+ * 실시간 목록이 있을 때는 부제가 없어(디자인 QA E7) 요약 줄이 남는 높이 가운데에 선다([PeekSummaryRow]).
+ *
+ * 상태마다 높이를 바꾸지 않는 이유: 이 값은 지도 `contentPadding` 이기도 해서, 목록이 0건↔N건을
+ * 오갈 때마다 높이가 바뀌면 지도의 보이는 영역이 흔들리고 그 영역으로 다시 조회한다.
+ */
 private val PeekSheetHeight = 96.dp
+
+/** 시트 맨 위 손잡이 줄 — 위 12dp + 손잡이 4dp + 아래 12dp (`MapSheetScaffold` 와 같다) */
+private val PeekHandleZone = 28.dp
 
 /** 반펼침(18)에서 시트 위로 남기는 지도 높이 */
 private val HalfMapHeight = 300.dp
@@ -282,13 +303,13 @@ private val ListHeaderGap = 12.dp
  *
  * 시트 상태 전환:
  * - 핸들·헤더를 **드래그**하면 가까운 앵커(또는 던진 방향의 다음 앵커)로 정착 — 세 단계 모두
- * - PEEK 의 「⌃」 탭 → HALF · HALF/FULL 헤더의 「지도 접기 ⌄ / 지도 펼치기 ⌃」 → FULL/HALF
+ * - PEEK 의 위 꺾쇠 버튼 → HALF · HALF/FULL 헤더의 「지도 접기 / 지도 펼치기」(+ 꺾쇠) → FULL/HALF
  *   (접기·펼치기는 **이 한 버튼**뿐이다 — 타이틀 행의 「🗺 지도」는 행 높이를 흔들어 뺐다)
  *
  * 이동(디스크립션):
- * - 「{단계} · {목적지} 보기 ›」 배너 → 진행 중인 방의 단계 화면 21/25/26 (onOngoingRideClick)
+ * - 「{단계} · {목적지} 보기」 배너 → 진행 중인 방의 단계 화면 21/25/26 (onOngoingRideClick)
  * - 지도 마커 탭 / 카드 「합류」 → 20 합류 확인 (onJoinParty)
- * - 「＋ 새 합승 방 만들기」 → 15 목적지 입력 (onCreateRoomClick)
+ * - 「새 동승 방 만들기」 → 15 목적지 입력 (onCreateRoomClick)
  * - 하단탭 홈 / 채팅 / 마이 → 14 / 24 / 35 (onTabSelect)
  *
  * 검증·상태:
@@ -323,12 +344,20 @@ fun ExploreScreen(
      */
     myPartyHidden: Boolean = false,
     /**
-     * 주기 갱신이 **연속으로** 실패해 목록이 낡았는가([ExploreViewModel.UiState.Success.stale]).
+     * 주기 갱신이 **연속으로** 실패해 목록이 낡았는가([ExploreViewModel.UiState.Success.stale] ·
+     * 「곧 출발」은 [ReservationFinderViewModel.UiState.Success.stale]).
      *
      * true 라도 보던 목록·마커는 그대로 둔다 — 지도를 에러 화면으로 바꾸지 않는다는 기존 판단을
      * 지키고, 대신 타이틀 줄에 **비차단 표시**만 올린다. 기본값 false 는 「문제 없음」이다.
      */
     stale: Boolean = false,
+    /**
+     * 지도 오른쪽 아래 **카운트다운 새로고침 버튼**이 그릴 것. **null 이면 버튼이 없다** — 주기 갱신을 하지
+     * 않는 모드(「날짜로 찾기」, [exploreAutoRefreshes])에서 호출부가 null 을 넘긴다.
+     */
+    refresh: ExploreRefreshUi? = null,
+    /** 새로고침 버튼 — 지금 보이는 목록을 즉시 다시 읽고 15초를 처음부터 센다. */
+    onRefreshClick: () -> Unit = {},
     locationGranted: Boolean = true,
     // 기기 실위치. null = 권한 없음 · 아직 fix 없음 → 지도는 기본 카메라 위치에서 시작한다
     myLocation: MyLocationFix? = null,
@@ -370,31 +399,30 @@ fun ExploreScreen(
     // (`ReservationFinder.kt` 표) 섞이면 「지도에 보이는데 목록에 없는 방」이 생긴다.
     val shownRides = if (mode.isReservation) reservations.items.map { it.ride } else parties
     val shownCount = shownRides.size
-    Column(modifier = Modifier.fillMaxSize().background(CanvasBg)) {
+    Column(modifier = Modifier.fillMaxSize().background(MoyeotaColor.SurfaceCanvas)) {
         StatusBarSpacer()
 
-        // 타이틀 행 — **고정 높이**. 단계에 따라 버튼이 생기고 사라지면 행 높이가 흔들려 제목이 움직였다
-        Box(
-            modifier = Modifier.fillMaxWidth().height(TitleRowHeight).padding(horizontal = 24.dp),
-            contentAlignment = Alignment.CenterStart,
-        ) {
-            Text(
-                text = "근처 동승 찾기",
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-                color = MoyeotaColor.InkPrimary,
-            )
-            // 낡은 목록 표시는 **고정 높이인 이 줄**에 둔다 — 지도 위에 띄우면 시트를 끝까지 올린
-            // 상태(FULL, 지도가 통째로 가려짐)에서 보이지 않고, 시트 안에 두면 접힘(PEEK) 높이가
-            // 흔들린다. 이 자리면 세 단계 모두에서 같은 자리에 보이고 레이아웃도 밀리지 않는다.
-            //
-            // **예약 모드에서는 그리지 않는다.** [stale] 은 실시간 주기 조회의 연속 실패 표시인데
-            // (`ExploreViewModel`) 예약 모드에서는 그 조회가 멈춰 있어서, 남아 있던 true 를 그리면
-            // 지금 보고 있는 예약 목록이 낡았다는 **거짓 경고**가 된다.
-            if (stale && !mode.isReservation) {
-                StaleListNotice(modifier = Modifier.align(Alignment.CenterEnd))
-            }
-        }
+        // 타이틀 행 — 탭 첫 화면 공용 머리줄([MoyeotaTabHeader], 52dp **고정 높이**). 단계에 따라 버튼이
+        // 생기고 사라지면 행 높이가 흔들려 제목이 움직였다.
+        //
+        // 낡은 목록 표시는 **고정 높이인 이 줄**에 둔다 — 지도 위에 띄우면 시트를 끝까지 올린
+        // 상태(FULL, 지도가 통째로 가려짐)에서 보이지 않고, 시트 안에 두면 접힘(PEEK) 높이가
+        // 흔들린다. 이 자리면 세 단계 모두에서 같은 자리에 보이고 레이아웃도 밀리지 않는다.
+        //
+        // **주기 갱신이 없는 모드(「날짜로 찾기」)에서는 그리지 않는다.** [stale] 은 주기 조회의 연속
+        // 실패 표시인데 그 모드에서는 주기 조회가 없어서, 남아 있던 true 를 그리면 지금 보고 있는
+        // 목록이 낡았다는 **거짓 경고**가 된다. 「곧 출발」은 15초 주기가 생겨 이제 그린다.
+        val showStale = stale && exploreAutoRefreshes(mode)
+        MoyeotaTabHeader(
+            title = "근처 동승 찾기",
+            // 머리줄은 trailing 이 있으면 끝 여백을 4dp 로 줄인다(아이콘 버튼 자리) — 배지는 버튼이 아니라
+            // 나머지 12dp 를 직접 줘서 16dp 화면 여백에 맞춘다
+            trailing = if (showStale) {
+                { StaleListNotice(modifier = Modifier.padding(end = 12.dp)) }
+            } else {
+                null
+            },
+        )
 
         // 모드 칩 — **지도 위가 아니라 지도 밖**에 둔다. 시트를 끝까지 올린 상태(FULL)에서도
         // 보여야 모드를 되돌릴 수 있고, 시트 안에 두면 접힘 높이가 모드에 따라 흔들린다
@@ -457,6 +485,20 @@ fun ExploreScreen(
                 )
             }
 
+            // 카운트다운 새로고침 버튼 — 네이버 줌 컨트롤과 같은 세로선([RefreshButtonEndInset]), 시트 윗변
+            // 16dp 위. 시트를 따라 움직이도록 **실측 높이**(드래그·정착 애니메이션 중의 값)를 쓴다.
+            // 시트를 끝까지 올리면(FULL) 지도가 다 가려지므로 버튼도 숨긴다 — 보이지 않는 목록의 갱신
+            // 버튼이 시트 위에 떠 있으면 무엇을 새로 고치는지 알 수 없다. 권한이 없어 지도가 없을 때도 없다.
+            if (refresh != null && locationGranted && sheetState != ExploreSheetState.FULL) {
+                ExploreRefreshButton(
+                    ui = refresh,
+                    onClick = onRefreshClick,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(end = RefreshButtonEndInset, bottom = sheetHeight + 16.dp),
+                )
+            }
+
             if (activeRide != null) {
                 ActiveRideBanner(
                     ride = activeRide,
@@ -464,20 +506,20 @@ fun ExploreScreen(
                     modifier = Modifier
                         .align(Alignment.TopCenter)
                         .onSizeChanged { bannerHeightPx = it.height }
-                        .padding(horizontal = 20.dp, vertical = 4.dp),
+                        .padding(horizontal = MoyeotaSpacing.ScreenGutter, vertical = 4.dp),
                 )
             }
 
             // 시트 — 높이만 앵커 사이를 오간다. 내용은 **목표 단계** 기준이라 애니메이션 중에 흔들리지 않는다.
-            // FULL 에서는 모서리를 각지게 — 둥근 모서리 틈으로 뒤의 지도가 비친다
-            val sheetShape = if (sheetState == ExploreSheetState.FULL) RoundedCornerShape(0.dp)
-            else RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+            // FULL 에서는 모서리를 각지게 — 둥근 모서리 틈으로 뒤의 지도가 비친다.
+            // 모서리·그림자는 다른 시트와 같은 토큰이다(디자인 QA G3·G4: 20dp · 8dp)
+            val sheetShape = if (sheetState == ExploreSheetState.FULL) RectangleShape else MoyeotaShape.Sheet
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
                     .height(sheetHeight)
-                    .shadow(14.dp, sheetShape, spotColor = Color(0x1A000000))
+                    .sheetShadow(sheetShape)
                     .clip(sheetShape)
                     .background(MoyeotaColor.SurfaceCanvas),
             ) {
@@ -501,7 +543,7 @@ fun ExploreScreen(
                             },
                         ),
                 ) {
-                    Box(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
+                    Box(modifier = Modifier.fillMaxWidth().height(PeekHandleZone), contentAlignment = Alignment.Center) {
                         SheetHandle()
                     }
                     if (sheetState == ExploreSheetState.PEEK) {
@@ -540,7 +582,7 @@ fun ExploreScreen(
                 if (sheetState != ExploreSheetState.PEEK) {
                     Spacer(Modifier.height(ListHeaderGap))
                     if (sheetState == ExploreSheetState.FULL) {
-                        HorizontalDivider(color = ChipBorder)
+                        HorizontalDivider(color = MoyeotaColor.Hairline)
                         Spacer(Modifier.height(ListHeaderGap))
                     }
                     // **이 목록이 무엇을 기준으로 찾은 것인가.** 예약 모드에서만 한 줄 붙는다 —
@@ -549,10 +591,9 @@ fun ExploreScreen(
                     exploreAreaNote(mode, reservations.destinationSent)?.let { note ->
                         Text(
                             text = note,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = GrayAsh,
-                            modifier = Modifier.padding(horizontal = 24.dp),
+                            style = MoyeotaType.CaptionMd,
+                            color = MoyeotaColor.TextMute,
+                            modifier = Modifier.padding(horizontal = MoyeotaSpacing.ScreenGutter),
                         )
                         Spacer(Modifier.height(ListHeaderGap))
                     }
@@ -588,9 +629,14 @@ fun ExploreScreen(
                     // 문구는 모드와 무관하게 그대로 둔다 — 누르면 15 목적지로 가고, 예약 방을
                     // 만드는 길도 그 뒤의 16 모달 안에 있다(「예약 방 만들기」로 바꾸면 16 이
                     // 기본값 「지금 출발」로 열리는 것과 어긋난다).
-                    CreateRoomButton(
+                    //
+                    // 공용 주 CTA 다(디자인 QA E3) — 예전 전용 버튼(r16·48dp)은 앱의 다른 주 CTA(알약·52dp)와
+                    // 모양이 달랐다. 이 시트의 **단 하나뿐인 솔리드 파랑**이고, 줄마다의 「합류」는 옅은 알약이다.
+                    // 「＋」 글자는 뺐다 — 아이콘 대신 쓴 글자다(G10).
+                    PrimaryCtaButton(
+                        text = "새 동승 방 만들기",
                         onClick = onCreateRoomClick,
-                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 10.dp),
+                        modifier = Modifier.padding(horizontal = MoyeotaSpacing.ScreenGutter, vertical = 8.dp),
                     )
                 }
             }
@@ -599,9 +645,6 @@ fun ExploreScreen(
         MoyeotaBottomBar(selected = MoyeotaTab.EXPLORE, onSelect = onTabSelect)
     }
 }
-
-/** 타이틀 행 고정 높이 — 예전 「🗺 지도」 버튼(32dp) + 세로 여백(6dp×2) 과 같은 값이라 레이아웃이 그대로다 */
-private val TitleRowHeight = 44.dp
 
 /**
  * 손을 뗀 위치·속도로 정착할 앵커. 빠르게 던지면 그 방향의 **다음** 앵커, 아니면 가장 가까운 앵커.
@@ -654,12 +697,34 @@ private fun PeekSummaryRow(
     val (emptyTitle, emptySubtitle) =
         if (mode.isReservation) reservationEmptyCopy(mode, dateLabel, myPartyHidden)
         else emptyListCopy(myPartyHidden)
+    // 「목적지 정하면 바로 자동 매칭」은 지웠다 — 목적지를 정하면 **새 방이 만들어지고**
+    // (16 「같이 탈 사람 찾기」 → `POST /matching/rooms`) 사람이 합류하기를 기다린다.
+    // 목적지로 기존 방에 자동으로 넣어 주는 기능은 없다(2026-10-13).
+    //
+    // 예약 모드에서는 **무엇을 기준으로 찾았는지**를 그 자리에 적는다([exploreAreaNote]) —
+    // 접힘 상태에서는 목록 위의 같은 줄이 보이지 않아 여기가 유일한 자리다.
+    // 예약 모드에서는 **도착지 정렬 설명을 빼고** 영역 기준만 적는다(destinationSent = false) —
+    // 접힘 한 줄에 두 문장을 넣으면 잘린다. 그 설명은 목록 위의 같은 줄이 맡는다.
+    //
+    // 실시간 목록이 있을 때는 **부제를 두지 않는다**(디자인 QA E7). 예전 「위로 올리면 리스트, 목적지를
+    // 정하면 새 방을 만들어요」는 화면 사용법을 글로 설명한 줄이었다 — 손잡이와 위 꺾쇠가 이미 그 말을 한다.
+    val subtitle = when {
+        isEmpty && statusText == null -> emptySubtitle
+        mode.isReservation -> exploreAreaNote(mode, destinationSent = false)
+        isEmpty -> emptySubtitle
+        else -> null
+    }
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
+        // 남는 높이([PeekSheetHeight] − 손잡이 줄) 가운데에 선다 — 부제가 없는 상태에서 제목이 위에 붙고
+        // 아래가 비어 보이지 않게. 끝 여백 4dp 는 48dp 꺾쇠 버튼의 아이콘이 16dp 화면 여백에 오게 한다.
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = PeekSheetHeight - PeekHandleZone)
+            .padding(start = MoyeotaSpacing.ScreenGutter, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (!isEmpty) {
-            Box(Modifier.size(10.dp).background(MoyeotaColor.Primary500, CircleShape))
+            Box(Modifier.size(8.dp).background(MoyeotaColor.Primary500, CircleShape))
             Spacer(Modifier.width(8.dp))
         }
         Column(modifier = Modifier.weight(1f)) {
@@ -670,38 +735,30 @@ private fun PeekSummaryRow(
                     isEmpty -> emptyTitle
                     else -> explorePeekTitle(mode, count, dateLabel)
                 },
-                fontSize = 19.sp,
-                fontWeight = FontWeight.Bold,
+                style = MoyeotaType.HeadingLg,
                 color = MoyeotaColor.InkPrimary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text(
-                // 「목적지 정하면 바로 자동 매칭」은 지웠다 — 목적지를 정하면 **새 방이 만들어지고**
-                // (16 「같이 탈 사람 찾기」 → `POST /matching/rooms`) 사람이 합류하기를 기다린다.
-                // 목적지로 기존 방에 자동으로 넣어 주는 기능은 없다(2026-10-13).
-                //
-                // 예약 모드에서는 **무엇을 기준으로 찾았는지**를 그 자리에 적는다([exploreAreaNote]) —
-                // 접힘 상태에서는 목록 위의 같은 줄이 보이지 않아 여기가 유일한 자리다.
-                // 예약 모드에서는 **도착지 정렬 설명을 빼고** 영역 기준만 적는다(destinationSent = false) —
-                // 접힘 한 줄에 두 문장을 넣으면 잘린다. 그 설명은 목록 위의 같은 줄이 맡는다.
-                text = when {
-                    isEmpty && statusText == null -> emptySubtitle
-                    mode.isReservation -> exploreAreaNote(mode, destinationSent = false).orEmpty()
-                    isEmpty -> emptySubtitle
-                    else -> "위로 올리면 리스트, 목적지를 정하면 새 방을 만들어요"
-                },
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Medium,
-                color = GrayMute,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
+            if (!subtitle.isNullOrBlank()) {
+                Text(
+                    text = subtitle,
+                    style = MoyeotaType.BodySm,
+                    color = MoyeotaColor.TextMute,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        // 48dp 버튼 — 예전엔 18dp 꺾쇠 그림 자체만 눌렸다(디자인 QA G12)
+        IconButton(onClick = onRaise) {
+            ChevronIcon(
+                direction = ChevronDirection.UP,
+                size = MoyeotaIconSize.Md,
+                tint = MoyeotaColor.TextMute,
+                modifier = Modifier.semantics { contentDescription = "목록 펼치기" },
             )
         }
-        ChevronUpIcon(
-            color = GrayAsh,
-            modifier = Modifier.clickable { onRaise() },
-        )
     }
 }
 
@@ -720,27 +777,33 @@ private fun ListHeaderRow(
     onToggleMap: () -> Unit,
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
+        // 끝 여백 8dp + 버튼 안쪽 8dp = 글자 끝이 16dp 화면 여백에 온다
+        modifier = Modifier.fillMaxWidth().padding(start = MoyeotaSpacing.ScreenGutter, end = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             text = exploreListTitle(mode, count, dateLabel, destinationSent),
-            fontSize = 17.sp,
-            fontWeight = FontWeight.Bold,
+            style = MoyeotaType.HeadingLg,
             color = MoyeotaColor.InkPrimary,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
         Spacer(Modifier.width(8.dp))
-        Text(
-            text = if (mapShown) "지도 접기 ⌄" else "지도 펼치기 ⌃",
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Medium,
-            color = MoyeotaColor.Primary500,
-            maxLines = 1,
-            softWrap = false,
-            modifier = Modifier.clickable { onToggleMap() },
+        // 글자로 쓰던 꺾쇠(⌄ ⌃)는 그린 아이콘으로 바꿨다(G10) — 글꼴마다 모양·높이가 달랐다.
+        // 파랑을 쓰지 않는다: 이 시트의 파랑은 「새 동승 방 만들기」 하나다. 48dp 터치(G12).
+        TextLinkButton(
+            text = if (mapShown) "지도 접기" else "지도 펼치기",
+            onClick = onToggleMap,
+            color = MoyeotaColor.TextBody,
+            style = MoyeotaType.BodySm.copy(fontWeight = FontWeight.SemiBold),
+            trailingIcon = {
+                ChevronIcon(
+                    direction = if (mapShown) ChevronDirection.DOWN else ChevronDirection.UP,
+                    size = MoyeotaIconSize.Sm,
+                    tint = MoyeotaColor.TextBody,
+                )
+            },
         )
     }
 }
@@ -750,9 +813,18 @@ private fun ListHeaderRow(
  *
  * 하단탭([MoyeotaBottomBar])처럼 보이지 않게 **칩**으로 둔다 — 이건 화면 이동이 아니라 같은 화면의
  * 필터이고, 지도 카메라·시트 단계는 모드를 바꿔도 그대로다. 디자인시스템의 [MoyeotaChip] 을 쓴다
- * (16 의 `ConditionChip` 은 그 모달의 관습이고, 새 자리는 공용 컴포넌트가 먼저다).
+ * (앱의 단 하나뿐인 칩이다 — 디자인 QA G6).
  *
- * 세 칩이 393dp 폭에 들어오지만 큰 글꼴 설정에서는 넘칠 수 있어 가로 스크롤을 둔다.
+ * ### 간격 (2026-11, 오너 UX 피드백 · 디자인 QA 4-8)
+ * 예전에는 칩 줄이 제목 줄과 지도 사이에 위아래 여백 없이 끼어 지도에 맞닿아 있었다.
+ * - **시작선**: 제목과 같은 [MoyeotaSpacing.ScreenGutter](16dp) — 두 줄이 한 머리글로 읽힌다
+ *   ([MoyeotaTabHeader] 도 같은 값을 쓴다)
+ * - **칩 사이 8dp**, 제목 아래 **8dp**, 지도 위 **12dp** — 4/8 리듬(`spacing.xs`·`spacing.sm`)
+ * - **터치 타깃 48dp**: 칩의 보이는 높이는 36dp 이고 [MoyeotaChip] 이 스스로 위아래 6dp 씩 눌리는 자리를
+ *   더한다. 그 6dp 는 투명하므로 위 「8dp·12dp」는 **보이는 칩 테두리 기준**이다(줄 여백 2dp·6dp + 터치 여유 6dp)
+ *
+ * 세 칩이 393dp 폭에 들어오지만 큰 글꼴 설정에서는 넘칠 수 있어 가로 스크롤을 둔다. 여백을 스크롤
+ * **안쪽**에 둬서 첫 칩은 제목 선에서 시작하고 스크롤하면 가장자리까지 흐른다.
  */
 @Composable
 private fun ExploreModeRow(selected: ExploreMode, onSelect: (ExploreMode) -> Unit) {
@@ -760,7 +832,7 @@ private fun ExploreModeRow(selected: ExploreMode, onSelect: (ExploreMode) -> Uni
         modifier = Modifier
             .fillMaxWidth()
             .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 24.dp),
+            .padding(start = MoyeotaSpacing.ScreenGutter, end = MoyeotaSpacing.ScreenGutter, top = 2.dp, bottom = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -775,15 +847,19 @@ private fun ExploreModeRow(selected: ExploreMode, onSelect: (ExploreMode) -> Uni
 }
 
 /**
- * 「날짜로 찾기」의 날짜 칩(오늘~7일 뒤)과 **도착지 칩**.
+ * 「날짜로 찾기」의 **주간 달력 띠**(오늘~7일 뒤)와 그 아래 **도착지 칩**.
  *
- * 날짜와 도착지를 한 줄에 두는 이유: 둘 다 같은 검색 요청의 입력이고, 도착지는 **있어도 되고 없어도
- * 되는 값**이라 날짜와 떨어뜨리면 왜 거기 있는지 알기 어렵다. 가로 스크롤인 근거는 16 모달의
- * `ScrollableChipRow` 와 같다 — 칩이 8개 + 1개라 좁은 폰의 한 줄에 들어오지 않는다.
+ * 날짜는 16 도착지 확인과 **같은 컴포넌트**다([ReservationDateStrip]) — 같은 8일 창을 두 화면이 다른
+ * 모양(칩 vs 달력)으로 고르면 같은 날이 다르게 보인다(2026-11, 오너 UX 피드백). 띠 위에는 덮는 달을
+ * 한 줄로 적는다([reservationMonthLabel]) — 칸에는 일(日) 숫자만 있다.
  *
- * 도착지 칩은 [onPickDestination] 이 null 이면 **그리지 않는다**: 도착지를 고르는 길(15 목적지)이
- * 아직 배선되지 않았을 수 있고, 그때 칩을 보여 주면 눌러도 아무 일도 일어나지 않는다. 도착지 없이
- * 검색하는 것은 서버가 인정하는 정상 경로다(둘 다 또는 둘 다 아니다).
+ * 도착지 칩은 띠 **아래 자기 줄**(8dp 간격)로 옮겼다 — 예전에는 날짜 칩 끝에 붙어 가로 스크롤 끝까지
+ * 가야 보였다. 둘 다 같은 검색 요청의 입력이라 붙어 있되, 도착지는 **있어도 되고 없어도 되는 값**이라
+ * 날짜와 다른 줄이 낫다. [onPickDestination] 이 null 이면 칩을 **그리지 않는다**: 도착지를 고르는 길
+ * (15 목적지)이 배선되지 않았을 수 있고, 그때 칩을 보여 주면 눌러도 아무 일도 일어나지 않는다.
+ * 도착지 없이 검색하는 것은 서버가 인정하는 정상 경로다(둘 다 또는 둘 다 아니다).
+ *
+ * 「전체」 칸은 없다 — 검색은 하루 단위다(`date` 필수).
  */
 @Composable
 private fun ReservationDateRow(
@@ -794,36 +870,38 @@ private fun ReservationDateRow(
     onPickDestination: (() -> Unit)?,
     onClearDestination: () -> Unit,
 ) {
-    val today = dates.firstOrNull()
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 24.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        dates.forEach { date ->
-            MoyeotaChip(
-                text = reservationDateLabel(date, today ?: date),
-                selected = date == selected,
-                onClick = { onDateSelect(date) },
-            )
+    Column(modifier = Modifier.fillMaxWidth()) {
+        // 달 표기는 묶음 머리말이다(디자인 QA 4-3 — 「11월」·「11–12월」) — 아래 8dp 는 SectionLabel 이 준다
+        reservationMonthLabel(dates)?.let { month ->
+            SectionLabel(text = month, modifier = Modifier.padding(horizontal = MoyeotaSpacing.ScreenGutter))
         }
-        if (destinationName != null) {
-            // 고른 도착지는 **이름으로** 보여 준다 — 「도착지 1곳」 같은 말로는 어디를 보냈는지
-            // 알 수 없고, 그 좌표가 결과 순서를 바꾼다(가까운 방이 먼저).
-            MoyeotaChip(
-                text = "$destinationName $RESERVATION_CLEAR_DESTINATION_LABEL",
-                selected = true,
-                onClick = onClearDestination,
-            )
-        } else if (onPickDestination != null) {
-            MoyeotaChip(
-                text = RESERVATION_ADD_DESTINATION_LABEL,
-                selected = false,
-                onClick = onPickDestination,
-            )
+        ReservationDateStrip(
+            dates = dates,
+            selected = selected,
+            onSelect = onDateSelect,
+            // 띠의 첫 칸이 시트 본문(16dp 화면 여백)과 같은 선에서 시작한다
+            contentPadding = PaddingValues(horizontal = MoyeotaSpacing.ScreenGutter),
+        )
+        if (destinationName != null || onPickDestination != null) {
+            // 띠와 칩 사이는 **보이는 칩 테두리 기준 8dp** — 칩이 위아래로 둔 투명한 터치 여유 6dp 에 2dp 를 더한다
+            Spacer(Modifier.height(2.dp))
+            Row(modifier = Modifier.padding(horizontal = MoyeotaSpacing.ScreenGutter)) {
+                if (destinationName != null) {
+                    // 고른 도착지는 **이름으로** 보여 준다 — 「도착지 1곳」 같은 말로는 어디를 보냈는지
+                    // 알 수 없고, 그 좌표가 결과 순서를 바꾼다(가까운 방이 먼저).
+                    MoyeotaChip(
+                        text = "$destinationName $RESERVATION_CLEAR_DESTINATION_LABEL",
+                        selected = true,
+                        onClick = onClearDestination,
+                    )
+                } else if (onPickDestination != null) {
+                    MoyeotaChip(
+                        text = RESERVATION_ADD_DESTINATION_LABEL,
+                        selected = false,
+                        onClick = onPickDestination,
+                    )
+                }
+            }
         }
     }
 }
@@ -838,11 +916,11 @@ private fun PartyList(
     showEndOfList: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    LazyColumn(
-        modifier = modifier.fillMaxWidth().padding(horizontal = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
+    // 카드 더미가 아니라 **목록 줄**이다(디자인 QA E5) — 흰 시트 안에 흰 테두리 카드를 쌓으면 반펼침에서
+    // 두 장 남짓만 보였다. 줄은 화면 폭을 다 쓰고 줄 사이는 안쪽으로 들인 헤어라인 하나다.
+    LazyColumn(modifier = modifier.fillMaxWidth()) {
         items(parties.size) { index ->
+            if (index > 0) ListRowDivider()
             PartyCard(ride = parties[index], onJoin = onJoinParty)
         }
         if (parties.isEmpty()) {
@@ -852,15 +930,23 @@ private fun PartyList(
             item {
                 Text(
                     text = "이 근처는 여기까지예요",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = GrayAsh,
+                    style = MoyeotaType.CaptionMd,
+                    color = MoyeotaColor.TextMute,
                     textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
                 )
             }
         }
     }
+}
+
+/** 목록 줄 사이 — 화면 여백만큼 안쪽으로 들인 헤어라인 */
+@Composable
+private fun ListRowDivider() {
+    HorizontalDivider(
+        color = MoyeotaColor.Hairline,
+        modifier = Modifier.padding(horizontal = MoyeotaSpacing.ScreenGutter),
+    )
 }
 
 /**
@@ -878,11 +964,9 @@ private fun ReservationList(
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    LazyColumn(
-        modifier = modifier.fillMaxWidth().padding(horizontal = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
+    LazyColumn(modifier = modifier.fillMaxWidth()) {
         items(pane.items.size) { index ->
+            if (index > 0) ListRowDivider()
             ReservationCard(item = pane.items[index], now = pane.now, onJoin = onJoin)
         }
         if (pane.items.isEmpty()) {
@@ -913,12 +997,12 @@ private fun ReservationEmptyState(pane: ReservationPaneUi, myPartyHidden: Boolea
         else -> {
             val (title, subtitle) = reservationEmptyCopy(pane.mode, pane.selectedDateLabel, myPartyHidden)
             Column(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = MoyeotaSpacing.ScreenGutter, vertical = 32.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                Text(text = title, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = MoyeotaColor.InkPrimary)
-                Text(text = subtitle, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = GrayMute)
+                Text(text = title, style = MoyeotaType.BodyStrong, color = MoyeotaColor.InkPrimary, textAlign = TextAlign.Center)
+                Text(text = subtitle, style = MoyeotaType.BodySm, color = MoyeotaColor.TextMute, textAlign = TextAlign.Center)
             }
         }
     }
@@ -928,19 +1012,14 @@ private fun ReservationEmptyState(pane: ReservationPaneUi, myPartyHidden: Boolea
 @Composable
 private fun ReservationNotice(text: String, onRetry: (() -> Unit)? = null) {
     Column(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = MoyeotaSpacing.ScreenGutter, vertical = 32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Text(text = text, fontSize = 14.sp, fontWeight = FontWeight.Medium, color = GrayMute)
+        Text(text = text, style = MoyeotaType.BodySm, color = MoyeotaColor.TextMute, textAlign = TextAlign.Center)
         if (onRetry != null) {
-            Text(
-                text = "다시 시도",
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Bold,
-                color = MoyeotaColor.Primary600,
-                modifier = Modifier.clickable { onRetry() },
-            )
+            // 48dp 터치 + 눌림 물결(G12) — 예전엔 글자 크기만큼만 눌렸다
+            TextLinkButton(text = "다시 시도", onClick = onRetry)
         }
     }
 }
@@ -969,46 +1048,36 @@ private fun ReservationCard(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .background(MoyeotaColor.SurfaceCanvas, RoundedCornerShape(16.dp))
-            .border(1.dp, ChipBorder, RoundedCornerShape(16.dp))
-            .padding(16.dp),
+            .padding(horizontal = MoyeotaSpacing.ScreenGutter, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            // 출발 시각이 이 줄의 제목이다 — 검정 굵은 글자로 둔다. 파랑은 시트의 CTA 몫이라 쓰지 않고,
+            // 숫자 폭을 고정해 줄마다 시각의 끝이 출렁이지 않게 한다
             reservationDepartureLabel(ride.departureAt, now)?.let { departure ->
                 Text(
                     text = departure,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MoyeotaColor.Primary600,
+                    style = MoyeotaType.BodyStrong.tabularNums(),
+                    color = MoyeotaColor.InkPrimary,
                     maxLines = 1,
                 )
             }
-            PlaceLine(label = "출발지", place = ride.origin)
-            PlaceLine(label = "목적지", place = ride.destination)
+            // 제목이 시각이라 장소는 부제 모양(24 채팅 목록과 같은 조각, emphasizePlace = false)
+            RoutePlaceLine(place = RoutePlace(label = "출발지", place = ride.origin))
+            RoutePlaceLine(place = RoutePlace(label = "목적지", place = ride.destination))
             val headcount = headcountLabel(joined = ride.members.size, capacity = ride.capacity)
             val nearby = destinationNearbyBadge(item.destinationNearby)
             if (headcount.isNotEmpty() || nearby != null) {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    if (headcount.isNotEmpty()) CapacityBadge(text = headcount)
-                    if (nearby != null) NearbyBadge(text = nearby)
+                    if (headcount.isNotEmpty()) StatusBadge(kind = NoticeKind.NEUTRAL, text = headcount)
+                    // 「도착지도 1km 안」 — 인원 배지(회색)와 **다른 색**이어야 다른 종류의 사실로 읽힌다.
+                    // 서버가 확인해 준 사실이라 초록을 그대로 둔다(디자인 QA E2)
+                    if (nearby != null) StatusBadge(kind = NoticeKind.SUCCESS, text = nearby)
                 }
             }
         }
         Spacer(Modifier.width(8.dp))
         JoinButton(full = full, onClick = { onJoin(ride) })
-    }
-}
-
-/** 「도착지도 1km 안」 — 인원 배지와 **다른 색**이어야 다른 종류의 사실로 읽힌다. */
-@Composable
-private fun NearbyBadge(text: String) {
-    Box(
-        modifier = Modifier
-            .background(MoyeotaColor.Success50, CircleShape)
-            .padding(horizontal = 10.dp, vertical = 3.dp),
-    ) {
-        Text(text = text, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MoyeotaColor.Success600)
     }
 }
 
@@ -1025,31 +1094,36 @@ private fun PartyCard(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .background(MoyeotaColor.SurfaceCanvas, RoundedCornerShape(16.dp))
-            .border(1.dp, ChipBorder, RoundedCornerShape(16.dp))
-            .padding(16.dp),
+            .padding(horizontal = MoyeotaSpacing.ScreenGutter, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        AvatarStack(count = ride.members.size)
-        Spacer(Modifier.width(10.dp))
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            // 출발지·목적지를 라벨 붙여 두 줄로 — 「A → B」 한 줄은 주소가 길면 어디서 갈리는지 읽기 어렵다
-            PlaceLine(label = "출발지", place = ride.origin)
-            PlaceLine(label = "목적지", place = ride.destination)
-            Text(
-                text = ride.departureLabel,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                color = GrayMute,
-            )
+        // 겹친 빈 아바타(사진·이름 없는 회색 원 N개)는 지웠다(디자인 QA E4) — 바로 옆 「2/3명」 배지와
+        // 같은 말을 그림으로 한 번 더 했을 뿐이다.
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            // 출발지·목적지를 라벨 붙여 두 줄로 — 「A → B」 한 줄은 주소가 길면 어디서 갈리는지 읽기 어렵다.
+            // 이 줄에는 다른 제목이 없어 장소가 제목이다(emphasizePlace) — 24 채팅 목록과 같은 조각이다
+            RoutePlaceLine(place = RoutePlace(label = "출발지", place = ride.origin), emphasizePlace = true)
+            RoutePlaceLine(place = RoutePlace(label = "목적지", place = ride.destination), emphasizePlace = true)
+            // 서버 목록 매핑(`PartyMappers`)은 이 값을 늘 빈 문자열로 둔다 — 그대로 그리면 모든 줄에 빈 줄이
+            // 하나씩 생겼다(디자인 QA E1). 값이 올 때만 세운다
+            if (ride.departureLabel.isNotBlank()) {
+                Text(
+                    text = ride.departureLabel,
+                    style = MoyeotaType.CaptionMd,
+                    color = MoyeotaColor.TextMute,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
             // 인원 문구는 16 추천 카드와 **같은 함수**를 쓴다([headcountLabel]) — 리터럴로 쓰던 동안
             // 인원을 모르는 방을 「0/3명」, 정원을 모르는 방을 「2/0명」으로 그렸다(없는 상태다).
             // 빈 문자열이면 배지째 지운다(그 판단은 [headcountLabel] KDoc 에 있다).
+            //
+            // 회색 배지다(디자인 QA E2) — 예전 호박색 바탕 + 흰 11sp 는 대비가 2.15:1 이었고, 호박색은 이 앱에서
+            // 「기다리는 중」이라는 **상태**를 뜻한다. 인원은 상태가 아니라 사실이다.
             val headcount = headcountLabel(joined = ride.members.size, capacity = ride.capacity)
             if (headcount.isNotEmpty()) {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    CapacityBadge(text = headcount)
-                }
+                StatusBadge(kind = NoticeKind.NEUTRAL, text = headcount)
             }
         }
         Spacer(Modifier.width(8.dp))
@@ -1057,104 +1131,15 @@ private fun PartyCard(
     }
 }
 
-/** 「출발지 : 장소」 한 줄. 라벨은 고정 폭이라 두 줄의 장소가 같은 x 에서 시작한다 */
-@Composable
-private fun PlaceLine(label: String, place: String) {
-    Row(verticalAlignment = Alignment.Top) {
-        Text(
-            text = "$label :",
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Medium,
-            color = GrayMute,
-            modifier = Modifier.width(52.dp),
-        )
-        Text(
-            text = place,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Bold,
-            color = MoyeotaColor.InkPrimary,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-    }
-}
-
 /**
- * 참여 인원만큼(최대 3개) 아바타를 겹쳐 그린다.
+ * 줄 끝의 「합류」 — 정원 찬 방(3/3)은 비활성 + 「마감」 표기 (스펙 18).
  *
- * **[count] 가 0 이면 아무것도 그리지 않는다.** 0 은 「빈 방」이 아니라 「인원을 모른다」는 뜻이고
- * ([headcountLabel]), 예전처럼 `coerceAtLeast(1)` 로 한 개를 그리면 「최대 3명」이라고 쓰면서
- * 사람 1명을 그려 **숫자와 그림이 서로 다른 말**을 한다.
+ * 공용 [CompactPillButton] 이다(디자인 QA E3): 보이는 높이 32dp·터치 48dp 의 옅은 파랑 알약. 예전 34dp
+ * 솔리드 파랑 버튼은 손가락에 작았고 줄마다 하나씩 있어 시트의 진짜 주 CTA(「새 동승 방 만들기」)를 묻었다.
  */
 @Composable
-private fun AvatarStack(count: Int) {
-    val shown = count.coerceIn(0, 3)
-    if (shown == 0) return
-    Box(modifier = Modifier.width(30.dp + 18.dp * (shown - 1)).height(30.dp)) {
-        repeat(shown) { i ->
-            AvatarCircle(size = 30.dp, modifier = Modifier.offset(x = 18.dp * i))
-        }
-    }
-}
-
-@Composable
-private fun CapacityBadge(text: String) {
-    Box(
-        modifier = Modifier
-            .background(MoyeotaColor.Waiting500, CircleShape)
-            .padding(horizontal = 10.dp, vertical = 3.dp),
-    ) {
-        Text(text = text, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MoyeotaColor.TextOnDark)
-    }
-}
-
-
-// 정원 찬 방(3/3)은 「합류」 비활성 + 「마감」 표기 (스펙 18)
-@Composable
 private fun JoinButton(full: Boolean, onClick: () -> Unit) {
-    val shape = RoundedCornerShape(12.dp)
-    if (full) {
-        Box(
-            modifier = Modifier
-                .size(width = 48.dp, height = 34.dp)
-                .background(MoyeotaColor.SurfaceSoft, shape),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(text = "마감", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = GrayAsh)
-        }
-    } else {
-        Box(
-            modifier = Modifier
-                .size(width = 48.dp, height = 34.dp)
-                .clip(shape)
-                .background(MoyeotaColor.Primary500)
-                .clickable { onClick() },
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(text = "합류", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = MoyeotaColor.TextOnDark)
-        }
-    }
-}
-
-@Composable
-private fun CreateRoomButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .height(48.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(MoyeotaColor.Primary500)
-            .clickable { onClick() },
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = "＋ 새 동승 방 만들기",
-            fontSize = 15.sp,
-            fontWeight = FontWeight.Bold,
-            color = MoyeotaColor.TextOnDark,
-        )
-    }
+    CompactPillButton(text = if (full) "마감" else "합류", onClick = onClick, enabled = !full)
 }
 
 // 위치 권한 없을 때 지도 대신 안내 (스펙 17).
@@ -1169,35 +1154,43 @@ private fun LocationPermissionNotice(
         modifier = modifier.background(MoyeotaColor.SurfaceSoft),
         contentAlignment = Alignment.Center,
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Column(
+            modifier = Modifier.padding(horizontal = MoyeotaSpacing.ScreenGutter),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
             Text(
                 text = "위치 권한이 필요해요",
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Bold,
+                style = MoyeotaType.BodyStrong,
                 color = MoyeotaColor.InkPrimary,
             )
             Text(
                 text = "권한을 허용하면 내 주변 동승을 지도로 볼 수 있어요",
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Medium,
-                color = GrayMute,
+                style = MoyeotaType.BodySm,
+                color = MoyeotaColor.TextMute,
+                textAlign = TextAlign.Center,
             )
-            Spacer(Modifier.height(4.dp))
+            // 보이는 알약은 36dp, 눌리는 자리는 48dp(G12) — 이 상태에서 화면의 유일한 행동이라 솔리드 파랑이다
             Box(
                 modifier = Modifier
-                    .height(36.dp)
-                    .clip(CircleShape)
-                    .background(MoyeotaColor.Primary500)
-                    .clickable { onRequestPermission() }
-                    .padding(horizontal = 18.dp),
+                    .minimumInteractiveComponentSize()
+                    .clip(MoyeotaShape.Pill)
+                    .clickable(role = Role.Button) { onRequestPermission() },
                 contentAlignment = Alignment.Center,
             ) {
-                Text(
-                    text = "위치 권한 허용",
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MoyeotaColor.SurfaceCanvas,
-                )
+                Box(
+                    modifier = Modifier
+                        .height(36.dp)
+                        .background(MoyeotaColor.Primary500, MoyeotaShape.Pill)
+                        .padding(horizontal = 16.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "위치 권한 허용",
+                        style = MoyeotaType.ButtonMd,
+                        color = MoyeotaColor.TextOnDark,
+                    )
+                }
             }
         }
     }
@@ -1206,29 +1199,15 @@ private fun LocationPermissionNotice(
 /**
  * 「최신 정보를 받지 못했어요」 — 목록을 **덮지 않는** 표시.
  *
- * 띄우는 조건은 [staleAfterPollFailures] 가 정한다(연속 실패 3회 = 12초). 여기서 하는 일은 그
- * 사실을 조용히 알리는 것뿐이고, 재시도 버튼을 달지 않는다 — 폴링이 4초마다 알아서 다시 읽고
- * 한 번 성공하면 이 표시가 사라진다. 사용자가 할 일이 없는 상태에 누를 것을 주면 더 헷갈린다.
+ * 띄우는 조건은 [staleAfterPollFailures] 가 정한다(연속 실패 2회 = 30초). 여기서 하는 일은 그
+ * 사실을 조용히 알리는 것뿐이고, 이 표시에는 재시도 버튼을 달지 않는다 — 폴링이 15초마다 알아서 다시
+ * 읽고 한 번 성공하면 이 표시가 사라진다. 지금 바로 다시 읽고 싶으면 지도의 새로고침 버튼이 있다
+ * ([ExploreRefreshButton]) — 같은 일을 하는 버튼을 두 자리에 두지 않는다.
  */
 @Composable
 private fun StaleListNotice(modifier: Modifier = Modifier) {
-    Box(
-        modifier = modifier
-            .height(26.dp)
-            .clip(CircleShape)
-            .background(MoyeotaColor.Danger50)
-            .padding(horizontal = 10.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = "최신 정보를 받지 못했어요",
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Bold,
-            color = MoyeotaColor.Danger600,
-            maxLines = 1,
-            softWrap = false,
-        )
-    }
+    // 공용 상태 배지(빨강 = 오류)다 — 예전 전용 알약(11sp Bold)과 색은 같고 글자 규칙만 맞췄다
+    StatusBadge(kind = NoticeKind.ERROR, text = "최신 정보를 받지 못했어요", modifier = modifier)
 }
 
 @Composable
@@ -1236,21 +1215,21 @@ private fun EmptyListNotice(myPartyHidden: Boolean) {
     // 접힘 요약(17)과 **같은 두 줄**이다 — 같은 상황을 두 자리가 다르게 말하지 않게 한 곳에서 뽑는다
     val (title, subtitle) = emptyListCopy(myPartyHidden)
     Column(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = MoyeotaSpacing.ScreenGutter, vertical = 32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Text(
             text = title,
-            fontSize = 15.sp,
-            fontWeight = FontWeight.Bold,
+            style = MoyeotaType.BodyStrong,
             color = MoyeotaColor.InkPrimary,
+            textAlign = TextAlign.Center,
         )
         Text(
             text = subtitle,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Medium,
-            color = GrayMute,
+            style = MoyeotaType.BodySm,
+            color = MoyeotaColor.TextMute,
+            textAlign = TextAlign.Center,
         )
     }
 }
@@ -1486,17 +1465,6 @@ private fun ExploreMarker(
     }
 }
 
-@Composable
-private fun ChevronUpIcon(color: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier.size(18.dp)) {
-        val w = size.width
-        val h = size.height
-        val stroke = 2.2.dp.toPx()
-        drawLine(color, Offset(w * 0.2f, h * 0.62f), Offset(w * 0.5f, h * 0.34f), stroke, StrokeCap.Round)
-        drawLine(color, Offset(w * 0.8f, h * 0.62f), Offset(w * 0.5f, h * 0.34f), stroke, StrokeCap.Round)
-    }
-}
-
 @Preview(showBackground = true, widthDp = 393, heightDp = 852)
 @Composable
 private fun ExploreScreenPeekPreview() {
@@ -1563,7 +1531,7 @@ private fun ExploreScreenSoonPreview() {
     )
 }
 
-/** 「날짜로 찾기」 — 날짜 칩·도착지 칩과 「도착지도 1km 안」 배지가 보이는 상태. */
+/** 「날짜로 찾기」 — 주간 달력 띠·도착지 칩과 「도착지도 1km 안」 배지가 보이는 상태. */
 @Preview(showBackground = true, widthDp = 393, heightDp = 852)
 @Composable
 private fun ExploreScreenByDatePreview() {

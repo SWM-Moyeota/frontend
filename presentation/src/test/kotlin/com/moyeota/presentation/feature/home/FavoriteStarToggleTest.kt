@@ -147,6 +147,25 @@ class FavoriteStarToggleTest {
         assertEquals("실패했는데 목록을 다시 받지 않았다", loadsBefore + 1, repository.loadCalls)
     }
 
+    /**
+     * 못 박는 것: **담기와 빼기가 같은 비행기모드에서 같은 말을 한다.**
+     * 화면마다 다른 말을 하면 사용자가 원인을 자기 조작에서 찾는다.
+     */
+    @Test
+    fun `빼기의 네트워크 실패도 담기와 같은 문구를 쓴다`() = runTest(mainDispatcher) {
+        val repository = FakePlaceRepository(
+            favorites = listOf(favorite(19, "판교역")),
+            singleDeleteError = FavoritePlaceException(code = null, serverMessage = null, isNetwork = true),
+        )
+        val viewModel = DestinationViewModel(repository)
+        advanceUntilIdle()
+
+        viewModel.removeFavorite(19L)
+        advanceUntilIdle()
+
+        assertEquals(FavoriteNetworkFailureMessage, viewModel.uiState.value.favoriteActionMessage)
+    }
+
     private fun place(name: String) = Place(name, "도로명", 37.0, 127.0)
 
     private fun favorite(

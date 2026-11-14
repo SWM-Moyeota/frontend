@@ -19,6 +19,7 @@ import com.moyeota.domain.model.RouteEstimate
 import com.moyeota.domain.model.User
 import com.moyeota.domain.model.UserProfileInfo
 import com.moyeota.domain.repository.AuthRepository
+import com.moyeota.domain.repository.ActivePartyRepository
 import com.moyeota.domain.repository.RideRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -155,4 +156,38 @@ class FakeAuthRepository : AuthRepository {
     override suspend fun resetProfileImage() = TODO()
     override suspend fun logout() = TODO()
     override suspend fun getMyProfile(): UserProfileInfo = TODO()
+
+    override suspend fun sendFindLoginIdCode(phoneNumber: String): Unit = TODO()
+    override suspend fun findLoginId(phoneNumber: String, code: String): String = TODO()
+    override suspend fun requestPasswordReset(loginId: String, phoneNumber: String): com.moyeota.domain.model.PasswordResetTicket = TODO()
+    override suspend fun verifyPasswordResetCode(requestId: String, code: String): String = TODO()
+    override suspend fun confirmPasswordReset(resetToken: String, newPassword: String, newPasswordConfirm: String): Unit = TODO()
+}
+
+/**
+ * 진행 중인 방을 돌려주는 가짜 저장소. 기본은 **없음**(null) — 합류 실패 안내가 「막은 방을 모를 때」의
+ * 문구로 떨어지는 것이 대부분의 테스트에 맞는 기본값이다
+ * (`JoinConfirmRoute.alreadyInPartyMessage`).
+ */
+open class FakeActivePartyRepository(
+    private val active: Ride? = null,
+    private val resolveError: Throwable? = null,
+) : ActivePartyRepository {
+    var remembered: String? = null
+        private set
+    var cleared = 0
+        private set
+
+    override suspend fun remember(partyId: String) {
+        remembered = partyId
+    }
+
+    override suspend fun clear() {
+        cleared++
+    }
+
+    override suspend fun resolve(): Ride? {
+        resolveError?.let { throw it }
+        return active
+    }
 }

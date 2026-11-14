@@ -117,7 +117,26 @@ class FavoriteDeleteStateTest {
         assertEquals("실패했는데 목록을 다시 받지 않았다", loadsBefore + 1, repository.loadCalls)
     }
 
-    /** 404 가 아닌 실패는 사유를 가리지 않는다 — 사용자가 할 수 있는 일이 재시도뿐이다. */
+    /** 홈의 지우기도 15 와 같은 네트워크 문구를 쓴다 — 같은 사실에 앱이 두 가지 말을 하지 않는다. */
+    @Test
+    fun `지우기의 네트워크 실패는 15 와 같은 문구를 쓴다`() = runTest(mainDispatcher) {
+        val repository = FakePlaceRepository(
+            favorites = listOf(favorite(19)),
+            batchDeleteError = FavoritePlaceException(code = null, serverMessage = null, isNetwork = true),
+        )
+        val viewModel = HomeViewModel(repository)
+        viewModel.refresh()
+        advanceUntilIdle()
+        viewModel.toggleFavoriteEditing()
+        viewModel.toggleFavoriteSelection(favorite(19))
+
+        viewModel.deleteSelectedFavorites()
+        advanceUntilIdle()
+
+        assertEquals(FavoriteNetworkFailureMessage, viewModel.editState.value.errorMessage)
+    }
+
+    /** 404 도 네트워크도 아닌 실패는 사유를 가리지 않는다 — 사용자가 할 수 있는 일이 재시도뿐이다. */
     @Test
     fun `404 가 아닌 실패는 일반 문구로 알린다`() = runTest(mainDispatcher) {
         val repository = FakePlaceRepository(

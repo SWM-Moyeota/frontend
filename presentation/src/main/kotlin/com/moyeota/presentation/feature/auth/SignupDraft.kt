@@ -118,6 +118,8 @@ internal fun authErrorMessage(error: AuthError, serverMessage: String? = null): 
         "탈퇴한 번호는 ${AuthPolicy.REJOIN_RESTRICTED_DAYS}일 동안 다시 가입할 수 없어요. 기간이 지난 뒤에 가입하거나 다른 번호를 써 주세요"
     AuthError.NICKNAME_DUPLICATED -> "이미 사용 중인 닉네임이에요"
     AuthError.INVALID_NICKNAME -> "닉네임은 한글·영문·숫자 2~10자로 입력해 주세요"
+    // 고칠 게 없는 사유다 — 「다시 확인해 주세요」로 말하면 날짜만 계속 고쳐 보게 된다.
+    AuthError.UNDER_MINIMUM_AGE -> "만 ${AuthPolicy.MIN_AGE}세 미만은 가입할 수 없어요"
     // 사용자가 고칠 입력이 아니라 앱이 목록 밖의 키를 보낸 것이다 — **같은 키로 재시도를 권하지 않는다**
     // (같은 키를 다시 눌러도 같은 400 이다).
     //
@@ -166,6 +168,21 @@ internal fun authErrorMessage(error: AuthError, serverMessage: String? = null): 
     AuthError.ONGOING_PARTY_EXISTS -> "진행 중인 합승이 있어요. 합승에서 먼저 나간 뒤에 탈퇴해 주세요"
     // 로그인 실패(401)와 달리 세션은 살아 있다 — "다시 로그인"이 아니라 "다시 입력"이다.
     AuthError.PASSWORD_MISMATCH -> "비밀번호가 일치하지 않아요"
+
+    // ── 아이디 찾기 · 비밀번호 재설정 (2026-11 신규, 04b · 04c) ──
+    // 가입 흐름의 「이미 가입된 번호」와 정반대다 — 갈 곳이 로그인이 아니라 가입이다.
+    AuthError.PHONE_NOT_REGISTERED -> "이 번호로 가입한 계정이 없어요. 번호를 다시 확인하거나 새로 가입해 주세요"
+    // 서버가 「틀림·만료·문자가 애초에 안 나감」을 한 코드로 뭉친다. 재설정은 아이디·번호가 틀려도
+    // 접수가 되므로, 오지 않는 문자를 기다리는 사람에게 확인할 곳을 같이 말한다.
+    AuthError.PASSWORD_RESET_CODE_REJECTED ->
+        "인증번호를 확인하지 못했어요. 문자로 받은 6자리를 다시 입력해 주세요. 문자가 오지 않았다면 아이디와 번호를 확인해 주세요"
+    // 입력을 고쳐서 풀리지 않는다 — 인증으로 되돌린다.
+    AuthError.PASSWORD_RESET_TOKEN_INVALID -> "인증 시간이 지났어요. 휴대폰 인증부터 다시 해 주세요"
+    AuthError.PASSWORD_CONFIRM_MISMATCH -> "새 비밀번호와 확인 값이 달라요"
+    AuthError.PASSWORD_POLICY_VIOLATION -> "비밀번호는 영문·숫자·특수문자를 모두 넣어 8~64자로 만들어 주세요"
+    AuthError.SAME_PASSWORD -> "지금 쓰는 비밀번호와 같아요. 다른 비밀번호를 입력해 주세요"
+    // 네 가지 제한이 한 코드로 온다(쿨다운·하루 횟수·계정당·IP 당) — 사유를 몰라 숫자를 말하지 않는다.
+    AuthError.PASSWORD_RESET_RATE_LIMITED -> "요청이 너무 많아요. 잠시 뒤 다시 시도해 주세요"
 
     AuthError.SESSION_EXPIRED -> "다시 로그인해 주세요"
     AuthError.NETWORK -> "네트워크 연결을 확인해 주세요"

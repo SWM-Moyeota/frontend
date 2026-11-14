@@ -1,6 +1,5 @@
 package com.moyeota.presentation.feature.home
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -17,42 +16,38 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.moyeota.core.designsystem.component.BackArrowIcon
 import com.moyeota.core.designsystem.component.NavigationBarSpacer
 import com.moyeota.core.designsystem.component.NoticeBanner
 import com.moyeota.core.designsystem.component.NoticeKind
 import com.moyeota.core.designsystem.component.PrimaryCtaButton
 import com.moyeota.core.designsystem.component.StatusBarSpacer
-import com.moyeota.core.designsystem.theme.PretendardFontFamily
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.core.designsystem.theme.MoyeotaShape
+import com.moyeota.core.designsystem.theme.MoyeotaSpacing
+import com.moyeota.core.designsystem.theme.MoyeotaType
+import com.moyeota.core.designsystem.component.MoyeotaIconSize
+import com.moyeota.core.designsystem.component.MoyeotaTopBar
+import com.moyeota.core.designsystem.component.SectionLabel
+import com.moyeota.core.designsystem.component.StarIcon
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.style.TextOverflow
 import com.moyeota.domain.model.Place
 import com.moyeota.domain.model.FavoritePlace as SavedPlace
-
-private val CanvasBg = Color(0xFFF5F7FA)
-private val GrayDeep = Color(0xFF54637D)
-private val GrayMute = Color(0xFF8A93A0)
-private val GrayAsh = Color(0xFF9AA1AC)
 
 /** 15 에서 지금 검색 입력을 받고 있는 필드 — 출발지·도착지가 같은 검색 UI 를 공유한다 */
 enum class DestinationField { ORIGIN, DESTINATION }
@@ -172,31 +167,20 @@ fun DestinationScreen(
         )
     val ctaEnabled = selectedPlace != null && !originMissing && !tooClose
 
-    Column(modifier = Modifier.fillMaxSize().imePadding().background(CanvasBg)) {
+    // 흰 화면(디자인 QA G2) — 예전 회색 바탕(#F5F7FA)은 비활성 CTA(#F4F6FA)와 대비가 1.01:1 이라
+    // 「경로 확인하기」 버튼 모양이 사라지고 회색 글자만 떠 있었다.
+    Column(modifier = Modifier.fillMaxSize().imePadding().background(MoyeotaColor.SurfaceCanvas)) {
         StatusBarSpacer()
 
-        // 헤더 — 뒤로 + 좌측 정렬 타이틀
-        Row(
-            modifier = Modifier.fillMaxWidth().height(56.dp).padding(start = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconButton(onClick = onBack) {
-                BackArrowIcon()
-            }
-            Text(
-                text = "어디로 갈까요?",
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-                color = MoyeotaColor.InkPrimary,
-            )
-        }
+        // 헤더 — 다른 하위 화면과 같은 가운데 제목 앱바(G7)
+        MoyeotaTopBar(title = "어디로 갈까요?", onBack = onBack)
 
         Column(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp),
+                .padding(horizontal = MoyeotaSpacing.ScreenGutter),
         ) {
             Spacer(Modifier.height(4.dp))
 
@@ -204,8 +188,6 @@ fun DestinationScreen(
             PlaceFieldRow(
                 dotColor = MoyeotaColor.Primary500,
                 focused = originActive,
-                // 검색 모드가 아닐 때만 그림자 — 포커스 테두리와 겹치면 지저분해진다
-                elevated = !originActive,
                 onClick = { onFieldFocus(DestinationField.ORIGIN) },
             ) {
                 if (originActive) {
@@ -219,24 +201,27 @@ fun DestinationScreen(
                 } else {
                     Text(
                         text = origin ?: "출발지를 검색해 주세요",
-                        fontSize = 15.sp,
-                        fontWeight = if (origin == null) FontWeight.Medium else FontWeight.Bold,
-                        color = if (origin == null) GrayAsh else MoyeotaColor.InkPrimary,
+                        style = if (origin == null) MoyeotaType.BodyMd else MoyeotaType.BodyStrong,
+                        color = if (origin == null) MoyeotaColor.TextPlaceholder else MoyeotaColor.InkPrimary,
                         maxLines = 1,
                         modifier = Modifier.weight(1f),
                     )
-                    Text(
-                        // 기본값일 때만 "현재 위치" — 사용자가 직접 고른 출발지는 "변경" 로 구분.
-                        // 출발지가 비었으면 "검색" — 눌러서 채우라는 신호
-                        text = when {
-                            origin == null -> "검색"
-                            originIsDefault -> "현재 위치"
-                            else -> "변경"
-                        },
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = GrayMute,
-                    )
+                    // 기본값일 때만 "현재 위치" — 사용자가 직접 고른 출발지는 "변경" 로 구분.
+                    // 출발지가 비었으면 "검색" — 눌러서 채우라는 신호.
+                    // 출발지 이름이 이미 「현재 위치」면 꼬리표를 달지 않는다(디자인 QA S15-2) —
+                    // 「현재 위치 … 현재 위치」로 같은 말이 한 줄에 두 번 나왔다.
+                    val originTag = when {
+                        origin == null -> "검색"
+                        originIsDefault -> "현재 위치".takeIf { origin.trim() != it }
+                        else -> "변경"
+                    }
+                    if (originTag != null) {
+                        Text(
+                            text = originTag,
+                            style = MoyeotaType.CaptionMd,
+                            color = MoyeotaColor.TextMute,
+                        )
+                    }
                 }
             }
 
@@ -246,7 +231,6 @@ fun DestinationScreen(
             PlaceFieldRow(
                 dotColor = MoyeotaColor.MarkerDestination,
                 focused = !originActive,
-                elevated = originActive,
                 onClick = { onFieldFocus(DestinationField.DESTINATION) },
             ) {
                 SearchInput(
@@ -268,83 +252,79 @@ fun DestinationScreen(
                     // 구분자만 남는다. 없으면 이름만 보여 준다.
                     text = "선택: ${selectedPlace.name}" +
                         selectedPlace.roadName.takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty(),
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
+                    style = MoyeotaType.CaptionMd,
                     color = MoyeotaColor.Primary600,
                 )
             }
 
-            Spacer(Modifier.height(26.dp))
+            Spacer(Modifier.height(MoyeotaSpacing.SectionGap))
 
             // 자주 가는 곳 — 서버(GET /users/me/favorite-places)
-            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "자주 가는 곳",
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = GrayMute,
-                )
-                if (favoritesLoading) {
-                    Spacer(Modifier.size(8.dp))
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(12.dp),
-                        strokeWidth = 1.5.dp,
-                        color = MoyeotaColor.Primary500,
-                    )
-                }
-            }
-            Spacer(Modifier.height(10.dp))
+            SectionLabel(
+                text = "자주 가는 곳",
+                trailing = if (favoritesLoading) {
+                    {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(12.dp),
+                            strokeWidth = 1.5.dp,
+                            color = MoyeotaColor.Primary500,
+                        )
+                    }
+                } else {
+                    null
+                },
+            )
             when {
                 favoritesErrorMessage != null -> Text(
                     text = favoritesErrorMessage,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
+                    style = MoyeotaType.CaptionMd,
                     color = MoyeotaColor.Danger600,
                 )
                 favoritePlaces.isEmpty() && !favoritesLoading -> Text(
                     text = "아직 등록한 장소가 없어요. 검색 결과의 ★ 를 눌러 등록해 보세요",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = GrayAsh,
+                    style = MoyeotaType.BodySm,
+                    color = MoyeotaColor.TextMute,
                 )
                 else -> Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(9.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     // 한 줄에 3개까지만 — 서버는 최대 10개를 내려준다.
                     // **여기에는 삭제 손잡이를 두지 않는다**: take(3) 이라 전체가 안 보이는데
                     // 「전체 삭제」를 이 자리에 두면 보이지 않는 7곳까지 지워진다. 목록 전체가
                     // 보이는 14 홈 편집 모드가 삭제의 유일한 자리다.
                     favoritePlaces.take(3).forEach { place ->
+                        // 그림자 대신 Border 선(디자인 QA G4·S15-2) — 흰 화면 위의 타일이라 선 하나로 모양이 선다.
+                        // 주소는 10sp → 12sp(CaptionMd): 10sp 는 이 앱의 글자 크기 표 밖이고 거의 읽히지 않았다.
                         Column(
                             modifier = Modifier
                                 .weight(1f)
-                                .height(72.dp)
-                                .shadow(4.dp, RoundedCornerShape(16.dp), spotColor = Color(0x1A1B2A4A))
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(MoyeotaColor.SurfaceCanvas)
+                                .height(80.dp)
+                                .clip(MoyeotaShape.Card)
+                                .border(1.dp, MoyeotaColor.Border, MoyeotaShape.Card)
                                 .clickable {
                                     onPlaceSelect(
                                         Place(place.name, place.roadName, place.latitude, place.longitude),
                                     )
                                 }
-                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                                .padding(12.dp),
                         ) {
-                            StarIcon()
+                            StarIcon(size = MoyeotaIconSize.Sm, tint = MoyeotaColor.TextPlaceholder)
                             Spacer(Modifier.weight(1f))
                             Text(
                                 text = place.name,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold,
+                                style = MoyeotaType.BodySm,
+                                fontWeight = FontWeight.SemiBold,
                                 color = MoyeotaColor.InkPrimary,
                                 maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                             )
                             Text(
                                 text = place.roadName,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = GrayMute,
+                                style = MoyeotaType.CaptionMd,
+                                color = MoyeotaColor.TextMute,
                                 maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                             )
                         }
                     }
@@ -354,71 +334,60 @@ fun DestinationScreen(
                 Spacer(Modifier.height(8.dp))
                 Text(
                     text = favoriteActionMessage,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = GrayDeep,
+                    style = MoyeotaType.CaptionMd,
+                    color = MoyeotaColor.TextBody,
                 )
             }
 
-            Spacer(Modifier.height(26.dp))
+            Spacer(Modifier.height(MoyeotaSpacing.SectionGap))
 
             // 검색 결과(서버) — 활성 필드 기준. 검색어가 비어 있으면 아무것도 그리지 않는다
             // (최근 검색 API 가 서버에 없어 더미 목록을 두지 않는다).
             val activeQuery = if (originActive) originQuery else query
             val showingSearch = activeQuery.isNotBlank()
             if (showingSearch) {
-                Text(
-                    text = if (originActive) "출발지 검색 결과" else "검색 결과",
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = GrayMute,
-                )
-                Spacer(Modifier.height(10.dp))
+                SectionLabel(text = if (originActive) "출발지 검색 결과" else "검색 결과")
                 when {
                     searchErrorMessage != null -> Text(
                         text = searchErrorMessage,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium,
+                        style = MoyeotaType.CaptionMd,
                         color = MoyeotaColor.Danger600,
                     )
                     searchResults.isEmpty() && !searchLoading -> Text(
                         text = "검색 결과가 없어요",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = GrayAsh,
+                        style = MoyeotaType.BodySm,
+                        color = MoyeotaColor.TextMute,
                     )
-                    else -> Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .shadow(4.dp, RoundedCornerShape(18.dp), spotColor = Color(0x1A1B2A4A))
-                            .clip(RoundedCornerShape(18.dp))
-                            .background(MoyeotaColor.SurfaceCanvas),
-                    ) {
+                    // 그림자 카드 없이 흰 화면 위에 줄로 바로(G4) — 줄 사이만 Hairline
+                    else -> Column(modifier = Modifier.fillMaxWidth()) {
                         searchResults.forEachIndexed { index, place ->
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
+                                    // 도로명이 빈 행도 두 줄짜리 행과 같은 높이를 갖는다(S15-1)
+                                    .heightIn(min = 56.dp)
                                     .clickable { onPlaceSelect(place) }
-                                    // end 를 4dp 로 줄인 건 ★ 가 48dp 를 스스로 차지하기 때문이다 —
-                                    // 예전 12dp 를 그대로 두면 ★ 가 오른쪽으로 더 밀려 가장자리에 붙는다.
-                                    .padding(start = 20.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+                                    // 오른쪽 여백이 없는 건 ★ 가 48dp 를 스스로 차지하기 때문이다.
+                                    .padding(vertical = 4.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                Box(Modifier.size(9.dp).background(activeMarkerColor, CircleShape))
-                                Spacer(Modifier.size(12.dp))
+                                Box(Modifier.size(8.dp).background(activeMarkerColor, CircleShape))
+                                Spacer(Modifier.width(12.dp))
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
                                         text = place.name,
-                                        fontSize = 14.sp,
-                                        fontWeight = FontWeight.Bold,
+                                        style = MoyeotaType.BodyStrong,
                                         color = MoyeotaColor.InkPrimary,
                                     )
-                                    Text(
-                                        text = place.roadName,
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Medium,
-                                        color = GrayMute,
-                                    )
+                                    // 서버가 도로명을 비워 주는 장소가 있다(지번만 있는 건물·역). 빈 줄을 세우면
+                                    // 이름이 두 줄 칸의 위쪽에 붙고 점·★ 는 가운데에 남아 어긋나 보였다(S15-1).
+                                    if (place.roadName.isNotBlank()) {
+                                        Text(
+                                            text = place.roadName,
+                                            style = MoyeotaType.BodySm,
+                                            color = MoyeotaColor.TextMute,
+                                        )
+                                    }
                                 }
                                 // ★ 토글 — 안 담은 곳이면 등록, 이미 담은 곳이면 빼기
                                 //
@@ -432,22 +401,28 @@ fun DestinationScreen(
                                     modifier = Modifier
                                         .size(48.dp)
                                         .clip(CircleShape)
-                                        .clickable(enabled = !favoriteActionLoading) {
+                                        // 아이콘만 있는 버튼이라 스크린리더에 무엇을 하는지 알린다
+                                        .clickable(
+                                            enabled = !favoriteActionLoading,
+                                            onClickLabel = if (savedId != null) "즐겨찾기에서 빼기" else "즐겨찾기에 담기",
+                                            role = Role.Button,
+                                        ) {
                                             if (savedId != null) onRemoveFavorite(savedId) else onAddFavorite(place)
                                         },
                                     contentAlignment = Alignment.Center,
                                 ) {
                                     StarIcon(
                                         // 담긴 곳은 채운 ★ — 지금 상태가 무엇인지가 토글의 전부다
-                                        color = if (favoriteActionLoading) GrayAsh else MoyeotaColor.Primary500,
+                                        tint = if (favoriteActionLoading) MoyeotaColor.TextPlaceholder else MoyeotaColor.Primary500,
                                         filled = savedId != null,
                                     )
                                 }
                             }
                             if (index != searchResults.lastIndex) {
+                                // 글자 시작(점 8 + 간격 12)부터 긋는다
                                 HorizontalDivider(
                                     color = MoyeotaColor.Hairline,
-                                    modifier = Modifier.padding(start = 50.dp, end = 20.dp),
+                                    modifier = Modifier.padding(start = 20.dp),
                                 )
                             }
                         }
@@ -459,26 +434,25 @@ fun DestinationScreen(
         }
 
         // 하단 — 안내 · 오류 · CTA
-        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = MoyeotaSpacing.ScreenGutter)) {
             Text(
                 // 「같은 방향 사람만 보여드려요」는 지웠다 — 17 탐색 목록은 **지도 영역**으로만 거른다
                 // (`getPartiesWithin`, 서버도 "출발지가 영역 안인 ACTIVE 방"). 도착지로 거르는 길이 없다.
                 // 이 CTA 가 실제로 하는 일은 16 에서 경로·예상 요금을 보여주는 것이다(2026-10-13).
                 text = "도착지를 넣으면 경로와 예상 요금을 알려드려요",
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                color = GrayAsh,
+                style = MoyeotaType.CaptionMd,
+                color = MoyeotaColor.TextMute,
                 modifier = Modifier.align(Alignment.CenterHorizontally),
             )
             if (originMissing) {
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(8.dp))
                 NoticeBanner(kind = NoticeKind.INFO, text = "현재 위치를 확인하거나 출발지를 검색해 주세요")
             }
             if (tooClose) {
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(8.dp))
                 NoticeBanner(kind = NoticeKind.ERROR, text = "너무 가까워요")
             }
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(12.dp))
             PrimaryCtaButton(
                 text = "경로 확인하기",
                 onClick = { selectedPlace?.let(onConfirmRoute) },
@@ -492,26 +466,28 @@ fun DestinationScreen(
 /**
  * 출발지·도착지 필드의 공통 껍데기.
  * focused 면 파랑 테두리 — 두 필드 중 어디에 검색어가 들어가는지 이걸로만 구분한다.
+ *
+ * 그림자는 두지 않는다(디자인 QA G4) — 흰 화면 위의 입력칸이라 테두리([MoyeotaColor.BorderStrong],
+ * 디자인 문서 text-input)로 모양이 선다. 예전엔 포커스 없는 칸에만 그림자를 줘서 두 칸이 서로 다른
+ * 높이에 떠 보였다.
  */
 @Composable
 private fun PlaceFieldRow(
     dotColor: Color,
     focused: Boolean,
-    elevated: Boolean,
     onClick: () -> Unit,
     content: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit,
 ) {
-    val shape = RoundedCornerShape(14.dp)
+    val shape = MoyeotaShape.Card
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .height(52.dp)
-            .then(if (elevated) Modifier.shadow(4.dp, shape, spotColor = Color(0x1A1B2A4A)) else Modifier)
             .clip(shape)
             .background(MoyeotaColor.SurfaceCanvas)
             .border(
                 width = if (focused) 1.5.dp else 1.dp,
-                color = if (focused) MoyeotaColor.Primary500 else MoyeotaColor.Hairline,
+                color = if (focused) MoyeotaColor.Primary500 else MoyeotaColor.BorderStrong,
                 shape = shape,
             )
             .clickable { onClick() }
@@ -535,20 +511,15 @@ private fun SearchInput(
             onValueChange = onValueChange,
             enabled = enabled,
             singleLine = true,
-            textStyle = TextStyle(
-                fontFamily = PretendardFontFamily,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Bold,
-                color = MoyeotaColor.InkPrimary,
-            ),
+            // 입력한 글자는 본문 굵기(디자인 문서 text-input = body-md) — 예전엔 15sp Bold 였다
+            textStyle = MoyeotaType.BodyMd.copy(color = MoyeotaColor.InkPrimary),
             modifier = Modifier.fillMaxWidth(),
         )
         if (value.isEmpty()) {
             Text(
                 text = placeholder,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Medium,
-                color = GrayAsh,
+                style = MoyeotaType.BodyMd,
+                color = MoyeotaColor.TextPlaceholder,
             )
         }
     }
@@ -562,31 +533,6 @@ private fun FieldSpinner() {
         strokeWidth = 2.dp,
         color = MoyeotaColor.Primary500,
     )
-}
-
-// ─── 아이콘 ──────────────────────────────────────────────────────────────
-
-/** [filled] = 이미 담은 곳. 같은 도형을 선 대신 면으로 칠해 「담겼다」를 한 눈에 보여준다 */
-@Composable
-private fun StarIcon(modifier: Modifier = Modifier, color: Color = GrayAsh, filled: Boolean = false) {
-    Canvas(modifier = modifier.size(17.dp)) {
-        val r = size.minDimension / 2f
-        val c = center
-        val path = Path()
-        for (i in 0 until 10) {
-            val radius = if (i % 2 == 0) r else r * 0.45f
-            val angle = -Math.PI / 2 + i * Math.PI / 5
-            val x = c.x + (radius * kotlin.math.cos(angle)).toFloat()
-            val y = c.y + (radius * kotlin.math.sin(angle)).toFloat()
-            if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
-        }
-        path.close()
-        if (filled) {
-            drawPath(path, color)
-        } else {
-            drawPath(path, color, style = Stroke(1.4.dp.toPx(), join = StrokeJoin.Round))
-        }
-    }
 }
 
 @Preview(showBackground = true, widthDp = 393, heightDp = 852)

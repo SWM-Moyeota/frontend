@@ -141,8 +141,12 @@ object AuthPolicy {
      * 개인정보 처리방침에도 「만 14세 미만은 가입할 수 없습니다」로 고지하므로 **고지와 동작이 어긋나면
      * 안 된다** — 화면 문구도 이 상수를 끼워 쓴다(`birthDateError`). 숫자를 한 곳에서만 고치게 하는 이유다.
      *
-     * **서버에는 이 제한이 없다**(`UserRegisterRequest` 는 `birthDate` 에 `@Past` 뿐이다).
-     * 즉 이 판정은 앱만의 방어선이고, API 를 직접 호출하면 우회된다 — 서버에도 같은 검증이 필요하다.
+     * **서버도 같은 값으로 막는다** — 400 `USER113` UNDER_MINIMUM_AGE
+     * ([AuthError.UNDER_MINIMUM_AGE], 실측(2026-11-05, 로컬 `:8080`): 생일 하루 전 400 / 당일 201).
+     * 한동안은 앱만의 방어선이었고(그때 `UserRegisterRequest` 에는 `@Past` 뿐이었다) API 직접 호출로
+     * 우회됐다. 지금은 두 겹이지만 **숫자가 두 곳에 있다** — 서버 쪽이 바뀌면 이 상수도 같이 고칠 것.
+     * 앱이 먼저 막는 것을 그만두지는 않는다: 문자 인증까지 다 거친 뒤 거절하는 대신 입력 자리에서
+     * 바로 말해 주는 쪽이 낫다.
      */
     const val MIN_AGE = 14
 
@@ -223,6 +227,22 @@ object AuthPolicy {
     fun isOldEnough(birthDate: LocalDate, today: LocalDate): Boolean =
         !today.isBefore(birthDate.plusYears(MIN_AGE.toLong()))
 }
+
+/**
+ * 비밀번호 재설정 인증번호 요청의 접수 결과 (`POST /api/v1/auth/password-reset/send` 의 202).
+ *
+ * **「문자를 보냈다」는 뜻이 아니다** — 서버는 아이디·번호가 가입 정보와 맞든 틀리든 같은 접수를 준다.
+ * 화면은 이 값으로 입력칸과 카운트다운만 열고, 발송 여부는 단정하지 않는다.
+ *
+ * @property requestId 확인 요청에 되돌려 보내는 접수번호. 번호가 아니라 이 값으로 인증번호를 확인한다.
+ * @property expiresInSeconds 인증번호 유효 시간(서버 값 180).
+ * @property resendAfterSeconds 다시 요청할 수 있을 때까지의 시간(서버 값 60).
+ */
+data class PasswordResetTicket(
+    val requestId: String,
+    val expiresInSeconds: Int,
+    val resendAfterSeconds: Int,
+)
 
 /**
  * 로그인 상태. presentation 은 토큰을 절대 보지 않고 이 상태만 본다.

@@ -181,9 +181,12 @@ class MyPageMenuRulesTest {
         assertEquals(MyPageAction.DeleteAccount, rows[1].action)
     }
 
-    /** 카드 안에서 빨강이 하나뿐이라야 경고로 읽힌다. 로그아웃은 되돌릴 수 있는 동작이다. */
+    /**
+     * 되돌릴 수 없는 행은 탈퇴 하나뿐이다 — 화면은 이 행만 카드 밖 링크로 뗀다(디자인 QA M2).
+     * 로그아웃은 되돌릴 수 있는 동작이라 카드에 남는다.
+     */
     @Test
-    fun `탈퇴하기만 빨간 행이다`() {
+    fun `탈퇴하기만 되돌릴 수 없는 행이다`() {
         val danger = myPageGroups(allLinks).flatMap { it.rows }.filter { it.danger }
 
         assertEquals(listOf("탈퇴하기"), danger.map { it.text })

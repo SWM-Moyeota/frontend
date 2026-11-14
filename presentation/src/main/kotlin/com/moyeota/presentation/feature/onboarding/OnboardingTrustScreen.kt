@@ -3,7 +3,6 @@ package com.moyeota.presentation.feature.onboarding
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,7 +16,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -25,17 +23,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import com.moyeota.core.designsystem.component.CheckIcon
+import com.moyeota.core.designsystem.component.MoyeotaIconSize
 import com.moyeota.core.designsystem.component.NavigationBarSpacer
 import com.moyeota.core.designsystem.component.PageDots
 import com.moyeota.core.designsystem.component.PrimaryCtaButton
 import com.moyeota.core.designsystem.component.StatusBarSpacer
+import com.moyeota.core.designsystem.component.TextLinkButton
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.core.designsystem.theme.MoyeotaShape
 import com.moyeota.core.designsystem.theme.MoyeotaType
 
 /**
@@ -63,25 +63,19 @@ fun OnboardingTrustScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(MoyeotaColor.SurfaceSoft),
+            .background(MoyeotaColor.SurfaceCanvas),
     ) {
         StatusBarSpacer()
 
-        // 건너뛰기 (우상단)
+        // 건너뛰기 (우상단) — 48dp 터치 + 물결(디자인 QA G12). 링크 안쪽 8dp 만큼 줄 여백을 줄여
+        // 글자 끝이 16dp 화면 여백에 선다
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(horizontal = 8.dp),
             horizontalArrangement = Arrangement.End,
         ) {
-            Text(
-                text = "건너뛰기",
-                style = MoyeotaType.ButtonMd,
-                color = MoyeotaColor.TextMute,
-                modifier = Modifier
-                    .clickable { onSkip() }
-                    .padding(8.dp),
-            )
+            TextLinkButton(text = "건너뛰기", onClick = onSkip, color = MoyeotaColor.TextMute)
         }
 
         Spacer(Modifier.height(24.dp))
@@ -97,7 +91,7 @@ fun OnboardingTrustScreen(
 
         Text(
             text = OnboardingTrustCopy.headline,
-            style = MoyeotaType.DisplayMd.copy(fontSize = 26.sp, letterSpacing = (-0.52).sp),
+            style = MoyeotaType.DisplayMd,
             color = MoyeotaColor.InkPrimary,
             textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth(),
@@ -107,7 +101,7 @@ fun OnboardingTrustScreen(
 
         Text(
             text = OnboardingTrustCopy.body,
-            style = MoyeotaType.BodyMd.copy(lineHeight = 22.sp, letterSpacing = (-0.3).sp),
+            style = MoyeotaType.BodyMd,
             color = MoyeotaColor.TextMute,
             textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth(),
@@ -135,29 +129,36 @@ fun OnboardingTrustScreen(
     }
 }
 
-// 일러스트 — 휴대폰 인증을 마친 프로필 카드 (아바타 + 체크 배지 + 이름 자리 바)
+/**
+ * 일러스트 — 휴대폰 인증을 마친 프로필 카드 (아바타 + 체크 배지 + 이름 자리 바).
+ *
+ * 뒤에 깔던 옅은 파란 판(r24)은 걷었다(디자인 QA A3) — 판 위의 카드는 "상자 속 상자"였다. 이제 카드가 흰
+ * 화면에 바로 서므로 그림자 대신 [MoyeotaColor.Border] 선으로 모양을 낸다(G4). 높이는 그대로라 세 장의
+ * 제목 자리가 같다.
+ */
 @Composable
 private fun TrustIllustration(modifier: Modifier = Modifier) {
     Column(
-        modifier = modifier.background(MoyeotaColor.Primary50, RoundedCornerShape(24.dp)),
+        modifier = modifier,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Spacer(Modifier.height(86.dp))
+        Spacer(Modifier.height(88.dp))
 
         Column(
             modifier = Modifier
                 .size(width = 166.dp, height = 120.dp)
-                .background(MoyeotaColor.SurfaceCanvas, RoundedCornerShape(16.dp)),
+                .background(MoyeotaColor.SurfaceCanvas, MoyeotaShape.Card)
+                .border(1.dp, MoyeotaColor.Border, MoyeotaShape.Card),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Spacer(Modifier.height(18.dp))
+            Spacer(Modifier.height(16.dp))
 
             Box {
                 // 아바타 (사람 실루엣)
                 Box(
                     modifier = Modifier
                         .size(44.dp)
-                        .background(Color(0xFFCBD2DA), CircleShape),
+                        .background(MoyeotaColor.BorderStrong, CircleShape),
                     contentAlignment = Alignment.Center,
                 ) {
                     PersonGlyph(Modifier.size(24.dp))
@@ -172,7 +173,7 @@ private fun TrustIllustration(modifier: Modifier = Modifier) {
                         .border(2.dp, MoyeotaColor.SurfaceCanvas, CircleShape),
                     contentAlignment = Alignment.Center,
                 ) {
-                    CheckGlyph(Modifier.size(10.dp), color = MoyeotaColor.TextOnDark)
+                    CheckIcon(size = MoyeotaIconSize.Sm, tint = MoyeotaColor.TextOnDark)
                 }
             }
 
@@ -183,14 +184,14 @@ private fun TrustIllustration(modifier: Modifier = Modifier) {
                 modifier = Modifier
                     .width(112.dp)
                     .height(14.dp)
-                    .background(Color(0xFFD3DAE4), CircleShape),
+                    .background(MoyeotaColor.Border, CircleShape),
             )
         }
     }
 }
 
 @Composable
-private fun PersonGlyph(modifier: Modifier = Modifier, color: Color = Color(0xFF7C8592)) {
+private fun PersonGlyph(modifier: Modifier = Modifier, color: Color = MoyeotaColor.TextMute) {
     Canvas(modifier = modifier) {
         val w = size.width
         val h = size.height
@@ -206,17 +207,6 @@ private fun PersonGlyph(modifier: Modifier = Modifier, color: Color = Color(0xFF
             size = Size(w * 0.76f, h * 0.72f),
             style = Fill,
         )
-    }
-}
-
-@Composable
-private fun CheckGlyph(modifier: Modifier = Modifier, color: Color) {
-    Canvas(modifier = modifier) {
-        val stroke = 2.dp.toPx()
-        val w = size.width
-        val h = size.height
-        drawLine(color, Offset(w * 0.1f, h * 0.55f), Offset(w * 0.4f, h * 0.85f), stroke, StrokeCap.Round)
-        drawLine(color, Offset(w * 0.4f, h * 0.85f), Offset(w * 0.9f, h * 0.2f), stroke, StrokeCap.Round)
     }
 }
 

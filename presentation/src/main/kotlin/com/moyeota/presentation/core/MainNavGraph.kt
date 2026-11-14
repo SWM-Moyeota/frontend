@@ -15,6 +15,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.runtime.SideEffect
+import android.os.Build
+import android.view.View
+import android.view.WindowInsetsController
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.LifecycleStartEffect
@@ -40,9 +46,11 @@ import com.moyeota.domain.repository.PlaceRepository
 import com.moyeota.domain.repository.NoShowRepository
 import com.moyeota.domain.repository.RideRecordRepository
 import com.moyeota.domain.repository.RideRepository
+import com.moyeota.presentation.feature.auth.FindIdRoute
 import com.moyeota.presentation.feature.auth.LoginFormRoute
 import com.moyeota.presentation.feature.auth.LoginScreen
 import com.moyeota.presentation.feature.auth.MannerPledgeRoute
+import com.moyeota.presentation.feature.auth.PasswordResetRoute
 import com.moyeota.presentation.feature.auth.ProfileSetupRoute
 import com.moyeota.presentation.feature.auth.SignupCompleteScreen
 import com.moyeota.presentation.feature.auth.SignupDraft
@@ -262,6 +270,21 @@ private fun MainNavHost(
     var reverifyPhoneRequest by rememberSaveable { mutableIntStateOf(0) }
     // 로그인 화면으로 돌아온 이유. 세션 만료일 때만 채워지고 사용자가 스스로 로그아웃하면 비운다.
     var signOutNotice by remember { mutableStateOf<String?>(null) }
+
+    // 04b 에서 찾았거나 04c 에서 비밀번호를 바꾼 아이디. 04a 로 돌아왔을 때 아이디 칸을 채우고,
+    // 04b → 04c 로 건너갈 때 04c 의 아이디 칸도 채운다. 로그인에 성공하면 버린다.
+    var recoveredLoginId by remember { mutableStateOf<String?>(null) }
+
+    // 04b·04c 를 끝내고 04a 로 돌아간다. 둘 다 04a 위에 쌓여 열리므로 그 엔트리로 되돌아가면 되고,
+    // 스택에 없으면(있을 수 없는 경로지만 화면 없는 그래프를 남기지 않으려고) 04a 로 새로 연다.
+    fun returnToLoginForm() {
+        if (!navController.popBackStack(Routes.LOGIN_FORM, inclusive = false)) {
+            navController.navigate(Routes.LOGIN_FORM) {
+                popUpTo(0) { inclusive = true }
+                launchSingleTop = true
+            }
+        }
+    }
     var logoutRequested by remember { mutableStateOf(false) }
     // ── 37 탈퇴의 두 표시 ──
     //
@@ -333,6 +356,20 @@ private fun MainNavHost(
     var selectedPartner by remember { mutableStateOf<User?>(null) }
     // 16 에서 만든 방 — 21 매칭 대기가 이 방을 조회한다. 위 selectedPartyId 와 같은 이유로 saveable
     var createdPartyId by rememberSaveable { mutableStateOf<Long?>(null) }
+
+    /**
+     * 16 도착지 확인을 **시간 정하기로 열까.** 17 탐색의 예약 탭에서 「새 동승 방 만들기」를 누른
+     * 경우에만 참이다.
+     *
+     * 깃발을 쓰는 이유: 15 → 16 은 두 걸음이고 그 사이에 출발지·도착지가 정해진다. 경로 인자로
+     * 실어 나르면 두 라우트의 주소가 모두 바뀌는데, 이 값은 **어디서 눌렀는지**일 뿐 화면의
+     * 정체성이 아니다. `selectedPartyId`·`createdPartyId` 와 같은 자리에 같은 이유로 둔다
+     * (구성 변경에서 살아남아야 하므로 saveable).
+     *
+     * **16 에 들어가지 않는 길에서는 반드시 내린다** — 홈 검색으로 들어온 사람이 직전에 예약 탭을
+     * 봤다는 이유로 시간 정하기 화면을 받으면 안 된다.
+     */
+    var createScheduled by rememberSaveable { mutableStateOf(false) }
     // 탐색용 selectedPartyId 와 진행용 createdPartyId 는 **일부러 둘이다** — 탐색 중 다른 방을 눌러도
     // 내가 들어 있는 방이 바뀌면 안 된다.
     //
@@ -614,6 +651,7 @@ private fun MainNavHost(
                 },
                 onLoggedIn = {
                     signOutNotice = null
+                    recoveredLoginId = null
                     resetTo(Routes.HOME)
                 },
                 onSignUp = {
@@ -621,7 +659,51 @@ private fun MainNavHost(
                     reverifyPhoneRequest = 0
                     navController.navigate(Routes.PROFILE_SETUP)
                 },
+                onFindId = { navController.navigate(Routes.FIND_ID) },
+                onResetPassword = {
+                    // 직접 들어가는 재설정은 빈 아이디 칸에서 시작한다 — 지난번에 찾은 아이디를 끌고 가지 않는다
+                    recoveredLoginId = null
+                    navController.navigate(Routes.PASSWORD_RESET)
+                },
+                prefillLoginId = recoveredLoginId,
                 noticeMessage = signOutNotice,
+            )
+        }
+
+        // B · 계정 찾기 04b · 04c (2026-11 신규)
+        composable(Routes.FIND_ID) {
+            FindIdRoute(
+                repository = authRepository,
+                onBack = ::back,
+                // 가입되지 않은 번호 — 가입으로 보낸다. 04a 의 「가입하기」와 같은 시작이다.
+                onSignUp = {
+                    signupDraft = SignupDraft()
+                    reverifyPhoneRequest = 0
+                    navController.navigate(Routes.PROFILE_SETUP)
+                },
+                onLogin = { loginId ->
+                    recoveredLoginId = loginId
+                    returnToLoginForm()
+                },
+                onResetPassword = { loginId ->
+                    recoveredLoginId = loginId
+                    navController.navigate(Routes.PASSWORD_RESET)
+                },
+            )
+        }
+        composable(Routes.PASSWORD_RESET) {
+            PasswordResetRoute(
+                repository = authRepository,
+                initialLoginId = recoveredLoginId.orEmpty(),
+                onBack = ::back,
+                onFindId = { navController.navigate(Routes.FIND_ID) },
+                onCompleted = { loginId ->
+                    recoveredLoginId = loginId
+                    // 성공해도 서버는 토큰을 주지 않는다 — 새 비밀번호로 직접 로그인해야 한다는 걸 04a 에서 말한다.
+                    // 세션 만료 안내와 같은 자리(noticeMessage)라 로그인에 성공하면 함께 지워진다.
+                    signOutNotice = "비밀번호를 바꿨어요. 새 비밀번호로 로그인해 주세요"
+                    returnToLoginForm()
+                },
             )
         }
 
@@ -686,15 +768,16 @@ private fun MainNavHost(
             LaunchedEffect(Unit) { activePartyViewModel.refresh() }
             HomeRoute(
                 repository = placeRepository,
-                userName = (userName as? UserNameState.Resolved)?.name,
                 activeRide = activeRide,
                 onActiveRideClick = { activeRide?.let(::navigateToStage) },
                 onSearchClick = {
                     searchInitialQuery = ""
+                    createScheduled = false
                     navController.navigate(Routes.DESTINATION)
                 },
                 onPlaceQuery = { query ->
                     searchInitialQuery = query
+                    createScheduled = false
                     navController.navigate(Routes.DESTINATION)
                 },
                 onTabSelect = ::navigateTab,
@@ -724,11 +807,16 @@ private fun MainNavHost(
                 },
             )
         }
-        // 16 은 15 위에 뜨는 모달 — 스크림 탭·닫기로만 닫힌다
+        // 16 은 15 위에 뜨는 모달 — 스크림 탭·닫기로만 닫힌다.
+        //
+        // decorFitsSystemWindows = false (디자인 QA S16-1): 기본값이면 다이얼로그 창이 상태바·제스처 바 **사이**에만
+        // 그려져, 두 바 자리에 다이얼로그의 어두운 딤(rgb 98,99,100)이 띠처럼 남았다. 창을 화면 끝까지 넓히면
+        // 16 의 StatusBarSpacer·NavigationBarSpacer 가 실제 인셋을 받아 그 자리를 흰색으로 칠한다.
         dialog(
             Routes.DESTINATION_CONFIRM,
-            dialogProperties = DialogProperties(usePlatformDefaultWidth = false),
+            dialogProperties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
         ) {
+            DialogLightSystemBars()
             DestinationConfirmRoute(
                 repository = rideRepository,
                 // 핀 조정·GPS 출발지의 좌표를 실주소로 되짚는다 (GET /places/reverse)
@@ -738,6 +826,8 @@ private fun MainNavHost(
                 onActivePartyRefresh = { activePartyViewModel.refresh() },
                 origin = confirmedOrigin,
                 destination = confirmedDestination,
+                // 17 예약 탭에서 눌러 온 길이면 시간 정하기로 연다 — 위 createScheduled 참고
+                initiallyScheduled = createScheduled,
                 onDismiss = ::back,
                 // 추천 방을 고르면 19 합류 확인으로 — 모달은 닫고 뒤로 눌러 돌아오지 않게 한다.
                 // 방을 만들지 않았으므로 createdPartyId 는 건드리지 않는다.
@@ -771,12 +861,17 @@ private fun MainNavHost(
                 },
                 // 배너는 **지금 단계 화면**으로 바로 간다
                 onOngoingRideClick = { activeRide?.let(::navigateToStage) },
-                onCreateRoomClick = { navController.navigate(Routes.DESTINATION) },
+                onCreateRoomClick = { scheduled ->
+                    createScheduled = scheduled
+                    navController.navigate(Routes.DESTINATION)
+                },
                 // 예약 날짜 검색의 도착지 필터 — 15 를 **고르기 전용**으로 열었다가 돌아온다.
                 searchDestination = reservationSearchDestination,
                 onPickSearchDestination = {
                     pickingSearchDestination = true
                     searchInitialQuery = ""
+                    // 필터만 고르러 가는 길이라 16 을 열지 않는다 — 깃발도 남기지 않는다
+                    createScheduled = false
                     navController.navigate(Routes.DESTINATION)
                 },
                 onClearSearchDestination = { reservationSearchDestination = null },
@@ -786,6 +881,9 @@ private fun MainNavHost(
         composable(Routes.JOIN_CONFIRM) {
             JoinConfirmRoute(
                 repository = rideRepository,
+                // 합류가 「다른 방에 참여 중」으로 막혔을 때 그 방이 확정된 방인지 알아내는 데 쓴다 —
+                // 확정된 방은 나갈 수가 없어서 안내할 행동이 달라진다(JoinConfirmRoute.alreadyInPartyMessage)
+                activePartyRepository = activePartyRepository,
                 partyId = selectedPartyId,
                 onDismiss = ::back,
                 // 합류가 끝나면 **방 id 만** 받아 21 매칭 대기로 넘긴다 — 합류 응답은 더 이상 방 상세가
@@ -887,7 +985,7 @@ private fun MainNavHost(
         composable(Routes.CHAT) {
             ChatRoute(
                 repository = chatRepository,
-                // 열린 방이 진행 중인 그 방이면 헤더에 「매칭 화면으로 →」가 뜨고 「나가기」가 사라진다.
+                // 열린 방이 진행 중인 그 방이면 헤더에 「매칭 화면으로」 줄이 뜨고 「나가기」가 사라진다.
                 // **판정의 1순위는 채팅방 id 다** — 이 경로의 방은 목록 응답(`GET /chat-rooms/me`)으로
                 // 만든 것이어서 partyId 가 0(모름)이고, 그걸로 비교하면 늘 "내 방이 아니다"가 됐다.
                 activeChatRoomId = activeChatRoomId,
@@ -1081,3 +1179,36 @@ private val SignupDraftSaver = listSaver<SignupDraft, Any>(
         )
     },
 )
+
+/**
+ * 지금 다이얼로그 창의 상태바·내비게이션바 아이콘을 **어두운 색**(light appearance)으로 맞춘다.
+ *
+ * 다이얼로그는 액티비티와 다른 창이라 액티비티의 시스템 바 설정을 물려받지 않는다. 16 처럼 창을 시스템 바
+ * 아래까지 넓혀 흰색으로 칠하면(decorFitsSystemWindows = false) 기본값인 흰 아이콘이 흰 바탕에 묻혀 시계·배터리가
+ * 사라진다. 그래서 그 창에서만 아이콘을 어둡게 바꾼다 — 창이 닫히면 설정도 함께 사라진다.
+ *
+ * androidx.core(`WindowCompat`)를 쓰지 않는 이유: presentation 모듈은 그 의존성을 직접 갖지 않는다.
+ * 플랫폼 API 로 충분하다(30+ 는 `insetsController`, 그 아래는 systemUiVisibility 플래그).
+ */
+@Composable
+private fun DialogLightSystemBars() {
+    val view = LocalView.current
+    SideEffect {
+        val window = (view.parent as? DialogWindowProvider)?.window ?: return@SideEffect
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val mask = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
+                WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+            window.insetsController?.setSystemBarsAppearance(mask, mask)
+        } else {
+            setLegacyLightSystemBars(window.decorView)
+        }
+    }
+}
+
+/** API 29 이하 — `insetsController` 가 없어 옛 systemUiVisibility 플래그로 같은 일을 한다 */
+@Suppress("DEPRECATION")
+private fun setLegacyLightSystemBars(decor: View) {
+    var flags = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) flags = flags or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+    decor.systemUiVisibility = decor.systemUiVisibility or flags
+}

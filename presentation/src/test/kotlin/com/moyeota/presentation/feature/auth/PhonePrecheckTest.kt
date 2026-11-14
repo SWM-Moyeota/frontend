@@ -256,4 +256,10 @@ private class FakePhonePrecheckRepository(
 
     override suspend fun getMyProfile(): UserProfileInfo =
         throw UnsupportedOperationException("선확인과 무관하다")
+
+    override suspend fun sendFindLoginIdCode(phoneNumber: String): Unit = throw UnsupportedOperationException("선확인과 무관하다")
+    override suspend fun findLoginId(phoneNumber: String, code: String): String = throw UnsupportedOperationException("선확인과 무관하다")
+    override suspend fun requestPasswordReset(loginId: String, phoneNumber: String): com.moyeota.domain.model.PasswordResetTicket = throw UnsupportedOperationException("선확인과 무관하다")
+    override suspend fun verifyPasswordResetCode(requestId: String, code: String): String = throw UnsupportedOperationException("선확인과 무관하다")
+    override suspend fun confirmPasswordReset(resetToken: String, newPassword: String, newPasswordConfirm: String): Unit = throw UnsupportedOperationException("선확인과 무관하다")
 }

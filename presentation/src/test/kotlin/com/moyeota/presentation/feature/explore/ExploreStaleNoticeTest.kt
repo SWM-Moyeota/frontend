@@ -19,20 +19,31 @@ import org.junit.Test
  */
 class ExploreStaleNoticeTest {
 
-    /** 한두 번의 실패로는 알리지 않는다 — 터널·엘리베이터처럼 금방 복구되는 끊김이 흔하다. */
+    /** 한 번의 실패로는 알리지 않는다 — 터널·엘리베이터처럼 금방 복구되는 끊김이 흔하다. */
     @Test
-    fun `한두 번 실패에는 알리지 않는다`() {
+    fun `한 번 실패에는 알리지 않는다`() {
         assertFalse(staleAfterPollFailures(0))
         assertFalse(staleAfterPollFailures(1))
-        assertFalse(staleAfterPollFailures(2))
     }
 
-    /** 3회(=12초)부터 알린다. 그 뒤로는 계속 알린 상태를 유지한다 — 복구될 때까지 사실이 그대로다. */
+    /**
+     * 2회(= 15초 주기 × 2 = 30초)부터 알린다. 그 뒤로는 계속 알린 상태를 유지한다 — 복구될 때까지 사실이 그대로다.
+     *
+     * 4초 주기 시절에는 3회(12초)였다. 주기를 15초로 늘리며 같은 두 조건(「한 번의 끊김은 넘긴다」·
+     * 「1~2분 터널보다 짧다」)을 다시 맞춘 값이 2회다([STALE_NOTICE_FAILURES] KDoc 의 표).
+     */
     @Test
-    fun `연속 세 번 실패하면 알린다`() {
+    fun `연속 두 번 실패하면 알린다`() {
+        assertTrue(staleAfterPollFailures(2))
         assertTrue(staleAfterPollFailures(3))
-        assertTrue(staleAfterPollFailures(4))
         assertTrue(staleAfterPollFailures(30))
+    }
+
+    /** 알리기까지 걸리는 시간이 터널 하나(약 1분)보다 짧다 — 진짜 끊김은 반드시 드러난다. */
+    @Test
+    fun `알리기까지 1분이 걸리지 않는다`() {
+        assertTrue(STALE_NOTICE_FAILURES * NEARBY_POLL_INTERVAL_MS < 60_000L)
+        assertTrue("한 번의 주기만으로 알리면 일시 끊김마다 깜빡인다", STALE_NOTICE_FAILURES >= 2)
     }
 
     /**
@@ -41,7 +52,7 @@ class ExploreStaleNoticeTest {
      */
     @Test
     fun `임계값은 상수가 정한다`() {
-        assertEquals(3, STALE_NOTICE_FAILURES)
+        assertEquals(2, STALE_NOTICE_FAILURES)
         assertFalse(staleAfterPollFailures(STALE_NOTICE_FAILURES - 1))
         assertTrue(staleAfterPollFailures(STALE_NOTICE_FAILURES))
     }

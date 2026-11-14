@@ -30,7 +30,9 @@ import com.moyeota.presentation.core.BackStateScaffold
 import com.moyeota.presentation.core.ErrorBox
 import com.moyeota.presentation.core.LoadingBox
 import com.moyeota.presentation.core.TabStateScaffold
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -43,23 +45,19 @@ import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.OffsetDateTime
 import java.time.ZoneId
+import kotlin.coroutines.EmptyCoroutineContext
 import com.moyeota.domain.model.ChatMessage as DomainChatMessage
 
 /**
- * 폴링 주기 — **소켓이 안 붙어 있을 때만** 돈다(미로그인·업그레이드 차단·재연결 중).
+ * 주기 루프 간격. 한 바퀴에 두 가지를 한다.
  *
- * 소켓이 붙어 있으면 폴링하지 않는다. 서버가 지난 메시지를 다시 주지 않아 생기는 구멍(재연결 사이)은
- * 연결될 때마다 한 번 `after` 조회로 메운다([ChatRealtimeEvent.Connected]) — heartbeat 는 끊김을
- * 알려 줄 뿐 그 구멍을 메우지 못한다.
+ * 1. **읽음 묶어 보내기** — 메시지마다 보내지 않고 이 간격마다 마지막으로 읽은 id 하나만 보낸다(REST 라
+ *    메시지마다 쏘면 요청 수가 크게 는다). 서버는 원래 가장 큰 값만 기억해 5초마다 반영하므로 묶어도
+ *    정확도가 같다. 화면을 벗어날 때·백그라운드로 갈 때는 기다리지 않고 바로 보낸다([ChatRoomViewModel.stopPolling]).
+ * 2. **폴링** — 소켓이 안 붙어 있을 때만(미로그인·업그레이드 차단·재연결 중). 붙어 있으면 공백은 연결 순간의
+ *    `after` 조회([ChatRealtimeEvent.Connected])와 seq 빈 번호 채우기가 메운다.
  */
 private const val POLL_INTERVAL_MS = 3_000L
-
-/**
- * 소켓으로 보낸 메시지가 **되돌아오기를** 기다리는 시간. 서버는 전송에 답하지 않고 저장된 메시지를
- * 구독으로 밀어 주므로, 이 시간이 지나도록 오지 않으면 실패로 본다.
- * 확인은 거의 즉시(수십 ms) 오므로 넉넉한 값이다. 놓쳤으면 다음 재연결의 공백 조회나 재진입이 실제 결과로 바로잡는다.
- */
-private const val PENDING_TIMEOUT_MS = 8_000L
 
 /**
  * 서버 한도(`SendMessageRequest @Size(max = 1000)`)와 같은 값.
@@ -91,8 +89,10 @@ private const val SEARCH_DEBOUNCE_MS = 350L
 /** 서버 규칙(`ChatMessageService.MIN_KEYWORD_LENGTH`) — 미만이면 400 CHAT_INVALID_KEYWORD 라 여기서 먼저 막는다 */
 internal const val SEARCH_MIN_LENGTH = 2
 
-/** 아직 확인이 오지 않은 내 말풍선에 붙이는 표기 */
-private const val PENDING_LABEL = "보내는 중"
+/**
+ * 전송에 실패한 내 말풍선에 붙이는 표기. 보내는 중에는 아무것도 붙이지 않는다 — 누르는 즉시 일반
+ * 메시지처럼 보인다(앞 요청을 기다리는 동안에도. 보통은 앞 요청이 이미 끝나 있어 바로 나간다).
+ */
 private const val PENDING_FAILED_LABEL = "전송 실패"
 
 // 발신자 닉네임이 없을 때 상대 말풍선에 붙이는 표기.
@@ -268,8 +268,8 @@ class ChatRoomViewModel(
         data class Success(
             val messages: List<DomainChatMessage>,
             /**
-             * 아직 서버에서 되돌아오지 않은 내 메시지. 소켓 전송(`/pub/…/messages`)은 **응답이 없어서**
-             * 화면이 먼저 그려 두고, 같은 내용이 [messages] 로 돌아오면 지운다.
+             * 눌렀지만 아직 저장 응답(201)을 받지 못한 내 메시지 — 또는 실패한 메시지. 누르는 즉시 화면에
+             * 그려 두고, 201 이 오거나 같은 내용이 소켓으로 먼저 돌아오면 [messages] 쪽으로 넘어간다.
              */
             val pending: List<PendingMessage> = emptyList(),
         ) : UiState
@@ -278,22 +278,29 @@ class ChatRoomViewModel(
     }
 
     /**
-     * 보내 놓고 확인을 기다리는 메시지.
+     * 보내 놓고 저장 응답을 기다리는(또는 실패한) 메시지.
      *
      * @param localId 화면에서 구분하기 위한 임시 id(음수 — 서버 id 와 겹치지 않는다)
-     * @param sinceId 보낼 때 이미 있던 마지막 메시지 id. 예전에 보낸 **같은 문장**을 확인으로 착각하지 않게 한다
-     * @param failed 확인이 [PENDING_TIMEOUT_MS] 안에 오지 않았다
+     * @param sinceId 보낼 때 이미 있던 가장 큰 메시지 id. 예전에 보낸 **같은 문장**을 소켓 확인으로 착각하지 않게 한다
+     * @param failed 전송이 실패했다(타임아웃·네트워크·4xx·5xx). 자동으로 다시 보내지 않는다
+     * @param uncertain 실패했지만 **서버 응답을 못 받은** 실패(타임아웃·연결 끊김)다. 요청은 도착해 저장됐을 수
+     *   있어, 같은 내용의 내 메시지가 뒤이어 들어오면 그것을 이 말풍선의 확인으로 본다([reconcilePending]).
+     *   그러지 않으면 「전송 실패」와 실제 메시지가 함께 남고, 사용자가 다시 보내 중복이 된다.
      */
     data class PendingMessage(
         val localId: Long,
         val content: String,
         val sinceId: Long,
         val failed: Boolean = false,
+        val uncertain: Boolean = false,
     )
 
+    /**
+     * 입력창 상태. 예전의 `sending`(응답 올 때까지 전송 버튼 잠금)은 없앴다 — 보낸 순서는 저장소가
+     * 방마다 줄 세워 지키므로([ChatRepository.sendMessage]) 화면이 연타를 막을 이유가 없다.
+     */
     data class InputState(
         val text: String = "",
-        val sending: Boolean = false,
         val errorMessage: String? = null,
     )
 
@@ -389,6 +396,16 @@ class ChatRoomViewModel(
      */
     private var readSendingMessageId: Long? = null
 
+    /**
+     * 빈 번호 채우기를 **이미 성공적으로 해 본** 커서들. 서버가 채워 줄 게 없는데도 빈틈이 남는 경우
+     * (서버 버그 등) 메시지가 올 때마다 같은 조회를 되풀이하지 않게 한다. 조회가 실패했으면 적지 않는다.
+     *
+     * 하나가 아니라 **집합**인 이유: 영영 안 메워지는 빈틈이 앞에 남아 있으면 「첫 빈틈」 커서가 늘 같아서,
+     * 하나만 기억하면 뒤에 새로 생긴 빈틈을 영영 채우지 못한다. 시도한 빈틈은 건너뛰고 다음 빈틈을 찾는다.
+     */
+    private val triedGapCursors = mutableSetOf<Long>()
+    private var gapFillJob: Job? = null
+
     private var nextLocalId = -1L
     private var searchJob: Job? = null
     private var chatRoomId: Long? = null
@@ -414,6 +431,8 @@ class ChatRoomViewModel(
             lastMessageId = null
             readSentMessageId = null
             readSendingMessageId = null
+            gapFillJob?.cancel()
+            triedGapCursors.clear()
             _peerTitle.value = null
             // 제목과 **같은 자리에서** 비운다 — 사전은 「이 방의 참여자」가 근거다. 앞 방 것을 남겨 두면
             // 새 방의 참여자 조회가 실패해(= 근거가 없어) 회색 원이어야 할 자리에 앞 방에서 본 얼굴이
@@ -508,10 +527,11 @@ class ChatRoomViewModel(
             if (showLoading) _uiState.value = UiState.Loading
             try {
                 val page = repository.getMessages(roomId)
-                // 서버 정렬을 신뢰하지 않고 id 오름차순으로 맞춘다 (커서 페이징은 최신부터 올 수 있다)
-                val ordered = page.messages.sortedBy { it.id }
-                publish(ordered)
-                markLastAsRead(ordered.lastOrNull()?.id)
+                // 서버 정렬을 신뢰하지 않고 seq(없으면 id) 오름차순으로 맞춘다 (커서 페이징은 최신부터 올 수 있다).
+                // 대기 중인 내 메시지는 남긴다 — 조용한 재조회가 방금 누른 말풍선을 지우면 안 된다.
+                val ordered = mergeMessagesById(emptyList(), page.messages)
+                publish(ordered, (_uiState.value as? UiState.Success)?.pending.orEmpty())
+                onMerged(roomId, ordered)
                 // 소켓이 이 조회보다 먼저 붙었으면 그 순간의 공백 조회는 화면이 아직 없어 건너뛰었다 — 지금 메운다
                 if (realtimeAlive) fetchNew(roomId)
             } catch (e: Exception) {
@@ -545,20 +565,32 @@ class ChatRoomViewModel(
                         fetchNew(roomId) // 구독이 걸린 뒤에 조회 — 겹치는 메시지는 id 로 합쳐진다
                     }
                     ChatRealtimeEvent.Disconnected -> realtimeAlive = false
+                    // 서버가 구독을 거절했다(참여자 아님·잘못된 경로). 소켓은 다시 붙지 않는다.
+                    // 바로 한 번 REST 로 물어 본다 — 참여자가 아니면 403 이 와서 [onNotParticipant] 가 폴링까지
+                    // 멈추고 화면에 알린다. REST 가 멀쩡하면(경로 버그) 폴링이 대화를 이어 받는다.
+                    ChatRealtimeEvent.Stopped -> {
+                        realtimeAlive = false
+                        fetchNew(roomId)
+                    }
                     is ChatRealtimeEvent.Message -> {
                         val current = _uiState.value as? UiState.Success ?: return@collect
-                        // 같은 id 가 다시 오면(삭제 브로드캐스트) **새 사본이 이긴다** — mergeMessagesById KDoc
+                        // 같은 id 는 덮어쓰되 삭제 상태가 이긴다 — mergeMessagesById KDoc
                         val merged = mergeMessagesById(current.messages, listOf(event.message))
                         publish(merged, current.pending)
-                        markLastAsRead(merged.lastOrNull()?.id)
+                        // seq 가 건너뛰었으면(11 다음 13) 여기서 12 를 채운다 — 소켓 서버는 늦은 번호를 버린다
+                        onMerged(roomId, merged)
                     }
                 }
             }
         }
     }
 
-    /** 화면이 가려지면(탭 이동·백그라운드·이탈) 폴링과 소켓을 함께 멈춘다. 안 그러면 로그아웃 뒤에도 계속 쏜다. */
+    /**
+     * 화면이 가려지면(탭 이동·백그라운드·이탈) 폴링과 소켓을 함께 멈춘다. 안 그러면 로그아웃 뒤에도 계속 쏜다.
+     * 묶어 두던 읽음은 **기다리지 않고 바로** 보낸다 — 화면을 벗어나는 순간이 목록 배지가 맞아야 하는 순간이다.
+     */
     fun stopPolling() {
+        flushRead(outliveScreen = true)
         pollingJob?.cancel()
         pollingJob = null
         socketJob?.cancel()
@@ -573,10 +605,10 @@ class ChatRoomViewModel(
             while (true) {
                 delay(POLL_INTERVAL_MS)
                 val roomId = chatRoomId ?: continue
-                // 뒤처진 읽음 처리는 **소켓 생사와 무관하게** 다시 보낸다 — 실패한 읽음은 새 메시지가
-                // 더 오지 않으면 스스로 나갈 기회가 없고, 그러면 이미 읽은 방에 목록 배지가 계속 남는다.
-                // 이미 반영된 지점과 같으면 [markLastAsRead] 가 그 자리에서 되돌아간다(평상시 0회).
-                markLastAsRead(lastMessageId)
+                // 읽음은 **소켓 생사와 무관하게** 이 주기에 묶어 보낸다. 실패한 읽음도 여기서 다시 나간다 —
+                // 새 메시지가 더 오지 않으면 스스로 나갈 기회가 없고, 그러면 이미 읽은 방에 목록 배지가 남는다.
+                // 이미 반영된 지점과 같으면 [flushRead] 가 그 자리에서 되돌아간다(평상시 0회).
+                flushRead()
                 if (realtimeAlive) continue
                 fetchNew(roomId)
             }
@@ -602,24 +634,40 @@ class ChatRoomViewModel(
      * 실패는 화면을 깨지 않는다 — 다음 연결·다음 주기가 메운다.
      */
     private suspend fun fetchNew(roomId: Long) {
-        if (_uiState.value !is UiState.Success) return
-        var cursor = lastMessageId
+        fetchAfter(roomId, lastMessageId)
+    }
+
+    /**
+     * [startCursor] 이후를 읽어 합친다([fetchNew] 의 본체). 빈 번호 채우기도 이 함수를 쓴다 — 그때 커서는
+     * 화면의 마지막이 아니라 **빈틈 바로 앞 메시지의 id** 다([seqGapCursor]).
+     *
+     * @return 조회가 (빈 결과여도) 성공했는가
+     */
+    private suspend fun fetchAfter(roomId: Long, startCursor: Long?): Boolean {
+        if (_uiState.value !is UiState.Success) return false
+        var cursor = startCursor
         var pagesRead = 0
         while (true) {
             // 커서가 있으면 「이후」 방향, 없으면 첫 페이지(= 과거 방향 최신 30건).
             // 지역 val 로 받아 두는 이유: 람다가 캡처한 var 는 스마트 캐스트가 안 된다.
             val at = cursor
-            val page = runCatching {
+            val page = try {
                 if (at == null) repository.getMessages(roomId) else repository.getMessagesAfter(roomId, at)
-            }.getOrNull() ?: return
-            if (page.messages.isEmpty() || chatRoomId != roomId) return
-            val latest = _uiState.value as? UiState.Success ?: return
-            // 같은 id 의 새 사본이 이긴다(삭제 브로드캐스트) — mergeMessagesById KDoc
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // 참여자가 아니게 됐다(나감·강퇴) — 이후 요청은 전부 403 이라 되풀이하지 않는다
+                if ((e as? ChatException)?.isNotParticipant == true && chatRoomId == roomId) onNotParticipant(e)
+                return false
+            }
+            if (page.messages.isEmpty() || chatRoomId != roomId) return true
+            val latest = _uiState.value as? UiState.Success ?: return true
+            // 같은 id 는 덮어쓰되 삭제 상태가 이긴다 — mergeMessagesById KDoc
             val merged = mergeMessagesById(latest.messages, page.messages)
             publish(merged, latest.pending)
-            markLastAsRead(merged.lastOrNull()?.id)
-            if (at == null || !page.hasNext) return
-            if (++pagesRead >= MAX_GAP_FILL_PAGES) return
+            onMerged(roomId, merged)
+            if (at == null || !page.hasNext) return true
+            if (++pagesRead >= MAX_GAP_FILL_PAGES) return true
             // 커서는 서버가 준 nextCursor 를 쓴다(이 방향에서는 「방금 받은 마지막 id」다).
             // 안 주는 서버면 받은 페이지의 최대 id 로 떨어진다 — 화면의 마지막 id 를 쓰면 그 사이
             // 소켓으로 들어온 더 큰 id 때문에 중간을 건너뛸 수 있다.
@@ -632,69 +680,111 @@ class ChatRoomViewModel(
     }
 
     /**
-     * 전송. **소켓이 붙어 있으면 소켓으로**(`/pub/chat-rooms/{id}/messages`), 아니면 REST 로 보낸다.
+     * 전송 — `POST /chat-rooms/{id}/messages`(REST). 소켓 서버는 SEND 를 받지 않는다.
      *
-     * 둘 중 하나만 쓴다 — 소켓으로 보낸 뒤 확인이 늦다고 REST 로 다시 보내면 같은 메시지가 두 번 저장된다.
-     * 그래서 소켓 경로의 실패는 재전송이 아니라 **실패 표시**로 끝난다(사용자가 다시 보낼지 정한다).
+     * - 누르는 즉시 내 메시지를 **일반 말풍선으로** 그리고 입력창을 비운다. 「보내는 중」 표시는 없다.
+     * - 보내는 순서는 저장소가 방마다 줄 세워 지킨다([ChatRepository.sendMessage]) — 앞 요청의 201 을 받은
+     *   뒤에 다음이 나간다. 그래서 여기서는 연타를 막지 않는다.
+     * - 실패(타임아웃·네트워크·4xx·5xx)하면 **다시 보내지 않고** 「전송 실패」로 남긴다. 줄은 다음 메시지로
+     *   넘어간다. 사용자가 다시 보내면 새 메시지로 맨 뒤에 붙는다.
+     * - 화면을 벗어나도 취소되지 않는다(아래 [NonCancellable] 주석).
      */
     fun send() {
         val roomId = chatRoomId ?: return
         val content = _inputState.value.text.trim()
-        if (content.isEmpty() || _inputState.value.sending) return
+        if (content.isEmpty()) return
         if (content.length > MAX_CONTENT_LENGTH) {
-            // 서버도 같은 한도로 거절한다(SendMessageRequest @Size). 프레임을 띄우기 전에 여기서 막는다.
+            // 서버도 같은 한도로 거절한다(SendMessageRequest @Size). 요청을 띄우기 전에 여기서 막는다.
             _inputState.update { it.copy(errorMessage = "메시지는 ${MAX_CONTENT_LENGTH}자까지 보낼 수 있어요") }
             return
         }
-        viewModelScope.launch {
-            _inputState.update { it.copy(sending = true, errorMessage = null) }
-            val overSocket = runCatching { repository.trySendMessage(roomId, content) }.getOrDefault(false)
-            if (overSocket) addPending(content) else sendOverRest(roomId, content)
-        }
-    }
-
-    // 서버가 답을 주지 않는 전송이라 화면이 먼저 그린다. 같은 내용이 구독으로 돌아오면(또는 폴링이 물어 오면)
-    // publish 가 이 말풍선을 걷어낸다.
-    private fun addPending(content: String) {
         val current = _uiState.value as? UiState.Success
         val entry = PendingMessage(
             localId = nextLocalId--,
             content = content,
-            sinceId = current?.messages?.lastOrNull()?.id ?: 0L,
+            sinceId = current?.messages?.maxOfOrNull { it.id } ?: 0L,
         )
         if (current != null) _uiState.value = current.copy(pending = current.pending + entry)
-        _inputState.value = InputState() // 프레임은 이미 나갔다 — 입력창은 바로 비운다
-        watchPending(entry.localId)
-    }
-
-    /** 확인이 끝내 오지 않으면 실패로 바꿔 보여 준다. 그 전에 돌아오면 이미 목록에서 사라져 있다. */
-    private fun watchPending(localId: Long) {
-        viewModelScope.launch {
-            delay(PENDING_TIMEOUT_MS)
-            val current = _uiState.value as? UiState.Success ?: return@launch
-            if (current.pending.none { it.localId == localId }) return@launch
-            _uiState.value = current.copy(
-                pending = current.pending.map { if (it.localId == localId) it.copy(failed = true) else it },
-            )
-            _inputState.update { it.copy(errorMessage = "메시지를 보내지 못했어요") }
+        _inputState.value = InputState()
+        // 화면을 벗어나도 끝까지 보낸다(읽음의 flushRead 와 같은 이유) — 입력창은 이미 비워져 사용자는 보낸 줄
+        // 안다. viewModelScope 그대로면 앞 응답을 기다리며 저장소 줄에 서 있던 메시지가 화면 정리와 함께 조용히
+        // 취소돼 실패 표시도 없이 사라진다. 화면이 바뀐 뒤의 갱신은 아래 roomId 가드가 막는다.
+        viewModelScope.launch(NonCancellable) {
+            try {
+                val sent = repository.sendMessage(roomId, content)
+                if (chatRoomId != roomId) return@launch
+                val latest = _uiState.value as? UiState.Success ?: return@launch
+                // 같은 id 가 소켓으로 먼저 와 있으면 덮어쓴다(삭제 상태는 유지) — mergeMessagesById KDoc
+                val merged = mergeMessagesById(latest.messages, listOf(sent))
+                publish(merged, latest.pending.filterNot { it.localId == entry.localId })
+                onMerged(roomId, merged)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (chatRoomId != roomId) return@launch
+                // 응답 자체를 못 받았으면(타임아웃·끊김) 서버가 저장했을 수 있다 — 확인이 오면 걷어낸다
+                markPendingFailed(entry.localId, uncertain = (e as? ChatException)?.isNetwork == true)
+                _inputState.update { it.copy(errorMessage = e.toChatMessage("메시지를 보내지 못했어요")) }
+            }
         }
     }
 
-    // 소켓이 없을 때의 경로. 이쪽은 저장 결과가 응답으로 와서 그 자리에서 붙일 수 있다.
-    private suspend fun sendOverRest(roomId: Long, content: String) {
-        try {
-            val sent = repository.sendMessage(roomId, content)
-            val current = _uiState.value as? UiState.Success
-            if (current != null) {
-                // 같은 id 가 이미 있으면 **방금 받은 응답이 이긴다** — mergeMessagesById KDoc
-                val merged = mergeMessagesById(current.messages, listOf(sent))
-                publish(merged, current.pending)
-                markLastAsRead(merged.lastOrNull()?.id)
-            }
-            _inputState.update { InputState() } // 성공 시에만 입력창을 비운다
-        } catch (e: Exception) {
-            _inputState.update {
-                it.copy(sending = false, errorMessage = e.toChatMessage("메시지를 보내지 못했어요"))
+    /**
+     * 이 방의 참여자가 아니다(403 `CHAT_NOT_PARTICIPANT`). 폴링·소켓을 멈추고 에러 상태로 올린다 — 그대로 두면
+     * 화면이 보이는 내내 3초마다 403 이 되풀이된다. 화면은 이 상태를 보고 방 id 캐시를 버린다(진입 시 403 과 같은 길).
+     */
+    private fun onNotParticipant(e: Exception) {
+        pollingJob?.cancel()
+        pollingJob = null
+        realtimeAlive = false
+        _uiState.value = UiState.Error(message = e.toChatMessage("대화를 불러오지 못했어요"), notParticipant = true)
+        socketJob?.cancel()
+        socketJob = null
+    }
+
+    private fun markPendingFailed(localId: Long, uncertain: Boolean) {
+        val current = _uiState.value as? UiState.Success ?: return
+        val pending = current.pending.map {
+            if (it.localId == localId) it.copy(failed = true, uncertain = uncertain) else it
+        }
+        // 실패가 확정되는 사이 확인이 이미 와 있었을 수 있다(타임아웃 직전 저장 + 소켓 브로드캐스트) — 다시 짝짓는다
+        _uiState.value = current.copy(pending = reconcilePending(current.messages, pending))
+    }
+
+    /**
+     * 합친 뒤의 공통 처리 — 커서 전진과 seq 빈 번호 채우기. 읽음은 여기서 보내지 않는다(주기에 묶어 보낸다).
+     * [merged] 는 seq 순으로 정렬돼 있어 마지막이 가장 최신이다.
+     */
+    private fun onMerged(roomId: Long, merged: List<DomainChatMessage>) {
+        merged.lastOrNull()?.let { lastMessageId = it.id }
+        fillSeqGap(roomId, merged)
+    }
+
+    /**
+     * seq 가 건너뛴 자리(11 다음 13)가 있으면 빈틈 바로 앞(11)의 **id** 를 커서로 `after` 를 읽어 제자리에 넣는다.
+     * 소켓 서버는 순서를 지키려고 늦게 도착한 번호를 보내지 않고 버리므로, 이것이 없으면 그 메시지는 화면을 다시
+     * 열 때까지 빠진다. 동시에 하나만 돌고, 같은 커서로 이미 성공한 적이 있으면 다시 하지 않는다.
+     */
+    private fun fillSeqGap(roomId: Long, messages: List<DomainChatMessage>) {
+        if (gapFillJob?.isActive == true) return
+        val cursor = seqGapCursor(messages, skip = triedGapCursors) ?: return
+        gapFillJob = viewModelScope.launch {
+            // 채우는 동안 합치기가 이 함수를 다시 불러도 job 이 살아 있어 되돌아간다. 그래서 빈틈이 둘 이상이면
+            // 여기서 **남은 빈틈을 이어서** 찾는다 — 안 그러면 두 번째는 다음 메시지가 올 때까지 빠진 채로 남는다.
+            // 한 바퀴마다 시도한 커서가 늘어나므로(유한) 끝난다.
+            var next: Long? = cursor
+            while (next != null) {
+                val ok = fetchAfter(roomId, next)
+                if (chatRoomId != roomId) return@launch
+                if (!ok) {
+                    // 실패면 한 주기 쉰다 — 이 job 이 살아 있는 동안은 재진입이 막혀, 서버가 5xx 인데 대화가 활발할 때
+                    // 소켓 메시지마다 같은 조회를 쏘지 않는다. 그 뒤 메시지·폴링이 다시 시도한다.
+                    delay(POLL_INTERVAL_MS)
+                    return@launch
+                }
+                triedGapCursors += next
+                val messages = (_uiState.value as? UiState.Success)?.messages ?: return@launch
+                next = seqGapCursor(messages, skip = triedGapCursors)
             }
         }
     }
@@ -822,25 +912,35 @@ class ChatRoomViewModel(
     }
 
     /**
-     * 읽음 처리. 실패는 사용자에게 알리지 않는다(배지 정확도보다 대화 흐름이 우선) —
-     * 대신 **[readSentMessageId] 를 올리지 않아** 다음 폴링 주기가 같은 id 로 다시 보낸다.
-     * 메시지마다 한 번씩 일어나는 일이라 소켓이 붙어 있으면 그쪽으로 보내 REST 왕복을 아낀다.
+     * 읽음 보내기 — `POST /chat-rooms/{id}/users/read/{readMessageId}`(REST). **메시지마다 부르지 않는다**:
+     * 주기 루프가 약 3초에 한 번([POLL_INTERVAL_MS]), 화면을 벗어날 때·백그라운드로 갈 때 한 번 부른다.
+     * 보내는 값은 그 시점의 마지막 메시지 id 하나다(서버는 가장 큰 값만 기억한다).
      *
-     * 커서([lastMessageId])는 성공 여부와 무관하게 전진한다 — 메시지를 다시 받아 오는 일과
-     * 읽음을 알리는 일은 서로의 재시도에 끼어들지 않아야 한다.
+     * 실패는 사용자에게 알리지 않는다(배지 정확도보다 대화 흐름이 우선) — 대신 **[readSentMessageId] 를 올리지
+     * 않아** 다음 주기가 같은 id 로 다시 보낸다. 커서([lastMessageId])는 성공 여부와 무관하게 전진한다.
+     *
+     * @param outliveScreen 화면을 벗어나며 부르는 경우 참 — 곧이어 화면(ViewModel)이 정리돼도 요청이
+     *   취소되지 않게 [NonCancellable] 로 띄운다. 한 번의 짧은 요청이라 새는 것이 없다.
      */
-    private fun markLastAsRead(messageId: Long?) {
+    private fun flushRead(outliveScreen: Boolean = false) {
         val roomId = chatRoomId ?: return
-        val id = messageId ?: return
-        lastMessageId = id
-        // 이미 반영됐거나 지금 보내는 중인 지점이면 보낼 것이 없다(평상시 이 길로 되돌아간다)
-        if (id == readSentMessageId || id == readSendingMessageId) return
+        val id = lastMessageId ?: return
+        // 이미 반영된 지점이면 보낼 것이 없다(평상시 이 길로 되돌아간다)
+        if (id == readSentMessageId) return
+        // 지금 보내는 중인 지점이면 보통은 건너뛴다. 단 화면을 벗어날 때는 **다시 보낸다** — 진행 중인 것은 주기
+        // 전송(취소 가능)일 수 있어 화면 정리와 함께 취소되면 마지막 읽음이 서버에 안 간다. 서버는 가장 큰 값만
+        // 기억하므로 두 번 가도 무해하다.
+        if (!outliveScreen && id == readSendingMessageId) return
         readSendingMessageId = id
-        viewModelScope.launch {
-            val sent = runCatching {
-                if (!repository.tryMarkAsRead(roomId, id)) repository.markAsRead(roomId, id)
+        viewModelScope.launch(if (outliveScreen) NonCancellable else EmptyCoroutineContext) {
+            val sent = try {
+                repository.markAsRead(roomId, id)
                 true
-            }.getOrDefault(false)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                false
+            }
             // 방을 갈아탄 뒤 늦게 온 결과가 새 방의 지점을 더럽히지 않게 한다
             if (chatRoomId != roomId) return@launch
             if (readSendingMessageId == id) readSendingMessageId = null
@@ -862,7 +962,7 @@ class ChatRoomViewModel(
  * 그쪽은 [ChatRoomDestinationRoute] 를 독립 목적지로 쌓아 뒤로가기가 원래 화면으로 돌아가게 한다.
  *
  * @param activeChatRoomId 진행 중인 방의 **채팅방 id**(`ActivePartyViewModel.chatRoomId`). 열린 채팅방이
- *   이것이면 헤더에 「매칭 화면으로 →」를 띄우고 「나가기」를 감춘다. 이 경로의 방은 목록 응답으로 만든
+ *   이것이면 헤더에 「매칭 화면으로」를 띄우고 「나가기」를 감춘다. 이 경로의 방은 목록 응답으로 만든
  *   것이어서 `partyId` 가 0(모름)이라 **이 값만이 판정 근거다**([ChatRoom.isActiveParty]).
  * @param activePartyId 진행 중인 방의 id([com.moyeota.domain.model.Ride.id]). 이 경로에서는 사실상
  *   판정에 기여하지 못한다(위 참조) — 그래도 같은 판정 함수를 쓰므로 함께 넘긴다. 없으면 null.
@@ -1008,7 +1108,6 @@ private fun ChatRoomRoute(
             // 아직 확인이 안 온 내 메시지는 목록 끝에 「보내는 중」으로 붙는다 — 소켓 전송은 응답이 없다.
             messages = current.messages.map { it.toUiMessage(peerImageUrls) } + current.pending.map { it.toUiMessage() },
             input = input.text,
-            sending = input.sending,
             errorMessage = input.errorMessage,
             onInputChange = viewModel::onInputChange,
             onSend = viewModel::send,
@@ -1055,7 +1154,7 @@ private fun ChatRoomRoute(
  * 통째로 들고 오지만, 진행 화면에서는 id 밖에 없다.
  *
  * @param activeChatRoomId 진행 중인 방의 **채팅방 id**. 이 화면의 [roomId] 가 그것이면 헤더에
- *   「매칭 화면으로 →」가 뜨고 「나가기」가 사라진다 — 판정의 1순위 근거다([ChatRoom.isActiveParty]).
+ *   「매칭 화면으로」가 뜨고 「나가기」가 사라진다 — 판정의 1순위 근거다([ChatRoom.isActiveParty]).
  * @param activePartyId 진행 중인 방 id. 이 경로의 [ChatRoom] 은 방 상세에서 온 **진짜** partyId 를
  *   들고 있어 보조 근거가 된다(채팅방 id 를 아직 못 찾은 구간을 메운다).
  *   뒤로가기로도 돌아갈 수 있지만, 채팅방에 오래 머문 뒤에는 「어디로 돌아가는 뒤로가기인지」가
@@ -1107,7 +1206,7 @@ fun ChatRoomDestinationRoute(
 }
 
 /**
- * 이 채팅방이 **지금 진행 중인 방**의 것인가 — 「매칭 화면으로 →」 배너와 「나가기」 노출을 가르는 판정.
+ * 이 채팅방이 **지금 진행 중인 방**의 것인가 — 「매칭 화면으로」 배너와 「나가기」 노출을 가르는 판정.
  *
  * 기준은 **채팅방 id** 다([activeChatRoomId]). 예전에는 [ChatRoom.partyId] 와 진행 중인 방 id 를
  * 비교했는데, 채팅 **탭 목록**에서 연 방은 그 값이 0 이다 — 목록 응답(`GET /chat-rooms/me`)에 partyId 가
@@ -1135,21 +1234,72 @@ internal fun ChatRoom.isActiveParty(activeChatRoomId: Long?, activePartyId: Stri
 private const val UNKNOWN_PARTY_ID = 0L
 
 /**
- * 메시지 목록을 id 로 합친다 — 겹치면 **나중에 온 사본([incoming])이 이긴다.**
+ * 메시지 목록을 id 로 합친다 — 겹치면 **나중에 온 사본([incoming])이 이긴다. 단, 삭제 상태는 되돌리지 않는다.**
  *
  * 예전에는 `(held + incoming).distinctBy { it.id }` 였는데 `distinctBy` 는 **먼저 등장한** 쪽을
  * 남긴다. 그래서 동승자가 메시지를 지우면 서버가 **같은 id** 를 `deleted = true`,
- * `content = "삭제된 메시지입니다"` 로 다시 밀어 주는데도(`ChatMessageBroadcaster.onMessageDeleted`)
- * 화면은 삭제 전 사본을 그대로 들고 있었다 — **지운 말이 그대로 남았다.**
+ * `content = "삭제된 메시지입니다"` 로 다시 밀어 주는데도 화면은 삭제 전 사본을 그대로 들고 있었다.
  *
- * `associateBy` 는 같은 키에 **나중 값**을 덮어쓴다. 반환 순서는 믿지 않고 마지막에 다시
- * id 오름차순으로 정렬한다(말풍선 순서는 이 정렬이 유일한 근거다).
+ * 반대 방향도 있다: 원본이 순서 맞추기로 소켓 서버에서 최대 0.2초 기다리는 사이 **삭제 이벤트가 먼저** 올 수
+ * 있다. 그때 뒤늦게 온 원본이 이기면 지운 말이 되살아난다 — 그래서 한 번 `deleted = true` 를 본 id 는
+ * 삭제 사본을 지킨다(순번이 비어 있었으면 원본의 seq 만 빌려 온다).
+ *
+ * 정렬: [DomainChatMessage.seq] **오름차순**(서버가 방 안에서 빈틈없이 매긴 순번이 화면 순서의 근거다).
+ * seq 가 없는 메시지는 id 로 그 사이에 끼운다([orderBySeq]).
  */
 internal fun mergeMessagesById(
     held: List<DomainChatMessage>,
     incoming: List<DomainChatMessage>,
-): List<DomainChatMessage> =
-    (held + incoming).associateBy { it.id }.values.sortedBy { it.id }
+): List<DomainChatMessage> {
+    val byId = LinkedHashMap<Long, DomainChatMessage>()
+    for (message in held + incoming) {
+        val previous = byId[message.id]
+        byId[message.id] = when {
+            previous == null -> message
+            previous.deleted && !message.deleted -> previous.copy(seq = previous.seq ?: message.seq)
+            // 새 사본에 순번이 빠져 있으면(삭제 이벤트 등) 앞 사본의 순번을 물려받는다 — 정렬이 흔들리지 않게
+            else -> if (message.seq == null) message.copy(seq = previous.seq) else message
+        }
+    }
+    return orderBySeq(byId.values)
+}
+
+/**
+ * 화면 순서. seq 가 있는 메시지는 **seq 순**, 없는 메시지(구버전 서버·순번이 빠진 응답)는 id 로 **사이에 끼운다** —
+ * 「id 가 자기보다 작은 마지막 메시지」 바로 뒤. 예전처럼 하나라도 seq 가 없으면 전체를 id 순으로 바꾸면,
+ * id 와 seq 가 뒤집힌 구간(다른 서버·스레드 저장)에서 말풍선 순서가 갑자기 바뀐다.
+ * 전부 seq 가 없으면 결과는 id 순과 같다.
+ */
+private fun orderBySeq(messages: Collection<DomainChatMessage>): List<DomainChatMessage> {
+    val (sequenced, unsequenced) = messages.partition { it.seq != null }
+    val ordered = sequenced.sortedWith(compareBy<DomainChatMessage>({ it.seq }, { it.id })).toMutableList()
+    for (message in unsequenced.sortedBy { it.id }) {
+        val after = ordered.indexOfLast { it.id < message.id }
+        ordered.add(after + 1, message)
+    }
+    return ordered
+}
+
+/**
+ * seq 가 처음 건너뛰는 자리의 **바로 앞 메시지 id** — 빈 번호를 채울 `after` 조회의 커서다. 빈틈이 없으면 null.
+ *
+ * 감지는 seq 로, 커서는 id 로 한다(서버 `after` 가 id 커서다). 예: seq 10·11·13 이면 11번 메시지의 id.
+ * [messages] 는 [mergeMessagesById] 가 정렬한 목록이어야 한다. seq 가 없는 메시지는 건너뛴다(구버전 서버).
+ *
+ * @param skip 이미 채워 봤지만 메워지지 않은 빈틈의 커서. 그 빈틈은 건너뛰고 **다음** 빈틈을 찾는다.
+ */
+internal fun seqGapCursor(messages: List<DomainChatMessage>, skip: Set<Long> = emptySet()): Long? {
+    var previousSeq: Long? = null
+    var previousId = 0L
+    for (message in messages) {
+        val seq = message.seq ?: continue
+        val before = previousSeq
+        if (before != null && seq > before + 1 && previousId !in skip) return previousId
+        previousSeq = seq
+        previousId = message.id
+    }
+    return null
+}
 
 /**
  * 서버 메시지 → 화면 표시 모델.
@@ -1171,13 +1321,14 @@ internal fun DomainChatMessage.toUiMessage(imageUrls: Map<String, String>): Chat
     id = id,
 )
 
-// 확인을 기다리는(또는 실패한) 내 메시지 → 말풍선. 시간 대신 상태를 메타로 보여 준다.
+// 저장 응답을 기다리는(또는 실패한) 내 메시지 → 말풍선. 기다리는 동안은 **일반 메시지와 똑같이** 보이고
+// 실패하면 「전송 실패」를 붙인다.
 // id 를 싣지 않는다(= NO_SERVER_MESSAGE_ID) — 서버 id 가 아직 없다. 내 메시지라 신고 길도
 // 애초에 안 생기지만, 음수 localId 를 그 자리에 넣으면 「id 가 있다」로 보여 판정이 갈린다.
-private fun ChatRoomViewModel.PendingMessage.toUiMessage(): ChatUiMessage = ChatUiMessage(
+internal fun ChatRoomViewModel.PendingMessage.toUiMessage(): ChatUiMessage = ChatUiMessage(
     text = content,
     isMine = true,
-    meta = if (failed) PENDING_FAILED_LABEL else PENDING_LABEL,
+    meta = if (failed) PENDING_FAILED_LABEL else null,
 )
 
 /**
@@ -1194,6 +1345,11 @@ internal fun reconcilePending(
     if (pending.isEmpty()) return pending
     val matched = mutableSetOf<Long>()
     return pending.filterNot { waiting ->
+        // 서버가 거절한 실패(4xx·5xx)는 짝짓지 않는다 — 저장되지 않은 게 확실하다. 사용자가 같은 문장을 다시
+        // 보내면 그 확인이 앞의 「전송 실패」를 지워 버려, 실패했다는 사실이 화면에서 사라진다.
+        // 응답을 못 받은 실패(uncertain)는 짝짓는다 — 저장됐을 수 있고, 다시 보낸 경우라도 확인 하나가 말풍선
+        // 하나만 지우므로 화면에 남는 수가 실제 저장 수와 맞는다.
+        if (waiting.failed && !waiting.uncertain) return@filterNot false
         val echo = messages.firstOrNull { message ->
             message.isMine &&
                 message.id > waiting.sinceId &&

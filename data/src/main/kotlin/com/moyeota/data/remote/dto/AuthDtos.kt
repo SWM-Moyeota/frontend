@@ -166,3 +166,70 @@ data class TokenResponse(
     val accessToken: String = "",
     val refreshToken: String = "",
 )
+
+/**
+ * POST /api/v1/auth/find-id/verify 의 응답 — 백엔드 `FindLoginIdResponse`.
+ *
+ * 요청 본문은 가입 인증과 같은 [SmsVerifyRequestDto] 를 그대로 쓴다(서버도 같은 record 다).
+ * `loginId` 는 가리지 않은 **전체 아이디**다 — 문자 인증을 통과한 사람에게만 돌려준다.
+ */
+@Serializable
+data class FindLoginIdResponse(
+    val loginId: String = "",
+)
+
+/**
+ * POST /api/v1/auth/password-reset/send 의 요청 본문 — 백엔드 `PasswordResetSendRequest`.
+ *
+ * 둘 다 `@Pattern` 이 걸려 있다 — `loginId` 는 가입 규칙과 같고 `phoneNumber` 는 발송 요청과 같다.
+ * 형식이 틀리면 접수 전에 400 `INVALID_REQUEST` 다.
+ */
+@Serializable
+data class PasswordResetSendRequestDto(
+    val loginId: String,
+    val phoneNumber: String,
+)
+
+/**
+ * POST /api/v1/auth/password-reset/send 의 202 응답 — 백엔드 `PasswordResetSendResponse`.
+ *
+ * `requestId` 는 확인 요청에 그대로 되돌려 보내는 접수번호(43자)다. `expiresIn`(180)·`resendAfter`(60)는 초 단위.
+ * `message` 는 서버 고정 문구다 — 앱은 자기 문구를 쓰므로 읽지 않는다.
+ */
+@Serializable
+data class PasswordResetSendResponse(
+    val requestId: String = "",
+    val expiresIn: Long = 0,
+    val resendAfter: Long = 0,
+    val message: String? = null,
+)
+
+/** POST /api/v1/auth/password-reset/verify 의 요청 본문 — 백엔드 `PasswordResetVerifyRequest`. */
+@Serializable
+data class PasswordResetVerifyRequestDto(
+    val requestId: String,
+    val code: String,
+)
+
+/**
+ * POST /api/v1/auth/password-reset/verify 의 200 응답 — 백엔드 `PasswordResetVerifyResponse`.
+ *
+ * `resetToken` 은 **한 번만 쓰는** 재설정 권한이다(`expiresIn` = 600초). 저장하지 않고 메모리에만 든다.
+ */
+@Serializable
+data class PasswordResetVerifyResponse(
+    val resetToken: String = "",
+    val expiresIn: Long = 0,
+)
+
+/**
+ * POST /api/v1/auth/password-reset/confirm 의 요청 본문 — 백엔드 `PasswordResetConfirmRequest`.
+ *
+ * 확인 값까지 서버로 보낸다 — 두 값이 같은지는 서버가 다시 본다(400 `USER303`).
+ */
+@Serializable
+data class PasswordResetConfirmRequestDto(
+    val resetToken: String,
+    val newPassword: String,
+    val newPasswordConfirm: String,
+)

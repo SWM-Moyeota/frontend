@@ -133,6 +133,8 @@ fun ChatMessageResponse.toChatMessage(identity: ChatIdentity): ChatMessage {
         isMine = senderPublicId != null && senderPublicId == identity.myUuid,
         senderName = member?.nickname?.takeIf { it.isNotBlank() }
             ?: senderNickname?.takeIf { it.isNotBlank() },
+        // 0 이하는 서버가 매기지 않은 값으로 본다(구버전 응답에 필드가 0 으로 찍혀 오는 경우 방어)
+        seq = seq?.takeIf { it > 0 },
     )
 }
 

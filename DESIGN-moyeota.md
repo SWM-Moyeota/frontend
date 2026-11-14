@@ -34,6 +34,7 @@ colors:
   body-light: "rgba(17,17,17,0.72)"
   mute-light: "#6B7280"
   ash-light: "#D1D5DB"
+  placeholder-light: "#9AA1AC"
   body-dark: "rgba(255,255,255,0.76)"
   mute-dark: "rgba(229,229,229,0.6)"
   ash-dark: "rgba(229,229,229,0.24)"
@@ -45,6 +46,8 @@ colors:
   surface-dark-elevated: "#181A1F"
   surface-dark-card: "#22252B"
   hairline-light: "#EDEFF3"
+  border-light: "#E2E6EC"
+  surface-disabled: "#E8EBF0"
   hairline-dark: "rgba(229,229,229,0.18)"
   on-dark: "#FFFFFF"
   on-dark-mute: "#CFD4DB"
@@ -228,8 +231,8 @@ components:
     padding: 14px 28px
     height: 56px
   button-disabled:
-    backgroundColor: "{colors.surface-soft}"
-    textColor: "{colors.ash-light}"
+    backgroundColor: "{colors.surface-disabled}"
+    textColor: "{colors.placeholder-light}"
     rounded: "{rounded.full}"
   status-badge-idle:
     backgroundColor: "{colors.surface-soft}"
@@ -274,17 +277,21 @@ components:
     padding: 14px 20px
     height: 56px
   filter-chip:
-    backgroundColor: "{colors.surface-soft}"
+    backgroundColor: "{colors.canvas-light}"
+    borderColor: "{colors.border-light}"
     textColor: "{colors.body-light}"
-    typography: "{typography.button-sm}"
+    typography: "{typography.button-md}"
     rounded: "{rounded.full}"
-    padding: 6px 12px
+    padding: 0 14px
+    height: 36px
   filter-chip-active:
-    backgroundColor: "{colors.primary}"
-    textColor: "{colors.on-primary}"
-    typography: "{typography.button-sm}"
+    backgroundColor: "{colors.primary-soft}"
+    borderColor: "{colors.primary}"
+    textColor: "{colors.primary-pressed}"
+    typography: "{typography.button-md}"
     rounded: "{rounded.full}"
-    padding: 6px 12px
+    padding: 0 14px
+    height: 36px
   match-request-card:
     backgroundColor: "{colors.surface-map-overlay}"
     textColor: "{colors.ink}"
@@ -440,12 +447,14 @@ The typography is Pretendard — the de-facto modern Korean sans-serif — carry
 ### Surface
 - **Canvas Light** (`{colors.canvas-light}` — `#FFFFFF`): true white default surface — bottom sheets, matched-mode result cards, top app bar background, chat surface.
 - **Canvas Dark** (`{colors.canvas-dark}` — `#111111`): dark surface for full-page dark mode (planned) and the toast background.
-- **Soft Surface** (`{colors.surface-soft}` — `#F4F6FA`): warm-cool neutral for chip default fill, secondary card background, disabled button fill.
-- **Surface Card** (`{colors.surface-card}` — `#FFFFFF`): default card background (identical to canvas — Moyeota cards distinguish themselves via shadow, not color).
+- **Soft Surface** (`{colors.surface-soft}` — `#F4F6FA`): fills inside a white screen (search input, partner chat bubble, read-only field) and the page background of inset-grouped settings lists (My Page, ride history, no-show records) only. Every other page and sheet is `{colors.canvas-light}`; never put a soft band inside a white sheet.
+- **Surface Disabled** (`{colors.surface-disabled}` — `#E8EBF0`): disabled button fill. It stays visible on both white and soft pages (the old soft-on-soft pair was 1.01:1, so the button shape vanished).
+- **Surface Card** (`{colors.surface-card}` — `#FFFFFF`): default card background (identical to canvas). Over the map a card lifts with the Level 2 shadow; on a white page or inside a sheet it is separated by a `{colors.border-light}` outline or a `{colors.surface-soft}` fill, never by a shadow.
 - **Surface Map Overlay** (`{colors.surface-map-overlay}` — `rgba(255,255,255,0.94)`): translucent white used for cards that float over the map — allows subtle map bleed-through without impairing readability.
 - **Surface Dark Elevated** (`{colors.surface-dark-elevated}` — `#181A1F`): elevated dark surface.
 - **Surface Dark Card** (`{colors.surface-dark-card}` — `#22252B`): dark-mode card background.
-- **Hairline Light** (`{colors.hairline-light}` — `#EDEFF3`): 1px divider rule on light surfaces.
+- **Hairline Light** (`{colors.hairline-light}` — `#EDEFF3`): 1px divider rule and progress-track base on light surfaces.
+- **Border Light** (`{colors.border-light}` — `#E2E6EC`): 1px outline of chips and list cards (the hairline is too faint, 1.15:1, to draw a shape).
 - **Hairline Dark** (`{colors.hairline-dark}` — `rgba(229,229,229,0.18)`): translucent 1px divider on dark surfaces.
 
 ### Text
@@ -453,7 +462,8 @@ The typography is Pretendard — the de-facto modern Korean sans-serif — carry
 - **Ink Deep** (`{colors.ink-deep}` — `#0A0A0B`): near-black for the toast fill.
 - **Body Light** (`{colors.body-light}` — `rgba(17,17,17,0.72)`): translucent body text on light canvas — the system's default paragraph color.
 - **Mute Light** (`{colors.mute-light}` — `#6B7280`): metadata text, timestamps, secondary label.
-- **Ash Light** (`{colors.ash-light}` — `#D1D5DB`): disabled text and lowest-emphasis utility on light surfaces.
+- **Placeholder Light** (`{colors.placeholder-light}` — `#9AA1AC`): input placeholders and disabled labels only (2.6:1). Never for information the user must read; that is `{colors.mute-light}` (4.8:1).
+- **Ash Light** (`{colors.ash-light}` — `#D1D5DB`): input and secondary-button outlines, the route connector, sheet handle. Not used for text.
 - **On Dark** (`{colors.on-dark}` — `#FFFFFF`): primary text on dark surfaces including toast.
 - **Body Dark** (`{colors.body-dark}` — `rgba(255,255,255,0.76)`): translucent body text on dark canvas.
 - **On Dark Mute** (`{colors.on-dark-mute}` — `#CFD4DB`): secondary text on dark surfaces.
@@ -535,9 +545,11 @@ Whitespace is functional and map-preserving. The 64px `{spacing.section}` betwee
 |---|---|---|
 | 0 — Flat | No border, no shadow | Map surface itself, top app bar |
 | 1 — Hairline | 1px solid `{colors.hairline-light}` or `{colors.hairline-dark}` | Divider rules inside cards, bottom nav top border |
-| 2 — Card lift | `0 4px 12px rgba(17,24,39,0.08)` + `0 2px 4px rgba(17,24,39,0.04)` | Default floating card on top of the map — compact but unambiguous "this is above the map" |
-| 3 — Bottom sheet | `0 -8px 24px rgba(17,24,39,0.12)` (upward-cast) | Bottom sheets sliding up from the screen edge |
-| 4 — Modal / dialog | `0 12px 40px rgba(17,24,39,0.16)` + centered scrim `rgba(17,17,17,0.4)` | Confirmation modals, safety-reporting dialog |
+| 2 — Map overlay (4dp) | `0 4px 12px rgba(17,24,39,0.08)` + `0 2px 4px rgba(17,24,39,0.04)` | Pills, round buttons and cards that float **on the map** — compact but unambiguous "this is above the map" |
+| 3 — Bottom sheet (8dp) | `0 -8px 24px rgba(17,24,39,0.12)` (upward-cast) | The top edge of a sheet sliding up from the screen edge |
+| 4 — Modal / dialog (12dp) | `0 12px 40px rgba(17,24,39,0.16)` + centered scrim `rgba(17,17,17,0.4)` | Confirmation modals, dropdown menus, safety-reporting dialog |
+
+Only things that float over the map (Level 2), the sheet edge (Level 3) and real overlays (Level 4) cast a shadow. Cards, chips, bubbles and list groups that sit on a page or inside a sheet are flat (Level 0/1). Shadows are always neutral blue-gray; never tint a shadow with the brand blue.
 
 Cards do not shift elevation on press — the pressed state is expressed via the pill/card's fill color darkening (primary-pressed variant), not a shadow change. This keeps interactions feeling immediate rather than floaty.
 
@@ -604,7 +616,7 @@ The radius vocabulary is a 6 / 12 / 20 rhythm for surfaces plus full-round for i
 - Used inside the safety flow only — the FAB variant `safety-shield-fab` is the resting-state entry point.
 
 **`button-disabled`**
-- Background `{colors.surface-soft}`, text `{colors.ash-light}`, rounded `{rounded.full}` — flat soft gray.
+- Background `{colors.surface-disabled}`, text `{colors.placeholder-light}`, rounded `{rounded.full}` — flat gray that stays visible on soft pages.
 
 ### Status Badges
 
@@ -626,9 +638,9 @@ The radius vocabulary is a 6 / 12 / 20 rhythm for surfaces plus full-round for i
 ### Filter & Chip
 
 **`filter-chip`** + **`filter-chip-active`**
-- Default: background `{colors.surface-soft}`, text `{colors.body-light}`, type `{typography.button-sm}`, padding `6px 12px`, rounded `{rounded.full}`.
-- Active: background flips to `{colors.primary}`, text `{colors.on-primary}` — a bold color shift so the chip stays legible against varied map backgrounds when the filter row floats above the map.
-- Used in the matching preferences row ("가까운 곳", "심야", "여성만") on the request-idle screen.
+- Default: background `{colors.canvas-light}`, 1px `{colors.border-light}` outline, text `{colors.body-light}`, type `{typography.button-md}`, height 36px (48px touch area), padding `0 14px`, rounded `{rounded.full}`, no shadow.
+- Active: background `{colors.primary-soft}`, 1px `{colors.primary}` outline, text `{colors.primary-pressed}`. The tint (not a solid blue fill) keeps solid blue reserved for the one primary CTA on the screen.
+- One chip for the whole app: matching conditions (16), the origin/destination toggle (16a), explore mode and date (17), meeting presets (21).
 
 ### Cards & Panels
 
@@ -710,7 +722,7 @@ The radius vocabulary is a 6 / 12 / 20 rhythm for surfaces plus full-round for i
 ## Do's and Don'ts
 
 ### Do
-- Reserve `{colors.primary}` (Moyeota Blue) for primary CTAs, the origin marker, the shared-route polyline, and the active filter chip. The blue is the trust anchor; wide accidental use dilutes it.
+- Reserve solid `{colors.primary}` (Moyeota Blue) for the one primary CTA per screen, the origin marker and the shared-route polyline. Active chips and secondary actions use the `{colors.primary-soft}` tint. The blue is the trust anchor; wide accidental use dilutes it.
 - Reserve `{colors.safety}` (deep red) exclusively for the emergency shield entry point and its confirmation modal. Never use for validation, cancellation, or destructive UI.
 - Use Pretendard at weight 600 (semibold) for card titles and screen headlines. Bold 700 is reserved for CTAs and display headlines only.
 - Stack floating cards over the map with `{spacing.md}` (16px) vertical gap between cards; keep no more than 3 cards visible at rest.
@@ -722,6 +734,8 @@ The radius vocabulary is a 6 / 12 / 20 rhythm for surfaces plus full-round for i
 - Don't use `{colors.primary}` on error text or destructive UI — mixing brand blue with negative outcomes damages the trust reading.
 - Don't apply `{colors.safety}` anywhere outside the emergency flow — its urgency signal only works because it's scarce.
 - Don't use drop shadows deeper than `Level 2` (compact 8px card-lift) on chrome — the map is the visual protagonist, and heavy chrome shadows compete with it.
+- Don't put a shadow on anything that already sits inside a white sheet or page, and don't stack tinted panels inside tinted panels. Separate with a hairline divider or a single soft fill.
+- Don't use text glyphs or emoji (`› → ⌄ ₩ 📍`) as icons. Use the drawn icon set (24px grid, 1.75px stroke).
 - Don't set text on top of the map without a card fill — floating text over map tiles is illegible at zoom transitions.
 - Don't introduce a second sans-serif or a serif for editorial polish. Pretendard carries every text role, and mixing faces feels off-brand for a task interface.
 - Don't soften pill geometry. CTAs are always `{rounded.full}` — no medium-radius buttons.
