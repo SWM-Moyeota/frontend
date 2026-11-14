@@ -369,6 +369,12 @@ private class FakeAuthRepository(
 
     override suspend fun getMyProfile(): UserProfileInfo =
         throw UnsupportedOperationException("프리필 값은 35 가 조회해 prefill 로 넘긴다")
+
+    override suspend fun sendFindLoginIdCode(phoneNumber: String): Unit = throw UnsupportedOperationException("36 프로필 수정과 무관하다")
+    override suspend fun findLoginId(phoneNumber: String, code: String): String = throw UnsupportedOperationException("36 프로필 수정과 무관하다")
+    override suspend fun requestPasswordReset(loginId: String, phoneNumber: String): com.moyeota.domain.model.PasswordResetTicket = throw UnsupportedOperationException("36 프로필 수정과 무관하다")
+    override suspend fun verifyPasswordResetCode(requestId: String, code: String): String = throw UnsupportedOperationException("36 프로필 수정과 무관하다")
+    override suspend fun confirmPasswordReset(resetToken: String, newPassword: String, newPasswordConfirm: String): Unit = throw UnsupportedOperationException("36 프로필 수정과 무관하다")
 }
 
 /**

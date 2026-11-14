@@ -61,6 +61,9 @@ fun LoginFormRoute(
     onBack: () -> Unit = {},
     onLoggedIn: () -> Unit = {},
     onSignUp: () -> Unit = {},
+    onFindId: () -> Unit = {},
+    onResetPassword: () -> Unit = {},
+    prefillLoginId: String? = null,
     noticeMessage: String? = null,
 ) {
     val viewModel: LoginViewModel = viewModel(factory = LoginViewModel.factory(repository))
@@ -74,6 +77,9 @@ fun LoginFormRoute(
         onBack = onBack,
         onSubmit = viewModel::login,
         onSignUp = onSignUp,
+        onFindId = onFindId,
+        onResetPassword = onResetPassword,
+        prefillLoginId = prefillLoginId,
         submitting = state.submitting,
         errorMessage = state.errorMessage,
         // 로그인 실패 문구가 떴다면 "왜 이 화면인지"보다 그쪽이 급하다 — 안내는 접는다

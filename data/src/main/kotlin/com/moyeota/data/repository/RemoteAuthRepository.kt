@@ -9,6 +9,9 @@ import com.moyeota.data.remote.authCall
 import com.moyeota.data.remote.dto.AccountDeletionRequest
 import com.moyeota.data.remote.dto.LoginRequestDto
 import com.moyeota.data.remote.dto.NicknameCheckRequestDto
+import com.moyeota.data.remote.dto.PasswordResetConfirmRequestDto
+import com.moyeota.data.remote.dto.PasswordResetSendRequestDto
+import com.moyeota.data.remote.dto.PasswordResetVerifyRequestDto
 import com.moyeota.data.remote.dto.PhoneCheckRequestDto
 import com.moyeota.data.remote.dto.RefreshTokenRequestDto
 import com.moyeota.data.remote.dto.SmsSendRequestDto
@@ -23,6 +26,7 @@ import com.moyeota.domain.model.AuthException
 import com.moyeota.domain.model.AuthPolicy
 import com.moyeota.domain.model.AuthState
 import com.moyeota.domain.model.NewUser
+import com.moyeota.domain.model.PasswordResetTicket
 import com.moyeota.domain.model.ProfileImage
 import com.moyeota.domain.model.UserProfileInfo
 import com.moyeota.domain.repository.AuthRepository
@@ -247,6 +251,76 @@ class RemoteAuthRepository(
      */
     override suspend fun isPhoneRegistered(phoneNumber: String): Boolean =
         authCall { api.checkPhone(PhoneCheckRequestDto(AuthPolicy.normalizePhoneNumber(phoneNumber))) }.exists
+
+    /** 번호 정규화는 가입 인증과 같다 — 발송과 확인이 **같은 형태**를 보내야 서버가 같은 번호로 본다. */
+    override suspend fun sendFindLoginIdCode(phoneNumber: String) {
+        authCall { api.sendFindLoginIdCode(SmsSendRequestDto(AuthPolicy.normalizePhoneNumber(phoneNumber))) }
+    }
+
+    /**
+     * 빈 아이디를 끊는 이유는 [verifyPhoneCode] 의 빈 토큰과 같다 — 통과시키면 화면이
+     * 「회원님의 아이디는 예요」처럼 빈 값을 결과로 그린다.
+     */
+    override suspend fun findLoginId(phoneNumber: String, code: String): String {
+        val response = authCall {
+            api.findLoginId(
+                SmsVerifyRequestDto(
+                    phoneNumber = AuthPolicy.normalizePhoneNumber(phoneNumber),
+                    code = code.trim(),
+                ),
+            )
+        }
+        return response.loginId.takeIf { it.isNotBlank() }
+            ?: throw AuthException(AuthError.UNKNOWN, "아이디 찾기 응답에 loginId 가 없습니다.")
+    }
+
+    /**
+     * 접수번호가 비면 끊는다 — 확인 단계가 빈 `requestId` 로 400 만 받게 되고, 사용자는 문자를 받고도
+     * 인증을 끝낼 수 없다. 시간 값은 서버가 0 이하를 줘도 화면이 즉시 만료로 그리지 않게 정책 상수로 메운다.
+     */
+    override suspend fun requestPasswordReset(loginId: String, phoneNumber: String): PasswordResetTicket {
+        val response = authCall {
+            api.sendPasswordResetCode(
+                PasswordResetSendRequestDto(
+                    loginId = loginId.trim(),
+                    phoneNumber = AuthPolicy.normalizePhoneNumber(phoneNumber),
+                ),
+            )
+        }
+        if (response.requestId.isBlank()) {
+            throw AuthException(AuthError.UNKNOWN, "재설정 접수 응답에 requestId 가 없습니다.")
+        }
+        return PasswordResetTicket(
+            requestId = response.requestId,
+            expiresInSeconds = response.expiresIn.takeIf { it > 0 }?.toInt() ?: AuthPolicy.SMS_CODE_TTL_SECONDS,
+            resendAfterSeconds = response.resendAfter.takeIf { it > 0 }?.toInt()
+                ?: AuthPolicy.SMS_RESEND_COOLDOWN_SECONDS,
+        )
+    }
+
+    override suspend fun verifyPasswordResetCode(requestId: String, code: String): String {
+        val response = authCall {
+            api.verifyPasswordResetCode(PasswordResetVerifyRequestDto(requestId = requestId, code = code.trim()))
+        }
+        return response.resetToken.takeIf { it.isNotBlank() }
+            ?: throw AuthException(AuthError.UNKNOWN, "재설정 인증 응답에 resetToken 이 없습니다.")
+    }
+
+    /**
+     * 비밀번호는 **다듬지 않는다** — 로그인이 입력값을 그대로 보내므로 여기서 공백을 깎으면
+     * 사용자가 정한 비밀번호와 저장된 비밀번호가 달라진다.
+     */
+    override suspend fun confirmPasswordReset(resetToken: String, newPassword: String, newPasswordConfirm: String) {
+        authCall {
+            api.confirmPasswordReset(
+                PasswordResetConfirmRequestDto(
+                    resetToken = resetToken,
+                    newPassword = newPassword,
+                    newPasswordConfirm = newPasswordConfirm,
+                ),
+            )
+        }
+    }
 
     /** 204 라 돌려받을 값이 없다. 실패는 전부 [AuthException] 으로 좁혀 올린다. */
     override suspend fun updateProfile(nickname: String?, imageKey: String?) {
