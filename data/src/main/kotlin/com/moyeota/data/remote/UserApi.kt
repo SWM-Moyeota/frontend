@@ -119,7 +119,8 @@ interface UserApi {
     suspend fun deleteFcmToken()
 
     /**
-     * 회원 탈퇴. 204 No Content. 기준: `user/deletion/presentation/UserDeletionController.java`
+     * **아이디·비밀번호 회원**의 탈퇴. 204 No Content. 소셜 회원은 본문 없는 [deleteSocialAccount] 다.
+     * 기준: `user/deletion/presentation/UserDeletionController.java`
      * (`@RequestMapping("/api/v1/users")` + `@DeleteMapping("/me")` + `@ResponseStatus(NO_CONTENT)`).
      *
      * ### `@DELETE` 가 아니라 `@HTTP` 인 이유 — Retrofit 의 함정
@@ -128,7 +129,8 @@ interface UserApi {
      * `IllegalArgumentException: Non-body HTTP method cannot contain @Body or @Field parameters.`
      * 로 터진다 — 즉 「탈퇴하기」를 누른 그 순간에야 드러난다.
      *
-     * 서버는 비밀번호를 **본문으로** 받으므로(`@Valid @RequestBody UserDeletionRequest`) 본문을
+     * 서버는 비밀번호를 **본문으로** 받으므로(`@RequestBody(required = false) UserDeletionRequest` —
+     * 소셜 회원 때문에 본문 자체는 선택이 됐지만 로컬 회원에게는 여전히 필수다) 본문을
      * 반드시 실어야 하고, 그 조합을 표현하는 길이 `@HTTP(hasBody = true)` 뿐이다. 쿼리로 돌리는 선택지는
      * 애초에 없다 — 비밀번호가 URL 과 서버 액세스 로그에 평문으로 남는다.
      *
@@ -147,10 +149,39 @@ interface UserApi {
      * 그래서 성공 자리에서 세션·로컬 기억을 비우는 것까지가 한 동작이다
      * ([com.moyeota.data.repository.RemoteAuthRepository.deleteAccount]).
      *
-     * 실패: 400 `USER111`(비밀번호 불일치) · 409 `USER110`(진행 중 합승) · 401 `USER005`(무토큰).
+     * 실패: 400 `USER111`(비밀번호 불일치) · 400 `INVALID_REQUEST`(비밀번호 누락·공백) ·
+     * 409 `USER110`(진행 중 합승) · 401 `USER005`(무토큰).
      */
     @HTTP(method = "DELETE", path = "api/v1/users/me", hasBody = true)
     suspend fun deleteAccount(@Body request: AccountDeletionRequest)
+
+    /**
+     * **소셜(구글) 회원**의 탈퇴. 204 No Content. [deleteAccount] 와 **같은 경로·같은 동사이고 본문만 없다.**
+     *
+     * 기준: `UserDeletionController.delete` 의 `@RequestBody(required = false)` (백엔드 `origin/develop`).
+     * 소셜 회원은 비밀번호가 없어 서버가 로그인 토큰만으로 본인 확인을 끝낸다
+     * (`UserDeletionService.confirmIdentity` — 로컬 로그인 행이 없고 소셜 연동 행이 있으면 통과).
+     *
+     * ### 여기는 평범한 [DELETE] 다
+     * [deleteAccount] 의 `@HTTP(hasBody = true)` 는 본문을 실으려는 우회였다. 본문이 없으면 우회할 것이 없다.
+     * 빈 본문을 싣는 식(`hasBody = true` + 빈 객체)으로 한 메서드에 합치지 않는 이유: `{}` 도 본문이라
+     * 서버가 `UserDeletionRequest(password = null)` 로 읽는데, 그 결과가 「본문 없음」과 같은 건 지금 서버
+     * 구현의 우연이다. 서버 문서가 말하는 계약은 **본문 없이 호출**이다.
+     *
+     * ### 로컬 회원에게 쓰면
+     * 400 `INVALID_REQUEST`(「비밀번호는 필수입니다.」)이고 아무것도 지워지지 않는다. 즉 회원 종류를 잘못
+     * 짚어도 계정이 날아가지는 않는다 — 다만 사용자는 이유 모를 실패를 본다.
+     *
+     * ### 이 메서드가 생기면서 더 위험해진 것
+     * 예전에는 본문 없는 `DELETE /users/me` 가 누구에게나 400 이었다. 이제는 **소셜 회원이면 그대로 탈퇴된다.**
+     * [resetProfileImage] 의 경로에서 뒤 조각이 빠지는 사고가 「400 이 난다」에서 「계정이 지워진다」로 바뀐
+     * 셈이다 — 그쪽 KDoc 의 경고가 이제 글자 그대로다.
+     *
+     * 실패: 409 `USER110`(진행 중 합승) · 400 `INVALID_REQUEST`(로컬 회원) · 401 `USER005`(무토큰).
+     * 성공 뒤의 일은 [deleteAccount] 와 같다(토큰 즉시 무효 → 그 자리에서 로컬 정리).
+     */
+    @DELETE("api/v1/users/me")
+    suspend fun deleteSocialAccount()
 
     /**
      * 내 탑승 기록 한 페이지. 200. 기준: `matching/record/RideRecordController.java`

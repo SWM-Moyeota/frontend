@@ -254,6 +254,16 @@ private class FakePhonePrecheckRepository(
     override suspend fun deleteAccount(password: String): Unit =
         throw UnsupportedOperationException("선확인과 무관하다")
 
+    // 구글 로그인·소셜 가입·소셜 탈퇴 — 로컬 가입의 번호 선확인과 무관하다.
+    override suspend fun loginWithGoogle(idToken: String): com.moyeota.domain.model.GoogleLoginResult =
+        throw UnsupportedOperationException("선확인과 무관하다")
+
+    override suspend fun registerSocial(newUser: com.moyeota.domain.model.NewSocialUser): String =
+        throw UnsupportedOperationException("선확인과 무관하다")
+
+    override suspend fun deleteSocialAccount(): Unit =
+        throw UnsupportedOperationException("선확인과 무관하다")
+
     override suspend fun getMyProfile(): UserProfileInfo =
         throw UnsupportedOperationException("선확인과 무관하다")
 

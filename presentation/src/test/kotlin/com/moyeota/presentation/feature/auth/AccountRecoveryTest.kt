@@ -444,5 +444,8 @@ private class FakeRecoveryRepository(
     override suspend fun login(loginId: String, password: String): String = unused()
     override suspend fun logout(): Unit = unused()
     override suspend fun deleteAccount(password: String): Unit = unused()
+    override suspend fun loginWithGoogle(idToken: String): com.moyeota.domain.model.GoogleLoginResult = unused()
+    override suspend fun registerSocial(newUser: com.moyeota.domain.model.NewSocialUser): String = unused()
+    override suspend fun deleteSocialAccount(): Unit = unused()
     override suspend fun getMyProfile(): UserProfileInfo = unused()
 }

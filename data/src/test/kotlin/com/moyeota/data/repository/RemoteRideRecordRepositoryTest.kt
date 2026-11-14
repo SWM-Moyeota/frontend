@@ -200,4 +200,5 @@ private class FakeRideRecordUserApi(
     override suspend fun registerFcmToken(request: FcmTokenRequest) = error("이 테스트에서 부를 일이 없다")
     override suspend fun deleteFcmToken() = error("이 테스트에서 부를 일이 없다")
     override suspend fun deleteAccount(request: AccountDeletionRequest) = error("이 테스트에서 부를 일이 없다")
+    override suspend fun deleteSocialAccount() = error("이 테스트에서 부를 일이 없다")
 }

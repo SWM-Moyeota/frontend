@@ -162,6 +162,12 @@ class FakeAuthRepository : AuthRepository {
     override suspend fun requestPasswordReset(loginId: String, phoneNumber: String): com.moyeota.domain.model.PasswordResetTicket = TODO()
     override suspend fun verifyPasswordResetCode(requestId: String, code: String): String = TODO()
     override suspend fun confirmPasswordReset(resetToken: String, newPassword: String, newPasswordConfirm: String): Unit = TODO()
+
+    // 구글 로그인·소셜 가입·소셜 탈퇴 — 아직 이 지원 클래스가 보는 분석 이벤트가 없다. 기록 지점이 생기면
+    // register/login 처럼 람다로 바꿔 호출을 세면 된다.
+    override suspend fun loginWithGoogle(idToken: String): com.moyeota.domain.model.GoogleLoginResult = TODO()
+    override suspend fun registerSocial(newUser: com.moyeota.domain.model.NewSocialUser): String = TODO()
+    override suspend fun deleteSocialAccount(): Unit = TODO()
 }
 
 /**

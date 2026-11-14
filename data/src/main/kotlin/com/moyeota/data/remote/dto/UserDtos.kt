@@ -106,8 +106,12 @@ data class UpdateProfileRequest(
 )
 
 /**
- * DELETE /api/v1/users/me 의 요청 본문 — 백엔드 `UserDeletionRequest(@NotBlank String password)`.
+ * DELETE /api/v1/users/me 의 요청 본문 — 백엔드 `UserDeletionRequest(String password)`.
  * 키 이름은 반드시 `password` 다.
+ *
+ * **아이디·비밀번호 회원 전용이다.** 소셜 회원은 비밀번호가 없어 이 본문 없이 같은 경로를 부른다
+ * ([com.moyeota.data.remote.UserApi.deleteSocialAccount]). 그 때문에 서버 필드에서 `@NotBlank` 가 빠졌고
+ * (컨트롤러도 `@RequestBody(required = false)` 다), 빈 값 검사는 서비스가 **로컬 회원일 때만** 한다.
  *
  * **DELETE 에 본문이 실린다는 게 이 DTO 의 전부다.** Retrofit 의 `@DELETE` 는 `hasBody = false` 라
  * [com.moyeota.data.remote.UserApi.deleteAccount] 는 `@HTTP(method = "DELETE", hasBody = true)` 를 쓴다
@@ -116,7 +120,8 @@ data class UpdateProfileRequest(
  * 누구를 지우는지는 싣지 않는다. 대상은 `@CurrentUser` 가 Bearer 에서 뽑는다
  * — 그래서 이 호출은 **반드시 인증 클라이언트**(`UserApi`)로 나가야 한다.
  *
- * 빈 문자열은 서버가 400 `INVALID_REQUEST` 로 튕긴다(`@NotBlank`). 화면이 빈 입력으로는 버튼을
+ * 빈 문자열은 서버가 400 `INVALID_REQUEST` 로 튕긴다(로컬 회원이면 서비스가 「비밀번호는 필수입니다.」로
+ * 끊는다). 화면이 빈 입력으로는 버튼을
  * 누를 수 없게 막으므로(`canSubmitAccountDeletion`) 실제로 나가지는 않는다.
  */
 @Serializable

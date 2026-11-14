@@ -184,6 +184,18 @@ internal fun authErrorMessage(error: AuthError, serverMessage: String? = null): 
     // 네 가지 제한이 한 코드로 온다(쿨다운·하루 횟수·계정당·IP 당) — 사유를 몰라 숫자를 말하지 않는다.
     AuthError.PASSWORD_RESET_RATE_LIMITED -> "요청이 너무 많아요. 잠시 뒤 다시 시도해 주세요"
 
+    // ── 구글 로그인 · 소셜 가입 (2026-11 신규) ──
+    // 넷 다 **로그인하기 전에** 난다. 401 둘을 놓치면 「다시 로그인해 주세요」(세션 만료)가, 409 를 놓치면
+    // 「이미 사용 중인 아이디예요」가 뜬다 — 세션도 아이디도 없는 화면이다.
+    // 위조·만료·다른 앱용이 한 코드로 온다. 사용자가 고칠 입력이 없어 할 일(다시 누르기)만 말한다.
+    AuthError.SOCIAL_TOKEN_INVALID -> "구글 로그인에 실패했어요. 다시 시도해 주세요"
+    // 문자 인증이 아니라 그 앞 단계가 죽었다 — 「인증을 다시」가 아니라 「구글 로그인부터」다.
+    AuthError.SOCIAL_SIGNUP_EXPIRED -> "가입 시간이 지났어요. 구글 로그인부터 다시 해 주세요"
+    // 실패처럼 보이지만 계정은 이미 있다 — 가입을 고치게 하지 않고 로그인으로 보낸다.
+    AuthError.SOCIAL_ALREADY_REGISTERED -> "이미 가입된 구글 계정이에요. 구글로 다시 로그인해 주세요"
+    // 구글 로그인 버튼 자리에서도 나므로 「문자 인증」을 말하지 않는다(SMS_UNAVAILABLE 과 나눈 이유다).
+    AuthError.SOCIAL_UNAVAILABLE -> "지금은 구글 로그인을 진행할 수 없어요. 잠시 뒤 다시 시도해 주세요"
+
     AuthError.SESSION_EXPIRED -> "다시 로그인해 주세요"
     AuthError.NETWORK -> "네트워크 연결을 확인해 주세요"
     AuthError.UNKNOWN -> "잠시 후 다시 시도해 주세요"
