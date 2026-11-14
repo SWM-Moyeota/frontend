@@ -1,8 +1,14 @@
 package com.moyeota.data.remote
 
+import com.moyeota.data.remote.dto.FindLoginIdResponse
 import com.moyeota.data.remote.dto.LoginRequestDto
 import com.moyeota.data.remote.dto.NicknameCheckRequestDto
 import com.moyeota.data.remote.dto.NicknameCheckResponse
+import com.moyeota.data.remote.dto.PasswordResetConfirmRequestDto
+import com.moyeota.data.remote.dto.PasswordResetSendRequestDto
+import com.moyeota.data.remote.dto.PasswordResetSendResponse
+import com.moyeota.data.remote.dto.PasswordResetVerifyRequestDto
+import com.moyeota.data.remote.dto.PasswordResetVerifyResponse
 import com.moyeota.data.remote.dto.PhoneCheckRequestDto
 import com.moyeota.data.remote.dto.PhoneCheckResponse
 import com.moyeota.data.remote.dto.RefreshTokenRequestDto
@@ -120,4 +126,56 @@ interface AuthApi {
      */
     @POST("api/v1/auth/phone/check")
     suspend fun checkPhone(@Body request: PhoneCheckRequestDto): PhoneCheckResponse
+
+    /**
+     * 아이디 찾기 인증번호 발송. **204 No Content**.
+     *
+     * 경로 기준: `AuthController.sendFindLoginIdCode` (Backend #314). 본문은 가입 인증과 같은 `SmsSendRequest` 다.
+     * 가입 발송([sendSmsCode])과 **번호 검사가 정반대다** — 그쪽은 가입된 번호를 409 로 끊고,
+     * 여기는 가입되지 **않은** 번호를 문자 비용을 쓰기 전에 404 `USER114` 로 끊는다.
+     * 쿨다운(1분)과 하루 횟수는 가입 인증과 **같은 칸에 센다** — 429 `USER202`·`USER203` 이 그대로 온다.
+     */
+    @POST("api/v1/auth/find-id/send")
+    suspend fun sendFindLoginIdCode(@Body request: SmsSendRequestDto)
+
+    /**
+     * 아이디 찾기 확인. 200 `{"loginId":"<아이디 전체>"}` — 가리지 않은 전체 아이디다.
+     *
+     * 실패 코드는 가입 인증 확인과 같다(400 `USER204`·`USER205`, 429 `USER206`).
+     */
+    @POST("api/v1/auth/find-id/verify")
+    suspend fun findLoginId(@Body request: SmsVerifyRequestDto): FindLoginIdResponse
+
+    /**
+     * 비밀번호 재설정 인증번호 요청. **202 Accepted** + 접수번호.
+     *
+     * 경로 기준: `PasswordResetController` (`/api/v1/auth/password-reset`, Backend #331).
+     * **아이디·번호가 가입 정보와 맞는지와 무관하게 같은 202 가 온다** — 계정 존재 여부를 흘리지 않으려는
+     * 서버 설계다. 문자는 맞을 때만 별도 작업으로 나가므로 앱은 「보냈다」고 단정하면 안 된다.
+     *
+     * 제한에 걸리면 429 `USER306` + `Retry-After` 다. 문자 쿨다운·하루 횟수를 가입 인증과 같은 칸에 세고,
+     * 여기에 계정당 시간당 10회·IP 당 분당 30회가 더 있는데 **넷 다 같은 코드로 온다.**
+     */
+    @POST("api/v1/auth/password-reset/send")
+    suspend fun sendPasswordResetCode(@Body request: PasswordResetSendRequestDto): PasswordResetSendResponse
+
+    /**
+     * 재설정 인증번호 확인. 200 `{"resetToken":"…","expiresIn":600}`.
+     *
+     * 번호가 아니라 **접수번호(`requestId`)** 로 확인한다. 틀려도 접수는 살아 있고 5번까지 받는다 —
+     * 400 `USER301` 은 「틀림·만료·없는 접수」가 한 코드로 뭉친 값이고, 5번을 넘기면 429 `USER306` 이다.
+     */
+    @POST("api/v1/auth/password-reset/verify")
+    suspend fun verifyPasswordResetCode(@Body request: PasswordResetVerifyRequestDto): PasswordResetVerifyResponse
+
+    /**
+     * 새 비밀번호 저장. **204 No Content**.
+     *
+     * 성공하면 서버가 그 계정의 리프레시 토큰을 전부 취소한다 — 다른 기기는 재발급 때 로그아웃된다.
+     * 400 이 넷으로 갈린다: `USER302`(토큰 무효·만료) · `USER303`(확인 값 불일치) · `USER304`(규칙 위반) ·
+     * `USER305`(지금 비밀번호와 같다). 302 만 「인증부터 다시」이고 나머지는 입력을 고치면 된다 —
+     * **검증에 실패해도 토큰은 소진되지 않는다.**
+     */
+    @POST("api/v1/auth/password-reset/confirm")
+    suspend fun confirmPasswordReset(@Body request: PasswordResetConfirmRequestDto)
 }

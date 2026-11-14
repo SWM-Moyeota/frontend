@@ -225,6 +225,22 @@ object AuthPolicy {
 }
 
 /**
+ * 비밀번호 재설정 인증번호 요청의 접수 결과 (`POST /api/v1/auth/password-reset/send` 의 202).
+ *
+ * **「문자를 보냈다」는 뜻이 아니다** — 서버는 아이디·번호가 가입 정보와 맞든 틀리든 같은 접수를 준다.
+ * 화면은 이 값으로 입력칸과 카운트다운만 열고, 발송 여부는 단정하지 않는다.
+ *
+ * @property requestId 확인 요청에 되돌려 보내는 접수번호. 번호가 아니라 이 값으로 인증번호를 확인한다.
+ * @property expiresInSeconds 인증번호 유효 시간(서버 값 180).
+ * @property resendAfterSeconds 다시 요청할 수 있을 때까지의 시간(서버 값 60).
+ */
+data class PasswordResetTicket(
+    val requestId: String,
+    val expiresInSeconds: Int,
+    val resendAfterSeconds: Int,
+)
+
+/**
  * 로그인 상태. presentation 은 토큰을 절대 보지 않고 이 상태만 본다.
  *
  * [Unknown] 이 따로 있는 이유: 앱 시작 직후에는 디스크(DataStore)에서 토큰을 아직 읽지 못했다.

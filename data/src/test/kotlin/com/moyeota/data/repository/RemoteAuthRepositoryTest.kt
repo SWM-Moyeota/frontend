@@ -933,6 +933,19 @@ private class FakeAuthApi(
         phoneCheckFailure?.let { throw it }
         return PhoneCheckResponse(exists = phoneExists)
     }
+
+    // 아이디 찾기·비밀번호 재설정은 AccountRecoveryTest 가 자기 가짜로 확인한다 — 여기서는 불리지 않는다.
+    override suspend fun sendFindLoginIdCode(request: SmsSendRequestDto): Unit = error("AccountRecoveryTest 가 확인한다")
+    override suspend fun findLoginId(request: SmsVerifyRequestDto): com.moyeota.data.remote.dto.FindLoginIdResponse =
+        error("AccountRecoveryTest 가 확인한다")
+    override suspend fun sendPasswordResetCode(
+        request: com.moyeota.data.remote.dto.PasswordResetSendRequestDto,
+    ): com.moyeota.data.remote.dto.PasswordResetSendResponse = error("AccountRecoveryTest 가 확인한다")
+    override suspend fun verifyPasswordResetCode(
+        request: com.moyeota.data.remote.dto.PasswordResetVerifyRequestDto,
+    ): com.moyeota.data.remote.dto.PasswordResetVerifyResponse = error("AccountRecoveryTest 가 확인한다")
+    override suspend fun confirmPasswordReset(request: com.moyeota.data.remote.dto.PasswordResetConfirmRequestDto): Unit =
+        error("AccountRecoveryTest 가 확인한다")
 }
 
 /**

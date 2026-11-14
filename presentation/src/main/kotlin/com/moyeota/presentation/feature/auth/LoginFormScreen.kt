@@ -62,12 +62,16 @@ fun LoginFormScreen(
     onBack: () -> Unit = {},
     onSubmit: (loginId: String, password: String) -> Unit = { _, _ -> },
     onSignUp: () -> Unit = {},
+    onFindId: () -> Unit = {},
+    onResetPassword: () -> Unit = {},
+    prefillLoginId: String? = null,
     submitting: Boolean = false,
     errorMessage: String? = null,
     noticeMessage: String? = null,
     modifier: Modifier = Modifier,
 ) {
-    var loginId by remember { mutableStateOf("") }
+    // 04b 에서 찾았거나 04c 에서 비밀번호를 바꾼 아이디로 시작한다 — 돌아왔을 때 다시 칠 필요가 없게.
+    var loginId by remember(prefillLoginId) { mutableStateOf(prefillLoginId.orEmpty()) }
     var password by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
 
@@ -161,7 +165,33 @@ fun LoginFormScreen(
                 loading = submitting,
             )
 
-            Spacer(Modifier.height(18.dp))
+            // 로그인이 막힌 사람이 찾는 자리다 — 버튼 바로 아래, 가입 유도보다 위에 둔다(2026-11 신규).
+            Spacer(Modifier.height(4.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextLinkButton(
+                    text = "아이디 찾기",
+                    onClick = onFindId,
+                    color = MoyeotaColor.TextMute,
+                    enabled = !submitting,
+                )
+                Spacer(
+                    Modifier
+                        .padding(horizontal = 6.dp)
+                        .size(width = 1.dp, height = 12.dp)
+                        .background(MoyeotaColor.Hairline),
+                )
+                TextLinkButton(
+                    text = "비밀번호 재설정",
+                    onClick = onResetPassword,
+                    color = MoyeotaColor.TextMute,
+                    enabled = !submitting,
+                )
+            }
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.Center,

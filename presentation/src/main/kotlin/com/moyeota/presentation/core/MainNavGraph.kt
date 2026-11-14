@@ -41,9 +41,11 @@ import com.moyeota.domain.repository.DispatchRepository
 import com.moyeota.domain.repository.PlaceRepository
 import com.moyeota.domain.repository.RideRecordRepository
 import com.moyeota.domain.repository.RideRepository
+import com.moyeota.presentation.feature.auth.FindIdRoute
 import com.moyeota.presentation.feature.auth.LoginFormRoute
 import com.moyeota.presentation.feature.auth.LoginScreen
 import com.moyeota.presentation.feature.auth.MannerPledgeRoute
+import com.moyeota.presentation.feature.auth.PasswordResetRoute
 import com.moyeota.presentation.feature.auth.ProfileSetupRoute
 import com.moyeota.presentation.feature.auth.SignupCompleteScreen
 import com.moyeota.presentation.feature.auth.SignupDraft
@@ -263,6 +265,21 @@ private fun MainNavHost(
     var reverifyPhoneRequest by rememberSaveable { mutableIntStateOf(0) }
     // 로그인 화면으로 돌아온 이유. 세션 만료일 때만 채워지고 사용자가 스스로 로그아웃하면 비운다.
     var signOutNotice by remember { mutableStateOf<String?>(null) }
+
+    // 04b 에서 찾았거나 04c 에서 비밀번호를 바꾼 아이디. 04a 로 돌아왔을 때 아이디 칸을 채우고,
+    // 04b → 04c 로 건너갈 때 04c 의 아이디 칸도 채운다. 로그인에 성공하면 버린다.
+    var recoveredLoginId by remember { mutableStateOf<String?>(null) }
+
+    // 04b·04c 를 끝내고 04a 로 돌아간다. 둘 다 04a 위에 쌓여 열리므로 그 엔트리로 되돌아가면 되고,
+    // 스택에 없으면(있을 수 없는 경로지만 화면 없는 그래프를 남기지 않으려고) 04a 로 새로 연다.
+    fun returnToLoginForm() {
+        if (!navController.popBackStack(Routes.LOGIN_FORM, inclusive = false)) {
+            navController.navigate(Routes.LOGIN_FORM) {
+                popUpTo(0) { inclusive = true }
+                launchSingleTop = true
+            }
+        }
+    }
     var logoutRequested by remember { mutableStateOf(false) }
     // ── 37 탈퇴의 두 표시 ──
     //
@@ -606,6 +623,7 @@ private fun MainNavHost(
                 },
                 onLoggedIn = {
                     signOutNotice = null
+                    recoveredLoginId = null
                     resetTo(Routes.HOME)
                 },
                 onSignUp = {
@@ -613,7 +631,51 @@ private fun MainNavHost(
                     reverifyPhoneRequest = 0
                     navController.navigate(Routes.PROFILE_SETUP)
                 },
+                onFindId = { navController.navigate(Routes.FIND_ID) },
+                onResetPassword = {
+                    // 직접 들어가는 재설정은 빈 아이디 칸에서 시작한다 — 지난번에 찾은 아이디를 끌고 가지 않는다
+                    recoveredLoginId = null
+                    navController.navigate(Routes.PASSWORD_RESET)
+                },
+                prefillLoginId = recoveredLoginId,
                 noticeMessage = signOutNotice,
+            )
+        }
+
+        // B · 계정 찾기 04b · 04c (2026-11 신규)
+        composable(Routes.FIND_ID) {
+            FindIdRoute(
+                repository = authRepository,
+                onBack = ::back,
+                // 가입되지 않은 번호 — 가입으로 보낸다. 04a 의 「가입하기」와 같은 시작이다.
+                onSignUp = {
+                    signupDraft = SignupDraft()
+                    reverifyPhoneRequest = 0
+                    navController.navigate(Routes.PROFILE_SETUP)
+                },
+                onLogin = { loginId ->
+                    recoveredLoginId = loginId
+                    returnToLoginForm()
+                },
+                onResetPassword = { loginId ->
+                    recoveredLoginId = loginId
+                    navController.navigate(Routes.PASSWORD_RESET)
+                },
+            )
+        }
+        composable(Routes.PASSWORD_RESET) {
+            PasswordResetRoute(
+                repository = authRepository,
+                initialLoginId = recoveredLoginId.orEmpty(),
+                onBack = ::back,
+                onFindId = { navController.navigate(Routes.FIND_ID) },
+                onCompleted = { loginId ->
+                    recoveredLoginId = loginId
+                    // 성공해도 서버는 토큰을 주지 않는다 — 새 비밀번호로 직접 로그인해야 한다는 걸 04a 에서 말한다.
+                    // 세션 만료 안내와 같은 자리(noticeMessage)라 로그인에 성공하면 함께 지워진다.
+                    signOutNotice = "비밀번호를 바꿨어요. 새 비밀번호로 로그인해 주세요"
+                    returnToLoginForm()
+                },
             )
         }
 

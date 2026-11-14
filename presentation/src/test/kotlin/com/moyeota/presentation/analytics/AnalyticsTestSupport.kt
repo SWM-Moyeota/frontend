@@ -134,4 +134,10 @@ class FakeAuthRepository : AuthRepository {
     override suspend fun resetProfileImage() = TODO()
     override suspend fun logout() = TODO()
     override suspend fun getMyProfile(): UserProfileInfo = TODO()
+
+    override suspend fun sendFindLoginIdCode(phoneNumber: String): Unit = TODO()
+    override suspend fun findLoginId(phoneNumber: String, code: String): String = TODO()
+    override suspend fun requestPasswordReset(loginId: String, phoneNumber: String): com.moyeota.domain.model.PasswordResetTicket = TODO()
+    override suspend fun verifyPasswordResetCode(requestId: String, code: String): String = TODO()
+    override suspend fun confirmPasswordReset(resetToken: String, newPassword: String, newPasswordConfirm: String): Unit = TODO()
 }

@@ -72,6 +72,14 @@ internal fun NewUser.toDto(): RegisterRequestDto = RegisterRequestDto(
  * | `USER206` | 429 | 입력 시도(5회) 초과 |
  * | `USER207` | 400 | 가입 토큰 무효(만료·소진·번호 불일치) |
  * | `USER208` | 503 | 인증 저장소 장애 |
+ * | `USER114` | 404 | 가입되지 않은 번호(아이디 찾기) |
+ * | `USER301` | 400 | 재설정 인증번호 틀림·만료·없는 접수 |
+ * | `USER302` | 400 | 재설정 토큰 무효·만료 |
+ * | `USER303` | 400 | 새 비밀번호와 확인 값 불일치 |
+ * | `USER304` | 400 | 비밀번호 규칙 위반 |
+ * | `USER305` | 400 | 지금 비밀번호와 같음 |
+ * | `USER306` | 429 | 재설정 요청 제한(`Retry-After`) |
+ * | `USER307` | 503 | 재설정 인증 저장소 장애 |
  * | `INVALID_REQUEST` | 400 | 검증 실패 (이름 그대로 남았다) |
  *
  * **문자 인증 계열은 상태 코드 폴백으로는 전혀 갈리지 않는다** — 429 가 셋(`USER202`·`USER203`·`USER206`),
@@ -110,6 +118,18 @@ internal fun Throwable.toAuthException(): AuthException = when (this) {
             // 코드를 놓치면 서버 원문(「제공하지 않는 프로필 이미지입니다」)이 그대로 떠서
             // 사용자가 할 일을 알 수 없다. 사용자 입력 문제가 아니라 앱이 잘못된 키를 보낸 것이다.
             "USER112" -> AuthError.INVALID_PROFILE_IMAGE
+            // 아이디 찾기(Backend #314). 404 라 코드를 놓치면 폴백이 UNKNOWN — 「잠시 후 다시」가 떠서
+            // 가입한 적 없는 번호를 계속 다시 넣어 보게 된다.
+            "USER114" -> AuthError.PHONE_NOT_REGISTERED
+            // 비밀번호 재설정(Backend #331). 400 이 다섯(301~305)이라 상태 코드 폴백으로는 전혀 갈리지 않는다.
+            "USER301" -> AuthError.PASSWORD_RESET_CODE_REJECTED
+            "USER302" -> AuthError.PASSWORD_RESET_TOKEN_INVALID
+            "USER303" -> AuthError.PASSWORD_CONFIRM_MISMATCH
+            "USER304" -> AuthError.PASSWORD_POLICY_VIOLATION
+            "USER305" -> AuthError.SAME_PASSWORD
+            "USER306" -> AuthError.PASSWORD_RESET_RATE_LIMITED
+            // 인증 저장소 장애(503). 사용자가 할 일이 문자 인증 장애와 같아 한 값으로 모은다.
+            "USER307" -> AuthError.SMS_UNAVAILABLE
             // 문자 인증. 둘(201/208)만 합치고 나머지는 그대로 남긴다 — 위 표 아래 주석에 근거.
             "USER201", "USER208" -> AuthError.SMS_UNAVAILABLE
             "USER202" -> AuthError.SMS_COOLDOWN
@@ -131,7 +151,9 @@ internal fun Throwable.toAuthException(): AuthException = when (this) {
                 else -> AuthError.UNKNOWN
             }
         }
-        AuthException(error, body?.message, this)
+        // 초 단위 정수만 읽는다(서버가 그렇게 준다). 날짜 형식이나 0 이하는 「모른다」로 둔다.
+        val retryAfter = response()?.headers()?.get("Retry-After")?.trim()?.toIntOrNull()?.takeIf { it > 0 }
+        AuthException(error, body?.message, this, retryAfter)
     }
 
     // 응답 자체를 못 받은 경우(연결 거부·타임아웃·DNS). 사용자에게는 재시도를 안내한다.

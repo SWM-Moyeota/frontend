@@ -2,6 +2,7 @@ package com.moyeota.domain.repository
 
 import com.moyeota.domain.model.AuthState
 import com.moyeota.domain.model.NewUser
+import com.moyeota.domain.model.PasswordResetTicket
 import com.moyeota.domain.model.UserProfileInfo
 import kotlinx.coroutines.flow.StateFlow
 
@@ -286,4 +287,42 @@ interface AuthRepository {
      *   [com.moyeota.domain.model.AuthError.UNKNOWN]
      */
     suspend fun getMyProfile(): UserProfileInfo
+
+    /**
+     * 아이디 찾기 — 가입된 번호로 인증번호를 보낸다 (`POST /api/v1/auth/find-id/send`).
+     *
+     * 가입 인증 발송과 번호 검사가 반대다: **가입되지 않은 번호**를 [AuthError.PHONE_NOT_REGISTERED] 로 끊는다
+     * (문자 비용을 쓰기 전이다). 쿨다운·하루 횟수는 가입 인증과 같은 칸에 세므로
+     * [AuthError.SMS_COOLDOWN]·[AuthError.SMS_DAILY_LIMIT_EXCEEDED] 가 그대로 온다.
+     */
+    suspend fun sendFindLoginIdCode(phoneNumber: String)
+
+    /**
+     * 아이디 찾기 — 인증번호를 확인하고 **아이디 전체**를 돌려받는다 (`POST /api/v1/auth/find-id/verify`).
+     *
+     * 실패는 가입 인증 확인과 같다(`SMS_CODE_EXPIRED`·`SMS_CODE_MISMATCH`·`SMS_TOO_MANY_ATTEMPTS`).
+     */
+    suspend fun findLoginId(phoneNumber: String, code: String): String
+
+    /**
+     * 비밀번호 재설정 — 인증번호를 요청한다 (`POST /api/v1/auth/password-reset/send`).
+     *
+     * **성공이 「문자가 갔다」를 뜻하지 않는다** — [PasswordResetTicket] 주석 참조.
+     * 제한에 걸리면 [AuthError.PASSWORD_RESET_RATE_LIMITED] 다.
+     */
+    suspend fun requestPasswordReset(loginId: String, phoneNumber: String): PasswordResetTicket
+
+    /**
+     * 비밀번호 재설정 — 접수번호와 인증번호로 **일회용 재설정 토큰**을 받는다
+     * (`POST /api/v1/auth/password-reset/verify`). 토큰은 10분 유효하고 저장하지 않는다.
+     */
+    suspend fun verifyPasswordResetCode(requestId: String, code: String): String
+
+    /**
+     * 비밀번호 재설정 — 새 비밀번호를 저장한다 (`POST /api/v1/auth/password-reset/confirm`).
+     *
+     * **세션을 건드리지 않는다.** 로그인 전 흐름이라 열려 있는 세션이 없고, 성공해도 토큰을 주지 않는다 —
+     * 사용자가 새 비밀번호로 직접 로그인한다. 서버는 그 계정의 리프레시 토큰을 전부 취소한다.
+     */
+    suspend fun confirmPasswordReset(resetToken: String, newPassword: String, newPasswordConfirm: String)
 }
