@@ -21,9 +21,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.isTraversalGroup
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
@@ -284,7 +286,10 @@ internal fun LeavingOverlay() {
             .background(MoyeotaColor.Scrim)
             // 뒤쪽 목록·탭을 누를 수 없게 받기만 한다
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { }
-            .semantics { contentDescription = "나가는 중이에요" },
+            .semantics {
+                contentDescription = "나가는 중이에요"
+                liveRegion = LiveRegionMode.Polite
+            },
         contentAlignment = Alignment.Center,
     ) {
         CircularProgressIndicator(color = MoyeotaColor.Primary500)
