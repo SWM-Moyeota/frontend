@@ -96,6 +96,9 @@ jobs:
         env:
           NAVER_MAPS_CLIENT_ID: ${{ secrets.NAVER_MAPS_CLIENT_ID }}
           MIXPANEL_TOKEN: ${{ secrets.MIXPANEL_TOKEN }}
+          # Mixpanel 과 같은 이벤트를 받는다. 비면 그 도구만 꺼지고 빌드는 된다(docs/ANALYTICS.md).
+          AMPLITUDE_API_KEY: ${{ secrets.AMPLITUDE_API_KEY }}
+          POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           # 메타 광고 설치 측정. 비면 SDK 가 켜지지 않아 설치가 메타로 안 간다(docs/ANALYTICS.md).
           FACEBOOK_CLIENT_TOKEN: ${{ secrets.FACEBOOK_CLIENT_TOKEN }}
           MOYEOTA_KEYSTORE_PATH: ${{ runner.temp }}/${{ env.KEYSTORE_NAME }}
@@ -134,6 +137,13 @@ jobs:
             echo "::error::MIXPANEL_TOKEN 이 비어 있다 — 스토어 빌드의 이벤트가 꺼진다."
             exit 1
           fi
+          # Amplitude·PostHog 는 막지 않고 경고만 한다 — 시크릿을 아직 안 넣었다고 스토어 빌드가 서면 안 된다.
+          # (Mixpanel 이 받고 있으므로 이벤트가 사라지는 건 아니다.)
+          for key in AMPLITUDE_API_KEY POSTHOG_API_KEY; do
+            if ! grep -Eq "${key} = \"[^\"]+\"" "${buildconfig}"; then
+              echo "::warning::${key} 가 비어 있다 — 이 빌드는 그 도구로 이벤트를 보내지 않는다."
+            fi
+          done
           resvalues=app/build/generated/res/resValues/release/values/gradleResValues.xml
           if ! grep -Eq 'name="facebook_client_token"[^>]*>[^<]+<' "${resvalues}"; then
             echo "::error::FACEBOOK_CLIENT_TOKEN 이 비어 있다 — 메타 광고 설치 측정이 꺼진다."
