@@ -71,6 +71,94 @@ data class NewUser(
 )
 
 /**
+ * 구글 로그인 뒤의 **소셜 회원가입** 요청. 백엔드 `SocialRegisterRequest` 와 필드 1:1
+ * (`POST /api/v1/auth/social/register`).
+ *
+ * [NewUser] 에서 `loginId`·`password`·`email` 이 빠지고 [signupToken] 이 들어간 모양이다.
+ * 닮았다고 [NewUser] 를 재사용하지 않는 이유: 없는 값을 빈 문자열로 채워 넘기는 순간 「아이디가
+ * 비어 있는 가입 요청」이 타입으로 표현 가능해지고, 그 값이 언젠가 로컬 가입 경로로 샌다.
+ *
+ * **이메일 칸이 없는 건 빠뜨린 게 아니다.** 서버가 요청에서 이메일을 받지 않고, 구글이 확인해 준
+ * 값을 가입 대기표에서 꺼내 쓴다(`SocialAuthService.register`). 화면이 보여 주는 이메일
+ * ([GoogleLoginResult.SignupRequired.email])은 **표시 전용**이고 되돌려 보낼 자리가 없다.
+ *
+ * [birthDate] 는 [NewUser] 와 같이 날짜로만 다룬다 — Instant 변환은 data 매퍼가 UTC 자정으로 한다.
+ */
+data class NewSocialUser(
+    /**
+     * 구글 로그인을 통과했다는 증표(가입 대기표).
+     * [AuthRepository.loginWithGoogle][com.moyeota.domain.repository.AuthRepository.loginWithGoogle] 이
+     * [GoogleLoginResult.SignupRequired.signupToken] 으로 돌려준 값을 그대로 넣는다.
+     *
+     * **수명 [AuthPolicy.SOCIAL_SIGNUP_TOKEN_TTL_SECONDS]초, 가입 성공 시 1회 소진.** 지나거나 없는 값이면
+     * 401 `USER402`([AuthError.SOCIAL_SIGNUP_EXPIRED]) 이고 그때는 구글 로그인부터 다시 해야 한다.
+     * [verificationToken] 과 마찬가지로 **가입 실패가 이 값을 태우지 않는다** — 서버는 저장이 다 끝난 뒤에야
+     * 대기표를 지운다. 닉네임 중복(409)으로 되돌아온 사용자는 닉네임만 고쳐 같은 값으로 재시도할 수 있다.
+     */
+    val signupToken: String,
+    /**
+     * 문자 인증을 통과했다는 증표. 로컬 가입의 [NewUser.verificationToken] 과 **같은 값·같은 규칙**이다 —
+     * 소셜 회원도 같은 문자 인증 API(`/auth/sms/send`·`/auth/sms/verify`)를 쓴다.
+     * 서버가 토큰에 묶인 번호와 [phoneNumber] 가 같은지까지 본다(다르면 400 `USER207`).
+     */
+    val verificationToken: String,
+    val phoneNumber: String,
+    /** 동승자에게 보이는 이름. 규칙은 로컬 가입과 같다([AuthPolicy.isValidNickname]). */
+    val nickname: String,
+    /**
+     * 실명. 구글 계정 이름([GoogleLoginResult.SignupRequired.name])을 **미리 채워 주되 사용자가 고칠 수 있는**
+     * 값이다 — 서버는 여기 실린 값을 저장하고 구글 쪽 이름은 다시 보지 않는다. 구글 계정에 이름이 없으면
+     * 미리 채울 값이 없으므로 화면이 직접 받아야 한다(서버 `@NotBlank`).
+     */
+    val name: String,
+    val birthDate: LocalDate,
+    val gender: Gender,
+)
+
+/**
+ * 구글 로그인의 결과 (`POST /api/v1/auth/login/google` 의 200).
+ *
+ * **성공이 둘로 갈린다** — 서버는 구글 로그인을 통과해도 회원을 바로 만들지 않는다. 처음 온 사람에게는
+ * 토큰 대신 가입 대기표를 주고, 문자 인증까지 마친 뒤에야 회원 생성과 토큰 발급을 한 번에 한다
+ * (「토큰을 가진 사람 = 휴대폰 인증을 마친 사람」이라는 규칙을 로컬 가입과 똑같이 지키려는 서버 설계다).
+ *
+ * 그래서 이 값이 [SignupRequired] 면 **아직 로그인된 게 아니다.** 예외가 아니라 반환값으로 둔 이유도
+ * 그것이다 — 실패가 아니라 「다음 화면이 다르다」는 정상 분기이고, `when` 을 포괄로 쓰면 가입 분기를
+ * 빠뜨린 채 홈으로 보내는 실수를 컴파일러가 잡는다.
+ */
+sealed interface GoogleLoginResult {
+
+    /**
+     * 이미 가입한 회원 — **세션이 열렸다.** 이 값을 받은 시점에 토큰은 이미 저장됐고
+     * [AuthRepository.authState][com.moyeota.domain.repository.AuthRepository.authState] 는
+     * [AuthState.Authenticated] 다. 로컬 로그인 성공과 똑같은 상태이므로 화면이 더 할 일은 없다.
+     *
+     * @property userUuid 로그인한 사용자의 UUID. 로컬 로그인과 같이 액세스 토큰의 `sub` 에서 읽은 값이다.
+     */
+    data class LoggedIn(val userUuid: String) : GoogleLoginResult
+
+    /**
+     * 처음 온 사람 — **세션은 그대로다**(토큰이 없다). 문자 인증을 거쳐
+     * [AuthRepository.registerSocial][com.moyeota.domain.repository.AuthRepository.registerSocial] 로
+     * 가입을 끝내야 로그인된다.
+     *
+     * @property signupToken 가입 대기표. [NewSocialUser.signupToken] 에 그대로 넣는다.
+     *   수명 [AuthPolicy.SOCIAL_SIGNUP_TOKEN_TTL_SECONDS]초 — **저장하지 않고 메모리에만 든다**
+     *   (앱이 죽으면 구글 로그인부터 다시 하면 되고, 디스크에 남길 만큼 오래 사는 값이 아니다).
+     * @property email 구글 계정 이메일. **가입 화면 표시용**이다 — 서버로 되돌려 보내지 않는다
+     *   ([NewSocialUser] 에 이메일 칸이 없다). 서버는 이메일 없는 토큰을 401 로 거절하므로 정상 응답이면
+     *   항상 있지만, 표시 전용 값이 빠졌다고 가입을 막을 이유가 없어 nullable 로 둔다(null 이면 그 줄을 숨긴다).
+     * @property name 구글 계정 이름. 실명 입력란을 **미리 채우는 용도**다.
+     *   **구글 계정에 이름이 없으면 null** 이다(서버가 키 자체를 뺀다) — 그때는 빈 입력란으로 시작한다.
+     */
+    data class SignupRequired(
+        val signupToken: String,
+        val email: String?,
+        val name: String?,
+    ) : GoogleLoginResult
+}
+
+/**
  * 서버 `UserRegisterRequest` 의 Bean Validation 규칙을 그대로 옮긴 것.
  * 화면이 제출 전에 같은 기준으로 검사해 왕복 400 을 줄인다 — 최종 판정은 어디까지나 서버다.
  */
@@ -111,6 +199,14 @@ object AuthPolicy {
      * 이 안에 가입을 끝내야 한다 — 지나면 가입이 400 `USER207` 로 떨어진다([NewUser.verificationToken]).
      */
     const val VERIFICATION_TOKEN_TTL_SECONDS = 600
+
+    /**
+     * 구글 로그인이 준 가입 대기표(`signupToken`)의 수명(초). 서버 `SocialAuthService.SIGNUP_TTL` = 10분.
+     * [VERIFICATION_TOKEN_TTL_SECONDS] 와 **값은 같지만 시계가 따로 돈다** — 대기표는 구글 로그인 시점부터,
+     * 인증 토큰은 문자 인증 성공 시점부터 센다. 그래서 문자 인증에서 오래 머문 사용자는 인증 토큰이
+     * 멀쩡해도 대기표가 먼저 죽을 수 있다(401 `USER402`, [AuthError.SOCIAL_SIGNUP_EXPIRED]).
+     */
+    const val SOCIAL_SIGNUP_TOKEN_TTL_SECONDS = 600
 
     /** 한 번호가 24시간 동안 받을 수 있는 인증번호 횟수. 서버 `DAILY_LIMIT` = 5, 초과 시 429 `USER203`. */
     const val SMS_DAILY_LIMIT = 5

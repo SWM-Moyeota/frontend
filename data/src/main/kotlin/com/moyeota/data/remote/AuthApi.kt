@@ -1,6 +1,7 @@
 package com.moyeota.data.remote
 
 import com.moyeota.data.remote.dto.FindLoginIdResponse
+import com.moyeota.data.remote.dto.GoogleLoginRequestDto
 import com.moyeota.data.remote.dto.LoginRequestDto
 import com.moyeota.data.remote.dto.NicknameCheckRequestDto
 import com.moyeota.data.remote.dto.NicknameCheckResponse
@@ -17,6 +18,8 @@ import com.moyeota.data.remote.dto.RegisterResponse
 import com.moyeota.data.remote.dto.SmsSendRequestDto
 import com.moyeota.data.remote.dto.SmsVerifyRequestDto
 import com.moyeota.data.remote.dto.SmsVerifyResponse
+import com.moyeota.data.remote.dto.SocialLoginResponse
+import com.moyeota.data.remote.dto.SocialRegisterRequestDto
 import com.moyeota.data.remote.dto.TokenResponse
 import retrofit2.Call
 import retrofit2.http.Body
@@ -81,6 +84,42 @@ interface AuthApi {
      */
     @POST("api/v1/auth/login")
     suspend fun login(@Body request: LoginRequestDto): TokenResponse
+
+    /**
+     * 구글 로그인. 200 인데 **본문의 `status` 로 둘로 갈린다** — `LOGIN`(토큰 쌍) / `SIGNUP_REQUIRED`(가입 대기표).
+     * 안 쓰는 칸은 키 자체가 빠진다([SocialLoginResponse] KDoc).
+     *
+     * 경로 기준: `user/social/presentation/SocialAuthController.java`
+     * (`@RequestMapping("/api/v1/auth")` + `@PostMapping("/login/google")`, 백엔드 `origin/develop`).
+     * 컨트롤러는 [login] 과 다른 파일이지만 **프리픽스가 같아 permitAll 구간에 들어온다** — 로그인 전(무토큰)
+     * 호출이라 이 API(Bearer 미부착)에 있어야 한다. 세션에 만료된 토큰이 남은 채 인증 클라이언트로 보내면
+     * permitAll 경로인데도 JWT 필터가 401 을 낸다([checkPhone] KDoc 의 실측과 같은 함정).
+     *
+     * 실패: 400 `INVALID_REQUEST`(idToken 누락) · 401 `USER401`(위조·만료·다른 앱용·email 없음) ·
+     * 503 `USER404`(가입 대기표 저장소 장애).
+     * **401 이 [login] 의 `USER102` 와 코드가 다르다** — 둘을 한 값으로 읽으면 구글 로그인 실패에
+     * 「아이디 또는 비밀번호」 안내가 뜬다.
+     *
+     * 실서버 미검증 — 구글 SDK 연동 전이라 진짜 idToken 을 만들 수 없다. 모양은 백엔드 소스와
+     * `http/social-login.http` 기준이다.
+     */
+    @POST("api/v1/auth/login/google")
+    suspend fun loginWithGoogle(@Body request: GoogleLoginRequestDto): SocialLoginResponse
+
+    /**
+     * 소셜 회원가입. **201 이 토큰 쌍이다**([TokenResponse]) — uuid 만 주는 [register] 와 다르다.
+     * 비밀번호가 없어 가입 뒤 따로 로그인할 수단이 없으므로 서버가 가입과 함께 토큰을 준다.
+     *
+     * 경로 기준: `SocialAuthController.register` (`@PostMapping("/social/register")` + `@ResponseStatus(CREATED)`).
+     * **`/auth/register` 가 아니다** — 한 조각(`social/`)을 빠뜨리면 로컬 가입으로 들어가 `loginId` 누락
+     * 400 `INVALID_REQUEST` 를 받는데, 그 400 은 입력 검증 실패와 구분이 안 된다.
+     *
+     * 실패: 400 `USER113`·`USER207`·`USER105`·`USER107`·`INVALID_REQUEST` · 401 `USER402`(대기표 없음·만료) ·
+     * 409 `USER403`(이미 가입된 구글 계정)·`USER104`·`USER108` · 503 `USER404`.
+     * **실패해도 `signupToken`·`verificationToken` 은 소진되지 않는다**(서버가 저장을 다 끝낸 뒤에 지운다).
+     */
+    @POST("api/v1/auth/social/register")
+    suspend fun registerSocial(@Body request: SocialRegisterRequestDto): TokenResponse
 
     /**
      * 200 / 401 UNAUTHORIZED. 회전 방식이라 성공 응답의 refreshToken 까지 저장해야 한다.

@@ -88,6 +88,7 @@ import java.time.LocalDate
 @Composable
 fun MainNavGraph(
     authRepository: AuthRepository,
+    googleCredentialProvider: com.moyeota.domain.model.GoogleCredentialProvider,
     appConfigRepository: AppConfigRepository,
     rideRepository: RideRepository,
     placeRepository: PlaceRepository,
@@ -127,6 +128,7 @@ fun MainNavGraph(
     MainNavHost(
         loggedIn = authState is AuthState.Authenticated,
         authRepository = authRepository,
+        googleCredentialProvider = googleCredentialProvider,
         appConfigRepository = appConfigRepository,
         rideRepository = rideRepository,
         placeRepository = placeRepository,
@@ -150,6 +152,9 @@ private val TabRoutes = listOf(Routes.HOME, Routes.EXPLORE, Routes.CHAT, Routes.
 // 안내 문구 하나뿐이고(화면 이동은 어차피 일어난다), 실제로는 한두 프레임이면 결론이 난다.
 // 끝내 못 기다리면 「탈퇴됐다」도 「세션이 만료됐다」도 말하지 않는다(둘 중 하나는 거짓말이다).
 private const val ACCOUNT_DELETE_RESULT_WAIT_MS = 200L
+
+// 04c 를 마치고 04a 에 띄우는 안내. 로그아웃 상태의 재설정과 로그인 상태의 재설정이 같은 말을 한다.
+private const val PASSWORD_RESET_DONE_NOTICE = "비밀번호를 바꿨어요. 새 비밀번호로 로그인해 주세요"
 private const val ACCOUNT_DELETE_RESULT_POLL_MS = 16L
 
 // v15 와이어프레임 35화면 이동 규칙을 한곳에서 배선한다.
@@ -158,6 +163,7 @@ private const val ACCOUNT_DELETE_RESULT_POLL_MS = 16L
 private fun MainNavHost(
     loggedIn: Boolean,
     authRepository: AuthRepository,
+    googleCredentialProvider: com.moyeota.domain.model.GoogleCredentialProvider,
     appConfigRepository: AppConfigRepository,
     rideRepository: RideRepository,
     placeRepository: PlaceRepository,
@@ -258,6 +264,9 @@ private fun MainNavHost(
     // 같은 값을 `rememberSaveable` 로 들고 있어 새로 생기는 노출이 아니다(37 탈퇴의 비밀번호를
     // ViewModel 에 둔 이유와는 상황이 다르다 — 그쪽은 저장할 이유 자체가 없다).
     var signupDraft by rememberSaveable(stateSaver = SignupDraftSaver) { mutableStateOf(SignupDraft()) }
+    val socialSignup: com.moyeota.presentation.feature.auth.SocialSignupState = viewModel()
+    var socialFlow by rememberSaveable { mutableStateOf(false) }
+    var socialNotice by remember { mutableStateOf<String?>(null) }
     // 12 가 가입에서 PHONE_NOT_VERIFIED 를 받고 10 으로 되돌려 보낸 횟수.
     // 10 은 이 값이 바뀔 때마다 문자 인증 블록을 초기화한다 — 토큰이 서버에서 이미 죽었기 때문이다.
     // Boolean 이 아니라 카운터인 이유: 같은 일이 두 번 일어날 수 있고(새 토큰도 또 만료될 수 있다),
@@ -286,6 +295,20 @@ private fun MainNavHost(
         }
     }
     var logoutRequested by remember { mutableStateOf(false) }
+    // 로그인한 채로 04c 비밀번호 재설정을 마쳐 로그아웃시키는 중이다. 아래 전이가 「세션이 만료됐어요」나
+    // 무안내 대신 「새 비밀번호로 로그인」을 말하게 하는 근거다.
+    var passwordResetSignOut by remember { mutableStateOf(false) }
+
+    // 사용자가 일으킨 로그아웃의 한 길. logout() 은 실패하지 않는다(서버 호출이 실패해도 로컬 세션은 먼저
+    // 비운다) — 상태 전이는 아래 LaunchedEffect 가 받아 04a 로 보낸다.
+    // logoutRequested 를 먼저 세워 두면 그 전이를 세션 만료로 오해하지 않는다.
+    fun requestLogout() {
+        logoutRequested = true
+        scope.launch {
+            authRepository.logout()
+            runCatching { googleCredentialProvider.clearCredentialState() }
+        }
+    }
     // ── 37 탈퇴의 두 표시 ──
     //
     // 하나로 두면 안 된다. 예전에는 **요청을 보내기 직전에** 세우는 플래그 하나였는데, 그 값은
@@ -516,6 +539,7 @@ private fun MainNavHost(
     var startupStageHandled by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(loggedIn) {
         if (wasLoggedIn && !loggedIn) {
+            socialSignup.clear(); socialFlow = false
             // 37 탈퇴 요청이 떠 있으면 **결과를 기다린다.** 세션이 사라진 이유가 탈퇴 성공(204)인지
             // 탈퇴 중 세션 만료(401 → 재발급 실패)인지를 가릴 수 있는 사실은 그 응답뿐인데, 두 경로가
             // 모두 메인 디스패처라 도착 순서가 보장되지 않는다. 기다리지 않고 「요청을 보냈다」만 보고
@@ -536,12 +560,15 @@ private fun MainNavHost(
                 // 요청은 보냈는데 결과를 끝내 못 봤다 — **아무 말도 하지 않는다.** 둘 중 하나는
                 // 거짓말이고(탈퇴됐는지 모른다), 사용자가 할 일은 어느 쪽이든 로그인 시도뿐이다.
                 accountDeleteRequested -> null
+                // 로그인한 채 비밀번호를 바꿨다 — 로그아웃 상태의 재설정과 같은 안내를 준다
+                passwordResetSignOut -> PASSWORD_RESET_DONE_NOTICE
                 logoutRequested -> null
                 else -> "세션이 만료됐어요. 다시 로그인해 주세요"
             }
             accountDeleted = false
             accountDeleteRequested = false
             logoutRequested = false
+            passwordResetSignOut = false
             // 로컬 기억은 남긴다(계정에 매인 값이라 같은 계정 재로그인 시 되살아나야 한다) —
             // 화면이 들고 있던 값만 버린다. 탈퇴는 예외로 디스크 기억까지 지우는데, 그건 여기가 아니라
             // AuthRepository.deleteAccount 가 세션을 비우면서 함께 한다(계정이 사라져 되살아날 길이 없다).
@@ -630,10 +657,22 @@ private fun MainNavHost(
 
         // B · 로그인 04 · 04a
         composable(Routes.LOGIN) {
-            LoginScreen(
-                // 「이메일로 시작하기」 = 가입 시작 → 10 프로필 설정. 소셜(카카오) 로그인은 백엔드에 없어 제공하지 않는다
+            LaunchedEffect(Unit) { socialSignup.clear(); socialFlow = false }
+            com.moyeota.presentation.feature.auth.LoginStartRoute(
+                repository = authRepository,
+                provider = googleCredentialProvider,
+                notice = socialNotice,
+                onLoggedIn = { socialSignup.clear(); socialFlow = false; resetTo(Routes.HOME) },
+                onSignupRequired = { ticket ->
+                    socialSignup.begin(ticket)
+                    socialFlow = true
+                    socialNotice = null
+                    reverifyPhoneRequest = 0
+                    navController.navigate(Routes.PROFILE_SETUP)
+                },
+                // 아이디 가입 → 기존 프로필·문자 인증 화면.
                 onEmailStart = {
-                    signupDraft = SignupDraft() // 새 가입은 빈 초안에서 시작
+                    socialSignup.clear(); socialFlow = false; signupDraft = SignupDraft() // 새 가입은 빈 초안에서 시작
                     // 지난 가입에서 인증 되돌림이 있었어도 새 폼에 그 안내가 남으면 안 된다
                     reverifyPhoneRequest = 0
                     navController.navigate(Routes.PROFILE_SETUP)
@@ -644,6 +683,15 @@ private fun MainNavHost(
         composable(Routes.LOGIN_FORM) {
             LoginFormRoute(
                 repository = authRepository,
+                googleProvider = googleCredentialProvider,
+                // 시작 화면의 Google 가입과 같은 진입 - 처음 온 계정이면 프로필·문자 인증으로 보낸다
+                onGoogleSignupRequired = { ticket ->
+                    socialSignup.begin(ticket)
+                    socialFlow = true
+                    socialNotice = null
+                    reverifyPhoneRequest = 0
+                    navController.navigate(Routes.PROFILE_SETUP)
+                },
                 onBack = {
                     // 세션 만료·로그아웃으로 스택이 비워진 채 들어왔으면 돌아갈 곳이 없다 — 04 로 보낸다.
                     // 그냥 popBackStack 하면 화면 없는 빈 그래프가 남는다.
@@ -655,7 +703,7 @@ private fun MainNavHost(
                     resetTo(Routes.HOME)
                 },
                 onSignUp = {
-                    signupDraft = SignupDraft()
+                    socialSignup.clear(); socialFlow = false; signupDraft = SignupDraft()
                     reverifyPhoneRequest = 0
                     navController.navigate(Routes.PROFILE_SETUP)
                 },
@@ -677,7 +725,7 @@ private fun MainNavHost(
                 onBack = ::back,
                 // 가입되지 않은 번호 — 가입으로 보낸다. 04a 의 「가입하기」와 같은 시작이다.
                 onSignUp = {
-                    signupDraft = SignupDraft()
+                    socialSignup.clear(); socialFlow = false; signupDraft = SignupDraft()
                     reverifyPhoneRequest = 0
                     navController.navigate(Routes.PROFILE_SETUP)
                 },
@@ -701,8 +749,17 @@ private fun MainNavHost(
                     recoveredLoginId = loginId
                     // 성공해도 서버는 토큰을 주지 않는다 — 새 비밀번호로 직접 로그인해야 한다는 걸 04a 에서 말한다.
                     // 세션 만료 안내와 같은 자리(noticeMessage)라 로그인에 성공하면 함께 지워진다.
-                    signOutNotice = "비밀번호를 바꿨어요. 새 비밀번호로 로그인해 주세요"
-                    returnToLoginForm()
+                    if (loggedIn) {
+                        // 35 로그인 수단 관리에서 들어온 재설정. 서버가 이 회원의 리프레시 토큰을 전부
+                        // 취소했으므로 이 기기의 세션도 끝난 것이다 — 그대로 두면 저장 토큰과 Authenticated 가
+                        // 남은 채 로그인 폼에 서고, 다음 재발급에서 「세션이 만료됐어요」로 쫓겨난다.
+                        // 로그아웃 전이가 스택을 비우고 04a 로 보내며 안내도 거기서 세운다.
+                        passwordResetSignOut = true
+                        requestLogout()
+                    } else {
+                        signOutNotice = PASSWORD_RESET_DONE_NOTICE
+                        returnToLoginForm()
+                    }
                 },
             )
         }
@@ -715,14 +772,20 @@ private fun MainNavHost(
         // 서버로 가지도 않는 값을 묻는 화면이 된다(Routes.kt B' 절 참고).
         // 09 가 받던 실명·생년월일·성별·휴대폰은 10 의 「기본 정보」 절이 이어받았다.
         composable(Routes.PROFILE_SETUP) {
+            if (socialFlow && socialSignup.ticket == null) {
+                LaunchedEffect(Unit) { socialFlow = false; socialNotice = "가입 시간이 지났어요. 구글 로그인부터 다시 해 주세요"; resetTo(Routes.LOGIN) }
+                return@composable
+            }
             // Route 인 이유는 닉네임 중복 확인(POST /auth/nickname/check) 하나 때문이다 —
             // 입력값 자체는 여전히 화면이 들고 있다.
             ProfileSetupRoute(
+                social = socialFlow,
+                initialName = socialSignup.ticket?.name.orEmpty(),
                 repository = authRepository,
                 onBack = ::back,
                 onNext = { info ->
                     // 닉네임·문자 인증 토큰을 포함한 서버 가입 9개 값이 이 화면에서 한 번에 채워진다
-                    signupDraft = info
+                    if (socialFlow) socialSignup.draft = info else signupDraft = info
                     navController.navigate(Routes.MANNER_PLEDGE)
                 },
                 // 이미 가입된 번호(409)로 인증번호 발송이 끊겼을 때의 길 — 가입을 계속하게 두지 않고 로그인으로 보낸다.
@@ -732,12 +795,24 @@ private fun MainNavHost(
             )
         }
         composable(Routes.MANNER_PLEDGE) {
+            if (socialFlow && socialSignup.ticket == null) {
+                LaunchedEffect(Unit) { socialFlow = false; socialNotice = "구글 로그인부터 다시 해 주세요"; resetTo(Routes.LOGIN) }
+                return@composable
+            }
             // 여기서 회원가입 + 자동 로그인이 실행된다. 성공했을 때만 13 으로 넘어간다.
             MannerPledgeRoute(
                 repository = authRepository,
-                draft = signupDraft,
+                draft = if (socialFlow) socialSignup.draft else signupDraft,
+                signupToken = if (socialFlow) socialSignup.ticket?.signupToken else null,
+                // 문구는 실패 사유가 정한다 — 만료(USER402)면 「가입 시간이 지났어요」, 이미 가입(USER403)이면
+                // 「이미 가입된 구글 계정이에요」. 고정 문구를 쓰면 이미 가입된 사람에게 시간이 지났다고 말한다.
+                onRestartSocial = { message ->
+                    socialSignup.clear(); socialFlow = false
+                    socialNotice = message
+                    resetTo(Routes.LOGIN)
+                },
                 onBack = ::back,
-                onCompleted = { navController.navigate(Routes.SIGNUP_COMPLETE) },
+                onCompleted = { socialSignup.clear(); socialFlow = false; navController.navigate(Routes.SIGNUP_COMPLETE) },
                 // 409 닉네임 중복 — 10 으로 되돌린다. 스택에 남아 있는 그 엔트리로 pop 하므로
                 // 이미 채운 나머지 7개 필드는 그대로 있고 닉네임만 고치면 된다.
                 onEditNickname = { navController.popBackStack(Routes.PROFILE_SETUP, inclusive = false) },
@@ -1040,12 +1115,8 @@ private fun MainNavHost(
                 onEditProfile = { navController.navigate(Routes.PROFILE_EDIT) },
                 onRideHistory = { navController.navigate(Routes.RIDE_HISTORY) },
                 onNoShowRecords = { navController.navigate(Routes.NO_SHOW_RECORDS) },
-                // logout() 은 실패하지 않는다 — 상태 전이는 위 LaunchedEffect 가 받아 04a 로 보낸다.
-                // logoutRequested 를 먼저 세워 두면 그 전이를 세션 만료로 오해하지 않는다.
-                onLogout = {
-                    logoutRequested = true
-                    scope.launch { authRepository.logout() }
-                },
+                onLogout = ::requestLogout,
+                onLoginMethods = { navController.navigate(Routes.LOGIN_METHODS) },
                 onDeleteAccount = { navController.navigate(Routes.ACCOUNT_DELETE) },
                 onTabSelect = ::navigateTab,
             )
@@ -1092,6 +1163,12 @@ private fun MainNavHost(
             NoShowRecordsRoute(
                 repository = noShowRepository,
                 onBack = ::back,
+            )
+        }
+        composable(Routes.LOGIN_METHODS) {
+            com.moyeota.presentation.feature.mypage.LoginMethodsRoute(
+                repository = authRepository, provider = googleCredentialProvider,
+                onBack = ::back, onPasswordReset = { navController.navigate(Routes.PASSWORD_RESET) },
             )
         }
         composable(Routes.ACCOUNT_DELETE) {

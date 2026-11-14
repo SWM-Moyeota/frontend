@@ -2,9 +2,14 @@ package com.moyeota.data.remote
 
 import com.moyeota.data.remote.dto.ApiErrorDto
 import com.moyeota.data.remote.dto.RegisterRequestDto
+import com.moyeota.data.remote.dto.SocialLoginResponse
+import com.moyeota.data.remote.dto.SocialRegisterRequestDto
+import com.moyeota.data.remote.dto.TokenResponse
 import com.moyeota.domain.model.AuthError
 import com.moyeota.domain.model.AuthException
 import com.moyeota.domain.model.AuthPolicy
+import com.moyeota.domain.model.GoogleLoginResult
+import com.moyeota.domain.model.NewSocialUser
 import com.moyeota.domain.model.NewUser
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
@@ -39,6 +44,87 @@ internal fun NewUser.toDto(): RegisterRequestDto = RegisterRequestDto(
     email = email,
     verificationToken = verificationToken,
 )
+
+/**
+ * 다듬는 규칙은 로컬 가입([NewUser.toDto])과 **같다** — 닉네임은 trim, 번호는 숫자열, 생년월일은 UTC 자정.
+ * 같은 사람이 같은 값을 넣었는데 가입 경로에 따라 저장되는 모양이 달라지면 안 된다.
+ *
+ * `signupToken`·`verificationToken` 은 건드리지 않는다 — 서버가 준 값을 그대로 되돌려 보내는 열쇠다.
+ */
+internal fun NewSocialUser.toDto(): SocialRegisterRequestDto = SocialRegisterRequestDto(
+    signupToken = signupToken,
+    verificationToken = verificationToken,
+    // 발송·확인·가입 세 요청이 같은 형태를 쓴다 — 근거는 AuthPolicy.normalizePhoneNumber KDoc.
+    phoneNumber = AuthPolicy.normalizePhoneNumber(phoneNumber),
+    nickname = nickname.trim(),
+    name = name,
+    birthDate = birthDate.toBirthDateInstant(),
+    gender = gender.name,
+)
+
+/**
+ * 구글 로그인 응답을 `status` 로 가른 중간 결과. **data 계층 안에서만 쓴다.**
+ *
+ * 도메인의 [GoogleLoginResult] 로 곧장 못 가는 이유: [GoogleLoginResult.LoggedIn] 은 「세션이 열렸다」는
+ * 뜻이라 토큰을 저장한 **뒤에야** 만들 수 있고, 그건 매퍼가 아니라 Repository 의 일이다
+ * ([com.moyeota.data.repository.RemoteAuthRepository.loginWithGoogle]). 매퍼는 「어느 쪽인가」와
+ * 「그쪽에 있어야 할 값이 다 있는가」까지만 답한다.
+ */
+internal sealed interface SocialLoginOutcome {
+    /** `status=LOGIN`. 두 토큰이 모두 비어 있지 않다는 것까지 확인된 상태다. */
+    data class Tokens(val tokens: TokenResponse) : SocialLoginOutcome
+
+    /** `status=SIGNUP_REQUIRED`. `signupToken` 이 비어 있지 않다는 것까지 확인된 상태다. */
+    data class SignupRequired(val result: GoogleLoginResult.SignupRequired) : SocialLoginOutcome
+}
+
+/**
+ * [SocialLoginResponse] 를 `status` 로 가른다. **`status` 만이 분기의 근거다** — 「토큰이 있으면 로그인」
+ * 식으로 칸의 유무를 보고 짐작하지 않는다. 서버가 어느 쪽인지 말해 주는 칸이 있는데 그걸 두고 추측하면,
+ * 서버가 status 를 하나 늘렸을 때(예: 정지된 계정에 토큰 없이 안내만 주는 응답) 앱이 엉뚱한 쪽으로 간다.
+ *
+ * 끊는 경우는 전부 [AuthError.UNKNOWN] 이다 — 사용자가 고칠 수 있는 게 없고, 서버와 앱의 계약이 어긋났다는
+ * 뜻이다. `serverMessage` 에는 무엇이 빠졌는지 적어 로그에서 원인을 찾을 수 있게 한다(화면은
+ * [AuthError.UNKNOWN] 의 문구를 쓰므로 사용자에게 보이지 않는다).
+ *
+ * - **모르는 status·status 누락**: 가입 분기로도 로그인 분기로도 보내지 않는다. 어느 쪽으로 보내든 틀린다.
+ * - **LOGIN 인데 토큰이 빠짐**: 통과시키면 빈 토큰으로 세션이 열려 「로그인은 됐는데 모든 요청이 401」이 된다.
+ * - **SIGNUP_REQUIRED 인데 signupToken 이 빠짐**: 통과시키면 화면은 문자 인증까지 다 받게 한 뒤
+ *   가입 제출에서야 400 을 본다([com.moyeota.data.repository.RemoteAuthRepository.verifyPhoneCode] 가
+ *   빈 인증 토큰을 끊는 것과 같은 이유다).
+ *
+ * `email`·`name` 은 **빠져도 끊지 않는다.** `name` 은 구글 계정에 이름이 없으면 서버가 키를 빼는 정상
+ * 경우이고, `email` 은 표시 전용이라 없다고 가입을 막을 이유가 없다. 공백뿐인 값은 null 로 접는다 —
+ * 도메인의 「없음」은 null 하나다([com.moyeota.data.remote.toDomain] 이 이름·아이디에 거는 것과 같은 정규화).
+ */
+internal fun SocialLoginResponse.toOutcome(): SocialLoginOutcome = when (status) {
+    SOCIAL_STATUS_LOGIN -> {
+        val access = accessToken?.takeIf { it.isNotBlank() }
+        val refresh = refreshToken?.takeIf { it.isNotBlank() }
+        if (access == null || refresh == null) {
+            throw AuthException(AuthError.UNKNOWN, "구글 로그인 응답(LOGIN)에 토큰이 없습니다.")
+        }
+        SocialLoginOutcome.Tokens(TokenResponse(accessToken = access, refreshToken = refresh))
+    }
+
+    SOCIAL_STATUS_SIGNUP_REQUIRED -> {
+        val token = signupToken?.takeIf { it.isNotBlank() }
+            ?: throw AuthException(AuthError.UNKNOWN, "구글 로그인 응답(SIGNUP_REQUIRED)에 signupToken 이 없습니다.")
+        SocialLoginOutcome.SignupRequired(
+            GoogleLoginResult.SignupRequired(
+                signupToken = token,
+                email = email?.trim()?.takeIf { it.isNotEmpty() },
+                name = name?.trim()?.takeIf { it.isNotEmpty() },
+            ),
+        )
+    }
+
+    else -> throw AuthException(AuthError.UNKNOWN, "구글 로그인 응답의 status 를 해석할 수 없습니다: $status")
+}
+
+/** 서버 `SocialLoginStatus` enum 의 이름 그대로다. 대소문자까지 같아야 한다. */
+private const val SOCIAL_STATUS_LOGIN = "LOGIN"
+private const val SOCIAL_STATUS_SIGNUP_REQUIRED = "SIGNUP_REQUIRED"
 
 /**
  * Retrofit/OkHttp 예외를 [AuthException] 으로 좁힌다. presentation 이 HTTP 를 알 필요가 없게 하는 경계다.
@@ -80,6 +166,10 @@ internal fun NewUser.toDto(): RegisterRequestDto = RegisterRequestDto(
  * | `USER305` | 400 | 지금 비밀번호와 같음 |
  * | `USER306` | 429 | 재설정 요청 제한(`Retry-After`) |
  * | `USER307` | 503 | 재설정 인증 저장소 장애 |
+ * | `USER401` | 401 | 구글 idToken 무효(위조·만료·다른 앱용·email 없음) |
+ * | `USER402` | 401 | 소셜 가입 대기표 없음·만료 |
+ * | `USER403` | 409 | 이미 가입된 소셜 계정 |
+ * | `USER404` | 503 | 소셜 로그인·가입 일시 불가(대기표 저장소 장애) — **HTTP 404 가 아니다** |
  * | `INVALID_REQUEST` | 400 | 검증 실패 (이름 그대로 남았다) |
  *
  * **문자 인증 계열은 상태 코드 폴백으로는 전혀 갈리지 않는다** — 429 가 셋(`USER202`·`USER203`·`USER206`),
@@ -89,6 +179,8 @@ internal fun NewUser.toDto(): RegisterRequestDto = RegisterRequestDto(
  *
  * 특히 **로그인 실패와 세션 만료가 둘 다 401** 이라 상태 코드 폴백만으로는 구분되지 않는다
  * — `USER102` 를 놓치면 아이디/비밀번호 오류에 "다시 로그인해 주세요"가 뜬다.
+ * 소셜 쪽 둘(`USER401`·`USER402`)도 401 이다. 둘 다 **로그인하기 전에** 나는 코드라, 놓쳐서
+ * [AuthError.SESSION_EXPIRED] 로 떨어지면 세션이 있었던 적도 없는 사람에게 세션 만료를 말하게 된다.
  *
  * 같은 이유로 **409 는 다섯 가지 뜻을 갖는다** — 아이디(`USER101`)·전화번호(`USER104`)·닉네임(`USER108`)
  * 중복에, 탈퇴 계열 둘(`USER109` 재가입 제한 · `USER110` 진행 중 합승)이 2026-10 에 더해졌다.
@@ -131,6 +223,17 @@ internal fun Throwable.toAuthException(): AuthException = when (this) {
             "USER306" -> AuthError.PASSWORD_RESET_RATE_LIMITED
             // 인증 저장소 장애(503). 사용자가 할 일이 문자 인증 장애와 같아 한 값으로 모은다.
             "USER307" -> AuthError.SMS_UNAVAILABLE
+            // 소셜(구글) 로그인·가입(백엔드 user/social). 401 둘·409 하나·503 하나라 폴백이 전부 틀린 말을 한다 —
+            // 401 은 SESSION_EXPIRED(로그인 전인데 세션 만료), 409 는 LOGIN_ID_DUPLICATED(아이디가 없는 가입),
+            // 503 은 UNKNOWN. 404 번은 장애지만 SMS_UNAVAILABLE 에 합치지 않는다 — 문자를 요청한 적 없는
+            // 구글 로그인 버튼 자리에서도 나므로 「문자 인증이 안 된다」는 안내가 거짓이 된다.
+            "USER401" -> AuthError.SOCIAL_TOKEN_INVALID
+            "USER402" -> AuthError.SOCIAL_SIGNUP_EXPIRED
+            "USER403" -> AuthError.SOCIAL_ALREADY_REGISTERED
+            "USER404" -> AuthError.SOCIAL_UNAVAILABLE
+            "USER405" -> AuthError.SOCIAL_LINK_CONFLICT
+            "USER406" -> AuthError.SOCIAL_LINK_VERIFICATION_EXPIRED
+            "USER407" -> AuthError.SOCIAL_CHALLENGE_INVALID
             // 문자 인증. 둘(201/208)만 합치고 나머지는 그대로 남긴다 — 위 표 아래 주석에 근거.
             "USER201", "USER208" -> AuthError.SMS_UNAVAILABLE
             "USER202" -> AuthError.SMS_COOLDOWN

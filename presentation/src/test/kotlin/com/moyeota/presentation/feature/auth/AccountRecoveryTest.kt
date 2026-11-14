@@ -10,6 +10,9 @@ import com.moyeota.domain.model.ProfileImage
 import com.moyeota.domain.model.UserProfileInfo
 import com.moyeota.domain.repository.AuthRepository
 import kotlinx.coroutines.CompletableDeferred
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -39,6 +42,18 @@ import org.junit.Test
 class AccountRecoveryTest {
 
     private val mainDispatcher = StandardTestDispatcher()
+    private val models = mutableListOf<RecoveryCodeViewModel>()
+    private fun newRecoveryCodeViewModel(purpose: RecoveryPurpose, repository: AuthRepository) =
+        RecoveryCodeViewModel(purpose, repository).also { models += it }
+
+    // runTest의 종료도 남은 가상시간 작업을 소진한다. 실시간 기반 ticker는 반드시 정리한다.
+    private fun runRecoveryTest(block: suspend TestScope.() -> Unit) = runTest(mainDispatcher) {
+        try { block() } finally {
+            models.forEach { it.viewModelScope.cancel() }
+            models.clear()
+        }
+    }
+
     private val PHONE = "01012345678"
 
     @Before
@@ -57,9 +72,9 @@ class AccountRecoveryTest {
     // ── 04b 아이디 찾기 ──
 
     @Test
-    fun `아이디 찾기는 번호로 발송하고 6자리를 채우면 스스로 확인해 아이디를 얻는다`() = runTest(mainDispatcher) {
+    fun `아이디 찾기는 번호로 발송하고 6자리를 채우면 스스로 확인해 아이디를 얻는다`() = runRecoveryTest {
         val repository = FakeRecoveryRepository()
-        val viewModel = RecoveryCodeViewModel(RecoveryPurpose.FIND_LOGIN_ID, repository)
+        val viewModel = newRecoveryCodeViewModel(RecoveryPurpose.FIND_LOGIN_ID, repository)
 
         viewModel.requestCode(PHONE)
         assertTrue("태스크 시작을 기다리지 않고 켜져야 두 번 눌리지 않는다", viewModel.state.value.requesting)
@@ -77,9 +92,9 @@ class AccountRecoveryTest {
 
     /** 가입 흐름의 「이미 가입된 번호」와 정반대다 — 입력칸을 열지 않고 가입으로 보낼 수 있어야 한다. */
     @Test
-    fun `가입되지 않은 번호는 입력칸을 열지 않고 가입 길을 켠다`() = runTest(mainDispatcher) {
+    fun `가입되지 않은 번호는 입력칸을 열지 않고 가입 길을 켠다`() = runRecoveryTest {
         val repository = FakeRecoveryRepository(sendFailure = AuthException(AuthError.PHONE_NOT_REGISTERED))
-        val viewModel = RecoveryCodeViewModel(RecoveryPurpose.FIND_LOGIN_ID, repository)
+        val viewModel = newRecoveryCodeViewModel(RecoveryPurpose.FIND_LOGIN_ID, repository)
 
         viewModel.requestCode(PHONE)
         runCurrent()
@@ -96,9 +111,9 @@ class AccountRecoveryTest {
     }
 
     @Test
-    fun `하루 한도 문구는 다른 번호로 가입하라고 하지 않는다`() = runTest(mainDispatcher) {
+    fun `하루 한도 문구는 다른 번호로 가입하라고 하지 않는다`() = runRecoveryTest {
         val repository = FakeRecoveryRepository(sendFailure = AuthException(AuthError.SMS_DAILY_LIMIT_EXCEEDED))
-        val viewModel = RecoveryCodeViewModel(RecoveryPurpose.FIND_LOGIN_ID, repository)
+        val viewModel = newRecoveryCodeViewModel(RecoveryPurpose.FIND_LOGIN_ID, repository)
 
         viewModel.requestCode(PHONE)
         runCurrent()
@@ -110,9 +125,9 @@ class AccountRecoveryTest {
     }
 
     @Test
-    fun `틀린 인증번호는 입력칸만 비우고 다시 받는다`() = runTest(mainDispatcher) {
+    fun `틀린 인증번호는 입력칸만 비우고 다시 받는다`() = runRecoveryTest {
         val repository = FakeRecoveryRepository(verifyFailure = AuthException(AuthError.SMS_CODE_MISMATCH))
-        val viewModel = RecoveryCodeViewModel(RecoveryPurpose.FIND_LOGIN_ID, repository)
+        val viewModel = newRecoveryCodeViewModel(RecoveryPurpose.FIND_LOGIN_ID, repository)
 
         viewModel.requestCode(PHONE)
         runCurrent()
@@ -126,9 +141,9 @@ class AccountRecoveryTest {
     }
 
     @Test
-    fun `요청이 날아간 사이 번호를 고치면 늦게 온 응답을 버린다`() = runTest(mainDispatcher) {
+    fun `요청이 날아간 사이 번호를 고치면 늦게 온 응답을 버린다`() = runRecoveryTest {
         val repository = FakeRecoveryRepository(holdSend = true)
-        val viewModel = RecoveryCodeViewModel(RecoveryPurpose.FIND_LOGIN_ID, repository)
+        val viewModel = newRecoveryCodeViewModel(RecoveryPurpose.FIND_LOGIN_ID, repository)
 
         viewModel.requestCode(PHONE)
         runCurrent()
@@ -142,9 +157,9 @@ class AccountRecoveryTest {
     // ── 04c 비밀번호 재설정 ──
 
     @Test
-    fun `재설정은 아이디와 번호로 요청하고 접수번호로 확인해 토큰을 얻는다`() = runTest(mainDispatcher) {
+    fun `재설정은 아이디와 번호로 요청하고 접수번호로 확인해 토큰을 얻는다`() = runRecoveryTest {
         val repository = FakeRecoveryRepository()
-        val viewModel = RecoveryCodeViewModel(RecoveryPurpose.RESET_PASSWORD, repository)
+        val viewModel = newRecoveryCodeViewModel(RecoveryPurpose.RESET_PASSWORD, repository)
 
         viewModel.requestCode(PHONE, "moyeota")
         runCurrent()
@@ -159,9 +174,9 @@ class AccountRecoveryTest {
     }
 
     @Test
-    fun `유효 시간과 재요청 간격은 서버가 준 값을 쓴다`() = runTest(mainDispatcher) {
+    fun `유효 시간과 재요청 간격은 서버가 준 값을 쓴다`() = runRecoveryTest {
         val repository = FakeRecoveryRepository(ticket = PasswordResetTicket("req-1", 90, 30))
-        val viewModel = RecoveryCodeViewModel(RecoveryPurpose.RESET_PASSWORD, repository)
+        val viewModel = newRecoveryCodeViewModel(RecoveryPurpose.RESET_PASSWORD, repository)
 
         viewModel.requestCode(PHONE, "moyeota")
         runCurrent()
@@ -173,9 +188,9 @@ class AccountRecoveryTest {
 
     /** 접수는 「아이디 + 번호」 한 쌍에 묶여 있다 — 옛 아이디로 받은 인증번호로 확인하면 바뀌는 건 옛 아이디의 비밀번호다. */
     @Test
-    fun `인증번호를 받은 뒤 아이디를 고치면 인증을 버린다`() = runTest(mainDispatcher) {
+    fun `인증번호를 받은 뒤 아이디를 고치면 인증을 버린다`() = runRecoveryTest {
         val repository = FakeRecoveryRepository()
-        val viewModel = RecoveryCodeViewModel(RecoveryPurpose.RESET_PASSWORD, repository)
+        val viewModel = newRecoveryCodeViewModel(RecoveryPurpose.RESET_PASSWORD, repository)
 
         viewModel.requestCode(PHONE, "moyeota")
         runCurrent()
@@ -194,11 +209,11 @@ class AccountRecoveryTest {
 
     /** 04b 에서 아이디를 찾자마자 같은 번호로 04c 를 열면 문자 쿨다운에 걸린다 — 가장 흔한 429 다. */
     @Test
-    fun `재설정 요청 제한은 서버가 준 남은 시간만큼만 버튼을 잠근다`() = runTest(mainDispatcher) {
+    fun `재설정 요청 제한은 서버가 준 남은 시간만큼만 버튼을 잠근다`() = runRecoveryTest {
         val repository = FakeRecoveryRepository(
             sendFailure = AuthException(AuthError.PASSWORD_RESET_RATE_LIMITED, retryAfterSeconds = 23),
         )
-        val viewModel = RecoveryCodeViewModel(RecoveryPurpose.RESET_PASSWORD, repository)
+        val viewModel = newRecoveryCodeViewModel(RecoveryPurpose.RESET_PASSWORD, repository)
 
         viewModel.requestCode(PHONE, "moyeota")
         runCurrent()
@@ -211,11 +226,11 @@ class AccountRecoveryTest {
 
     /** 하루 횟수·계정당 제한은 몇 분~몇 시간이다 — 초를 세는 카운트다운을 걸면 「3600초 후 다시 받기」가 된다. */
     @Test
-    fun `오래 걸리는 재설정 제한은 카운트다운 없이 버튼을 잠근다`() = runTest(mainDispatcher) {
+    fun `오래 걸리는 재설정 제한은 카운트다운 없이 버튼을 잠근다`() = runRecoveryTest {
         val repository = FakeRecoveryRepository(
             sendFailure = AuthException(AuthError.PASSWORD_RESET_RATE_LIMITED, retryAfterSeconds = 1_500),
         )
-        val viewModel = RecoveryCodeViewModel(RecoveryPurpose.RESET_PASSWORD, repository)
+        val viewModel = newRecoveryCodeViewModel(RecoveryPurpose.RESET_PASSWORD, repository)
 
         viewModel.requestCode(PHONE, "moyeota")
         runCurrent()
@@ -249,9 +264,9 @@ class AccountRecoveryTest {
     }
 
     @Test
-    fun `남은 시간을 모르는 재설정 제한은 재요청 버튼을 쿨다운으로 잠근다`() = runTest(mainDispatcher) {
+    fun `남은 시간을 모르는 재설정 제한은 재요청 버튼을 쿨다운으로 잠근다`() = runRecoveryTest {
         val repository = FakeRecoveryRepository(sendFailure = AuthException(AuthError.PASSWORD_RESET_RATE_LIMITED))
-        val viewModel = RecoveryCodeViewModel(RecoveryPurpose.RESET_PASSWORD, repository)
+        val viewModel = newRecoveryCodeViewModel(RecoveryPurpose.RESET_PASSWORD, repository)
 
         viewModel.requestCode(PHONE, "moyeota")
         runCurrent()
@@ -265,9 +280,9 @@ class AccountRecoveryTest {
 
     /** 접수가 살아 있어 5번까지 다시 넣을 수 있다 — 입력칸을 닫으면 안 된다. */
     @Test
-    fun `재설정 인증번호 400 은 입력칸을 비우고 다시 받는다`() = runTest(mainDispatcher) {
+    fun `재설정 인증번호 400 은 입력칸을 비우고 다시 받는다`() = runRecoveryTest {
         val repository = FakeRecoveryRepository(verifyFailure = AuthException(AuthError.PASSWORD_RESET_CODE_REJECTED))
-        val viewModel = RecoveryCodeViewModel(RecoveryPurpose.RESET_PASSWORD, repository)
+        val viewModel = newRecoveryCodeViewModel(RecoveryPurpose.RESET_PASSWORD, repository)
 
         viewModel.requestCode(PHONE, "moyeota")
         runCurrent()
@@ -281,9 +296,9 @@ class AccountRecoveryTest {
     }
 
     @Test
-    fun `재설정 인증번호를 5번 넘기면 입력칸을 닫고 재요청으로 보낸다`() = runTest(mainDispatcher) {
+    fun `재설정 인증번호를 5번 넘기면 입력칸을 닫고 재요청으로 보낸다`() = runRecoveryTest {
         val repository = FakeRecoveryRepository(verifyFailure = AuthException(AuthError.PASSWORD_RESET_RATE_LIMITED))
-        val viewModel = RecoveryCodeViewModel(RecoveryPurpose.RESET_PASSWORD, repository)
+        val viewModel = newRecoveryCodeViewModel(RecoveryPurpose.RESET_PASSWORD, repository)
 
         viewModel.requestCode(PHONE, "moyeota")
         runCurrent()
@@ -295,8 +310,8 @@ class AccountRecoveryTest {
     }
 
     @Test
-    fun `되돌리기는 인증을 버리고 사유를 번호 칸에 남긴다`() = runTest(mainDispatcher) {
-        val viewModel = RecoveryCodeViewModel(RecoveryPurpose.RESET_PASSWORD, FakeRecoveryRepository())
+    fun `되돌리기는 인증을 버리고 사유를 번호 칸에 남긴다`() = runRecoveryTest {
+        val viewModel = newRecoveryCodeViewModel(RecoveryPurpose.RESET_PASSWORD, FakeRecoveryRepository())
         viewModel.requestCode(PHONE, "moyeota")
         runCurrent()
         viewModel.onCodeChanged("123456")
@@ -311,7 +326,7 @@ class AccountRecoveryTest {
     // ── 새 비밀번호 저장 ──
 
     @Test
-    fun `저장에 성공하면 completed 가 켜지고 값을 그대로 보낸다`() = runTest(mainDispatcher) {
+    fun `저장에 성공하면 completed 가 켜지고 값을 그대로 보낸다`() = runRecoveryTest {
         val repository = FakeRecoveryRepository()
         val viewModel = PasswordResetConfirmViewModel(repository)
 
@@ -325,7 +340,7 @@ class AccountRecoveryTest {
     }
 
     @Test
-    fun `실패는 고칠 곳에 따라 다른 자리에 뜬다`() = runTest(mainDispatcher) {
+    fun `실패는 고칠 곳에 따라 다른 자리에 뜬다`() = runRecoveryTest {
         fun stateAfter(error: AuthError): PasswordResetConfirmViewModel.UiState {
             val viewModel = PasswordResetConfirmViewModel(FakeRecoveryRepository(confirmFailure = AuthException(error)))
             viewModel.confirm("tok", "Passw0rd!", "Passw0rd!")
@@ -357,7 +372,7 @@ class AccountRecoveryTest {
     }
 
     @Test
-    fun `입력을 고치면 서버 오류 문구를 지운다`() = runTest(mainDispatcher) {
+    fun `입력을 고치면 서버 오류 문구를 지운다`() = runRecoveryTest {
         val viewModel = PasswordResetConfirmViewModel(
             FakeRecoveryRepository(confirmFailure = AuthException(AuthError.SAME_PASSWORD)),
         )
@@ -395,6 +410,11 @@ private class FakeRecoveryRepository(
     private val holdSend: Boolean = false,
     private val ticket: PasswordResetTicket = PasswordResetTicket("req-1", 180, 60),
 ) : AuthRepository {
+    override suspend fun getLoginMethods() = com.moyeota.domain.model.LoginMethods(true, emptyList())
+    override suspend fun sendLoginMethodCode() = Unit
+    override suspend fun verifyLoginMethodCode(code: String) = com.moyeota.domain.model.LinkVerification("link-test", 300)
+    override suspend fun linkGoogle(idToken: String, verificationToken: String) = Unit
+
 
     override val authState: StateFlow<AuthState> = MutableStateFlow(AuthState.Unauthenticated)
 
@@ -444,5 +464,8 @@ private class FakeRecoveryRepository(
     override suspend fun login(loginId: String, password: String): String = unused()
     override suspend fun logout(): Unit = unused()
     override suspend fun deleteAccount(password: String): Unit = unused()
+    override suspend fun loginWithGoogle(idToken: String): com.moyeota.domain.model.GoogleLoginResult = unused()
+    override suspend fun registerSocial(newUser: com.moyeota.domain.model.NewSocialUser): String = unused()
+    override suspend fun deleteSocialAccount(): Unit = unused()
     override suspend fun getMyProfile(): UserProfileInfo = unused()
 }

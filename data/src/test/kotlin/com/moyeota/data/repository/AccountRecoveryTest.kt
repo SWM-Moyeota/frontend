@@ -351,6 +351,11 @@ private class RecoveryFakeAuthApi(
     override suspend fun verifySmsCode(request: SmsVerifyRequestDto): SmsVerifyResponse = unused()
     override suspend fun register(request: RegisterRequestDto): RegisterResponse = unused()
     override suspend fun login(request: LoginRequestDto): TokenResponse = unused()
+    override suspend fun loginWithGoogle(
+        request: com.moyeota.data.remote.dto.GoogleLoginRequestDto,
+    ): com.moyeota.data.remote.dto.SocialLoginResponse = unused()
+    override suspend fun registerSocial(request: com.moyeota.data.remote.dto.SocialRegisterRequestDto): TokenResponse =
+        unused()
     override fun reissue(request: RefreshTokenRequestDto): Call<TokenResponse> = unused()
     override suspend fun logout(request: RefreshTokenRequestDto): Unit = unused()
     override suspend fun checkNickname(request: NicknameCheckRequestDto): NicknameCheckResponse = unused()

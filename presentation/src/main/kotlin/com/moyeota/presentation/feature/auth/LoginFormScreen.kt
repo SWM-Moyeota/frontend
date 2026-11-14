@@ -67,6 +67,9 @@ fun LoginFormScreen(
     errorMessage: String? = null,
     noticeMessage: String? = null,
     modifier: Modifier = Modifier,
+    // Google 로 가입한 회원은 아이디가 없다 - 로그아웃 뒤 이 화면에 와도 바로 로그인할 수 있게 한다. null 이면 버튼을 숨긴다
+    onGoogle: (() -> Unit)? = null,
+    googleBusy: Boolean = false,
 ) {
     // 04b 에서 찾았거나 04c 에서 비밀번호를 바꾼 아이디로 시작한다 — 돌아왔을 때 다시 칠 필요가 없게.
     var loginId by remember(prefillLoginId) { mutableStateOf(prefillLoginId.orEmpty()) }
@@ -187,6 +190,12 @@ fun LoginFormScreen(
                     color = MoyeotaColor.TextMute,
                     enabled = !submitting,
                 )
+            }
+
+            if (onGoogle != null) {
+                Spacer(Modifier.height(8.dp))
+                GoogleContinueButton(busy = googleBusy, onClick = onGoogle)
+                Spacer(Modifier.height(8.dp))
             }
 
             Row(

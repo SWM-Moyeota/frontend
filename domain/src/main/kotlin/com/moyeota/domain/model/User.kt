@@ -177,4 +177,21 @@ data class UserProfileInfo(
      * 기본값 null 은 PR #330 이전 서버(키 자체가 없다) 대비용이다.
      */
     val loginId: String? = null,
-)
+) {
+    /**
+     * **소셜(구글) 회원인가** — 아이디·비밀번호가 없는 계정인가.
+     *
+     * 서버가 따로 알려 주는 칸은 없고 [loginId] 가 null 인 것이 곧 그 뜻이다(서버 `MyProfileResponse` 는
+     * 로컬 로그인 행이 없으면 `loginId` 를 null 로 준다. `http/social-login.http` 5번이 같은 판별을 쓴다).
+     * 화면마다 `loginId == null` 을 직접 쓰지 않게 이름을 붙여 둔다 — 판별 근거가 바뀌면 여기만 고친다.
+     *
+     * 갈리는 화면은 지금 하나다: **회원 탈퇴.** 소셜 회원은 비밀번호가 없어 입력란을 띄우면 안 되고
+     * [AuthRepository.deleteSocialAccount][com.moyeota.domain.repository.AuthRepository.deleteSocialAccount] 를,
+     * 로컬 회원은 [AuthRepository.deleteAccount][com.moyeota.domain.repository.AuthRepository.deleteAccount] 를 부른다.
+     *
+     * **프로필을 받기 전에는 판별할 수 없다** — 이 값은 조회 결과에만 있다. 조회에 실패했을 때 「아이디가
+     * 없으니 소셜」로 넘겨짚지 말 것: 잘못 짚어도 계정이 엉뚱하게 지워지지는 않지만(로컬 회원의 본문 없는
+     * 탈퇴는 서버가 400 으로 막는다) 사용자는 이유 모를 실패를 본다.
+     */
+    val isSocialAccount: Boolean get() = loginId == null
+}
