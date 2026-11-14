@@ -118,7 +118,7 @@ private fun AnnotatedString.Builder.appendLegalDocument(
  *
  * 진입: 03 시작하기 · 온보딩 완료 후 재실행 · 로그아웃 직후
  *
- * @param onEmailStart 「이메일로 시작하기」 → 10 프로필 설정 (가입 1단계)
+ * @param onEmailStart 「일반 회원가입」 → 10 프로필 설정 (가입 1단계)
  * @param onLogin 「로그인」(이미 계정이 있어요) → 04a 아이디 로그인
  *
  * 구글 버튼은 앱 계층 Credential Manager로 연결한다. 신규 회원은 프로필·문자 인증으로 이어진다.
@@ -185,7 +185,7 @@ fun LoginScreen(
             Spacer(Modifier.height(24.dp))
         }
 
-        // 「이메일로 시작하기」 묶음은 스크롤 밖 = 화면 하단 고정.
+        // 「일반 회원가입」 묶음은 스크롤 밖 = 화면 하단 고정.
         // 본문이 짧아 고정 Spacer 로 CTA 위치를 잡으면 본문 아래에 빈 공간이 남는다.
         // 하단 고정이면 남는 높이를 스크롤 영역이 흡수한다.
         Column(
@@ -199,12 +199,12 @@ fun LoginScreen(
                 Spacer(Modifier.height(12.dp))
             }
             com.moyeota.core.designsystem.component.SecondaryButton(
-                text = if (googleBusy) "로그인 중…" else "Google로 계속하기",
+                text = if (googleBusy) "로그인 중…" else "구글로 회원가입하기",
                 onClick = onGoogle, enabled = !googleBusy,
             )
             Spacer(Modifier.height(12.dp))
             PrimaryCtaButton(
-                text = "아이디로 가입하기",
+                text = "일반 회원가입",
                 onClick = onEmailStart,
             )
 
