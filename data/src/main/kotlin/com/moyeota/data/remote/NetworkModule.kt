@@ -35,8 +35,8 @@ object NetworkModule {
      *
      * [debugLogging] 은 호출자가 주입한다. data 는 라이브러리 모듈이라 자체 BuildConfig.DEBUG 가
      * app 의 빌드 타입과 일치하지 않으므로 여기서 판단하지 않는다.
-     * 켜지면 요청/응답 본문 전체가 logcat 에 남는다 — 채팅 메시지와 **인증 토큰**이 포함되므로
-     * 릴리즈에서는 반드시 꺼져야 한다.
+     * 인증 토큰·문자 인증번호가 로그에 남지 않도록 BASIC 수준만 사용한다.
+     * 릴리즈에서는 꺼져 있다.
      */
     fun create(baseUrl: String, debugLogging: Boolean, tokenHolder: TokenHolder): Apis {
         val baseClient = OkHttpClient.Builder()
@@ -47,7 +47,7 @@ object NetworkModule {
             .apply {
                 if (debugLogging) {
                     addInterceptor(
-                        HttpLoggingInterceptor().apply { level = HttpLoggingInterceptor.Level.BODY },
+                        HttpLoggingInterceptor().apply { level = HttpLoggingInterceptor.Level.BASIC },
                     )
                 }
             }
@@ -88,7 +88,7 @@ object NetworkModule {
             .build()
 
         // 프로필 사진 전용. baseClient 를 파생하지 않고 **새로 만든다** — 두 가지 이유다.
-        // (1) baseClient 에는 디버그 빌드에서 HttpLoggingInterceptor(BODY) 가 붙어 있다. PNG 본문은
+        // (1) baseClient 에는 디버그 빌드에서 HttpLoggingInterceptor(BASIC) 가 붙어 있다. PNG 본문은
         //     "(binary ... body omitted)" 로 생략되지만 아바타 한 장마다 요청/응답 헤더가 logcat 에 쌓인다.
         // (2) 커넥션 풀을 공유할 이득이 없다. 이미지는 cdn.moyeota.co.kr 에서 오고 API 는 다른 호스트라
         //     어차피 커넥션이 재사용되지 않는다.

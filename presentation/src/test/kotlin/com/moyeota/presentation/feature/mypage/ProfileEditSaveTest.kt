@@ -310,6 +310,11 @@ private class FakeAuthRepository(
     private val images: List<ProfileImage> = PRESET_PROFILE_IMAGES,
     private val updateFailure: Throwable? = null,
 ) : AuthRepository {
+    override suspend fun getLoginMethods() = com.moyeota.domain.model.LoginMethods(true, emptyList())
+    override suspend fun sendLoginMethodCode() = Unit
+    override suspend fun verifyLoginMethodCode(code: String) = com.moyeota.domain.model.LinkVerification("link-test", 300)
+    override suspend fun linkGoogle(idToken: String, verificationToken: String) = Unit
+
 
     override val authState: StateFlow<AuthState> = MutableStateFlow(AuthState.Authenticated("user-uuid"))
 

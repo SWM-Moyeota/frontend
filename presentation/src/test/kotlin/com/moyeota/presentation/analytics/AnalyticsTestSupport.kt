@@ -114,6 +114,11 @@ open class FakeRideRepository : RideRepository {
 }
 
 class FakeAuthRepository : AuthRepository {
+    override suspend fun getLoginMethods() = com.moyeota.domain.model.LoginMethods(true, emptyList())
+    override suspend fun sendLoginMethodCode() = Unit
+    override suspend fun verifyLoginMethodCode(code: String) = com.moyeota.domain.model.LinkVerification("link-test", 300)
+    override suspend fun linkGoogle(idToken: String, verificationToken: String) = Unit
+
     var registerCalls = 0
     var loginCalls = 0
     var onRegister: (NewUser) -> String = { "uuid" }

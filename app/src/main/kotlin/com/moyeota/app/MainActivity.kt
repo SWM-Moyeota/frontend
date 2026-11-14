@@ -64,6 +64,7 @@ class MainActivity : ComponentActivity() {
             MoyeotaTheme {
                 MainNavGraph(
                     authRepository = container.authRepository,
+                    googleCredentialProvider = GoogleSignIn(this@MainActivity),
                     appConfigRepository = container.appConfigRepository,
                     rideRepository = container.rideRepository,
                     placeRepository = container.placeRepository,

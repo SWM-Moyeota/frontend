@@ -121,6 +121,7 @@ fun MyPageScreen(
     onEditProfile: () -> Unit = {},          // → 36 프로필 수정
     onRideHistory: () -> Unit = {},          // → 34 지난 탑승 기록
     onLogout: () -> Unit = {},               // → 04a 로그인 (세션 정리 후)
+    onLoginMethods: () -> Unit = {},
     onDeleteAccount: () -> Unit = {},        // → 37 회원 탈퇴
     onTabSelect: (MoyeotaTab) -> Unit = {},  // → 14 / 17 / 24
     modeDebug: ModeDebugOptions? = null,     // 디버그 빌드 전용 개발자 옵션. 릴리스는 null
@@ -141,6 +142,7 @@ fun MyPageScreen(
             is MyPageAction.OpenWeb -> context.openWebPage(action.url)
             is MyPageAction.SendMail -> context.openSupportEmail(action.address)
             MyPageAction.RideHistory -> onRideHistory()
+            MyPageAction.LoginMethods -> onLoginMethods()
             MyPageAction.Logout -> logoutConfirming = true
             MyPageAction.DeleteAccount -> onDeleteAccount()
         }

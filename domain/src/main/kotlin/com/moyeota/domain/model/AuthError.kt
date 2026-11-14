@@ -284,6 +284,9 @@ enum class AuthError {
      * 번호가 404 처럼 생겼지만 **HTTP 404 가 아니라 503 이다**(`USER404` 는 코드 문자열일 뿐이다).
      */
     SOCIAL_UNAVAILABLE,
+    SOCIAL_LINK_CONFLICT,
+    SOCIAL_LINK_VERIFICATION_EXPIRED,
+    SOCIAL_CHALLENGE_INVALID,
 
     /**
      * 400 INVALID_REQUEST — 서버 검증 실패. 서버 message 가 "필드: 사유" 형태라

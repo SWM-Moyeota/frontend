@@ -133,8 +133,7 @@ private fun AnnotatedString.Builder.appendLegalDocument(
  * @param onEmailStart 「이메일로 시작하기」 → 10 프로필 설정 (가입 1단계)
  * @param onLogin 「로그인」(이미 계정이 있어요) → 04a 아이디 로그인
  *
- * 소셜(카카오) 로그인은 없다 — 백엔드 AuthController 에 소셜 로그인 엔드포인트가 없고
- * 가입·로그인은 아이디/비밀번호뿐이다. 카카오 버튼과 「준비 중」 안내는 그래서 뺐다.
+ * 구글 버튼은 앱 계층 Credential Manager로 연결한다. 신규 회원은 프로필·문자 인증으로 이어진다.
  *
  * 신뢰 불릿은 [LoginTrustBullets] 에 있다 — 가입 전 마지막으로 "모여타가 무엇을 해 주는가"를
  * 말하는 자리라 **코드로 확인한 사실만** 적는다(2026-10-13).
@@ -144,6 +143,9 @@ fun LoginScreen(
     onEmailStart: () -> Unit,
     onLogin: () -> Unit,
     modifier: Modifier = Modifier,
+    onGoogle: () -> Unit = {},
+    googleBusy: Boolean = false,
+    errorMessage: String? = null,
 ) {
     val context = LocalContext.current
     // 문장은 고정이므로 재구성마다 다시 만들지 않는다 (링크 두 개짜리 AnnotatedString)
@@ -186,7 +188,7 @@ fun LoginScreen(
             Text(
                 // 학교 이메일 인증은 가입 필수 경로가 아니다(마이페이지에서 나중에 추가하는 컨셉).
                 // 「학생만 · 학교 이메일로 확인」은 이제 사실이 아니라 지웠다.
-                text = "아이디로 간편하게 가입해요",
+                text = "구글 또는 아이디로 간편하게 시작해요",
                 color = MoyeotaColor.TextMute,
                 fontSize = 14.sp,
                 lineHeight = 20.sp,
@@ -219,8 +221,18 @@ fun LoginScreen(
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp),
         ) {
+            if (errorMessage != null) {
+                com.moyeota.core.designsystem.component.NoticeBanner(
+                    kind = com.moyeota.core.designsystem.component.NoticeKind.ERROR, text = errorMessage)
+                Spacer(Modifier.height(12.dp))
+            }
+            com.moyeota.core.designsystem.component.SecondaryButton(
+                text = if (googleBusy) "로그인 중…" else "Google로 계속하기",
+                onClick = onGoogle, enabled = !googleBusy,
+            )
+            Spacer(Modifier.height(12.dp))
             PrimaryCtaButton(
-                text = "이메일로 시작하기",
+                text = "아이디로 가입하기",
                 onClick = onEmailStart,
             )
 

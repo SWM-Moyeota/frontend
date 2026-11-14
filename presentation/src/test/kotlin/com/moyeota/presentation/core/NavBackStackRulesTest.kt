@@ -191,7 +191,7 @@ class NavBackStackRulesTest {
         )
         assertTrue(
             "탈퇴 성공 직후에 onDeleted() 를 부르지 않는다",
-            Regex("""repository\.deleteAccount\([^)]*\)\s*(//[^\n]*\n\s*)*onDeleted\(\)""")
+            Regex("""repository\.deleteSocialAccount\(\)\s*(//[^\n]*\n\s*)*onDeleted\(\)""")
                 .containsMatchIn(source("feature/mypage/AccountDeleteRoute.kt")),
         )
     }

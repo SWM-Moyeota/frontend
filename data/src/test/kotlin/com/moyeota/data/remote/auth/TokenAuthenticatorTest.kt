@@ -1,6 +1,7 @@
 package com.moyeota.data.remote.auth
 
 import com.moyeota.data.session.TokenHolder
+import okhttp3.ResponseBody.Companion.toResponseBody
 import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.Response
@@ -13,6 +14,16 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 class TokenAuthenticatorTest {
+    @Test fun `연결 증표 만료 401은 세션을 갱신하거나 지우지 않는다`() {
+        val tokens = FakeTokenHolder("access", "refresh")
+        val refresher = FakeRefresher(RefreshResult.Rejected)
+        val response = unauthorized("access").newBuilder()
+            .body("""{"code":"USER406","message":"expired"}""".toResponseBody()).build()
+        assertNull(TokenAuthenticator(tokens, refresher).authenticate(null, response))
+        assertEquals(0, refresher.callCount.get())
+        assertEquals(0, tokens.sessionExpiredCount)
+    }
+
 
     @Test
     fun `401 이면 재발급한 액세스 토큰으로 원요청을 재시도한다`() {

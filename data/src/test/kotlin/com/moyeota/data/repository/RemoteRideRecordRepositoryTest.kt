@@ -183,6 +183,11 @@ private class FakeRideRecordUserApi(
     private val page: RideRecordPageResponse,
     private val failure: Throwable? = null,
 ) : UserApi {
+    override suspend fun getLoginMethods() = com.moyeota.data.remote.dto.LoginMethodsDto(true, emptyList())
+    override suspend fun sendLoginMethodCode() = Unit
+    override suspend fun verifyLoginMethodCode(request: com.moyeota.data.remote.dto.LinkCodeDto) = com.moyeota.data.remote.dto.LinkVerificationDto("link-test", 300)
+    override suspend fun linkGoogle(request: com.moyeota.data.remote.dto.GoogleLinkDto) = Unit
+
 
     /** 나간 호출의 `(cursor, size)`. 저장소가 값을 다듬지 않는지 보는 자리다. */
     val calls = mutableListOf<Pair<Long?, Int>>()

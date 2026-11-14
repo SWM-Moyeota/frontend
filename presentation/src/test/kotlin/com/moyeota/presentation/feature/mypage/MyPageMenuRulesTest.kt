@@ -73,7 +73,7 @@ class MyPageMenuRulesTest {
         // 주소와 무관한 세 그룹은 그대로 있어야 한다 — 로그아웃·탈퇴가 사라지면 갇힌다.
         assertEquals(listOf("지난 탑승 기록"), groups.rowTexts(MyPageGroupLabel.RIDES))
         assertEquals(listOf("알림 설정"), groups.rowTexts(MyPageGroupLabel.SETTINGS))
-        assertEquals(listOf("로그아웃", "탈퇴하기"), groups.rowTexts(MyPageGroupLabel.ACCOUNT))
+        assertEquals(listOf("로그인 수단 관리", "로그아웃", "탈퇴하기"), groups.rowTexts(MyPageGroupLabel.ACCOUNT))
     }
 
     /** 세 행은 서로 독립이다 — 하나가 비어도 나머지는 남는다. */
@@ -155,7 +155,7 @@ class MyPageMenuRulesTest {
                 is MyPageAction.OpenWeb,
                 is MyPageAction.SendMail,
                 -> true
-                MyPageAction.RideHistory, MyPageAction.Logout, MyPageAction.DeleteAccount -> false
+                MyPageAction.RideHistory, MyPageAction.LoginMethods, MyPageAction.Logout, MyPageAction.DeleteAccount -> false
             }
             val expected = if (leavesApp) MyPageRowMark.EXTERNAL else MyPageRowMark.CHEVRON
             assertEquals(row.text, expected, row.mark)
@@ -172,9 +172,10 @@ class MyPageMenuRulesTest {
     fun `계정 카드는 로그아웃 다음에 탈퇴하기다`() {
         val rows = myPageGroups(allLinks).group(MyPageGroupLabel.ACCOUNT)!!.rows
 
-        assertEquals(listOf("로그아웃", "탈퇴하기"), rows.map { it.text })
-        assertEquals(MyPageAction.Logout, rows[0].action)
-        assertEquals(MyPageAction.DeleteAccount, rows[1].action)
+        assertEquals(listOf("로그인 수단 관리", "로그아웃", "탈퇴하기"), rows.map { it.text })
+        assertEquals(MyPageAction.LoginMethods, rows[0].action)
+        assertEquals(MyPageAction.Logout, rows[1].action)
+        assertEquals(MyPageAction.DeleteAccount, rows[2].action)
     }
 
     /** 카드 안에서 빨강이 하나뿐이라야 경고로 읽힌다. 로그아웃은 되돌릴 수 있는 동작이다. */
@@ -210,7 +211,7 @@ class MyPageMenuRulesTest {
 
     /**
      * 서버 API 가 없는 메뉴는 행을 만들지 않는다(`docs/BACKEND-GAP-CLEANUP.md`).
-     * 레퍼런스 앱의 「로그인 수단 안내」도 같은 이유로 없다 — 이 화면이 아는 서버 값은 이름뿐이다.
+     * 로그인 수단은 2026-11-14 서버 API가 추가되어 별도 관리 화면으로 제공한다.
      *
      * ### 금지어에서 「탑승 기록」이 빠진 이유 (2026-11-01)
      * **전제가 깨졌다 — 서버가 이제 준다.** `GET /api/v1/users/me/parties` 가 생겨
@@ -218,8 +219,8 @@ class MyPageMenuRulesTest {
      * 그래서 「지난 탑승 기록」 행이 들어왔고(34 재도입, `docs/BACKEND-GAP-CLEANUP.md` §6)
      * 이 목록에 그 말이 남아 있으면 **행을 추가하는 순간 이 테스트가 빨개진다.**
      *
-     * 나머지 다섯은 **여전히 서버에 없다** — 고객센터(문의 접수 API), 매너 점수·마일리지(평가 API),
-     * 결제(요금 확정·결제 API), 로그인 수단. 그쪽은 계속 막는다.
+     * 나머지 네 기능은 **여전히 서버에 없다** — 고객센터(문의 접수 API), 매너 점수·마일리지(평가 API),
+     * 결제(요금 확정·결제 API). 그쪽은 계속 막는다.
      *
      * 반대로 `AccountDeleteRulesTest` 의 「탑승 기록」 금지는 **성격이 다르니 건드리지 마라** —
      * 그건 탈퇴 경고가 「탑승 기록도 지워진다」고 거짓말하지 못하게 막는 것이고, 서버는 실제로
@@ -229,7 +230,7 @@ class MyPageMenuRulesTest {
     fun `서버가 주지 않는 것으로 행을 만들지 않는다`() {
         val texts = myPageGroups(allLinks).flatMap { it.rows }.map { it.text }
 
-        listOf("고객센터", "매너 점수", "마일리지", "결제", "로그인 수단").forEach { absent ->
+        listOf("고객센터", "매너 점수", "마일리지", "결제").forEach { absent ->
             assertFalse("없는 기능 행이 생겼다: $absent", texts.any { it.contains(absent) })
         }
         // 행 이름이 겹치면 사용자가 같은 것을 두 군데서 찾는다

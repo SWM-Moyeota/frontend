@@ -2,6 +2,7 @@ package com.moyeota.presentation.core
 
 // v15 와이어프레임 화면 번호 · 화면 ID 매핑
 object Routes {
+    const val LOGIN_METHODS = "mypage/login-methods" // 로그인 수단 관리
     // A · 온보딩
     const val ONBOARDING_SAVING = "onboarding/saving"        // 01 O01
     const val ONBOARDING_TRUST = "onboarding/trust"          // 02 O02

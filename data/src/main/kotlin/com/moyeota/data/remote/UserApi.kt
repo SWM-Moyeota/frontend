@@ -28,6 +28,18 @@ import retrofit2.http.Query
  * — 가입은 `POST /api/v1/auth/register` 로 간다([AuthApi.register]).
  */
 interface UserApi {
+    @GET("api/v1/users/me/login-methods")
+    suspend fun getLoginMethods(): com.moyeota.data.remote.dto.LoginMethodsDto
+
+    @retrofit2.http.POST("api/v1/users/me/login-methods/sms/send")
+    suspend fun sendLoginMethodCode()
+
+    @retrofit2.http.POST("api/v1/users/me/login-methods/sms/verify")
+    suspend fun verifyLoginMethodCode(@Body request: com.moyeota.data.remote.dto.LinkCodeDto): com.moyeota.data.remote.dto.LinkVerificationDto
+
+    @retrofit2.http.POST("api/v1/users/me/login-methods/google")
+    suspend fun linkGoogle(@Body request: com.moyeota.data.remote.dto.GoogleLinkDto)
+
 
     /**
      * 200. 조회 주체는 토큰이 정한다(`@CurrentUser`) — 경로·쿼리에 식별자를 싣지 않는다.

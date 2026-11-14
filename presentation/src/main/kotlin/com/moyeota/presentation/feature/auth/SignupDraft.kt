@@ -57,6 +57,15 @@ data class SignupDraft(
      * null 은 "플로우를 건너뛰어 필수 값이 비었다"는 뜻 — 화면 순서가 바뀌었을 때
      * 400 을 맞고 나서야 알아차리는 대신 제출 전에 걸러낸다.
      */
+    fun toNewSocialUser(signupToken: String): com.moyeota.domain.model.NewSocialUser? {
+        val birth = birthDate ?: return null
+        val selectedGender = gender ?: return null
+        if (signupToken.isBlank() || verificationToken.isBlank() || name.isBlank() ||
+            phoneNumber.isBlank() || !AuthPolicy.isValidNickname(nickname)) return null
+        return com.moyeota.domain.model.NewSocialUser(signupToken, verificationToken, phoneNumber,
+            nickname.trim(), name, birth, selectedGender)
+    }
+
     fun toNewUser(): NewUser? {
         val birth = birthDate ?: return null
         val genderValue = gender ?: return null
@@ -194,6 +203,9 @@ internal fun authErrorMessage(error: AuthError, serverMessage: String? = null): 
     // 구글 로그인 버튼 자리에서도 나므로 「문자 인증」을 말하지 않는다(SMS_UNAVAILABLE 과 나눈 이유다).
     AuthError.SOCIAL_UNAVAILABLE -> "지금은 구글 로그인을 진행할 수 없어요. 잠시 뒤 다시 시도해 주세요"
 
+    AuthError.SOCIAL_LINK_CONFLICT -> "이미 다른 계정에 연결되어 있거나 다른 구글 계정이 연결되어 있어요"
+    AuthError.SOCIAL_LINK_VERIFICATION_EXPIRED -> "연결 인증 시간이 지났어요. 문자 인증부터 다시 해 주세요"
+    AuthError.SOCIAL_CHALLENGE_INVALID -> "인증 요청이 만료됐어요. 다시 인증해 주세요"
     AuthError.SESSION_EXPIRED -> "다시 로그인해 주세요"
     AuthError.NETWORK -> "네트워크 연결을 확인해 주세요"
     AuthError.UNKNOWN -> "잠시 후 다시 시도해 주세요"

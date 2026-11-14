@@ -121,13 +121,15 @@ fun ProfileSetupScreen(
     onSubmitVerificationCode: () -> Unit = {},
     onPhoneEditRequested: () -> Unit = {},
     onGoToLogin: () -> Unit = {},
+    social: Boolean = false,
+    initialName: String = "",
 ) {
     // rememberSaveable 이어야 하는 이유: 12 매너 서약에서 가입이 409(닉네임 중복)로 실패하면
     // 「닉네임 바꾸기」가 이 화면으로 popBackStack 한다. 그 사이 이 엔트리는 컴포지션에서 빠져 있어
     // 평범한 remember 였다면 여기 여덟 값이 전부 날아가고 사용자는 가입 폼을 처음부터 다시 채워야 한다.
     var nickname by rememberSaveable { mutableStateOf("") }
 
-    var realName by rememberSaveable { mutableStateOf("") }
+    var realName by rememberSaveable { mutableStateOf(initialName) }
     var birthDigits by rememberSaveable { mutableStateOf("") }
     var gender by rememberSaveable { mutableStateOf<Gender?>(null) }
     var phoneDigits by rememberSaveable { mutableStateOf("") }
@@ -208,7 +210,7 @@ fun ProfileSetupScreen(
     // 중복 확인이 아직 진행 중이거나 네트워크로 실패했어도 다음 단계는 막지 않는다
     // — 서버가 가입 시점에 409 로 최종 판정하고, 12 화면이 그 실패를 배너로 되돌려 준다.
     val isValid = NicknamePolicy.isValid(nickname) && nicknameError == null &&
-        basicValid && phoneVerified && accountValid
+        basicValid && phoneVerified && (social || accountValid)
 
     Column(modifier = modifier.fillMaxSize().imePadding().background(MoyeotaColor.SurfaceSoft)) {
         StatusBarSpacer()
@@ -397,6 +399,7 @@ fun ProfileSetupScreen(
             )
 
             Spacer(Modifier.height(28.dp))
+            if (!social) {
             ProfileSectionHeader(
                 title = "로그인 정보",
                 description = "다음에 로그인할 때 쓰는 아이디와 비밀번호예요",
@@ -449,6 +452,7 @@ fun ProfileSetupScreen(
             )
 
             Spacer(Modifier.height(24.dp))
+            }
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
