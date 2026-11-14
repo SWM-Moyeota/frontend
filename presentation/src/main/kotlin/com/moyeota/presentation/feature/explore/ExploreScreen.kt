@@ -109,8 +109,13 @@ import com.naver.maps.map.util.MarkerIcons
 import java.time.Instant
 import java.time.LocalDate
 
-/** 바텀시트 3단계 — 17 지도(peek) / 18 지도+리스트(half) / 19 리스트(full) */
-enum class ExploreSheetState { PEEK, HALF, FULL }
+/**
+ * 바텀시트 단계 — 손잡이만(hidden) / 17 지도(peek) / 18 지도+리스트(half) / 19 리스트(full).
+ *
+ * [HIDDEN] 은 14 홈과 같은 「손잡이 줄만 남기기」다(2026-11 오너 UX 피드백) — 접힘에서도 요약 한 줄이 지도
+ * 아래를 덮어서 지도를 다 볼 방법이 없었다. 손잡이 줄을 누르면 접힘으로 돌아온다.
+ */
+enum class ExploreSheetState { HIDDEN, PEEK, HALF, FULL }
 
 /**
  * 지도에 그릴 기기 실위치 1건.
@@ -282,6 +287,9 @@ private val PeekSheetHeight = 96.dp
 
 /** 시트 맨 위 손잡이 줄 — 위 12dp + 손잡이 4dp + 아래 12dp (`MapSheetScaffold` 와 같다) */
 private val PeekHandleZone = 28.dp
+
+/** 손잡이만 남았을 때 그 줄을 누르는 동작의 스크린리더 이름 */
+private const val HIDDEN_HANDLE_LABEL = "동승 목록 펼치기"
 
 /** 반펼침(18)에서 시트 위로 남기는 지도 높이 */
 private val HalfMapHeight = 300.dp
@@ -464,6 +472,7 @@ fun ExploreScreen(
             // 앵커 = 시트 높이. HALF 는 지도 300dp 를 남기고, FULL 은 지도를 다 덮는다
             val anchorDp: (ExploreSheetState) -> Dp = { state ->
                 when (state) {
+                    ExploreSheetState.HIDDEN -> PeekHandleZone
                     ExploreSheetState.PEEK -> PeekSheetHeight
                     ExploreSheetState.HALF -> (containerHeight - HalfMapHeight).coerceAtLeast(PeekSheetHeight)
                     ExploreSheetState.FULL -> containerHeight
@@ -482,7 +491,7 @@ fun ExploreScreen(
             val scope = rememberCoroutineScope()
             val dragState = rememberDraggableState { delta ->
                 dragPx = ((dragPx ?: sheetPx.value) - delta)
-                    .coerceIn(anchorPx(ExploreSheetState.PEEK), anchorPx(ExploreSheetState.FULL))
+                    .coerceIn(anchorPx(ExploreSheetState.HIDDEN), anchorPx(ExploreSheetState.FULL))
             }
 
             // 진행 배너 높이 — 지도 위 contentPadding 으로 넘겨 줌 컨트롤(+/−)이 배너 아래로 내려가게 한다
@@ -520,8 +529,8 @@ fun ExploreScreen(
                 sheetState = sheetState,
                 containerHeight = containerHeight,
                 sheetHeight = sheetHeight,
-                // CTA 는 접힘에서는 없다. 있으면 아래 여백 + 버튼 높이가 그 윗변이다
-                bottomCtaTop = if (sheetState == ExploreSheetState.PEEK) {
+                // CTA 는 접힘·손잡이만에서는 없다. 있으면 아래 여백 + 버튼 높이가 그 윗변이다
+                bottomCtaTop = if (sheetState == ExploreSheetState.PEEK || sheetState == ExploreSheetState.HIDDEN) {
                     null
                 } else {
                     SheetCtaPadding + with(density) { ctaHeightPx.toDp() }
@@ -582,10 +591,31 @@ fun ExploreScreen(
                             },
                         ),
                 ) {
-                    Box(modifier = Modifier.fillMaxWidth().height(PeekHandleZone), contentAlignment = Alignment.Center) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(PeekHandleZone)
+                            // 손잡이만 남았을 때 그 줄을 누르면 접힘으로 돌아온다 — 끌 수 없는 사용자(스크린리더·스위치
+                            // 접근)를 위한 길이다(14 홈의 `MapSheetScaffold` 와 같은 처리). 다른 단계에서는 누르는 동작을
+                            // 싣지 않는다(손잡이가 「누를 수 없는 버튼」으로 읽히지 않게)
+                            .then(
+                                if (sheetState == ExploreSheetState.HIDDEN) {
+                                    Modifier
+                                        .clickable(onClickLabel = HIDDEN_HANDLE_LABEL, role = Role.Button) {
+                                            sheetState = ExploreSheetState.PEEK
+                                        }
+                                        .semantics { contentDescription = HIDDEN_HANDLE_LABEL }
+                                } else {
+                                    Modifier
+                                },
+                            ),
+                        contentAlignment = Alignment.Center,
+                    ) {
                         SheetHandle()
                     }
-                    if (sheetState == ExploreSheetState.PEEK) {
+                    if (sheetState == ExploreSheetState.HIDDEN) {
+                        // 손잡이만 — 요약 줄도 그리지 않는다
+                    } else if (sheetState == ExploreSheetState.PEEK) {
                         PeekSummaryRow(
                             mode = mode,
                             count = shownCount,
@@ -618,7 +648,7 @@ fun ExploreScreen(
                     }
                 }
 
-                if (sheetState != ExploreSheetState.PEEK) {
+                if (sheetState == ExploreSheetState.HALF || sheetState == ExploreSheetState.FULL) {
                     Spacer(Modifier.height(ListHeaderGap))
                     if (sheetState == ExploreSheetState.FULL) {
                         HorizontalDivider(color = MoyeotaColor.Hairline)
