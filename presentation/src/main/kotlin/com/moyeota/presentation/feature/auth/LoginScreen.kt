@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -226,10 +227,7 @@ fun LoginScreen(
                     kind = com.moyeota.core.designsystem.component.NoticeKind.ERROR, text = errorMessage)
                 Spacer(Modifier.height(12.dp))
             }
-            com.moyeota.core.designsystem.component.SecondaryButton(
-                text = if (googleBusy) "로그인 중…" else "구글로 회원가입하기",
-                onClick = onGoogle, enabled = !googleBusy,
-            )
+            GoogleContinueButton(busy = googleBusy, onClick = onGoogle)
             Spacer(Modifier.height(12.dp))
             PrimaryCtaButton(
                 text = "일반 회원가입",
@@ -335,4 +333,46 @@ private fun LoginScreenPreview() {
         onEmailStart = {},
         onLogin = {},
     )
+}
+
+/**
+ * 「Google로 계속하기」 — 왼쪽에 Google 로고, 가입과 로그인을 한 버튼으로 받는다.
+ * 모양은 디자인 시스템 SecondaryButton(테두리 알약, 52dp)과 같게 맞춘다.
+ */
+@Composable
+private fun GoogleContinueButton(busy: Boolean, onClick: () -> Unit) {
+    androidx.compose.material3.OutlinedButton(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth().height(52.dp),
+        enabled = !busy,
+        shape = androidx.compose.foundation.shape.CircleShape,
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp, if (!busy) MoyeotaColor.BorderStrong else MoyeotaColor.Border),
+        colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(contentColor = MoyeotaColor.InkPrimary),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 24.dp),
+    ) {
+        if (!busy) {
+            // 로고는 장식이다 - 버튼 글자가 이미 Google 을 말하므로 스크린리더에 따로 읽히지 않게 한다
+            androidx.compose.foundation.Image(
+                imageVector = GoogleLogo, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(10.dp))
+        }
+        Text(text = if (busy) "로그인 중…" else "Google로 계속하기", style = MoyeotaType.ButtonLg)
+    }
+}
+
+/** Google "G" 로고(18x18). 리소스 폴더가 없는 모듈이라 벡터를 코드로 만든다. 색·모양은 Google 브랜드 지침의 원본 그대로 둔다. */
+private val GoogleLogo: androidx.compose.ui.graphics.vector.ImageVector by lazy {
+    fun androidx.compose.ui.graphics.vector.ImageVector.Builder.part(color: Long, d: String) = addPath(
+        pathData = androidx.compose.ui.graphics.vector.PathParser().parsePathString(d).toNodes(),
+        fill = androidx.compose.ui.graphics.SolidColor(androidx.compose.ui.graphics.Color(color)),
+    )
+    androidx.compose.ui.graphics.vector.ImageVector.Builder(
+        name = "GoogleLogo", defaultWidth = 18.dp, defaultHeight = 18.dp, viewportWidth = 18f, viewportHeight = 18f,
+    ).apply {
+        part(0xFF4285F4, "M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z")
+        part(0xFF34A853, "M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332C2.438 15.983 5.482 18 9 18z")
+        part(0xFFFBBC05, "M3.964 10.71c-.18-.54-.282-1.117-.282-1.71s.102-1.17.282-1.71V4.958H.957C.347 6.173 0 7.548 0 9s.348 2.827.957 4.042l3.007-2.332z")
+        part(0xFFEA4335, "M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0 5.482 0 2.438 2.017.957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z")
+    }.build()
 }
