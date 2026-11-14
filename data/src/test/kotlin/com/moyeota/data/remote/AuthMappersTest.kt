@@ -5,10 +5,15 @@ import com.moyeota.data.remote.dto.RegisterResponse
 import com.moyeota.data.remote.dto.SmsSendRequestDto
 import com.moyeota.data.remote.dto.SmsVerifyRequestDto
 import com.moyeota.data.remote.dto.SmsVerifyResponse
+import com.moyeota.data.remote.dto.SocialLoginResponse
+import com.moyeota.data.remote.dto.SocialRegisterRequestDto
 import com.moyeota.data.remote.dto.TokenResponse
 import com.moyeota.domain.model.AuthError
+import com.moyeota.domain.model.AuthException
 import com.moyeota.domain.model.AuthPolicy
 import com.moyeota.domain.model.Gender
+import com.moyeota.domain.model.GoogleLoginResult
+import com.moyeota.domain.model.NewSocialUser
 import com.moyeota.domain.model.NewUser
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
@@ -550,6 +555,280 @@ class AuthMappersTest {
         assertFalse("가운데 공백은 안 된다", AuthPolicy.isValidNickname("모여 타"))
         assertFalse("특수문자는 안 된다", AuthPolicy.isValidNickname("모여타!"))
         assertFalse("자모 낱자는 안 된다", AuthPolicy.isValidNickname("ㄱㄴㄷ"))
+    }
+
+    // ─────────────────── 구글 로그인 · 소셜 가입 (백엔드 user/social) ───────────────────
+    //
+    // 응답 픽스처는 **백엔드 소스 기준**이다(`origin/develop` 의 `SocialLoginResponse` 와
+    // `SocialAuthControllerUnitTest`). 구글 SDK 연동 전이라 진짜 idToken 을 만들 수 없어 실서버 응답은 못 봤다.
+
+    private val newSocialUser = NewSocialUser(
+        signupToken = "5d0c2a7e-0000-4000-8000-000000000002",
+        verificationToken = "3f2b8c1e-0000-4000-8000-000000000001",
+        phoneNumber = "010-1234-5678",
+        nickname = "길동이",
+        name = "홍길동",
+        birthDate = LocalDate.of(2000, 1, 1),
+        gender = Gender.MALE,
+    )
+
+    private fun decodeSocialLogin(body: String): SocialLoginResponse =
+        json.decodeFromString(SocialLoginResponse.serializer(), body)
+
+    private fun unknownFrom(block: () -> Unit): AuthException {
+        val thrown = runCatching(block).exceptionOrNull()
+        assertTrue("AuthException 이 아니다: $thrown", thrown is AuthException)
+        assertEquals(AuthError.UNKNOWN, (thrown as AuthException).error)
+        return thrown
+    }
+
+    /**
+     * 서버는 안 쓰는 칸을 null 로 싣지 않고 **키째로 뺀다**(`@JsonInclude(NON_NULL)`).
+     * DTO 의 어느 칸이든 논-널이면 이 디코딩이 `MissingFieldException` 으로 터진다 —
+     * 가입한 회원의 로그인이 전부 막히는 결함이다.
+     */
+    @Test
+    fun `LOGIN 응답은 가입용 키가 통째로 빠져도 파싱되고 토큰으로 갈린다`() {
+        val response = decodeSocialLogin(
+            """{"status":"LOGIN","accessToken":"access.jwt.value","refreshToken":"refresh.jwt.value"}""",
+        )
+
+        assertNull(response.signupToken)
+        assertNull(response.email)
+        assertNull(response.name)
+
+        val outcome = response.toOutcome()
+        assertTrue("LOGIN 이 토큰 분기로 가지 않았다: $outcome", outcome is SocialLoginOutcome.Tokens)
+        val tokens = (outcome as SocialLoginOutcome.Tokens).tokens
+        assertEquals("access.jwt.value", tokens.accessToken)
+        assertEquals("refresh.jwt.value", tokens.refreshToken)
+    }
+
+    /** 반대쪽 — 처음 온 사람의 응답에는 토큰 키가 없다. 여기서 터지면 신규 가입만 전부 막힌다. */
+    @Test
+    fun `SIGNUP_REQUIRED 응답은 토큰 키가 통째로 빠져도 파싱되고 가입 분기로 갈린다`() {
+        val response = decodeSocialLogin(
+            """{"status":"SIGNUP_REQUIRED","signupToken":"5d0c2a7e-0000-4000-8000-000000000002","email":"hong@gmail.com","name":"홍길동"}""",
+        )
+
+        assertNull(response.accessToken)
+        assertNull(response.refreshToken)
+
+        val outcome = response.toOutcome()
+        assertEquals(
+            SocialLoginOutcome.SignupRequired(
+                GoogleLoginResult.SignupRequired(
+                    signupToken = "5d0c2a7e-0000-4000-8000-000000000002",
+                    email = "hong@gmail.com",
+                    name = "홍길동",
+                ),
+            ),
+            outcome,
+        )
+    }
+
+    /**
+     * 구글 계정에 이름이 없으면 서버가 `name` 키를 뺀다 — **정상 경우다.** 에러로 바꾸면 이름을 설정하지
+     * 않은 구글 계정은 가입을 시작조차 못 한다. 화면은 실명 입력란을 빈 채로 연다.
+     */
+    @Test
+    fun `SIGNUP_REQUIRED 에 name 키가 없어도 가입 분기로 가고 이름은 null 이다`() {
+        val outcome = decodeSocialLogin(
+            """{"status":"SIGNUP_REQUIRED","signupToken":"signup-token","email":"hong@gmail.com"}""",
+        ).toOutcome()
+
+        val result = (outcome as SocialLoginOutcome.SignupRequired).result
+        assertEquals("signup-token", result.signupToken)
+        assertEquals("hong@gmail.com", result.email)
+        assertNull(result.name)
+    }
+
+    /**
+     * 이메일은 **표시 전용**이라(서버로 되돌려 보내지 않는다) 빠졌다고 가입을 막지 않는다.
+     * 공백뿐인 값은 null 로 접는다 — 화면이 빈 문자열과 null 을 따로 처리하지 않게 한다.
+     */
+    @Test
+    fun `email 이 빠지거나 공백뿐이어도 가입 분기는 유지되고 없음으로 접는다`() {
+        val missing = decodeSocialLogin("""{"status":"SIGNUP_REQUIRED","signupToken":"signup-token"}""").toOutcome()
+        assertNull((missing as SocialLoginOutcome.SignupRequired).result.email)
+
+        val blank = SocialLoginResponse(status = "SIGNUP_REQUIRED", signupToken = "signup-token", email = "  ", name = " ")
+            .toOutcome() as SocialLoginOutcome.SignupRequired
+        assertNull(blank.result.email)
+        assertNull(blank.result.name)
+    }
+
+    /**
+     * **빈 토큰으로 세션을 열면 안 된다** — 로그인은 됐는데 모든 요청이 401 이 된다.
+     * 한쪽만 빠진 경우도 같다: 리프레시가 없으면 30분 뒤 재발급에서 조용히 로그아웃된다.
+     */
+    @Test
+    fun `LOGIN 인데 토큰이 하나라도 빠지면 UNKNOWN 으로 끊는다`() {
+        listOf(
+            """{"status":"LOGIN"}""",
+            """{"status":"LOGIN","accessToken":"access.jwt.value"}""",
+            """{"status":"LOGIN","refreshToken":"refresh.jwt.value"}""",
+            """{"status":"LOGIN","accessToken":"","refreshToken":"refresh.jwt.value"}""",
+            """{"status":"LOGIN","accessToken":"access.jwt.value","refreshToken":"  "}""",
+        ).forEach { body ->
+            unknownFrom { decodeSocialLogin(body).toOutcome() }
+        }
+    }
+
+    /** 통과시키면 화면이 문자 인증까지 다 받게 한 뒤 가입 제출에서야 400 을 본다. 여기서 끊는다. */
+    @Test
+    fun `SIGNUP_REQUIRED 인데 signupToken 이 없으면 UNKNOWN 으로 끊는다`() {
+        listOf(
+            """{"status":"SIGNUP_REQUIRED","email":"hong@gmail.com","name":"홍길동"}""",
+            """{"status":"SIGNUP_REQUIRED","signupToken":"","email":"hong@gmail.com"}""",
+            """{"status":"SIGNUP_REQUIRED","signupToken":"   ","email":"hong@gmail.com"}""",
+        ).forEach { body ->
+            unknownFrom { decodeSocialLogin(body).toOutcome() }
+        }
+    }
+
+    /**
+     * 서버가 status 를 늘리거나(예: 정지된 계정) 키를 빼먹었을 때 **어느 쪽으로도 보내지 않는다.**
+     *
+     * 「토큰이 있으니 로그인이겠지」로 짐작하지 않는다는 것까지 못 박는다 — 마지막 두 건은 칸은 멀쩡한데
+     * status 만 틀린 경우다. 대소문자가 다른 것도 모르는 값이다(서버 enum 이름은 대문자 고정이다).
+     * status 를 enum 으로 받았다면 이 응답들은 디코딩 단계에서 터져 같은 [AuthError.UNKNOWN] 이 되긴 하지만,
+     * 그때는 「어떤 값이 왔는지」가 메시지에 남지 않는다.
+     */
+    @Test
+    fun `모르는 status 나 status 누락은 UNKNOWN 으로 끊고 짐작하지 않는다`() {
+        val suspended = unknownFrom { decodeSocialLogin("""{"status":"SUSPENDED"}""").toOutcome() }
+        assertTrue("어떤 값이 왔는지 남지 않았다: ${suspended.serverMessage}", suspended.serverMessage!!.contains("SUSPENDED"))
+
+        listOf(
+            """{}""",
+            """{"status":null}""",
+            """{"status":""}""",
+            """{"status":"login","accessToken":"a","refreshToken":"r"}""",
+            """{"accessToken":"a","refreshToken":"r"}""",
+            """{"status":"PENDING","signupToken":"signup-token","email":"hong@gmail.com"}""",
+        ).forEach { body ->
+            unknownFrom { decodeSocialLogin(body).toOutcome() }
+        }
+    }
+
+    /** 서버가 칸을 더 실어 보내도(예: 프로필 사진) 분기는 그대로다 — `ignoreUnknownKeys`. */
+    @Test
+    fun `구글 로그인 응답에 모르는 키가 늘어도 파싱이 깨지지 않는다`() {
+        val outcome = decodeSocialLogin(
+            """{"status":"LOGIN","accessToken":"a","refreshToken":"r","picture":"https://example.com/p.png"}""",
+        ).toOutcome()
+
+        assertTrue(outcome is SocialLoginOutcome.Tokens)
+    }
+
+    /**
+     * 서버 `SocialRegisterRequest` 와 키가 1:1 이어야 한다. **`email`·`loginId`·`password` 는 나가면 안 된다** —
+     * 서버는 모르는 키를 무시하므로 400 은 안 나지만, 「앱이 보낸 이메일이 저장된다」는 오해를 코드에 남긴다
+     * (실제로는 구글 계정 이메일이 저장된다).
+     */
+    @Test
+    fun `소셜 가입 요청 본문은 서버 필드 일곱 개뿐이고 이메일을 싣지 않는다`() {
+        val dto = newSocialUser.toDto()
+
+        assertEquals(
+            SocialRegisterRequestDto(
+                signupToken = "5d0c2a7e-0000-4000-8000-000000000002",
+                verificationToken = "3f2b8c1e-0000-4000-8000-000000000001",
+                phoneNumber = "01012345678",
+                nickname = "길동이",
+                name = "홍길동",
+                birthDate = "2000-01-01T00:00:00Z",
+                gender = "MALE",
+            ),
+            dto,
+        )
+
+        val encoded = json.encodeToString(SocialRegisterRequestDto.serializer(), dto)
+        assertEquals(
+            """{"signupToken":"5d0c2a7e-0000-4000-8000-000000000002",""" +
+                """"verificationToken":"3f2b8c1e-0000-4000-8000-000000000001",""" +
+                """"phoneNumber":"01012345678","nickname":"길동이","name":"홍길동",""" +
+                """"birthDate":"2000-01-01T00:00:00Z","gender":"MALE"}""",
+            encoded,
+        )
+        listOf("email", "loginId", "password").forEach {
+            assertFalse("$it 가 소셜 가입 본문에 실렸다: $encoded", encoded.contains("\"$it\""))
+        }
+    }
+
+    /**
+     * 다듬는 규칙이 로컬 가입과 같아야 한다 — 같은 값을 넣었는데 가입 경로에 따라 저장 모양이 달라지면 안 된다.
+     * 두 토큰은 서버가 준 열쇠라 건드리지 않는다.
+     */
+    @Test
+    fun `소셜 가입도 로컬 가입과 같은 규칙으로 닉네임과 번호를 다듬는다`() {
+        val dto = newSocialUser.copy(nickname = " 길동이 ", phoneNumber = "010 1234-5678").toDto()
+        val local = newUser.copy(nickname = " 길동이 ", phoneNumber = "010 1234-5678").toDto()
+
+        assertEquals(local.nickname, dto.nickname)
+        assertEquals(local.phoneNumber, dto.phoneNumber)
+        assertEquals(local.birthDate, dto.birthDate)
+        assertEquals("UNDISCLOSED", newSocialUser.copy(gender = Gender.UNDISCLOSED).toDto().gender)
+    }
+
+    /**
+     * **소셜 코드 넷은 상태 코드 폴백이 전부 틀린 말을 한다.**
+     *
+     * - `USER401`·`USER402` (401) → 폴백은 [AuthError.SESSION_EXPIRED]: 로그인도 안 한 사람에게 「다시 로그인」
+     * - `USER403` (409) → 폴백은 [AuthError.LOGIN_ID_DUPLICATED]: 아이디가 없는 가입 화면에 아이디 중복
+     * - `USER404` (503) → 폴백은 [AuthError.UNKNOWN]. **HTTP 404 가 아니다** — 번호만 닮았다.
+     *
+     * 메시지 원문은 백엔드 `UserErrorCode` 그대로다.
+     */
+    @Test
+    fun `소셜 네 코드는 폴백이 아니라 각자의 사유로 갈린다`() {
+        val mapped = listOf(
+            401 to """{"code":"USER401","message":"구글 로그인에 실패했습니다. 다시 시도해 주세요."}""",
+            401 to """{"code":"USER402","message":"가입 시간이 만료되었습니다. 구글 로그인부터 다시 진행해 주세요."}""",
+            409 to """{"code":"USER403","message":"이미 가입된 계정입니다. 다시 로그인해 주세요."}""",
+            503 to """{"code":"USER404","message":"지금은 로그인을 진행할 수 없습니다. 잠시 후 다시 시도해 주세요."}""",
+        ).map { (status, body) -> httpException(status, body).toAuthException().error }
+
+        assertEquals(
+            listOf(
+                AuthError.SOCIAL_TOKEN_INVALID,
+                AuthError.SOCIAL_SIGNUP_EXPIRED,
+                AuthError.SOCIAL_ALREADY_REGISTERED,
+                AuthError.SOCIAL_UNAVAILABLE,
+            ),
+            mapped,
+        )
+        // 폴백으로 떨어졌다면 나왔을 값들 — 하나라도 섞이면 그 화면은 틀린 안내를 한다.
+        listOf(AuthError.SESSION_EXPIRED, AuthError.LOGIN_ID_DUPLICATED, AuthError.LOGIN_FAILED, AuthError.UNKNOWN)
+            .forEach { assertFalse("소셜 코드가 $it 로 떨어졌다: $mapped", it in mapped) }
+    }
+
+    /**
+     * 가입 대기표 저장소 장애는 문자 인증 장애와 **합치지 않았다** — 구글 로그인 버튼 자리에서도 나므로
+     * 「문자 인증이 안 된다」는 안내가 거짓이 된다. 합친 것으로 되돌리려면 여기부터 고쳐야 한다.
+     */
+    @Test
+    fun `503 USER404 는 문자 인증 장애와 다른 값이다`() {
+        val social = httpException(503, """{"code":"USER404","message":"지금은 로그인을 진행할 수 없습니다."}""")
+            .toAuthException().error
+        val sms = httpException(503, """{"code":"USER208","message":"지금은 인증을 진행할 수 없습니다."}""")
+            .toAuthException().error
+
+        assertEquals(AuthError.SOCIAL_UNAVAILABLE, social)
+        assertNotEquals(sms, social)
+    }
+
+    /** 대기표 만료(401)와 문자 인증 만료(400)는 되돌릴 단계가 다르다 — 구글 로그인부터 / 문자 인증부터. */
+    @Test
+    fun `대기표 만료와 문자 인증 만료는 서로 다른 값이다`() {
+        val ticket = httpException(401, """{"code":"USER402","message":"가입 시간이 만료되었습니다."}""")
+            .toAuthException().error
+        val sms = httpException(400, """{"code":"USER207","message":"휴대폰 인증이 필요합니다."}""")
+            .toAuthException().error
+
+        assertEquals(AuthError.SOCIAL_SIGNUP_EXPIRED, ticket)
+        assertEquals(AuthError.PHONE_NOT_VERIFIED, sms)
     }
 
     private fun httpException(code: Int, body: String): HttpException = HttpException(

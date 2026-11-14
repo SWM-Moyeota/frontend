@@ -127,6 +127,27 @@ class UserApiDeleteBodyTest {
     }
 
     /**
+     * **소셜 회원의 탈퇴는 본문 없이 나간다.** 서버 문서의 계약이 「본문 없이 호출」이고
+     * (`UserDeletionController` 의 `@RequestBody(required = false)`), 소셜 회원에게는 실을 비밀번호가 없다.
+     *
+     * `{}` 같은 빈 본문도 실리면 안 된다 — 지금 서버는 그것도 받아 주지만 그건 구현의 우연이다.
+     * 경로·동사는 비밀번호 탈퇴와 같아야 한다(서버에 탈퇴 경로는 하나다).
+     */
+    @Test
+    fun `소셜 회원 탈퇴는 같은 경로의 DELETE 인데 본문이 없다`() {
+        val captured = mutableListOf<Request>()
+        val api = service(UserApi::class.java, captured = captured)
+
+        runBlocking { api.deleteSocialAccount() }
+
+        val request = captured.single()
+        assertEquals("DELETE", request.method)
+        assertEquals("http://localhost/api/v1/users/me", request.url.toString())
+        assertNull("소셜 탈퇴에 본문이 실렸다: ${request.bodyAsString()}", request.body)
+        assertNull("소셜 탈퇴에 쿼리가 붙었다", request.url.query)
+    }
+
+    /**
      * **함정 자체를 기록해 두는 음성 대조군.** 같은 서명을 `@DELETE` 로 쓰면 Retrofit 이 거부한다.
      *
      * 이 테스트가 깨진다면(= 더 이상 던지지 않는다면) Retrofit 이 `@DELETE` + 본문을 허용하도록

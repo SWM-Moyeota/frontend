@@ -5,6 +5,7 @@ import com.moyeota.data.remote.dto.UserProfileResponse
 import com.moyeota.domain.model.ProfileImage
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -110,6 +111,20 @@ class UserMappersTest {
         val body = """{"uuid":"u-1","name":"김성윤","badgeId":3,"mannerScore":4.5}"""
 
         assertEquals("김성윤", json.decodeFromString<UserProfileResponse>(body).toDomain().name)
+    }
+
+    /**
+     * **소셜 회원 판별은 loginId 유무 하나다** — 서버가 따로 알려 주는 칸이 없다
+     * (백엔드 `http/social-login.http` 5번: 「소셜 회원은 loginId 가 null」).
+     * 탈퇴 화면이 이 값으로 「비밀번호 입력 + 본문 있는 탈퇴」와 「본문 없는 탈퇴」를 가른다.
+     */
+    @Test
+    fun `loginId 가 없으면 소셜 회원이고 있으면 아이디 회원이다`() {
+        val social = json.decodeFromString<UserProfileResponse>("""{"uuid":"u-1","name":"홍길동","loginId":null}""")
+        val local = json.decodeFromString<UserProfileResponse>("""{"uuid":"u-2","name":"김성윤","loginId":"hong123"}""")
+
+        assertTrue(social.toDomain().isSocialAccount)
+        assertFalse(local.toDomain().isSocialAccount)
     }
 
     /**

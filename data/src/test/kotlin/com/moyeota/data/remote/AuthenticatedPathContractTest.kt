@@ -176,6 +176,70 @@ class AuthenticatedPathContractTest {
     }
 
     /**
+     * 구글 로그인과 소셜 가입은 **로그인 전(무토큰)에** 불린다 — 서버 컨트롤러(`SocialAuthController`)는
+     * [AuthApi] 의 다른 메서드들과 파일이 다르지만 프리픽스가 `/api/v1/auth` 라 permitAll 구간에 들어온다.
+     * 그래서 둘 다 **[AuthApi] 에 있어야 하고 [UserApi] 에 있으면 안 된다**: 인증 클라이언트로 보내면
+     * 세션에 만료된 토큰이 남은 사용자만 permitAll 경로에서 401 을 받는다(`checkPhone` KDoc 의 실측과 같은 함정).
+     *
+     * 소셜 가입 경로는 로컬 가입과 한 조각 차이다(`/auth/register` ↔ `/auth/social/register`). 섞이면
+     * 로컬 가입 검증에 걸려 400 `INVALID_REQUEST` 가 나는데, 그건 입력 검증 실패와 구분되지 않는다.
+     *
+     * 기준은 백엔드 `origin/develop` 의 `user/social/presentation/SocialAuthController.java` 소스다(실서버 미검증).
+     */
+    @Test
+    fun `구글 로그인과 소셜 가입은 토큰 없이 부르는 AuthApi 의 POST 다`() {
+        assertEquals("api/v1/auth/login/google", AuthApi::class.java.path("loginWithGoogle"))
+        assertEquals("api/v1/auth/social/register", AuthApi::class.java.path("registerSocial"))
+
+        listOf("loginWithGoogle", "registerSocial").forEach { name ->
+            val method = AuthApi::class.java.declaredMethods.single { it.name == name }
+            assertTrue("$name 이 POST 가 아니다", method.isAnnotationPresent(POST::class.java))
+            assertTrue(
+                "$name 이 Bearer 가 붙는 UserApi 쪽에도 있다",
+                UserApi::class.java.methods.none { it.name == name },
+            )
+        }
+        assertNotEquals(
+            "소셜 가입이 로컬 가입과 같은 경로를 탄다 — loginId 누락 400 이 된다",
+            AuthApi::class.java.path("register"),
+            AuthApi::class.java.path("registerSocial"),
+        )
+        assertNotEquals(
+            "구글 로그인이 아이디 로그인과 같은 경로를 탄다",
+            AuthApi::class.java.path("login"),
+            AuthApi::class.java.path("loginWithGoogle"),
+        )
+    }
+
+    /**
+     * 소셜 회원의 탈퇴는 비밀번호 탈퇴와 **경로·동사가 같고 본문만 없다**(서버 `@RequestBody(required = false)`).
+     *
+     * - 본문 파라미터가 붙으면 안 된다 — 소셜 회원에게는 실을 비밀번호가 없다.
+     * - 경로가 `deleteAccount` 와 달라지면 안 된다 — 서버에 탈퇴 경로는 하나다.
+     * - `AuthApi` 로 옮겨 가면 안 된다 — 이 호출의 본인 확인은 **Bearer 토큰 그 자체**다. 토큰이 붙지 않는
+     *   클라이언트로 나가면 401 `USER005` 다.
+     *
+     * 실제 요청에 본문이 없는지는 [UserApiDeleteBodyTest] 가 Retrofit 을 돌려 확인한다.
+     */
+    @Test
+    fun `소셜 회원 탈퇴는 비밀번호 탈퇴와 같은 경로의 DELETE 이고 본문이 없다`() {
+        val delete = UserApi::class.java.declaredMethods.single { it.name == "deleteSocialAccount" }
+
+        assertEquals("api/v1/users/me", UserApi::class.java.path("deleteSocialAccount"))
+        assertEquals(UserApi::class.java.path("deleteAccount"), UserApi::class.java.path("deleteSocialAccount"))
+        assertTrue("소셜 탈퇴가 DELETE 가 아니다", delete.isAnnotationPresent(DELETE::class.java))
+        assertTrue(
+            "소셜 탈퇴에 본문 파라미터가 붙었다 — 소셜 회원은 비밀번호가 없다",
+            delete.parameterAnnotations.none { annotations -> annotations.any { it is Body } },
+        )
+        assertEquals("소셜 탈퇴에 파라미터가 생겼다(suspend 의 Continuation 하나만 있어야 한다)", 1, delete.parameterCount)
+        assertTrue(
+            "소셜 탈퇴가 Bearer 없는 AuthApi 쪽으로 옮겨졌다 — 토큰이 본인 확인인데 토큰이 안 붙는다",
+            AuthApi::class.java.methods.none { it.name == "deleteSocialAccount" },
+        )
+    }
+
+    /**
      * 프로필 이미지 두 경로는 **생김새가 닮아 바꿔 쓰기 쉽다** — 목록은 복수형에 `/me` 가 없고
      * (`api/v1/users/profile-images`), 되돌리기는 단수형에 `/me` 가 있다
      * (`api/v1/users/me/profile-image`). 둘을 뒤집으면 404 가 아니라 **401** 로 떨어져
@@ -203,6 +267,12 @@ class AuthenticatedPathContractTest {
         assertNotEquals(
             "되돌리기가 회원 탈퇴와 같은 경로를 탄다 — 같은 DELETE 라 성공하고 계정이 지워진다",
             UserApi::class.java.path("deleteAccount"),
+            UserApi::class.java.path("resetProfileImage"),
+        )
+        // 본문 없는 탈퇴(소셜 회원)와는 **애노테이션까지 같아서** 경로만이 둘을 가른다.
+        assertNotEquals(
+            "되돌리기가 소셜 회원 탈퇴와 같은 경로를 탄다 — 본문 없는 DELETE 라 그대로 계정이 지워진다",
+            UserApi::class.java.path("deleteSocialAccount"),
             UserApi::class.java.path("resetProfileImage"),
         )
         // 탈퇴처럼 본문을 싣는 우회(@HTTP hasBody)를 복사해 오면 서버 매핑과 어긋난다 — 되돌리기는 본문이 없다.
