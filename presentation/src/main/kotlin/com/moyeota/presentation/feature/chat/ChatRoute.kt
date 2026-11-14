@@ -1,6 +1,8 @@
 package com.moyeota.presentation.feature.chat
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -11,13 +13,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.viewmodel.viewModelFactory
+import com.moyeota.core.designsystem.component.MoyeotaConfirmDialog
 import com.moyeota.core.designsystem.component.MoyeotaTab
+import com.moyeota.domain.analytics.Analytics
+import com.moyeota.domain.analytics.AnalyticsEvent
 import com.moyeota.domain.model.ChatException
 import com.moyeota.domain.model.ChatRealtimeEvent
 import com.moyeota.domain.model.ChatMember
@@ -26,6 +32,7 @@ import com.moyeota.domain.model.ChatRoom
 import com.moyeota.domain.model.ChatRoomStatus
 import com.moyeota.domain.model.MyChatRoom
 import com.moyeota.domain.repository.ChatRepository
+import com.moyeota.domain.repository.RideRepository
 import com.moyeota.presentation.core.BackStateScaffold
 import com.moyeota.presentation.core.ErrorBox
 import com.moyeota.presentation.core.LoadingBox
@@ -37,8 +44,11 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -185,6 +195,7 @@ internal fun chatRoomSortKey(item: MyChatRoom): Long {
 
 class ChatListViewModel(
     private val repository: ChatRepository,
+    private val rideRepository: RideRepository,
 ) : ViewModel() {
 
     sealed interface UiState {
@@ -193,11 +204,199 @@ class ChatListViewModel(
         data class Error(val message: String) : UiState
     }
 
+    /** 길게 누른 방에 대해 떠 있는 것 — 메뉴 → 확인창 → 요청 중. null 이면 아무것도 없다 */
+    sealed interface RoomAction {
+        val item: ChatRoomListItem
+
+        /**
+         * 메뉴가 떠 있다. 메뉴를 여는 순간 방 상태를 읽기 시작한다([plan] 이 null 이면 읽는 중) —
+         * 「나가기」를 누를 때쯤이면 대개 판정이 끝나 있다.
+         *
+         * @param leaveTapped 판정 전에 「나가기」를 눌렀다 — 판정이 끝나는 대로 확인창으로 넘어간다
+         * @param planFailed 방 상태를 읽지 못했다 — 「나가기」를 누르면 다시 읽는다
+         */
+        data class Menu(
+            override val item: ChatRoomListItem,
+            val plan: ChatLeavePlan? = null,
+            val leaveTapped: Boolean = false,
+            val planFailed: Boolean = false,
+        ) : RoomAction
+
+        data class Confirm(override val item: ChatRoomListItem, val plan: ChatLeavePlan) : RoomAction
+
+        /** 나가기 요청이 나갔다 — 확인을 두 번 눌러도 한 번만 보낸다 */
+        data class Leaving(override val item: ChatRoomListItem, val plan: ChatLeavePlan) : RoomAction
+    }
+
     private val _uiState = MutableStateFlow<UiState>(UiState.Loading)
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
 
+    private val _action = MutableStateFlow<RoomAction?>(null)
+    val action: StateFlow<RoomAction?> = _action.asStateFlow()
+
+    /** 메뉴 동작이 실패했을 때 목록 위에 띄우는 한 줄. 다음 동작이나 새로 읽기에서 지운다 */
+    private val _notice = MutableStateFlow<String?>(null)
+    val notice: StateFlow<String?> = _notice.asStateFlow()
+
+    /** 나가기가 끝났다 — 진행 중인 방 기억(홈 배너·「채팅 열기」)을 고쳐야 해서 화면 밖으로 알린다 */
+    private val _left = MutableSharedFlow<ChatLeavePlan>(extraBufferCapacity = 1)
+    val left: SharedFlow<ChatLeavePlan> = _left.asSharedFlow()
+
+    private var planJob: Job? = null
+
+    /** 길게 누르기 — 메뉴를 띄우고, 「나가기」를 대비해 방 상태를 미리 읽는다 */
+    fun openMenu(item: ChatRoomListItem) {
+        if (_action.value is RoomAction.Leaving) return
+        _notice.value = null
+        _action.value = RoomAction.Menu(item)
+        resolvePlan(item)
+    }
+
+    fun dismissAction() {
+        if (_action.value is RoomAction.Leaving) return
+        planJob?.cancel()
+        _action.value = null
+    }
+
+    /** 메뉴의 「알림 끄기/켜기」 — 바로 바꿔 그리고, 실패하면 되돌린다 */
+    fun toggleMuted(item: ChatRoomListItem) {
+        planJob?.cancel()
+        _action.value = null
+        val roomId = item.room.room.id
+        val target = !item.room.membership.notificationMuted
+        setMutedInList(roomId, target)
+        viewModelScope.launch {
+            try {
+                repository.setNotificationMuted(roomId, target)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                setMutedInList(roomId, !target)
+                _notice.value = e.toChatMessage("알림 설정을 바꾸지 못했어요")
+            }
+        }
+    }
+
+    /** 메뉴의 「나가기」 — 판정이 끝났으면 확인창, 아니면 끝나는 대로 넘어간다 */
+    fun requestLeave() {
+        val menu = _action.value as? RoomAction.Menu ?: return
+        val plan = menu.plan
+        when {
+            plan != null -> _action.value = RoomAction.Confirm(menu.item, plan)
+            menu.planFailed -> {
+                _action.value = menu.copy(leaveTapped = true, planFailed = false)
+                resolvePlan(menu.item)
+            }
+            else -> _action.value = menu.copy(leaveTapped = true)
+        }
+    }
+
+    /** 확인창의 확인. 막힌 경우([ChatLeavePlan.Blocked])는 닫기만 한다 */
+    fun confirmLeave() {
+        val confirm = _action.value as? RoomAction.Confirm ?: return
+        val plan = confirm.plan
+        if (plan == ChatLeavePlan.Blocked) {
+            _action.value = null
+            return
+        }
+        _action.value = RoomAction.Leaving(confirm.item, plan)
+        viewModelScope.launch {
+            try {
+                when (plan) {
+                    is ChatLeavePlan.ChatOnly -> leaveChatOnly(plan.chatRoomId)
+                    is ChatLeavePlan.LeaveParty -> {
+                        // 나가는 주체는 Bearer 토큰이 정한다. 채팅방은 서버가 동승 이탈에 맞춰 정리한다
+                        rideRepository.leaveParty(plan.partyId)
+                        Analytics.track(AnalyticsEvent.MatchCanceled(capacity = plan.capacity, memberCount = plan.memberCount))
+                    }
+                    ChatLeavePlan.Blocked -> Unit
+                }
+                // 서버의 채팅방 정리는 이벤트로 늦게 돈다 — 바로 다시 읽으면 나간 방이 잠깐 남아 보여 목록에서 먼저 뺀다
+                removeFromList(confirm.item.room.room.id)
+                _left.tryEmit(plan)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _notice.value = when (plan) {
+                    is ChatLeavePlan.LeaveParty -> chatListLeaveFailureMessage(e)
+                    else -> e.toChatMessage("채팅방에서 나가지 못했어요")
+                }
+            } finally {
+                if (_action.value is RoomAction.Leaving) _action.value = null
+            }
+        }
+    }
+
+    private suspend fun leaveChatOnly(chatRoomId: Long) {
+        try {
+            repository.leaveChatRoom(chatRoomId)
+        } catch (e: ChatException) {
+            if (!isAlreadyOutOfChat(e)) throw e
+        }
+    }
+
+    private fun resolvePlan(item: ChatRoomListItem) {
+        val chatRoomId = item.room.room.id
+        planJob?.cancel()
+        planJob = viewModelScope.launch {
+            val plan = try {
+                loadLeavePlan(chatRoomId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                null
+            }
+            val menu = _action.value as? RoomAction.Menu ?: return@launch
+            if (menu.item.room.room.id != chatRoomId) return@launch
+            _action.value = when {
+                plan != null && menu.leaveTapped -> RoomAction.Confirm(menu.item, plan)
+                plan != null -> menu.copy(plan = plan)
+                menu.leaveTapped -> {
+                    _notice.value = "방 상태를 확인하지 못했어요. 잠시 뒤 다시 시도해 주세요"
+                    null
+                }
+                else -> menu.copy(planFailed = true)
+            }
+        }
+    }
+
+    /**
+     * 채팅방 → 방 id → 방 상세. 목록 응답에는 방 id 가 없어(`UNKNOWN_PARTY_ID`) 채팅방 상세를 한 번 더 읽는다.
+     * 채팅방 상세가 403·404 면 이미 그 방 사람이 아니거나 방이 없다 — 채팅방만 치운다.
+     */
+    private suspend fun loadLeavePlan(chatRoomId: Long): ChatLeavePlan {
+        val partyId = try {
+            repository.getChatRoom(chatRoomId).partyId
+        } catch (e: ChatException) {
+            if (e.httpStatus == 403 || e.httpStatus == 404) return ChatLeavePlan.ChatOnly(chatRoomId)
+            throw e
+        }
+        if (partyId <= 0) return ChatLeavePlan.ChatOnly(chatRoomId)
+        return chatLeavePlan(chatRoomId, rideRepository.getPartyDetail(partyId))
+    }
+
+    private fun setMutedInList(chatRoomId: Long, muted: Boolean) {
+        _uiState.update { state ->
+            if (state !is UiState.Success) return@update state
+            state.copy(
+                rooms = state.rooms.map { item ->
+                    if (item.room.room.id != chatRoomId) item
+                    else item.copy(room = item.room.copy(membership = item.room.membership.copy(notificationMuted = muted)))
+                },
+            )
+        }
+    }
+
+    private fun removeFromList(chatRoomId: Long) {
+        _uiState.update { state ->
+            if (state !is UiState.Success) state
+            else state.copy(rooms = state.rooms.filterNot { it.room.room.id == chatRoomId })
+        }
+    }
+
     fun refresh() {
         viewModelScope.launch {
+            _notice.value = null
             _uiState.value = UiState.Loading
             _uiState.value = try {
                 UiState.Success(loadRooms())
@@ -246,8 +445,8 @@ class ChatListViewModel(
     }
 
     companion object {
-        fun factory(repository: ChatRepository) = viewModelFactory {
-            initializer { ChatListViewModel(repository) }
+        fun factory(repository: ChatRepository, rideRepository: RideRepository) = viewModelFactory {
+            initializer { ChatListViewModel(repository, rideRepository) }
         }
     }
 }
@@ -966,14 +1165,20 @@ class ChatRoomViewModel(
  *   것이어서 `partyId` 가 0(모름)이라 **이 값만이 판정 근거다**([ChatRoom.isActiveParty]).
  * @param activePartyId 진행 중인 방의 id([com.moyeota.domain.model.Ride.id]). 이 경로에서는 사실상
  *   판정에 기여하지 못한다(위 참조) — 그래도 같은 판정 함수를 쓰므로 함께 넘긴다. 없으면 null.
+ * @param rideRepository 목록 길게 누르기의 「나가기」가 방 상태를 읽고 동승에서 나갈 때 쓴다([ChatLeavePlan])
+ * @param onLeftParty 목록에서 **동승에서** 나갔다(방 id) — 진행 중인 방 기억을 고쳐야 한다
+ * @param onLeftChatRoom 목록에서 **채팅방만** 나갔다(채팅방 id) — 그 id 를 들고 있으면 버려야 한다
  */
 @Composable
 fun ChatRoute(
     repository: ChatRepository,
+    rideRepository: RideRepository,
     activeChatRoomId: Long? = null,
     activePartyId: String? = null,
     onOpenMatching: () -> Unit = {},
     onLeaveChat: () -> Unit = {},
+    onLeftParty: (partyId: Long) -> Unit = {},
+    onLeftChatRoom: (chatRoomId: Long) -> Unit = {},
     onTabSelect: (MoyeotaTab) -> Unit = {},
     /** 열린 방에서 403(참여자 아님) — 진행 화면의 채팅방 id 캐시를 버리게 한다 */
     onNotParticipant: () -> Unit = {},
@@ -988,10 +1193,13 @@ fun ChatRoute(
     if (room == null) {
         ChatListRoute(
             repository = repository,
+            rideRepository = rideRepository,
             onRoomClick = {
                 openedMuted = it.membership.notificationMuted
                 openedRoom = it.room
             },
+            onLeftParty = onLeftParty,
+            onLeftChatRoom = onLeftChatRoom,
             onTabSelect = onTabSelect,
         )
     } else {
@@ -1015,14 +1223,30 @@ fun ChatRoute(
 @Composable
 private fun ChatListRoute(
     repository: ChatRepository,
+    rideRepository: RideRepository,
     onRoomClick: (MyChatRoom) -> Unit,
+    onLeftParty: (partyId: Long) -> Unit,
+    onLeftChatRoom: (chatRoomId: Long) -> Unit,
     onTabSelect: (MoyeotaTab) -> Unit,
 ) {
-    val viewModel: ChatListViewModel = viewModel(factory = ChatListViewModel.factory(repository))
+    val viewModel: ChatListViewModel = viewModel(factory = ChatListViewModel.factory(repository, rideRepository))
     val state by viewModel.uiState.collectAsState()
+    val action by viewModel.action.collectAsState()
+    val notice by viewModel.notice.collectAsState()
 
     // 방에 들어갔다 돌아오면 안읽음 배지가 갱신돼야 해서 매 진입마다 다시 읽는다
     LaunchedEffect(Unit) { viewModel.refresh() }
+    LaunchedEffect(viewModel) {
+        viewModel.left.collect { plan ->
+            when (plan) {
+                is ChatLeavePlan.LeaveParty -> onLeftParty(plan.partyId)
+                is ChatLeavePlan.ChatOnly -> onLeftChatRoom(plan.chatRoomId)
+                ChatLeavePlan.Blocked -> Unit
+            }
+        }
+    }
+    // 메뉴·확인창이 떠 있으면 시스템 뒤로가기는 그것만 닫는다
+    BackHandler(enabled = action != null) { viewModel.dismissAction() }
 
     // 로딩·에러에서도 하단탭 유지 (QA F-1)
     when (val current = state) {
@@ -1032,11 +1256,38 @@ private fun ChatListRoute(
         is ChatListViewModel.UiState.Error -> TabStateScaffold(MoyeotaTab.CHAT, onTabSelect) {
             ErrorBox(message = current.message, onRetry = viewModel::refresh)
         }
-        is ChatListViewModel.UiState.Success -> ChatListScreen(
-            rooms = current.rooms,
-            onRoomClick = onRoomClick,
-            onTabSelect = onTabSelect,
-        )
+        is ChatListViewModel.UiState.Success -> Box(Modifier.fillMaxSize()) {
+            ChatListScreen(
+                rooms = current.rooms,
+                notice = notice,
+                onRoomClick = onRoomClick,
+                onRoomLongClick = viewModel::openMenu,
+                onTabSelect = onTabSelect,
+            )
+            when (val shown = action) {
+                is ChatListViewModel.RoomAction.Menu -> ChatRoomActionSheet(
+                    title = chatRoomListTitle(shown.item),
+                    muted = shown.item.room.membership.notificationMuted,
+                    leaveChecking = shown.leaveTapped,
+                    onToggleMuted = { viewModel.toggleMuted(shown.item) },
+                    onLeave = viewModel::requestLeave,
+                    onDismiss = viewModel::dismissAction,
+                )
+                is ChatListViewModel.RoomAction.Confirm -> {
+                    val copy = chatLeaveDialog(shown.plan)
+                    MoyeotaConfirmDialog(
+                        title = copy.title,
+                        body = copy.body,
+                        confirmText = copy.confirmText,
+                        onConfirm = viewModel::confirmLeave,
+                        dismissText = copy.dismissText,
+                        onDismiss = viewModel::dismissAction,
+                        destructive = copy.destructive,
+                    )
+                }
+                is ChatListViewModel.RoomAction.Leaving, null -> Unit
+            }
+        }
     }
 }
 

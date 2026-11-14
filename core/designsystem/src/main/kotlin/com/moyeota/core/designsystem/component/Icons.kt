@@ -34,7 +34,7 @@ import kotlin.math.sin
  * - 스크린리더 이름은 **감싸는 버튼**이 준다. 아이콘 자체는 장식이다
  *
  * iOS 는 같은 이름의 SF Symbol(chevron.right · checkmark · star · magnifyingglass · xmark · arrow.clockwise ·
- * arrow.up.right · ellipsis · bubble.left)을 `.font(.system(size:, weight: .medium))` 로 옮긴다.
+ * arrow.up.right · ellipsis · bubble.left · bell.slash)을 `.font(.system(size:, weight: .medium))` 로 옮긴다.
  */
 object MoyeotaIconSize {
     val Lg: Dp = 24.dp
@@ -194,6 +194,42 @@ fun ChatBubbleIcon(
     Canvas(modifier = modifier.size(size)) {
         val u = this.size.width / 24f
         drawChatIcon(tint, iconStroke(u))
+    }
+}
+
+/**
+ * 사선 그은 종 — 「알림 꺼짐」. 켜진 상태에는 짝이 되는 아이콘을 두지 않는다(채팅 목록 — 켜진 게 기본이다).
+ *
+ * @param background 아이콘이 놓이는 면의 색. 사선을 이 색으로 한 번 넓게 그어 종 윤곽을 끊는다 —
+ *   끊지 않으면 16dp 에서 사선이 윤곽에 묻혀 「그냥 종」으로 읽힌다
+ */
+@Composable
+fun BellOffIcon(
+    modifier: Modifier = Modifier,
+    size: Dp = MoyeotaIconSize.Sm,
+    tint: Color = MoyeotaColor.TextPlaceholder,
+    background: Color = MoyeotaColor.SurfaceCanvas,
+) {
+    GridIcon(modifier, size) { u, stroke ->
+        val bell = Path().apply {
+            moveTo(6f * u, 16.5f * u)
+            lineTo(6f * u, 11f * u)
+            cubicTo(6f * u, 7.4f * u, 8.7f * u, 4.5f * u, 12f * u, 4.5f * u)
+            cubicTo(15.3f * u, 4.5f * u, 18f * u, 7.4f * u, 18f * u, 11f * u)
+            lineTo(18f * u, 16.5f * u)
+        }
+        drawPath(bell, tint, style = stroke)
+        drawLine(tint, Offset(4.5f * u, 16.5f * u), Offset(19.5f * u, 16.5f * u), stroke.width, StrokeCap.Round)
+        val clapper = Path().apply {
+            moveTo(10f * u, 19.5f * u)
+            cubicTo(10.4f * u, 20.6f * u, 11.1f * u, 21.2f * u, 12f * u, 21.2f * u)
+            cubicTo(12.9f * u, 21.2f * u, 13.6f * u, 20.6f * u, 14f * u, 19.5f * u)
+        }
+        drawPath(clapper, tint, style = stroke)
+        val from = Offset(3.5f * u, 3.5f * u)
+        val to = Offset(20.5f * u, 20.5f * u)
+        drawLine(background, from, to, stroke.width * 3f, StrokeCap.Round)
+        drawLine(tint, from, to, stroke.width, StrokeCap.Round)
     }
 }
 
