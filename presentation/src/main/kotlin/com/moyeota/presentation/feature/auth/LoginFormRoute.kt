@@ -65,9 +65,13 @@ fun LoginFormRoute(
     onResetPassword: () -> Unit = {},
     prefillLoginId: String? = null,
     noticeMessage: String? = null,
+    // null 이면 Google 버튼을 숨긴다(미리보기·테스트)
+    googleProvider: com.moyeota.domain.model.GoogleCredentialProvider? = null,
+    onGoogleSignupRequired: (com.moyeota.domain.model.GoogleLoginResult.SignupRequired) -> Unit = {},
 ) {
     val viewModel: LoginViewModel = viewModel(factory = LoginViewModel.factory(repository))
     val state by viewModel.uiState.collectAsState()
+    val google = googleProvider?.let { rememberGoogleLogin(repository, it, onLoggedIn, onGoogleSignupRequired) }
 
     LaunchedEffect(state.loggedIn) {
         if (state.loggedIn) onLoggedIn()
@@ -81,8 +85,10 @@ fun LoginFormRoute(
         onResetPassword = onResetPassword,
         prefillLoginId = prefillLoginId,
         submitting = state.submitting,
-        errorMessage = state.errorMessage,
+        errorMessage = state.errorMessage ?: google?.error,
         // 로그인 실패 문구가 떴다면 "왜 이 화면인지"보다 그쪽이 급하다 — 안내는 접는다
-        noticeMessage = noticeMessage.takeIf { state.errorMessage == null },
+        noticeMessage = noticeMessage.takeIf { state.errorMessage == null && google?.error == null },
+        onGoogle = google?.start,
+        googleBusy = google?.busy == true,
     )
 }

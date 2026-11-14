@@ -683,6 +683,15 @@ private fun MainNavHost(
         composable(Routes.LOGIN_FORM) {
             LoginFormRoute(
                 repository = authRepository,
+                googleProvider = googleCredentialProvider,
+                // 시작 화면의 Google 가입과 같은 진입 - 처음 온 계정이면 프로필·문자 인증으로 보낸다
+                onGoogleSignupRequired = { ticket ->
+                    socialSignup.begin(ticket)
+                    socialFlow = true
+                    socialNotice = null
+                    reverifyPhoneRequest = 0
+                    navController.navigate(Routes.PROFILE_SETUP)
+                },
                 onBack = {
                     // 세션 만료·로그아웃으로 스택이 비워진 채 들어왔으면 돌아갈 곳이 없다 — 04 로 보낸다.
                     // 그냥 popBackStack 하면 화면 없는 빈 그래프가 남는다.

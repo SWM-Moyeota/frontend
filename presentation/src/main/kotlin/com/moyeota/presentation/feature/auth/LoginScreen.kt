@@ -277,7 +277,7 @@ private fun LoginScreenPreview() {
  * 모양은 디자인 시스템 SecondaryButton(테두리 알약, 52dp)과 같게 맞춘다.
  */
 @Composable
-private fun GoogleContinueButton(busy: Boolean, onClick: () -> Unit) {
+internal fun GoogleContinueButton(busy: Boolean, onClick: () -> Unit) {
     androidx.compose.material3.OutlinedButton(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth().height(52.dp),

@@ -304,7 +304,7 @@ fun MyPageScreen(
         // 앱 공용 확인 다이얼로그(G11). 확인 버튼은 예전처럼 빨강 — 세션이 끝나는 이탈이다
         MoyeotaConfirmDialog(
             title = "로그아웃할까요?",
-            body = "다시 이용하려면 아이디로 로그인해야 해요",
+            body = "다시 이용하려면 로그인해야 해요",
             confirmText = "로그아웃",
             onConfirm = {
                 logoutConfirming = false
