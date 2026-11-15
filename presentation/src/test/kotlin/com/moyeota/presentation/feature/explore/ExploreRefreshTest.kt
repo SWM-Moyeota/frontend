@@ -194,10 +194,14 @@ class ExploreRefreshTest {
         assertEquals(76.dp, placement.bottom)
     }
 
-    /** 접힘·반펼침은 예전 자리 그대로 — 네이버 줌 컨트롤과 같은 세로선, 시트 윗변 16dp 위. */
+    /** 손잡이만·접힘·반펼침은 예전 자리 그대로 — 네이버 줌 컨트롤과 같은 세로선, 시트 윗변 16dp 위. */
     @Test
-    fun `접힘과 반펼침에서는 지도 위 시트 윗변 16dp 위에 선다`() {
-        listOf(ExploreSheetState.PEEK to 96.dp, ExploreSheetState.HALF to 300.dp).forEach { (state, sheet) ->
+    fun `손잡이만과 접힘과 반펼침에서는 지도 위 시트 윗변 16dp 위에 선다`() {
+        listOf(
+            ExploreSheetState.HIDDEN to 28.dp,
+            ExploreSheetState.PEEK to 96.dp,
+            ExploreSheetState.HALF to 300.dp,
+        ).forEach { (state, sheet) ->
             val placement = refreshButtonPlacement(state, containerHeight = 600.dp, sheetHeight = sheet, bottomCtaTop = 60.dp)
             assertEquals(state.name, RefreshButtonSpot.ABOVE_SHEET, placement.spot)
             assertEquals(state.name, RefreshButtonEndInset, placement.end)

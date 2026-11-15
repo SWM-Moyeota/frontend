@@ -15,7 +15,7 @@ import com.moyeota.core.designsystem.theme.MoyeotaType
  * 예전엔 제목이 17sp Bold·16sp SemiBold 로 갈리고, 채팅방 「나가기」는 손으로 그린 다이얼로그에 **파란** 확인
  * 버튼을 달았다 — 되돌릴 수 없는 이탈에 주 행동 색을 쓴 것이다(디자인 문서: 파괴적 UI 에 primary 금지).
  *
- * - 제목 [MoyeotaType.HeadingMd], 본문 [MoyeotaType.BodySm] [MoyeotaColor.TextBody], 흰 바탕, 모서리 20dp
+ * - 제목 [MoyeotaType.HeadingMd], 본문 [MoyeotaType.BodySm] [MoyeotaColor.TextBody](어절 단위 줄바꿈 — [KoreanBodyText]), 흰 바탕, 모서리 20dp
  * - 확인 버튼은 [destructive] 면 빨강, 아니면 진한 파랑. 취소는 [MoyeotaColor.TextMute]
  * - 바깥을 누르거나 뒤로 가기를 누르면 [onDismiss] — 취소와 같다
  *
@@ -39,7 +39,8 @@ fun MoyeotaConfirmDialog(
         onDismissRequest = onDismiss,
         modifier = modifier,
         title = { Text(text = title, style = MoyeotaType.HeadingMd, color = MoyeotaColor.InkPrimary) },
-        text = body?.let { { Text(text = it, style = MoyeotaType.BodySm, color = MoyeotaColor.TextBody) } },
+        // 본문은 어절 단위로 꺾는다 — 그냥 Text 는 「없/어요」·「1/명은」처럼 어절 한가운데서 줄을 바꿨다(QA M5)
+        text = body?.let { { KoreanBodyText(text = it, style = MoyeotaType.BodySm, color = MoyeotaColor.TextBody) } },
         confirmButton = {
             TextButton(onClick = onConfirm) {
                 Text(

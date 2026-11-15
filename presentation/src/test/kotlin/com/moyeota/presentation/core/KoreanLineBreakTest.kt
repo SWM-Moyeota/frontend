@@ -1,5 +1,10 @@
 package com.moyeota.presentation.core
 
+import com.moyeota.core.designsystem.component.NO_BREAK_SPACE
+import com.moyeota.core.designsystem.component.PHRASE_LINE_BREAK_MIN_SDK
+import com.moyeota.core.designsystem.component.WORD_JOINER
+import com.moyeota.core.designsystem.component.keepKoreanWordsTogether
+import com.moyeota.core.designsystem.component.koreanParagraphDisplayText
 import com.moyeota.presentation.feature.home.reservationCommitmentNotice
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -73,5 +78,20 @@ class KoreanLineBreakTest {
         assertEquals(notice, koreanParagraphDisplayText(notice, sdkInt = 37))
         assertEquals(keepKoreanWordsTogether(notice), koreanParagraphDisplayText(notice, sdkInt = 32))
         assertEquals(keepKoreanWordsTogether(notice), koreanParagraphDisplayText(notice, sdkInt = 24))
+    }
+
+    /** 이모지(서로게이트 짝)·이음 표시·이체 선택자 사이에는 넣지 않는다 — 넣으면 글자가 깨진다(공용 확인창 본문에 닉네임이 들어올 수 있다) */
+    @Test
+    fun `이모지와 이음 표시 사이에는 넣지 않는다`() {
+        val smile = "\uD83D\uDE00" // 😀
+        val result = keepKoreanWordsTogether("나${smile}요")
+        assertTrue(result.contains(smile))
+        assertEquals("나${smile}요", result.visible())
+
+        val family = "\uD83D\uDC68\u200D\uD83D\uDC69" // 👨‍👩
+        assertTrue(keepKoreanWordsTogether("가$family").contains(family))
+
+        val heart = "\u2764\uFE0F" // ❤️
+        assertTrue(keepKoreanWordsTogether("가$heart").contains(heart))
     }
 }
