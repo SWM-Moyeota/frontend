@@ -304,6 +304,119 @@ class ReservationFinderTest {
         assertFalse("서버가 약속하지 않은 순서를 적지 않는다", soon.contains("순"))
     }
 
+    /**
+     * ★ 목록을 아직 읽지 못했으면 헤더에 **개수를 적지 않는다** — 「11월 17일 (화) 출발 0개 · 출발 시간 순」은
+     * 「그 날은 없다」로 읽힌다(2026-11, 오너 UX 피드백 2차: 새 날짜를 읽는 동안 목록 자리를 비운다). 세 모드 모두.
+     */
+    @Test
+    fun `개수를 모르면 헤더는 개수 없이 적는다`() {
+        assertEquals(
+            "11월 17일 (화) 출발 · 출발 시간 순",
+            exploreListTitle(ExploreMode.BY_DATE, count = null, dateLabel = "11월 17일 (화)"),
+        )
+        assertEquals(
+            "11월 17일 (화) 출발",
+            exploreListTitle(ExploreMode.BY_DATE, count = null, dateLabel = "11월 17일 (화)", destinationSent = true),
+        )
+        assertEquals("곧 출발", exploreListTitle(ExploreMode.SOON, count = null, dateLabel = null))
+        assertEquals("주변 동승 · 가까운 순", exploreListTitle(ExploreMode.REALTIME, count = null, dateLabel = null))
+        ExploreMode.entries.forEach { mode ->
+            val title = exploreListTitle(mode, count = null, dateLabel = "오늘")
+            assertFalse("$mode 헤더에 개수가 남았다: $title", title.contains("개"))
+        }
+    }
+
+    /** 개수는 **읽은 목록**에만 붙는다 — 읽는 중·위치 대기·실패에 「0개」를 적으면 모르는 것을 「없다」로 단정한다. */
+    @Test
+    fun `헤더 개수는 읽은 목록에만 적는다`() {
+        assertNull(exploreHeaderCount(0, loading = true, locating = false, failed = false))
+        assertNull(exploreHeaderCount(0, loading = false, locating = true, failed = false))
+        assertNull(exploreHeaderCount(0, loading = false, locating = false, failed = true))
+        assertEquals("빈 목록의 0 은 사실이다", 0, exploreHeaderCount(0, loading = false, locating = false, failed = false))
+        assertEquals(3, exploreHeaderCount(3, loading = false, locating = false, failed = false))
+    }
+
+    // ─────────────────────────── 같은 목록인가 · 언제 읽는가 ───────────────────────────
+
+    private fun byDate(
+        date: String = "2026-11-17",
+        lat: Double = 35.23,
+        lng: Double = 129.08,
+        destination: ReservationDestination? = null,
+    ) = ReservationQuery.ByDate(departureLat = lat, departureLng = lng, date = date, destination = destination)
+
+    /**
+     * 지도 범위·내 위치가 달라도 **같은 목록**이다 — 다시 읽는 동안 보던 목록을 남긴다. 날짜·도착지·모드가
+     * 다르면 다른 목록이다 — 앞 목록의 줄을 남기면 다른 날의 방에 「합류」하게 된다.
+     */
+    @Test
+    fun `같은 목록은 날짜 도착지 모드가 정한다`() {
+        val other = MapBounds(swLat = 35.3, swLng = 129.1, neLat = 35.4, neLng = 129.2)
+        assertTrue("지도를 옮겨도 같은 곧 출발 목록", ReservationQuery.Soon(bounds).sameListAs(ReservationQuery.Soon(other)))
+        assertTrue("GPS 가 흔들려도 같은 날짜 목록", byDate().sameListAs(byDate(lat = 35.2302, lng = 129.0803)))
+
+        assertFalse("날짜가 다르다", byDate().sameListAs(byDate(date = "2026-11-18")))
+        assertFalse("도착지를 골랐다", byDate().sameListAs(byDate(destination = ReservationDestination(35.16, 129.06))))
+        assertFalse("모드가 다르다", ReservationQuery.Soon(bounds).sameListAs(byDate()))
+        assertFalse("모드가 다르다", byDate().sameListAs(ReservationQuery.Soon(bounds)))
+    }
+
+    /** 언제 읽는가의 표 — 카운트다운은 어느 쪽이든 건드리지 않는다(`ExploreRefreshTest` 가 시간으로 본다). */
+    @Test
+    fun `새 목록은 바로 읽고 지도 이동은 디바운스하고 위치 흔들림은 다음 갱신에 맡긴다`() {
+        val soon = ReservationQuery.Soon(bounds)
+        val movedSoon = ReservationQuery.Soon(MapBounds(swLat = 35.3, swLng = 129.1, neLat = 35.4, neLng = 129.2))
+
+        assertEquals("처음", ExploreLoadTiming.NOW, reservationLoadTiming(null, soon, listShown = false, fetching = false))
+        assertEquals("모드를 바꿈", ExploreLoadTiming.NOW, reservationLoadTiming(soon, byDate(), listShown = true, fetching = false))
+        assertEquals(
+            "날짜를 바꿈",
+            ExploreLoadTiming.NOW,
+            reservationLoadTiming(byDate(), byDate(date = "2026-11-18"), listShown = true, fetching = true),
+        )
+        assertEquals("지도 이동", ExploreLoadTiming.DEBOUNCED, reservationLoadTiming(soon, movedSoon, listShown = true, fetching = false))
+        assertEquals(
+            "보여 줄 목록이 없으면 늦출 이득이 없다",
+            ExploreLoadTiming.NOW,
+            reservationLoadTiming(soon, movedSoon, listShown = false, fetching = false),
+        )
+        assertEquals(
+            "GPS 흔들림",
+            ExploreLoadTiming.NEXT_TICK,
+            reservationLoadTiming(byDate(), byDate(lat = 35.2302), listShown = true, fetching = false),
+        )
+    }
+
+    /**
+     * ★ 리뷰 반영 3차(PR #99): 「날짜로 찾기」의 위치 흔들림은 **목록 유무와 상관없이** 다음 갱신에 맡긴다. 실패
+     * 화면에서 바로 읽게 하면 빨리 실패하는 망(오프라인)에서 1초마다 다시 보내게 된다.
+     */
+    @Test
+    fun `날짜로 찾기의 위치 흔들림은 늘 다음 갱신에 맡긴다`() {
+        val wobble = byDate(lat = 35.2302)
+
+        assertEquals(
+            "목록이 보인다",
+            ExploreLoadTiming.NEXT_TICK,
+            reservationLoadTiming(byDate(), wobble, listShown = true, fetching = false),
+        )
+        assertEquals(
+            "목록이 보이고 갱신도 나가 있다",
+            ExploreLoadTiming.NEXT_TICK,
+            reservationLoadTiming(byDate(), wobble, listShown = true, fetching = true),
+        )
+        assertEquals(
+            "보여 줄 목록이 없다(실패 화면) — 빨리 실패하는 망에서 1초마다 보내지 않는다",
+            ExploreLoadTiming.NEXT_TICK,
+            reservationLoadTiming(byDate(), wobble, listShown = false, fetching = false),
+        )
+        assertEquals(
+            "빈 자리로 조회가 오는 중이다(로딩)",
+            ExploreLoadTiming.NEXT_TICK,
+            reservationLoadTiming(byDate(), wobble, listShown = false, fetching = true),
+        )
+    }
+
     /** ★ 두 모드가 **다른 영역**을 본다는 사실이 화면에 남아 있어야 한다. */
     @Test
     fun `영역 안내는 모드마다 기준을 말한다`() {

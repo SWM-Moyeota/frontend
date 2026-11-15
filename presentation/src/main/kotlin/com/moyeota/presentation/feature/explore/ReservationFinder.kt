@@ -318,19 +318,38 @@ internal fun explorePeekTitle(mode: ExploreMode, count: Int, dateLabel: String?)
  * | [ExploreMode.SOON] | 없음 | 서버가 순서를 약속하지 않았다 — **모르는 정렬을 적지 않는다** |
  * | [ExploreMode.BY_DATE] · 도착지 없음 | `· 출발 시간 순` | 서버가 출발 시각 순으로 준다 |
  * | [ExploreMode.BY_DATE] · 도착지 있음 | 없음 | **도착지 가까운 방이 먼저**이고 그 안에서 시각 순이다. 「출발 시간 순」은 거짓이 되므로 [exploreAreaNote] 가 설명한다 |
+ *
+ * @param count 목록의 방 수. **null 이면 개수를 적지 않는다**(「11월 17일 (화) 출발 · 출발 시간 순」) — 아직 읽지
+ *   못한 목록에 「0개」를 적으면 「없다」를 단정하게 된다([exploreHeaderCount])
  */
 internal fun exploreListTitle(
     mode: ExploreMode,
-    count: Int,
+    count: Int?,
     dateLabel: String?,
     destinationSent: Boolean = false,
-): String = when (mode) {
-    ExploreMode.REALTIME -> "주변 동승 ${count}개 · 가까운 순"
-    ExploreMode.SOON -> "곧 출발 ${count}개"
-    ExploreMode.BY_DATE ->
-        if (destinationSent) "${dateLabel ?: "선택한 날"} 출발 ${count}개"
-        else "${dateLabel ?: "선택한 날"} 출발 ${count}개 · 출발 시간 순"
+): String {
+    val n = count?.let { " ${it}개" }.orEmpty()
+    return when (mode) {
+        ExploreMode.REALTIME -> "주변 동승$n · 가까운 순"
+        ExploreMode.SOON -> "곧 출발$n"
+        ExploreMode.BY_DATE ->
+            if (destinationSent) "${dateLabel ?: "선택한 날"} 출발$n"
+            else "${dateLabel ?: "선택한 날"} 출발$n · 출발 시간 순"
+    }
 }
+
+/**
+ * 목록 헤더에 적을 **개수** — 목록을 아직 읽지 못했으면 null 이고 헤더는 개수 없이 그린다([exploreListTitle]).
+ *
+ * | 상태 | 개수 | 이유 |
+ * |---|---|---|
+ * | 새 목록을 읽는 중(날짜·도착지·모드를 바꿈, 첫 조회) | 없음 | 목록 자리는 비어 있고 기다림은 새로고침 버튼이 보여 준다. 「0개」는 「없다」로 읽힌다 |
+ * | 내 위치를 기다리는 중 | 없음 | 아직 묻지도 못했다 |
+ * | 조회 실패(보여 줄 목록 없음) | 없음 | 못 물어봤다 — 「0개」는 장애를 「없다」로 위장한다(`reservationStatusTitle` 과 같은 근거) |
+ * | 읽은 목록(빈 목록 포함) | 그 수 | 사실이다 |
+ */
+internal fun exploreHeaderCount(count: Int, loading: Boolean, locating: Boolean, failed: Boolean): Int? =
+    if (loading || locating || failed) null else count
 
 /**
  * **이 목록이 무엇을 기준으로 찾은 것인가** — 예약 모드에서만 그리는 한 줄.
@@ -394,7 +413,12 @@ internal const val RESERVATION_LOAD_FAILED_TEXT = "예약 방을 불러오지 �
  */
 internal const val RESERVATION_LOCATING_TEXT = "내 위치를 확인하는 중이에요"
 
-/** 조회 중. 접힘 요약처럼 **스피너를 둘 자리가 없는 곳**이 쓴다(목록 쪽은 `LoadingBox` 를 쓴다). */
+/**
+ * 조회 중 — 접힘 요약 한 줄이 쓴다(0건을 「없어요」로 말하지 않게).
+ *
+ * 목록 쪽은 이 글도 스피너도 두지 않는다 — 자리를 비워 두고, 기다림은 새로고침 버튼의 도는 고리가 보여 준다
+ * (2026-11, 오너 UX 피드백 2차: 「날짜로 찾기」의 목록 가운데 큰 스피너를 걷었다).
+ */
 internal const val RESERVATION_LOADING_TEXT = "예약 방을 불러오는 중이에요"
 
 /**
