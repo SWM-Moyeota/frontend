@@ -172,7 +172,7 @@ fun LoginScreen(
             Text(
                 // 학교 이메일 인증은 가입 필수 경로가 아니다(마이페이지에서 나중에 추가하는 컨셉).
                 // 「학생만 · 학교 이메일로 확인」은 이제 사실이 아니라 지웠다.
-                text = "구글 또는 아이디로 간편하게 시작해요",
+                text = "원하는 방법으로 간편하게 시작해요",
                 style = MoyeotaType.BodyMd,
                 color = MoyeotaColor.TextMute,
             )
