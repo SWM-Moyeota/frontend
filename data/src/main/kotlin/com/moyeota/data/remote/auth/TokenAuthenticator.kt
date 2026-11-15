@@ -32,6 +32,13 @@ class TokenAuthenticator(
 ) : Authenticator {
 
     override fun authenticate(route: Route?, response: Response): Request? {
+        // 연결용 증표/공급자 인증 실패는 앱 세션 만료가 아니다.
+        val code = runCatching {
+            kotlinx.serialization.json.Json.parseToJsonElement(response.peekBody(4096).string())
+                .let { it as? kotlinx.serialization.json.JsonObject }?.get("code")
+                ?.let { it as? kotlinx.serialization.json.JsonPrimitive }?.content
+        }.getOrNull()
+        if (code in setOf("USER401", "USER406", "USER407")) return null
         // 애초에 토큰을 안 실은 요청의 401 은 재발급으로 풀 수 없다(미로그인 상태의 보호 API 접근).
         val failedAccessToken = response.request.bearerToken() ?: return null
 

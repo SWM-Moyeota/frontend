@@ -33,7 +33,7 @@ import kotlinx.coroutines.SupervisorJob
 import okhttp3.OkHttpClient
 
 // 수동 DI 컨테이너. 백엔드 연동 시 Hilt 로 교체 예정.
-// debugLogging: HTTP 본문 로깅 여부. 디버그 빌드에서만 켠다(호출자가 판단해 주입).
+// debugLogging: HTTP 기본 정보 로깅 여부. 디버그 빌드에서만 켠다(호출자가 판단해 주입).
 class AppContainer(context: Context, debugLogging: Boolean) {
 
     /**

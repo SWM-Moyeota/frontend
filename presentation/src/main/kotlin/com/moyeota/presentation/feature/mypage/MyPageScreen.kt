@@ -140,6 +140,7 @@ fun MyPageScreen(
     onRideHistory: () -> Unit = {},          // → 34 지난 탑승 기록
     onNoShowRecords: () -> Unit = {},        // → 38 노쇼 기록·이의 신청
     onLogout: () -> Unit = {},               // → 04a 로그인 (세션 정리 후)
+    onLoginMethods: () -> Unit = {},
     onDeleteAccount: () -> Unit = {},        // → 37 회원 탈퇴
     onTabSelect: (MoyeotaTab) -> Unit = {},  // → 14 / 17 / 24
     // 「안내」 카드가 여는 주소. 기본값은 운영 값이고, 프리뷰·테스트가 빈 상태를 넣어 본다.
@@ -172,6 +173,7 @@ fun MyPageScreen(
             is MyPageAction.SendMail -> context.openSupportEmail(action.address)
             MyPageAction.RideHistory -> onRideHistory()
             MyPageAction.NoShowRecords -> onNoShowRecords()
+            MyPageAction.LoginMethods -> onLoginMethods()
             MyPageAction.Logout -> logoutConfirming = true
             MyPageAction.DeleteAccount -> onDeleteAccount()
         }
@@ -302,7 +304,7 @@ fun MyPageScreen(
         // 앱 공용 확인 다이얼로그(G11). 확인 버튼은 예전처럼 빨강 — 세션이 끝나는 이탈이다
         MoyeotaConfirmDialog(
             title = "로그아웃할까요?",
-            body = "다시 이용하려면 아이디로 로그인해야 해요",
+            body = "다시 이용하려면 로그인해야 해요",
             confirmText = "로그아웃",
             onConfirm = {
                 logoutConfirming = false

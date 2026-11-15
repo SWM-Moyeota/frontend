@@ -3,10 +3,12 @@ package com.moyeota.data.repository
 import com.moyeota.data.local.ActivePartyStorage
 import com.moyeota.data.push.FcmTokenRegistrar
 import com.moyeota.data.remote.AuthApi
+import com.moyeota.data.remote.SocialLoginOutcome
 import com.moyeota.data.remote.UserApi
 import com.moyeota.data.remote.auth.jwtSubject
 import com.moyeota.data.remote.authCall
 import com.moyeota.data.remote.dto.AccountDeletionRequest
+import com.moyeota.data.remote.dto.GoogleLoginRequestDto
 import com.moyeota.data.remote.dto.LoginRequestDto
 import com.moyeota.data.remote.dto.NicknameCheckRequestDto
 import com.moyeota.data.remote.dto.PasswordResetConfirmRequestDto
@@ -16,15 +18,19 @@ import com.moyeota.data.remote.dto.PhoneCheckRequestDto
 import com.moyeota.data.remote.dto.RefreshTokenRequestDto
 import com.moyeota.data.remote.dto.SmsSendRequestDto
 import com.moyeota.data.remote.dto.SmsVerifyRequestDto
+import com.moyeota.data.remote.dto.TokenResponse
 import com.moyeota.data.remote.dto.UpdateProfileRequest
 import com.moyeota.data.remote.toDomain
 import com.moyeota.data.remote.toDto
+import com.moyeota.data.remote.toOutcome
 import com.moyeota.data.session.SessionManager
 import com.moyeota.data.session.StoredSession
 import com.moyeota.domain.model.AuthError
 import com.moyeota.domain.model.AuthException
 import com.moyeota.domain.model.AuthPolicy
 import com.moyeota.domain.model.AuthState
+import com.moyeota.domain.model.GoogleLoginResult
+import com.moyeota.domain.model.NewSocialUser
 import com.moyeota.domain.model.NewUser
 import com.moyeota.domain.model.PasswordResetTicket
 import com.moyeota.domain.model.ProfileImage
@@ -60,6 +66,19 @@ class RemoteAuthRepository(
     private val fcmTokenRegistrar: FcmTokenRegistrar,
     private val activePartyStorage: ActivePartyStorage,
 ) : AuthRepository {
+    override suspend fun getLoginMethods() = authCall { userApi.getLoginMethods() }.toDomain()
+    override suspend fun sendLoginMethodCode() { authCall { userApi.sendLoginMethodCode() } }
+    override suspend fun verifyLoginMethodCode(code: String): com.moyeota.domain.model.LinkVerification {
+        val response = authCall { userApi.verifyLoginMethodCode(com.moyeota.data.remote.dto.LinkCodeDto(code.trim())) }
+        if (response.verificationToken.isBlank() || response.expiresInSeconds <= 0) {
+            throw AuthException(AuthError.UNKNOWN, "문자 인증 응답을 확인할 수 없습니다.")
+        }
+        return com.moyeota.domain.model.LinkVerification(response.verificationToken, response.expiresInSeconds)
+    }
+    override suspend fun linkGoogle(idToken: String, verificationToken: String) {
+        authCall { userApi.linkGoogle(com.moyeota.data.remote.dto.GoogleLinkDto(idToken, verificationToken)) }
+    }
+
 
     // 세션 상태의 실체는 SessionManager 다. 여기서 별도 상태를 들면 두 출처가 어긋난다.
     override val authState: StateFlow<AuthState> = session.authState
@@ -103,27 +122,75 @@ class RemoteAuthRepository(
             ?: throw AuthException(AuthError.UNKNOWN, "가입 응답에 uuid 가 없습니다.")
     }
 
+    /** 세션을 여는 일은 전부 [openSession] 이 한다 — 구글 로그인·소셜 가입과 **같은 한 경로**다. */
+    override suspend fun login(loginId: String, password: String): String {
+        val response = authCall { api.login(LoginRequestDto(loginId, password)) }
+        return openSession(response, source = "로그인")
+    }
+
     /**
-     * 로그인 응답에는 더 이상 `userId` 가 없다 — 사용자 UUID 는 액세스 토큰의 `sub` 에서 읽는다
+     * `status` 분기와 「그쪽에 있어야 할 값이 다 있는가」는 매퍼가 끝낸다([toOutcome]). 여기서 하는 일은
+     * 하나다 — **LOGIN 일 때만 세션을 연다.**
+     *
+     * SIGNUP_REQUIRED 는 [session] 도 [fcmTokenRegistrar] 도 건드리지 않고 값만 돌려준다. 토큰이 없으니
+     * 열 세션이 없고, 여기서 무엇이든 저장해 두면 가입을 끝내지 않고 나간 사람의 흔적이 기기에 남는다 —
+     * 가입 대기표는 화면이 메모리로만 들고 다닌다([GoogleLoginResult.SignupRequired] KDoc).
+     *
+     * [idToken] 은 다듬지 않는다. 서명된 값이라 손대면 무효가 되고, 비었으면 서버가 400 으로 말해 준다.
+     */
+    override suspend fun loginWithGoogle(idToken: String): GoogleLoginResult {
+        val response = authCall { api.loginWithGoogle(GoogleLoginRequestDto(idToken)) }
+        return when (val outcome = response.toOutcome()) {
+            is SocialLoginOutcome.Tokens ->
+                GoogleLoginResult.LoggedIn(openSession(outcome.tokens, source = "구글 로그인"))
+            is SocialLoginOutcome.SignupRequired -> outcome.result
+        }
+    }
+
+    /**
+     * [register] 와 달리 **성공한 자리에서 세션을 연다** — 201 이 uuid 가 아니라 토큰 쌍이다.
+     *
+     * 토큰이 비었거나 `sub` 를 못 읽으면 [openSession] 이 끊는다. 그때 서버에는 **계정이 이미 만들어져 있다**
+     * (가입은 성공했고 응답만 못 읽은 것이다). 같은 대기표로 다시 제출하면 서버가 대기표를 이미 지웠으므로
+     * 401 `USER402` 가 오고, 구글 로그인을 다시 하면 이번에는 LOGIN 으로 들어온다 — 즉 사용자가 갇히지는 않는다.
+     * 여기서 스스로 구글 로그인을 다시 부르지 않는 건 부를 수 없어서다: idToken 은 화면(구글 SDK)만 갖고 있다.
+     */
+    override suspend fun registerSocial(newUser: NewSocialUser): String {
+        val response = authCall { api.registerSocial(newUser.toDto()) }
+        return openSession(response, source = "소셜 가입")
+    }
+
+    /**
+     * 토큰 쌍으로 세션을 여는 **유일한 경로.** 로컬 로그인·구글 로그인(LOGIN)·소셜 가입이 전부 여기를 지난다.
+     *
+     * 한 곳에 모은 이유는 셋이 **똑같은 전이**를 해야 하기 때문이다 — 토큰 영속화,
+     * [AuthState.Authenticated] 전이, 푸시 토큰 등록. 경로마다 따로 적어 두면 언젠가 하나가 빠지고,
+     * 빠지는 건 대개 맨 끝의 푸시 등록이다: 로그인은 멀쩡히 되는데 **구글로 들어온 사람만 알림이 오지 않는**
+     * 결함이 되고, 그건 화면에서 보이지 않는다.
+     *
+     * ### 사용자 UUID 는 응답이 아니라 토큰에서 읽는다
+     * 세 응답 모두 토큰 쌍뿐이고 `userId` 가 없다 — 액세스 토큰의 `sub` 에서 읽는다
      * ([jwtSubject] KDoc 에 근거와 대안 비교).
      *
      * 파싱 실패를 예외로 끊는 이유: UUID 없이 세션을 열면 [AuthState.Authenticated] 의 식별자가
      * 빈 문자열이 되어 "로그인은 됐는데 내가 누군지 모르는" 상태가 조용히 굳는다.
+     * 끊을 때는 **세션에 손대기 전에** 끊는다 — 실패한 호출이 반쪽짜리 세션을 남기지 않는다.
+     *
+     * @param source 실패 문구에 넣을 경로 이름. 셋이 같은 문구를 내면 로그에서 어느 경로인지 알 수 없다.
      */
-    override suspend fun login(loginId: String, password: String): String {
-        val response = authCall { api.login(LoginRequestDto(loginId, password)) }
-        if (response.accessToken.isBlank() || response.refreshToken.isBlank()) {
-            throw AuthException(AuthError.UNKNOWN, "로그인 응답에 토큰이 없습니다.")
+    private suspend fun openSession(tokens: TokenResponse, source: String): String {
+        if (tokens.accessToken.isBlank() || tokens.refreshToken.isBlank()) {
+            throw AuthException(AuthError.UNKNOWN, "$source 응답에 토큰이 없습니다.")
         }
 
-        val userUuid = jwtSubject(response.accessToken)
-            ?: throw AuthException(AuthError.UNKNOWN, "로그인 토큰에서 사용자 식별자를 읽지 못했습니다.")
+        val userUuid = jwtSubject(tokens.accessToken)
+            ?: throw AuthException(AuthError.UNKNOWN, "$source 토큰에서 사용자 식별자를 읽지 못했습니다.")
 
         session.onLoggedIn(
             StoredSession(
                 userUuid = userUuid,
-                accessToken = response.accessToken,
-                refreshToken = response.refreshToken,
+                accessToken = tokens.accessToken,
+                refreshToken = tokens.refreshToken,
             ),
         )
 
@@ -209,7 +276,28 @@ class RemoteAuthRepository(
      */
     override suspend fun deleteAccount(password: String) {
         authCall { userApi.deleteAccount(AccountDeletionRequest(password)) }
+        clearLocalAfterDeletion()
+    }
 
+    /**
+     * 소셜 회원의 탈퇴. [deleteAccount] 와 다른 건 **요청 한 줄**(본문이 없다)뿐이고, 204 뒤의 정리는
+     * [clearLocalAfterDeletion] 을 함께 쓴다 — 순서도 같다: 서버 성공을 확인한 뒤에만 로컬을 지우고,
+     * 실패하면 세션을 그대로 남긴다(진행 중인 합승이 있는 사용자는 아무 일도 없었던 것처럼 계속 써야 한다).
+     *
+     * 비밀번호 인자를 nullable 로 바꿔 [deleteAccount] 하나로 합치지 않은 이유: 그러면 로컬 회원 화면이
+     * 실수로 null 을 넘기는 것과 소셜 회원의 정상 호출이 **타입으로 구분되지 않는다.** 서버가 400 으로
+     * 막아 주긴 하지만, 「비밀번호 없이 탈퇴」는 이름이 붙은 별도 동작이어야 호출부에서 눈에 띈다.
+     */
+    override suspend fun deleteSocialAccount() {
+        authCall { userApi.deleteSocialAccount() }
+        clearLocalAfterDeletion()
+    }
+
+    /**
+     * 탈퇴 204 뒤의 로컬 정리. [deleteAccount]·[deleteSocialAccount] 가 함께 쓴다 —
+     * 무엇을 어떤 순서로 비우는지는 [deleteAccount] KDoc 에 있다.
+     */
+    private suspend fun clearLocalAfterDeletion() {
         // 204 를 받은 뒤부터는 **취소되어서는 안 된다.** 서버 계정은 이미 사라졌는데 여기서 호출부
         // 스코프가 끊기면(화면 회전 등으로 액티비티 재생성) 앱만 로그인 상태로 남는다. 그러면 다음
         // 요청마다 401 을 맞고 재발급도 거절돼 「세션이 만료됐어요」가 뜬다 — **스스로 탈퇴한

@@ -204,6 +204,11 @@ private class FakeUserSession(initial: AuthState) : UserSession {
 }
 
 private class FakeUserApi(private val failure: Throwable? = null) : UserApi {
+    override suspend fun getLoginMethods() = com.moyeota.data.remote.dto.LoginMethodsDto(true, emptyList())
+    override suspend fun sendLoginMethodCode() = Unit
+    override suspend fun verifyLoginMethodCode(request: com.moyeota.data.remote.dto.LinkCodeDto) = com.moyeota.data.remote.dto.LinkVerificationDto("link-test", 300)
+    override suspend fun linkGoogle(request: com.moyeota.data.remote.dto.GoogleLinkDto) = Unit
+
     val registered = mutableListOf<FcmTokenRequest>()
     var deleteCount = 0
         private set
@@ -231,6 +236,9 @@ private class FakeUserApi(private val failure: Throwable? = null) : UserApi {
     }
 
     override suspend fun deleteAccount(request: AccountDeletionRequest): Unit =
+        throw UnsupportedOperationException("푸시 토큰 등록과 무관하다")
+
+    override suspend fun deleteSocialAccount(): Unit =
         throw UnsupportedOperationException("푸시 토큰 등록과 무관하다")
 
     // UserApi 에 탑승 기록 조회(GET /users/me/parties)가 들어와 생긴 구현. 이 테스트와 무관하다.

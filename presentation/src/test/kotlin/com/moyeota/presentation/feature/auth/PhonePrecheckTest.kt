@@ -209,6 +209,11 @@ private class FakePhonePrecheckRepository(
     private val failure: Throwable? = null,
     private val blockSend: Boolean = false,
 ) : AuthRepository {
+    override suspend fun getLoginMethods() = com.moyeota.domain.model.LoginMethods(true, emptyList())
+    override suspend fun sendLoginMethodCode() = Unit
+    override suspend fun verifyLoginMethodCode(code: String) = com.moyeota.domain.model.LinkVerification("link-test", 300)
+    override suspend fun linkGoogle(idToken: String, verificationToken: String) = Unit
+
 
     override val authState: StateFlow<AuthState> = MutableStateFlow(AuthState.Unauthenticated)
 
@@ -252,6 +257,16 @@ private class FakePhonePrecheckRepository(
         throw UnsupportedOperationException("선확인과 무관하다")
 
     override suspend fun deleteAccount(password: String): Unit =
+        throw UnsupportedOperationException("선확인과 무관하다")
+
+    // 구글 로그인·소셜 가입·소셜 탈퇴 — 로컬 가입의 번호 선확인과 무관하다.
+    override suspend fun loginWithGoogle(idToken: String): com.moyeota.domain.model.GoogleLoginResult =
+        throw UnsupportedOperationException("선확인과 무관하다")
+
+    override suspend fun registerSocial(newUser: com.moyeota.domain.model.NewSocialUser): String =
+        throw UnsupportedOperationException("선확인과 무관하다")
+
+    override suspend fun deleteSocialAccount(): Unit =
         throw UnsupportedOperationException("선확인과 무관하다")
 
     override suspend fun getMyProfile(): UserProfileInfo =

@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
@@ -118,11 +119,10 @@ private fun AnnotatedString.Builder.appendLegalDocument(
  *
  * 진입: 03 시작하기 · 온보딩 완료 후 재실행 · 로그아웃 직후
  *
- * @param onEmailStart 「이메일로 시작하기」 → 10 프로필 설정 (가입 1단계)
+ * @param onEmailStart 「일반 회원가입」 → 10 프로필 설정 (가입 1단계)
  * @param onLogin 「로그인」(이미 계정이 있어요) → 04a 아이디 로그인
  *
- * 소셜(카카오) 로그인은 없다 — 백엔드 AuthController 에 소셜 로그인 엔드포인트가 없고
- * 가입·로그인은 아이디/비밀번호뿐이다. 카카오 버튼과 「준비 중」 안내는 그래서 뺐다.
+ * 구글 버튼은 앱 계층 Credential Manager로 연결한다. 신규 회원은 프로필·문자 인증으로 이어진다.
  *
  * 신뢰 불릿은 [LoginTrustBullets] 에 있다 — 가입 전 마지막으로 "모여타가 무엇을 해 주는가"를
  * 말하는 자리라 **코드로 확인한 사실만** 적는다(2026-10-13).
@@ -132,6 +132,9 @@ fun LoginScreen(
     onEmailStart: () -> Unit,
     onLogin: () -> Unit,
     modifier: Modifier = Modifier,
+    onGoogle: () -> Unit = {},
+    googleBusy: Boolean = false,
+    errorMessage: String? = null,
 ) {
     val context = LocalContext.current
     // 문장은 고정이므로 재구성마다 다시 만들지 않는다 (링크 두 개짜리 AnnotatedString)
@@ -169,7 +172,7 @@ fun LoginScreen(
             Text(
                 // 학교 이메일 인증은 가입 필수 경로가 아니다(마이페이지에서 나중에 추가하는 컨셉).
                 // 「학생만 · 학교 이메일로 확인」은 이제 사실이 아니라 지웠다.
-                text = "아이디로 간편하게 가입해요",
+                text = "구글 또는 아이디로 간편하게 시작해요",
                 style = MoyeotaType.BodyMd,
                 color = MoyeotaColor.TextMute,
             )
@@ -183,7 +186,7 @@ fun LoginScreen(
             Spacer(Modifier.height(24.dp))
         }
 
-        // 「이메일로 시작하기」 묶음은 스크롤 밖 = 화면 하단 고정.
+        // 「일반 회원가입」 묶음은 스크롤 밖 = 화면 하단 고정.
         // 본문이 짧아 고정 Spacer 로 CTA 위치를 잡으면 본문 아래에 빈 공간이 남는다.
         // 하단 고정이면 남는 높이를 스크롤 영역이 흡수한다.
         Column(
@@ -191,8 +194,15 @@ fun LoginScreen(
                 .fillMaxWidth()
                 .padding(horizontal = MoyeotaSpacing.ScreenGutter),
         ) {
+            if (errorMessage != null) {
+                com.moyeota.core.designsystem.component.NoticeBanner(
+                    kind = com.moyeota.core.designsystem.component.NoticeKind.ERROR, text = errorMessage)
+                Spacer(Modifier.height(12.dp))
+            }
+            GoogleContinueButton(busy = googleBusy, onClick = onGoogle)
+            Spacer(Modifier.height(12.dp))
             PrimaryCtaButton(
-                text = "이메일로 시작하기",
+                text = "일반 회원가입",
                 onClick = onEmailStart,
             )
 
@@ -260,4 +270,46 @@ private fun LoginScreenPreview() {
         onEmailStart = {},
         onLogin = {},
     )
+}
+
+/**
+ * 「Google로 계속하기」 — 왼쪽에 Google 로고, 가입과 로그인을 한 버튼으로 받는다.
+ * 모양은 디자인 시스템 SecondaryButton(테두리 알약, 52dp)과 같게 맞춘다.
+ */
+@Composable
+internal fun GoogleContinueButton(busy: Boolean, onClick: () -> Unit) {
+    androidx.compose.material3.OutlinedButton(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth().height(52.dp),
+        enabled = !busy,
+        shape = androidx.compose.foundation.shape.CircleShape,
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp, if (!busy) MoyeotaColor.BorderStrong else MoyeotaColor.Border),
+        colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(contentColor = MoyeotaColor.InkPrimary),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 24.dp),
+    ) {
+        if (!busy) {
+            // 로고는 장식이다 - 버튼 글자가 이미 Google 을 말하므로 스크린리더에 따로 읽히지 않게 한다
+            androidx.compose.foundation.Image(
+                imageVector = GoogleLogo, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(10.dp))
+        }
+        Text(text = if (busy) "로그인 중…" else "Google로 계속하기", style = MoyeotaType.ButtonLg)
+    }
+}
+
+/** Google "G" 로고(18x18). 리소스 폴더가 없는 모듈이라 벡터를 코드로 만든다. 색·모양은 Google 브랜드 지침의 원본 그대로 둔다. */
+private val GoogleLogo: androidx.compose.ui.graphics.vector.ImageVector by lazy {
+    fun androidx.compose.ui.graphics.vector.ImageVector.Builder.part(color: Long, d: String) = addPath(
+        pathData = androidx.compose.ui.graphics.vector.PathParser().parsePathString(d).toNodes(),
+        fill = androidx.compose.ui.graphics.SolidColor(androidx.compose.ui.graphics.Color(color)),
+    )
+    androidx.compose.ui.graphics.vector.ImageVector.Builder(
+        name = "GoogleLogo", defaultWidth = 18.dp, defaultHeight = 18.dp, viewportWidth = 18f, viewportHeight = 18f,
+    ).apply {
+        part(0xFF4285F4, "M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z")
+        part(0xFF34A853, "M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332C2.438 15.983 5.482 18 9 18z")
+        part(0xFFFBBC05, "M3.964 10.71c-.18-.54-.282-1.117-.282-1.71s.102-1.17.282-1.71V4.958H.957C.347 6.173 0 7.548 0 9s.348 2.827.957 4.042l3.007-2.332z")
+        part(0xFFEA4335, "M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0 5.482 0 2.438 2.017.957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z")
+    }.build()
 }

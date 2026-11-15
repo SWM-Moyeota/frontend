@@ -1,6 +1,8 @@
 package com.moyeota.domain.repository
 
 import com.moyeota.domain.model.AuthState
+import com.moyeota.domain.model.GoogleLoginResult
+import com.moyeota.domain.model.NewSocialUser
 import com.moyeota.domain.model.NewUser
 import com.moyeota.domain.model.PasswordResetTicket
 import com.moyeota.domain.model.UserProfileInfo
@@ -13,6 +15,11 @@ import kotlinx.coroutines.flow.StateFlow
  * 모든 실패는 [com.moyeota.domain.model.AuthException] 으로 던진다.
  */
 interface AuthRepository {
+    suspend fun getLoginMethods(): com.moyeota.domain.model.LoginMethods
+    suspend fun sendLoginMethodCode()
+    suspend fun verifyLoginMethodCode(code: String): com.moyeota.domain.model.LinkVerification
+    suspend fun linkGoogle(idToken: String, verificationToken: String)
+
 
     /**
      * 로그인 상태의 단일 출처. 화면 진입 라우팅(스플래시 → 로그인/홈)의 근거이자,
@@ -78,6 +85,8 @@ interface AuthRepository {
      *
      * **가입은 로그인시키지 않는다** — 서버가 토큰이 아니라 uuid 만 준다.
      * 성공 후 화면은 같은 자격증명으로 [login] 을 이어서 호출해야 한다.
+     * (구글 로그인으로 들어온 사람의 가입은 이 메서드가 아니라 [registerSocial] 이고, 그쪽은 반대로
+     * 가입과 동시에 로그인된다.)
      *
      * [NewUser.nickname] 은 **필수다** — 서버가 닉네임 없이는 가입을 받지 않는다.
      *
@@ -209,6 +218,71 @@ interface AuthRepository {
     suspend fun login(loginId: String, password: String): String
 
     /**
+     * 구글 로그인. POST /api/v1/auth/login/google (200, **토큰 불필요**).
+     *
+     * 구글 SDK(Credential Manager)가 준 `idToken` 을 서버로 넘긴다. 서버가 서명·발급자·대상(aud)·만료를
+     * 검사하므로 앱은 토큰을 열어 보지 않는다 — **다듬지도 않는다**(서명된 값이라 한 글자만 달라도 무효다).
+     *
+     * ### 성공이 둘로 갈린다 — 반환값을 반드시 분기할 것
+     * - [GoogleLoginResult.LoggedIn]: 이미 가입한 회원. **[login] 성공과 똑같은 일이 끝나 있다** —
+     *   토큰 영속화, [authState] 의 [AuthState.Authenticated] 전이, 보류 중이던 푸시 토큰 등록까지.
+     *   호출부가 세션을 따로 저장하거나 [login] 을 더 부를 필요가 없다.
+     * - [GoogleLoginResult.SignupRequired]: 처음 온 사람. **세션을 건드리지 않는다**([authState] 그대로).
+     *   받은 `signupToken` 을 들고 문자 인증([sendPhoneVerificationCode] → [verifyPhoneCode])을 거쳐
+     *   [registerSocial] 로 가입을 끝내야 한다.
+     *
+     * 탈퇴한 소셜 회원이 다시 누르면 [GoogleLoginResult.SignupRequired] 다 — 탈퇴가 소셜 연동까지 끊으므로
+     * 서버는 처음 온 사람으로 본다. 다만 같은 번호의 문자 발송은
+     * [AuthPolicy.REJOIN_RESTRICTED_DAYS][com.moyeota.domain.model.AuthPolicy.REJOIN_RESTRICTED_DAYS]일간
+     * 409 `USER109`([AuthError.REJOIN_RESTRICTED])로 막힌다.
+     *
+     * @param idToken 구글 SDK 가 준 idToken(JWT). 서버용(웹) 클라이언트 ID 로 발급받은 것이어야 한다.
+     * @throws com.moyeota.domain.model.AuthException
+     *   [AuthError.SOCIAL_TOKEN_INVALID] (401 `USER401`, 위조·만료·다른 앱용·email 없음 — 구글 로그인을 다시) /
+     *   [AuthError.SOCIAL_UNAVAILABLE] (503 `USER404`, 잠시 뒤 재시도) /
+     *   [AuthError.INVALID_REQUEST] (400, idToken 이 비었다 — 앱 쪽 결함) /
+     *   [AuthError.NETWORK] /
+     *   [AuthError.UNKNOWN] (응답의 status 를 해석하지 못했거나 그 status 에 있어야 할 값이 없다)
+     */
+    suspend fun loginWithGoogle(idToken: String): GoogleLoginResult
+
+    /**
+     * 소셜 회원가입. POST /api/v1/auth/social/register (**201 이 토큰 쌍이다**, 토큰 불필요).
+     *
+     * ### [register] 와 다르다 — 가입과 동시에 로그인된다
+     * 로컬 가입은 uuid 만 받고 [login] 을 이어서 부르지만, 소셜 회원은 비밀번호가 없어 가입 뒤 따로 로그인할
+     * 수단이 구글 로그인뿐이다. 그래서 서버가 가입 응답에 토큰을 싣고, 이 메서드는 **성공한 자리에서
+     * [login] 성공과 똑같은 세션 전이**(토큰 영속화 + [AuthState.Authenticated] + 푸시 토큰 등록)를 끝낸다.
+     * **성공 뒤에 [login] 이나 [loginWithGoogle] 을 부르지 말 것** — 이미 로그인돼 있다.
+     *
+     * ### 실패가 두 토큰을 태우지 않는다
+     * 서버는 저장이 다 끝난 뒤에야 `signupToken`·`verificationToken` 을 지운다. 닉네임 중복(409)으로
+     * 되돌아온 사용자는 닉네임만 고쳐 **같은 두 값으로** 재시도할 수 있다. 다시 받게 해야 하는 건 둘뿐이다 —
+     * [AuthError.SOCIAL_SIGNUP_EXPIRED](구글 로그인부터) · [AuthError.PHONE_NOT_VERIFIED](문자 인증부터).
+     * 실패하면 세션은 건드리지 않는다.
+     *
+     * 서버 검사 순서(`SocialAuthService.register`): 나이 → 가입 대기표 → 문자 인증 → 이미 가입된 구글 계정 →
+     * 번호 중복 → 닉네임 중복. 여러 개가 틀렸으면 앞의 것 하나만 온다.
+     *
+     * @return 가입한 사용자의 UUID 문자열([login] 과 같이 액세스 토큰의 `sub` 에서 읽는다)
+     * @throws com.moyeota.domain.model.AuthException
+     *   [AuthError.UNDER_MINIMUM_AGE] (400 `USER113`) /
+     *   [AuthError.SOCIAL_SIGNUP_EXPIRED] (401 `USER402`, 대기표 없음·10분 만료 — 구글 로그인부터 다시) /
+     *   [AuthError.PHONE_NOT_VERIFIED] (400 `USER207`, 인증 토큰 만료·소진·번호 불일치 — 문자 인증부터 다시) /
+     *   [AuthError.SOCIAL_ALREADY_REGISTERED] (409 `USER403`, 그 구글 계정이 이미 가입됨 —
+     *     [loginWithGoogle] 을 다시 부르면 로그인된다) /
+     *   [AuthError.PHONE_NUMBER_DUPLICATED] (409 `USER104`) /
+     *   [AuthError.NICKNAME_DUPLICATED] (409 `USER108`) /
+     *   [AuthError.INVALID_NICKNAME] (400 `USER107`) /
+     *   [AuthError.INVALID_PHONE_NUMBER] (400 `USER105`) /
+     *   [AuthError.INVALID_REQUEST] (400, serverMessage 가 "필드: 사유") /
+     *   [AuthError.SOCIAL_UNAVAILABLE] (503 `USER404`) /
+     *   [AuthError.NETWORK] /
+     *   [AuthError.UNKNOWN] (201 인데 토큰이 비었거나 `sub` 를 읽지 못했다)
+     */
+    suspend fun registerSocial(newUser: NewSocialUser): String
+
+    /**
      * 로그아웃. POST /api/v1/auth/logout (204, 멱등).
      *
      * **로컬 세션을 먼저 비우고 서버 무효화를 시도하므로 절대 실패하지 않는다** —
@@ -218,7 +292,8 @@ interface AuthRepository {
     suspend fun logout()
 
     /**
-     * 회원 탈퇴. DELETE /api/v1/users/me (**204 No Content**, 토큰 필수, 본문에 비밀번호).
+     * **아이디·비밀번호 회원**의 탈퇴. DELETE /api/v1/users/me (**204 No Content**, 토큰 필수, 본문에 비밀번호).
+     * 소셜(구글) 회원은 비밀번호가 없어 [deleteSocialAccount] 를 쓴다.
      *
      * Google Play 의 계정 삭제 요건을 채우는 경로다(Backend #206 / PR #216).
      *
@@ -265,6 +340,32 @@ interface AuthRepository {
      *   [AuthError.UNKNOWN]
      */
     suspend fun deleteAccount(password: String)
+
+    /**
+     * **소셜(구글) 회원**의 탈퇴. DELETE /api/v1/users/me (**204 No Content**, 토큰 필수, **본문 없음**).
+     *
+     * [deleteAccount] 와 같은 엔드포인트이고, 다른 건 본인 확인 방식 하나다 — 소셜 회원은 비밀번호가 없어
+     * 서버가 **로그인 토큰으로 요청한 것 자체**를 본인 확인으로 본다(`UserDeletionService.confirmIdentity`).
+     * 그래서 서버가 막아 주는 「한 번 더 확인」이 없다: **이 호출 하나로 계정이 지워진다.**
+     * 탈퇴 의사를 한 번 더 묻는 건 화면 몫이다(서버 문서도 그렇게 요구한다).
+     *
+     * 누가 소셜 회원인지는 [UserProfileInfo.isSocialAccount] 로 가른다. **로컬 회원에게 이 메서드를 쓰면**
+     * 서버가 400 `INVALID_REQUEST`(「비밀번호는 필수입니다.」)로 거절하고 아무것도 지워지지 않는다.
+     *
+     * 성공한 뒤의 일은 [deleteAccount] 와 **한 글자도 다르지 않다** — 서버가 하는 일, 토큰이 즉시 죽는 것,
+     * 204 를 받은 자리에서 세션과 「진행 중인 방」 기억을 비우고 [authState] 를
+     * [AuthState.Unauthenticated] 로 바꾸는 것, 푸시 토큰을 따로 해제하지 않는 것까지(그쪽 KDoc 참조).
+     * 소셜 회원에게만 더해지는 것이 하나 있다: **구글 연동도 끊긴다.** 같은 구글 계정으로 다시 로그인하면
+     * 처음 온 사람으로 취급된다([loginWithGoogle] 이 [GoogleLoginResult.SignupRequired] 를 돌려준다).
+     *
+     * @throws com.moyeota.domain.model.AuthException
+     *   [AuthError.ONGOING_PARTY_EXISTS] (409 `USER110`, 진행 중 합승 — 먼저 나가야 한다) /
+     *   [AuthError.INVALID_REQUEST] (400, 로컬 회원인데 이 메서드로 불렀다) /
+     *   [AuthError.SESSION_EXPIRED] (401) /
+     *   [AuthError.NETWORK] (연결 실패 — **세션은 그대로 남는다**) /
+     *   [AuthError.UNKNOWN]
+     */
+    suspend fun deleteSocialAccount()
 
     /**
      * 로그인한 본인의 정보 조회. GET /api/v1/local/users/info (200, **토큰 필수**).

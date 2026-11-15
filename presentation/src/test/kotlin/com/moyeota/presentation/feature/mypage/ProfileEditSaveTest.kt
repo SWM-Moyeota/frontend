@@ -310,6 +310,11 @@ private class FakeAuthRepository(
     private val images: List<ProfileImage> = PRESET_PROFILE_IMAGES,
     private val updateFailure: Throwable? = null,
 ) : AuthRepository {
+    override suspend fun getLoginMethods() = com.moyeota.domain.model.LoginMethods(true, emptyList())
+    override suspend fun sendLoginMethodCode() = Unit
+    override suspend fun verifyLoginMethodCode(code: String) = com.moyeota.domain.model.LinkVerification("link-test", 300)
+    override suspend fun linkGoogle(idToken: String, verificationToken: String) = Unit
+
 
     override val authState: StateFlow<AuthState> = MutableStateFlow(AuthState.Authenticated("user-uuid"))
 
@@ -366,6 +371,15 @@ private class FakeAuthRepository(
 
     override suspend fun deleteAccount(password: String): Unit =
         throw UnsupportedOperationException("탈퇴는 37 의 몫이다")
+
+    override suspend fun deleteSocialAccount(): Unit =
+        throw UnsupportedOperationException("탈퇴는 37 의 몫이다")
+
+    override suspend fun loginWithGoogle(idToken: String): com.moyeota.domain.model.GoogleLoginResult =
+        throw UnsupportedOperationException("36 프로필 수정과 무관하다")
+
+    override suspend fun registerSocial(newUser: com.moyeota.domain.model.NewSocialUser): String =
+        throw UnsupportedOperationException("36 프로필 수정과 무관하다")
 
     override suspend fun getMyProfile(): UserProfileInfo =
         throw UnsupportedOperationException("프리필 값은 35 가 조회해 prefill 로 넘긴다")

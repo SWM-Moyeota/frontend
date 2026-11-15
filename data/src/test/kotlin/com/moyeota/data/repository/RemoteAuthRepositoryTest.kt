@@ -7,6 +7,7 @@ import com.moyeota.data.remote.AuthApi
 import com.moyeota.data.remote.UserApi
 import com.moyeota.data.remote.dto.AccountDeletionRequest
 import com.moyeota.data.remote.dto.FcmTokenRequest
+import com.moyeota.data.remote.dto.GoogleLoginRequestDto
 import com.moyeota.data.remote.dto.LoginRequestDto
 import com.moyeota.data.remote.dto.NicknameCheckRequestDto
 import com.moyeota.data.remote.dto.NicknameCheckResponse
@@ -19,6 +20,8 @@ import com.moyeota.data.remote.dto.RegisterResponse
 import com.moyeota.data.remote.dto.SmsSendRequestDto
 import com.moyeota.data.remote.dto.SmsVerifyRequestDto
 import com.moyeota.data.remote.dto.SmsVerifyResponse
+import com.moyeota.data.remote.dto.SocialLoginResponse
+import com.moyeota.data.remote.dto.SocialRegisterRequestDto
 import com.moyeota.data.remote.dto.TokenResponse
 import com.moyeota.data.remote.dto.UpdateProfileRequest
 import com.moyeota.data.remote.dto.UserProfileResponse
@@ -30,6 +33,8 @@ import com.moyeota.domain.model.AuthError
 import com.moyeota.domain.model.AuthException
 import com.moyeota.domain.model.AuthState
 import com.moyeota.domain.model.Gender
+import com.moyeota.domain.model.GoogleLoginResult
+import com.moyeota.domain.model.NewSocialUser
 import com.moyeota.domain.model.NewUser
 import com.moyeota.domain.model.ProfileImage
 import kotlinx.coroutines.CompletableDeferred
@@ -830,6 +835,374 @@ class RemoteAuthRepositoryTest {
         assertEquals(AuthState.Unauthenticated, session.authState.value)
     }
 
+    // ─────────────────────── 구글 로그인 · 소셜 가입 · 소셜 탈퇴 ───────────────────────
+
+    private val newSocialUser = NewSocialUser(
+        signupToken = "5d0c2a7e-0000-4000-8000-000000000002",
+        verificationToken = "3f2b8c1e-0000-4000-8000-000000000001",
+        phoneNumber = "010-1234-5678",
+        nickname = "길동이",
+        name = "홍길동",
+        birthDate = LocalDate.of(2000, 1, 1),
+        gender = Gender.MALE,
+    )
+
+    private val signupRequiredResponse = SocialLoginResponse(
+        status = "SIGNUP_REQUIRED",
+        signupToken = "5d0c2a7e-0000-4000-8000-000000000002",
+        email = "hong@gmail.com",
+        name = "홍길동",
+    )
+
+    /**
+     * **LOGIN 은 로컬 로그인 성공과 똑같은 세션 전이를 한다** — 저장되는 세션의 모양까지 같아야 한다
+     * (`로그인 성공 시 액세스 토큰 sub 를 UUID 로 삼아 영속화한다` 와 단언이 같은 이유다).
+     * idToken 은 서명된 값이라 다듬지 않고 그대로 나가야 한다.
+     */
+    @Test
+    fun `구글 로그인이 LOGIN 이면 세션을 저장하고 Authenticated 로 전이한다`() = runBlocking {
+        val api = FakeAuthApi()
+        val storage = FakeTokenStorage(null)
+        val session = session(storage = storage)
+
+        val result = repository(api, session).loginWithGoogle(" google.id.token ")
+
+        assertEquals(GoogleLoginResult.LoggedIn("uuid-1"), result)
+        assertEquals(GoogleLoginRequestDto(" google.id.token "), api.googleLoginRequest)
+        assertEquals(AuthState.Authenticated("uuid-1"), session.authState.value)
+        assertEquals(StoredSession("uuid-1", ACCESS_TOKEN_WITH_SUB, "refresh.jwt"), storage.saved)
+    }
+
+    /**
+     * **처음 온 사람은 아직 로그인된 게 아니다.** 여기서 세션을 열거나 무엇이든 저장하면 가입을 끝내지 않고
+     * 나간 사람의 흔적이 기기에 남고, 화면은 가입도 안 한 사람을 홈으로 보낸다.
+     * 푸시 토큰 등록도 나가면 안 된다 — Bearer 가 없어 401 만 받는다.
+     */
+    @Test
+    fun `구글 로그인이 SIGNUP_REQUIRED 면 세션을 건드리지 않고 대기표만 돌려준다`() = runBlocking {
+        val userApi = FakeUserApi()
+        val storage = FakeTokenStorage(null)
+        val session = session(storage = storage)
+        val registrar = FcmTokenRegistrar(userApi, session)
+        registrar.onTokenAvailable("device-token")
+
+        val result = repository(FakeAuthApi(googleLoginResponse = signupRequiredResponse), session, userApi, registrar)
+            .loginWithGoogle("google.id.token")
+
+        assertEquals(
+            GoogleLoginResult.SignupRequired(
+                signupToken = "5d0c2a7e-0000-4000-8000-000000000002",
+                email = "hong@gmail.com",
+                name = "홍길동",
+            ),
+            result,
+        )
+        assertEquals(AuthState.Unauthenticated, session.authState.value)
+        assertNull(storage.saved)
+        assertNull(session.currentAccessToken())
+        assertTrue("가입 전인데 푸시 토큰을 보냈다: ${userApi.fcmCalls}", userApi.fcmCalls.isEmpty())
+    }
+
+    /**
+     * 이미 다른 계정으로 로그인된 기기에서 SIGNUP_REQUIRED 를 받아도 **있던 세션은 그대로다.**
+     * (정상 화면 흐름에서는 로그인 화면에서만 부르지만, 「건드리지 않는다」는 비어 있을 때만의 약속이 아니다.)
+     */
+    @Test
+    fun `SIGNUP_REQUIRED 는 이미 열려 있는 세션도 건드리지 않는다`() = runBlocking {
+        val existing = StoredSession("uuid-9", "access.jwt", "refresh.jwt")
+        val storage = FakeTokenStorage(existing)
+        val session = session(storage = storage)
+
+        repository(FakeAuthApi(googleLoginResponse = signupRequiredResponse), session).loginWithGoogle("google.id.token")
+
+        assertEquals(AuthState.Authenticated("uuid-9"), session.authState.value)
+        assertEquals("access.jwt", session.currentAccessToken())
+    }
+
+    /**
+     * 구글로 들어온 사람만 알림이 안 오는 결함은 화면에서 보이지 않는다 — 로그인 후속 처리가
+     * 로컬 로그인과 **같은 경로**를 타는지 직접 확인한다.
+     */
+    @Test
+    fun `구글 로그인 성공 시에도 보류된 푸시 토큰을 서버에 등록한다`() = runBlocking {
+        val userApi = FakeUserApi()
+        val session = session()
+        val registrar = FcmTokenRegistrar(userApi, session)
+        registrar.onTokenAvailable("device-token")
+
+        repository(FakeAuthApi(), session, userApi, registrar).loginWithGoogle("google.id.token")
+
+        assertEquals(listOf("PUT:device-token"), userApi.fcmCalls)
+    }
+
+    /** 로컬 로그인과 같은 방어다 — 식별자 없는 세션을 열지 않는다. */
+    @Test
+    fun `구글 로그인 토큰에서 sub 를 읽지 못하면 세션을 열지 않는다`() = runBlocking {
+        val api = FakeAuthApi(
+            googleLoginResponse = SocialLoginResponse(
+                status = "LOGIN",
+                accessToken = ACCESS_TOKEN_WITHOUT_SUB,
+                refreshToken = "refresh.jwt",
+            ),
+        )
+        val storage = FakeTokenStorage(null)
+        val session = session(storage = storage)
+
+        val thrown = runCatching { repository(api, session).loginWithGoogle("google.id.token") }.exceptionOrNull()
+
+        assertEquals(AuthError.UNKNOWN, (thrown as AuthException).error)
+        assertEquals(AuthState.Unauthenticated, session.authState.value)
+        assertNull(storage.saved)
+    }
+
+    /** 매퍼가 끊은 응답(모르는 status·빠진 토큰)이 Repository 를 지나며 세션을 열지 않는지 본다. */
+    @Test
+    fun `구글 로그인 응답을 해석하지 못하면 세션을 열지 않는다`() {
+        listOf(
+            SocialLoginResponse(status = "SUSPENDED", accessToken = ACCESS_TOKEN_WITH_SUB, refreshToken = "refresh.jwt"),
+            SocialLoginResponse(status = null, accessToken = ACCESS_TOKEN_WITH_SUB, refreshToken = "refresh.jwt"),
+            SocialLoginResponse(status = "LOGIN", accessToken = ACCESS_TOKEN_WITH_SUB),
+            SocialLoginResponse(status = "SIGNUP_REQUIRED", email = "hong@gmail.com"),
+        ).forEach { response ->
+            val storage = FakeTokenStorage(null)
+            val session = session(storage = storage)
+
+            val thrown = runCatching {
+                runBlocking { repository(FakeAuthApi(googleLoginResponse = response), session).loginWithGoogle("t") }
+            }.exceptionOrNull()
+
+            assertEquals("$response", AuthError.UNKNOWN, (thrown as AuthException).error)
+            assertEquals("$response 에서 세션이 열렸다", AuthState.Unauthenticated, session.authState.value)
+            assertNull("$response 에서 세션이 저장됐다", storage.saved)
+        }
+    }
+
+    /**
+     * 구글 로그인의 세 실패. **401 이 세션 만료로 읽히면 안 된다** — 로그인 전이라 만료될 세션이 없다.
+     * 400 은 idToken 을 비워 보낸 앱 쪽 결함이다.
+     */
+    @Test
+    fun `구글 로그인 실패는 소셜 사유로 올라오고 세션을 열지 않는다`() {
+        val failures = listOf(
+            httpException(401, """{"code":"USER401","message":"구글 로그인에 실패했습니다. 다시 시도해 주세요."}""") to
+                AuthError.SOCIAL_TOKEN_INVALID,
+            httpException(503, """{"code":"USER404","message":"지금은 로그인을 진행할 수 없습니다. 잠시 후 다시 시도해 주세요."}""") to
+                AuthError.SOCIAL_UNAVAILABLE,
+            httpException(400, """{"code":"INVALID_REQUEST","message":"idToken: idToken 은 필수입니다."}""") to
+                AuthError.INVALID_REQUEST,
+            IOException("offline") to AuthError.NETWORK,
+        )
+
+        failures.forEach { (failure, expected) ->
+            val session = session()
+
+            val thrown = runCatching {
+                runBlocking { repository(FakeAuthApi(googleLoginFailure = failure), session).loginWithGoogle("t") }
+            }.exceptionOrNull()
+
+            assertEquals(expected, (thrown as AuthException).error)
+            assertEquals("$expected 에서 세션이 열렸다", AuthState.Unauthenticated, session.authState.value)
+        }
+    }
+
+    /**
+     * **로컬 가입과 반대다** — `가입은 uuid 만 돌려주고 로그인시키지는 않는다` 의 거울상이다.
+     * 201 이 토큰 쌍이라 성공한 자리에서 세션이 열려야 하고, 화면이 login 을 더 부를 필요가 없다.
+     */
+    @Test
+    fun `소셜 가입이 성공하면 세션을 저장하고 Authenticated 로 전이한다`() = runBlocking {
+        val api = FakeAuthApi()
+        val storage = FakeTokenStorage(null)
+        val session = session(storage = storage)
+
+        val uuid = repository(api, session).registerSocial(newSocialUser)
+
+        assertEquals("uuid-1", uuid)
+        assertEquals(AuthState.Authenticated("uuid-1"), session.authState.value)
+        assertEquals(StoredSession("uuid-1", ACCESS_TOKEN_WITH_SUB, "refresh.jwt"), storage.saved)
+        // 가입이 login·구글 로그인을 몰래 이어 부르지 않는다 — 토큰은 가입 응답에서 왔다.
+        assertNull(api.loginRequest)
+        assertNull(api.googleLoginRequest)
+    }
+
+    /** 나간 본문 — 번호는 숫자열, 닉네임은 trim, 생년월일은 UTC 자정. 두 토큰은 그대로. */
+    @Test
+    fun `소셜 가입은 대기표와 인증 토큰을 그대로 싣고 나머지는 로컬 가입처럼 다듬는다`() = runBlocking {
+        val api = FakeAuthApi()
+
+        repository(api, session()).registerSocial(newSocialUser.copy(nickname = " 길동이 "))
+
+        assertEquals(
+            SocialRegisterRequestDto(
+                signupToken = "5d0c2a7e-0000-4000-8000-000000000002",
+                verificationToken = "3f2b8c1e-0000-4000-8000-000000000001",
+                phoneNumber = "01012345678",
+                nickname = "길동이",
+                name = "홍길동",
+                birthDate = "2000-01-01T00:00:00Z",
+                gender = "MALE",
+            ),
+            api.socialRegisterRequest,
+        )
+    }
+
+    @Test
+    fun `소셜 가입 성공 시에도 보류된 푸시 토큰을 서버에 등록한다`() = runBlocking {
+        val userApi = FakeUserApi()
+        val session = session()
+        val registrar = FcmTokenRegistrar(userApi, session)
+        registrar.onTokenAvailable("device-token")
+
+        repository(FakeAuthApi(), session, userApi, registrar).registerSocial(newSocialUser)
+
+        assertEquals(listOf("PUT:device-token"), userApi.fcmCalls)
+    }
+
+    /**
+     * 201 인데 토큰이 비었으면 빈 세션을 열지 않는다. 서버에는 계정이 이미 만들어졌지만
+     * 사용자는 구글 로그인을 다시 하면 LOGIN 으로 들어온다 — 갇히지 않는다.
+     */
+    @Test
+    fun `소셜 가입 응답에 토큰이 없으면 세션을 열지 않는다`() = runBlocking {
+        val api = FakeAuthApi(socialRegisterResponse = TokenResponse())
+        val storage = FakeTokenStorage(null)
+        val session = session(storage = storage)
+
+        val thrown = runCatching { repository(api, session).registerSocial(newSocialUser) }.exceptionOrNull()
+
+        assertEquals(AuthError.UNKNOWN, (thrown as AuthException).error)
+        assertEquals(AuthState.Unauthenticated, session.authState.value)
+        assertNull(storage.saved)
+    }
+
+    /**
+     * 소셜 가입의 실패들. 되돌릴 단계가 전부 다르다 — 구글 로그인부터(402) / 문자 인증부터(207) /
+     * 구글 로그인을 다시 부르면 로그인됨(403) / 닉네임만 고침(108). 어느 것도 세션을 열지 않는다.
+     */
+    @Test
+    fun `소셜 가입 실패는 사유별로 갈리고 세션을 열지 않는다`() {
+        val failures = listOf(
+            httpException(401, """{"code":"USER402","message":"가입 시간이 만료되었습니다. 구글 로그인부터 다시 진행해 주세요."}""") to
+                AuthError.SOCIAL_SIGNUP_EXPIRED,
+            httpException(409, """{"code":"USER403","message":"이미 가입된 계정입니다. 다시 로그인해 주세요."}""") to
+                AuthError.SOCIAL_ALREADY_REGISTERED,
+            httpException(503, """{"code":"USER404","message":"지금은 로그인을 진행할 수 없습니다. 잠시 후 다시 시도해 주세요."}""") to
+                AuthError.SOCIAL_UNAVAILABLE,
+            httpException(400, """{"code":"USER207","message":"휴대폰 인증이 필요합니다."}""") to
+                AuthError.PHONE_NOT_VERIFIED,
+            httpException(400, """{"code":"USER113","message":"만 14세 미만은 가입할 수 없습니다."}""") to
+                AuthError.UNDER_MINIMUM_AGE,
+            httpException(409, """{"code":"USER104","message":"이미 가입된 전화번호입니다."}""") to
+                AuthError.PHONE_NUMBER_DUPLICATED,
+            httpException(409, """{"code":"USER108","message":"이미 사용 중인 닉네임입니다."}""") to
+                AuthError.NICKNAME_DUPLICATED,
+        )
+
+        failures.forEach { (failure, expected) ->
+            val storage = FakeTokenStorage(null)
+            val session = session(storage = storage)
+
+            val thrown = runCatching {
+                runBlocking {
+                    repository(FakeAuthApi(socialRegisterFailure = failure), session).registerSocial(newSocialUser)
+                }
+            }.exceptionOrNull()
+
+            assertEquals(expected, (thrown as AuthException).error)
+            assertEquals("$expected 에서 세션이 열렸다", AuthState.Unauthenticated, session.authState.value)
+            assertNull("$expected 에서 세션이 저장됐다", storage.saved)
+        }
+    }
+
+    /**
+     * **소셜 탈퇴는 본문 없는 호출로 나간다.** 비밀번호가 없는 회원이라 실을 것이 없고, 본문 있는 쪽
+     * (`deleteAccount`)으로 나가면 서버가 빈 비밀번호를 받는다. 실제 HTTP 요청에 본문이 없는지는
+     * `UserApiDeleteBodyTest` 가 Retrofit 을 돌려 확인한다 — 여기서는 「어느 메서드를 불렀는가」를 본다.
+     */
+    @Test
+    fun `소셜 탈퇴는 본문 없는 호출로 한 번만 나간다`() = runBlocking {
+        val userApi = FakeUserApi()
+        val session = session(StoredSession("uuid-1", "access.jwt", "refresh.jwt"))
+
+        repository(FakeAuthApi(), session, userApi).deleteSocialAccount()
+
+        assertEquals(1, userApi.socialDeletionCount)
+        assertTrue("소셜 탈퇴가 본문 있는 쪽으로도 나갔다: ${userApi.deletions}", userApi.deletions.isEmpty())
+    }
+
+    /** 반대쪽 못 박기 — 비밀번호 탈퇴가 본문 없는 쪽으로 새지 않는다. */
+    @Test
+    fun `비밀번호 탈퇴는 본문 없는 호출을 부르지 않는다`() = runBlocking {
+        val userApi = FakeUserApi()
+        val session = session(StoredSession("uuid-1", "access.jwt", "refresh.jwt"))
+
+        repository(FakeAuthApi(), session, userApi).deleteAccount("Passw0rd!")
+
+        assertEquals(0, userApi.socialDeletionCount)
+    }
+
+    /** 204 뒤의 정리는 비밀번호 탈퇴와 같다 — 세션, 그리고 「진행 중인 방」 기억까지. */
+    @Test
+    fun `소셜 탈퇴가 성공하면 세션과 방 기억을 비우고 미로그인으로 전이한다`() = runBlocking {
+        val storage = SpyActivePartyStorage(RememberedParty("42", "uuid-1"))
+        val session = session(StoredSession("uuid-1", "access.jwt", "refresh.jwt"))
+
+        repository(FakeAuthApi(), session, activePartyStorage = storage).deleteSocialAccount()
+
+        assertEquals(AuthState.Unauthenticated, session.authState.value)
+        assertNull(session.currentAccessToken())
+        assertNull(session.currentRefreshToken())
+        assertNull(storage.load())
+    }
+
+    /**
+     * 진행 중인 합승(409)·로컬 회원인데 잘못 부름(400)·오프라인 — 어느 것이든 **아무 일도 없었던 것처럼**
+     * 계속 쓸 수 있어야 한다. 400 은 서버가 「비밀번호는 필수입니다.」로 끊는 경우다.
+     */
+    @Test
+    fun `소셜 탈퇴가 실패하면 세션과 방 기억이 그대로 남는다`() {
+        val failures = listOf(
+            httpException(409, """{"code":"USER110","message":"진행 중인 동승이 있어 탈퇴할 수 없습니다. 동승이 끝난 뒤 다시 시도해 주세요."}""") to
+                AuthError.ONGOING_PARTY_EXISTS,
+            httpException(400, """{"code":"INVALID_REQUEST","message":"비밀번호는 필수입니다."}""") to
+                AuthError.INVALID_REQUEST,
+            IOException("offline") to AuthError.NETWORK,
+        )
+
+        failures.forEach { (failure, expected) ->
+            val remembered = RememberedParty("42", "uuid-1")
+            val storage = SpyActivePartyStorage(remembered)
+            val session = session(StoredSession("uuid-1", "access.jwt", "refresh.jwt"))
+            val userApi = FakeUserApi(deleteAccountFailure = failure)
+
+            val thrown = runCatching {
+                runBlocking {
+                    repository(FakeAuthApi(), session, userApi, activePartyStorage = storage).deleteSocialAccount()
+                }
+            }.exceptionOrNull()
+
+            assertEquals(expected, (thrown as AuthException).error)
+            assertEquals("$expected 에서 세션이 날아갔다", AuthState.Authenticated("uuid-1"), session.authState.value)
+            assertEquals("$expected 에서 방 기억이 날아갔다", remembered, runBlocking { storage.load() })
+        }
+    }
+
+    /** 비밀번호 탈퇴와 같은 이유다 — 서버가 FCM 토큰을 비우고 리프레시도 전량 취소했다. */
+    @Test
+    fun `소셜 탈퇴도 푸시 해제와 로그아웃 API 를 덧붙여 부르지 않는다`() = runBlocking {
+        val api = FakeAuthApi()
+        val userApi = FakeUserApi()
+        val session = session(StoredSession("uuid-1", "access.jwt", "refresh.jwt"))
+        val registrar = FcmTokenRegistrar(userApi, session)
+        registrar.onTokenAvailable("device-token")
+        userApi.fcmCalls.clear()
+
+        repository(api, session, userApi, registrar).deleteSocialAccount()
+
+        assertTrue("소셜 탈퇴가 FCM 해제를 불렀다: ${userApi.fcmCalls}", userApi.fcmCalls.isEmpty())
+        assertNull(api.logoutRequest)
+    }
+
     private fun httpException(code: Int, body: String) = HttpException(
         Response.error<Any>(code, body.toResponseBody("application/json".toMediaType())),
     )
@@ -873,7 +1246,17 @@ private class FakeAuthApi(
     private val smsSendFailure: Throwable? = null,
     private val smsVerifyFailure: Throwable? = null,
     private val verificationToken: String = "3f2b8c1e-0000-4000-8000-000000000001",
+    private val googleLoginResponse: SocialLoginResponse =
+        SocialLoginResponse(status = "LOGIN", accessToken = ACCESS_TOKEN_WITH_SUB, refreshToken = "refresh.jwt"),
+    private val googleLoginFailure: Throwable? = null,
+    private val socialRegisterResponse: TokenResponse =
+        TokenResponse(accessToken = ACCESS_TOKEN_WITH_SUB, refreshToken = "refresh.jwt"),
+    private val socialRegisterFailure: Throwable? = null,
 ) : AuthApi {
+    var googleLoginRequest: GoogleLoginRequestDto? = null
+        private set
+    var socialRegisterRequest: SocialRegisterRequestDto? = null
+        private set
     var registerRequest: RegisterRequestDto? = null
         private set
     var nicknameRequest: NicknameCheckRequestDto? = null
@@ -911,6 +1294,18 @@ private class FakeAuthApi(
         loginFailure?.let { throw it }
         // 서버는 사용자 식별자를 주지 않는다 — 토큰 쌍이 전부다.
         return TokenResponse(accessToken = accessToken, refreshToken = "refresh.jwt")
+    }
+
+    override suspend fun loginWithGoogle(request: GoogleLoginRequestDto): SocialLoginResponse {
+        googleLoginRequest = request
+        googleLoginFailure?.let { throw it }
+        return googleLoginResponse
+    }
+
+    override suspend fun registerSocial(request: SocialRegisterRequestDto): TokenResponse {
+        socialRegisterRequest = request
+        socialRegisterFailure?.let { throw it }
+        return socialRegisterResponse
     }
 
     // 재발급은 OkHttp Authenticator 경로 전용이라 Repository 테스트에서는 호출되지 않는다.
@@ -973,6 +1368,11 @@ private class FakeUserApi(
     private val profileImagesFailure: Throwable? = null,
     private val resetProfileImageFailure: Throwable? = null,
 ) : UserApi {
+    override suspend fun getLoginMethods() = com.moyeota.data.remote.dto.LoginMethodsDto(true, emptyList())
+    override suspend fun sendLoginMethodCode() = Unit
+    override suspend fun verifyLoginMethodCode(request: com.moyeota.data.remote.dto.LinkCodeDto) = com.moyeota.data.remote.dto.LinkVerificationDto("link-test", 300)
+    override suspend fun linkGoogle(request: com.moyeota.data.remote.dto.GoogleLinkDto) = Unit
+
     /** 푸시 토큰 호출이 **일어난 순서**. 어떤 호출이 실제로 나갔는지를 그대로 남긴다. */
     val fcmCalls = mutableListOf<String>()
 
@@ -981,6 +1381,13 @@ private class FakeUserApi(
 
     /** 탈퇴 요청으로 나간 본문. 비밀번호가 다듬어지지 않았는지까지 본다. */
     val deletions = mutableListOf<AccountDeletionRequest>()
+
+    /**
+     * **본문 없는** 탈퇴(소셜 회원)가 나간 횟수. 본문이 없어 [deletions] 에 담을 것이 없다 —
+     * 두 기록을 나눠 둬야 「소셜 탈퇴가 본문 있는 쪽으로 나갔다」를 잡을 수 있다.
+     */
+    var socialDeletionCount = 0
+        private set
 
     /**
      * 되돌리기가 나간 횟수. 204 라 돌려받을 값이 없어 **"몇 번 나갔는가"만이 검증 대상**이다 —
@@ -1026,6 +1433,12 @@ private class FakeUserApi(
         deleteAccountFailure?.let { throw it }
     }
 
+    override suspend fun deleteSocialAccount() {
+        // 실패해도 세어 둔다 — 같은 이유다. 실패는 본문 있는 탈퇴와 같은 설정을 쓴다(서버 경로가 하나다).
+        socialDeletionCount++
+        deleteAccountFailure?.let { throw it }
+    }
+
     // UserApi 에 탑승 기록 조회(GET /users/me/parties)가 들어와 생긴 구현. 인증 흐름과 무관하다.
     override suspend fun getMyRideRecords(cursor: Long?, size: Int): RideRecordPageResponse =
         throw UnsupportedOperationException("인증 흐름과 무관하다")
@@ -1036,6 +1449,11 @@ private class FakeUserApi(
  * "세션 정리보다 먼저 해제했는가"는 호출 횟수로는 알 수 없고, 이렇게 시점을 찍어야만 드러난다.
  */
 private class TokenProbingUserApi(private val accessToken: () -> String?) : UserApi {
+    override suspend fun getLoginMethods() = com.moyeota.data.remote.dto.LoginMethodsDto(true, emptyList())
+    override suspend fun sendLoginMethodCode() = Unit
+    override suspend fun verifyLoginMethodCode(request: com.moyeota.data.remote.dto.LinkCodeDto) = com.moyeota.data.remote.dto.LinkVerificationDto("link-test", 300)
+    override suspend fun linkGoogle(request: com.moyeota.data.remote.dto.GoogleLinkDto) = Unit
+
     var accessTokenAtDelete: String? = null
         private set
     var deleteCount = 0
@@ -1063,6 +1481,9 @@ private class TokenProbingUserApi(private val accessToken: () -> String?) : User
     override suspend fun deleteAccount(request: AccountDeletionRequest) =
         throw UnsupportedOperationException("푸시 해제 순서 검증 전용 페이크다")
 
+    override suspend fun deleteSocialAccount() =
+        throw UnsupportedOperationException("푸시 해제 순서 검증 전용 페이크다")
+
     override suspend fun getMyRideRecords(cursor: Long?, size: Int): RideRecordPageResponse =
         throw UnsupportedOperationException("푸시 해제 순서 검증 전용 페이크다")
 }
@@ -1077,6 +1498,11 @@ private class TokenProbingUserApi(private val accessToken: () -> String?) : User
  * 비껴갈 수 있어 회귀 테스트로서 믿을 수 없다.
  */
 private class SuspendingFcmUserApi(private val entered: CompletableDeferred<Unit>) : UserApi {
+    override suspend fun getLoginMethods() = com.moyeota.data.remote.dto.LoginMethodsDto(true, emptyList())
+    override suspend fun sendLoginMethodCode() = Unit
+    override suspend fun verifyLoginMethodCode(request: com.moyeota.data.remote.dto.LinkCodeDto) = com.moyeota.data.remote.dto.LinkVerificationDto("link-test", 300)
+    override suspend fun linkGoogle(request: com.moyeota.data.remote.dto.GoogleLinkDto) = Unit
+
     override suspend fun getMyProfile(): UserProfileResponse =
         throw UnsupportedOperationException("로그아웃 취소 검증 전용 페이크다")
 
@@ -1097,6 +1523,9 @@ private class SuspendingFcmUserApi(private val entered: CompletableDeferred<Unit
     }
 
     override suspend fun deleteAccount(request: AccountDeletionRequest) =
+        throw UnsupportedOperationException("로그아웃 취소 검증 전용 페이크다")
+
+    override suspend fun deleteSocialAccount() =
         throw UnsupportedOperationException("로그아웃 취소 검증 전용 페이크다")
 
     override suspend fun getMyRideRecords(cursor: Long?, size: Int): RideRecordPageResponse =
