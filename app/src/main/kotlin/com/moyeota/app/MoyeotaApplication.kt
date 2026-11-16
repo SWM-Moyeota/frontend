@@ -45,16 +45,45 @@ class MoyeotaApplication : Application(), SingletonImageLoader.Factory {
         // 수집 스위치가 뒤에 있으면 바로 그 사고만 영영 못 본다.
         configureCrashReporting()
         appContainer = AppContainer(context = this, debugLogging = isDebuggableBuild())
-        // 토큰이 비어 있으면 아무것도 꽂지 않는다(Analytics.track 무동작). 세션 구독은 appScope 수명만큼 산다.
-        MixpanelAnalyticsReporter.install(
-            context = this,
-            token = BuildConfig.MIXPANEL_TOKEN,
-            session = appContainer.userSession,
-            debuggable = isDebuggableBuild(),
-            scope = appScope,
-        )
+        installAnalytics()
         createNotificationChannel()
         fetchFcmToken()
+    }
+
+    /**
+     * 행동 이벤트를 Mixpanel·Amplitude·PostHog 로 보낸다. **같은 이벤트가 켜진 도구 모두에게 간다.**
+     * 키가 비어 있는 도구는 SDK 를 켜지 않고 건너뛴다 — 셋 다 비면 아무것도 꽂지 않아 `Analytics.track` 은 무동작이다.
+     * 세션 구독은 appScope 수명만큼 산다.
+     *
+     * 도구 하나의 초기화가 터져도 앱 시작과 나머지 도구를 막지 않는다 — 분석은 부가 기능이다.
+     */
+    private fun installAnalytics() {
+        val debuggable = isDebuggableBuild()
+        val destinations = listOf<() -> AnalyticsDestination?>(
+            { MixpanelAnalyticsReporter.create(this, BuildConfig.MIXPANEL_TOKEN, debuggable) },
+            {
+                AmplitudeAnalyticsReporter.create(
+                    context = this,
+                    apiKey = BuildConfig.AMPLITUDE_API_KEY,
+                    serverZone = BuildConfig.AMPLITUDE_SERVER_ZONE,
+                    debuggable = debuggable,
+                )
+            },
+            {
+                PostHogAnalyticsReporter.create(
+                    context = this,
+                    apiKey = BuildConfig.POSTHOG_API_KEY,
+                    host = BuildConfig.POSTHOG_HOST,
+                    debuggable = debuggable,
+                )
+            },
+        ).mapNotNull { create ->
+            runCatching(create)
+                .onFailure { Log.w(ANALYTICS_TAG, "분석 도구 초기화 실패: ${it.javaClass.simpleName}") }
+                .getOrNull()
+        }
+        Log.i(ANALYTICS_TAG, "켜진 분석 도구: ${destinations.joinToString { it.name }.ifEmpty { "없음" }}")
+        AnalyticsReporters.install(destinations, appContainer.userSession, appScope)
     }
 
     /**
@@ -203,5 +232,6 @@ class MoyeotaApplication : Application(), SingletonImageLoader.Factory {
 
     private companion object {
         const val TAG = "MoyeotaFcm"
+        const val ANALYTICS_TAG = "MoyeotaAnalytics"
     }
 }
