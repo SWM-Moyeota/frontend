@@ -103,8 +103,9 @@ class DummyRideRepository : RideRepository {
     // 서버와 같은 모양으로 합류 직후 상태만 돌려준다 — 동승자 목록은 상세 조회가 맡는다.
     override suspend fun joinParty(partyId: Long): PartyStatus {
         val joined = getNearbyParties().first()
+        // 합류 직후는 늘 모집 중이다 — 정원이 차도 서버는 ACTIVE 로 둔다(`b16551b7`). 확정된 방은 참여 자체가 막힌다
         return PartyStatus(
-            status = RideStatus.CONFIRMED,
+            status = RideStatus.RECRUITING,
             currentMembers = joined.members.size,
         )
     }

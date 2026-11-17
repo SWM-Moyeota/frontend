@@ -713,18 +713,22 @@ class RemoteRideRepositoryTest {
     }
 
     /**
-     * **출발은 방장 전용이 아니다** — 그래서 `NOT_PARTY_HOST` 를 사유로 두지 않았다. 옛 서버나
-     * 되돌린 배포가 그 코드를 보내도 **사유가 되지 않고** 일반 문구로 떨어져야 한다
-     * (「방장만 할 수 있어요」라고 말하면 도착한 멤버가 출발을 포기한다).
+     * 🔴 **출발은 이제 방장 전용이다**(`b16551b7`: 「출발은 도착한 방장만 누른다」) — 예전 테스트는
+     * 「출발에 방장 전용 코드가 와도 사유가 되지 않는다」였고, 그 전제가 뒤집혔다.
+     *
+     * 403 이 **두 가지 뜻**(방장 아님 · 멤버 아님)이라 상태 코드로는 갈리지 않는다 — 코드로 가른다.
      */
     @Test
-    fun `출발에 방장 전용 코드가 와도 사유가 되지 않는다`() = runBlocking {
-        val error = departError(httpError(403, "NOT_PARTY_HOST", "방장만 수행할 수 있습니다."))
+    fun `출발 403 은 방장 아님과 멤버 아님으로 갈린다`() = runBlocking {
+        val notHost = departError(httpError(403, "NOT_PARTY_HOST", "방장만 수행할 수 있습니다."))
+        val notMember = departError(httpError(403, "NOT_PARTY_MEMBER", "파티 멤버가 아닙니다."))
 
-        assertEquals("NOT_PARTY_HOST", error.code)
-        assertFalse(error.isNotMember)
-        assertFalse(error.isNotArrived)
-        assertEquals(403, error.httpStatus)
+        assertTrue(notHost.isNotHost)
+        assertFalse(notHost.isNotMember)
+        assertFalse(notHost.isNotArrived)
+        assertTrue(notMember.isNotMember)
+        assertFalse(notMember.isNotHost)
+        assertEquals(403, notHost.httpStatus)
     }
 
     /**
