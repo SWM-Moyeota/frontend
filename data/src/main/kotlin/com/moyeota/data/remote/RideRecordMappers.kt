@@ -38,7 +38,6 @@ fun RideRecordResponse.toRideRecord(currentUuid: String?): RideRecord = RideReco
     departure = departure.orEmpty(),
     destination = destination.orEmpty(),
     pickupTime = pickupTime,
-    dropoffTime = dropoffTime,
     totalFare = totalFare,
     farePerPerson = farePerPerson,
     memberCount = currentMembers,

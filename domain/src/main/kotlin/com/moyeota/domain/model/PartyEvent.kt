@@ -11,15 +11,19 @@ package com.moyeota.domain.model
  * - 구독 직후 [Snapshot] 이 방 상세 **전체**를 준다. 끊겨 다시 붙을 때마다 또 온다 — 그 사이
  *   놓친 변화를 스냅샷이 통째로 보정하므로 **catch-up 조회도, 평상시 폴링도 필요 없다**.
  * - 그 뒤로는 변경분만 온다. [MemberJoined]·[MemberLeft] 는 한 명씩 들고 나는 것이고, 둘 다 **변경 후
- *   방 상태**를 함께 실어 주므로 정원이 차서 생기는 전이(모집 중 → 정원 충족)도 이 신호로 알 수 있다.
- * - 방을 끝내는 길에서 셋이 더 온다: [RecruitingClosed](모집 시간이 끝나 지금 인원으로 마감)·
- *   [Confirmed](방장이 약속 시간을 확정)·[MemberArrived](누가 출발지에 도착). 이 셋도 같은 version
- *   규칙을 탄다.
+ *   방 상태**를 함께 실어 준다. ⚠️ 다만 그 status 로 **정원이 찼는지는 알 수 없다** — 서버가 정원이
+ *   찬 방도 ACTIVE 로 두기 때문이다(`b16551b7`). 정원 판정은 멤버 수와 정원을 직접 비교할 일이다.
+ * - 방을 끝내는 길에서 둘이 더 온다: [Confirmed](방장이 약속 시간·만남 장소를 확정)·
+ *   [MemberArrived](누가 출발지에 도착). 둘도 같은 version 규칙을 탄다.
  *
- * 서버의 발행처는 `PartyService` 의 참여·퇴장·종료(join/leave/finish/expire)와 **방을 끝내는 정식
- * 경로**(confirm/arrive/depart)·모집 마감 스윕이다. 예전에 이 자리에
- * 적혀 있던 배차·운행 전이(`MATCHING→DRIVER_ASSIGNED→IN_RIDE`)는 **서버에서 사라졌다** — 그 status
- * 자체가 없어졌으므로 기다릴 신호도, 폴링으로 메울 단계도 없다.
+ * `recruiting-closed`(모집 마감)는 **서버가 없앴다**(`b16551b7`). 「정원이 차서 모집이 끝난다」는
+ * 전이 자체가 사라졌고, 15분 모집 만료는 **혼자인 방만** 닫으므로 그때는 [Closed] 가 온다.
+ * 모집을 끝내는 신호는 [Confirmed] 하나다.
+ *
+ * 서버의 발행처는 `PartyService` 의 참여·퇴장과 **방을 끝내는 정식 경로**(confirm/arrive/depart)·
+ * 자동 정리 스윕이다. 예전에 이 자리에 적혀 있던 배차·운행 전이
+ * (`MATCHING→DRIVER_ASSIGNED→IN_RIDE`)는 **서버에서 사라졌다** — 그 status 자체가 없어졌으므로
+ * 기다릴 신호도, 폴링으로 메울 단계도 없다.
  *
  * **[Snapshot] 이 먼저 온다는 보장은 없다.** 서버는 구독을 레지스트리에 **먼저 등록한 뒤** DB 를 읽어
  * `connected` 를 보내므로, 그 사이에 커밋된 변경분이 `connected` 보다 **먼저** 도착할 수 있다
@@ -96,36 +100,57 @@ sealed interface PartyEvent {
     ) : PartyEvent
 
     /**
-     * 모집이 마감됐다(`recruiting-closed`). 서버의 모집 정리 스윕이 **시간이 다 된 방**을 지금 인원
-     * (2명 이상)으로 닫을 때 보낸다 — 정원이 차서 마감되는 경우는 이게 아니라 [MemberJoined] 의
-     * [status] 에 실려 온다(그쪽이 마지막 자리를 채운 당사자의 신호다).
-     *
-     * [status] 가 **서버 enum 이름 그대로인 문자열**인 것은 [Confirmed] 와 함께 리더가 고정한 계약이다
-     * — [MemberJoined]·[MemberLeft] 의 [RideStatus] 와 모양이 다르다. 지금 이 자리에 오는 값은
-     * `"COMPLETED"` 하나뿐이고(모집이 끝났다는 신호다) 화면은 그걸 읽기보다 **모집이 끝났다는 사실**만
-     * 쓴다. 상태 전이의 근거가 필요하면 [Snapshot] 이나 상세 재조회가 단일 창구다.
-     */
-    data class RecruitingClosed(
-        val status: String,
-        /** 반영 **뒤**의 방 순번. 순서 판정 규칙은 이 파일 맨 위 표. null 이면 옛 서버다. */
-        val version: Long? = null,
-    ) : PartyEvent
-
-    /**
-     * 방장이 **약속 시간을 확정했다**(`confirmed`). 이 신호 뒤로 방은 성질이 바뀐다 — 모집이 끝나고
-     * (status 는 `COMPLETED`) **아무도 나갈 수 없으며**(409 `CANNOT_LEAVE_CONFIRMED_PARTY`),
-     * 「합승 완료」도 막힌다(409 `USE_DEPART_FOR_CONFIRMED_PARTY`). 끝내는 길은 「출발」 하나다.
+     * 방장이 **약속 시간과 만남 장소를 확정했다**(`confirmed`). 이 신호 뒤로 방은 성질이 바뀐다 —
+     * 모집이 끝나(status 는 `COMPLETED`) **참여가 막힌다**. **나가기는 된다** — 확정을 이유로 막던
+     * 규칙은 서버에서 사라졌고(`b16551b7`), 지금 나가기를 막는 건 **도착을 누른 사람**뿐이다
+     * (409 `ARRIVED_MEMBER_CANNOT_LEAVE`). 방을 끝내는 길은 **도착한 방장의 「출발」** 하나다.
      *
      * [departureAt] 은 **ISO-8601 문자열 그대로**다([Ride.departureAt] 과 같은 관례 — 파싱은 화면이 한다).
      * **null 이면 서버가 약속 시간을 말하지 않은 것**이고(옛 배포·필드 누락), 그때는 이 프레임만으로
      * 화면을 그릴 수 없으므로 상세를 다시 읽어야 한다 — 「확정됐다」는 사실만 알고 **언제**를 모르면
      * 21 대기 화면이 「약속 시간 ?」을 그리게 된다.
      *
-     * [status] 가 문자열인 이유는 [RecruitingClosed] 와 같다.
+     * ### 출발지 셋이 함께 온다 — 받아서 **덮어써야** 한다 ★
+     * 확정은 방의 출발지를 만남 장소로 옮긴다(서버 `Party.confirm`). 그래서 이 프레임에
+     * [departureLat]·[departureLng]·[departurePlace] 가 실려 오고, 화면은 그걸 방의 출발지로
+     * 교체해야 한다. 안 하면 지도가 옛 출발지를 가리키고, 무엇보다 **도착 버튼이 틀린 곳을 기준으로
+     * 판정**돼 약속 장소에 서 있는 사람이 「출발지에서 너무 멀어요」를 맞는다.
+     *
+     * 셋은 **다 있을 때만** 쓴다 — 일부만 온 프레임으로 덮어쓰면 좌표와 이름이 어긋난 출발지가
+     * 만들어진다. 그때는 상세를 다시 읽는 쪽이 맞다.
+     *
+     * ### 왜 하나의 타입(`MeetingPlace?`)으로 묶지 않았나 ★
+     * 매퍼가 이미 「셋이 다 있거나 전부 null」로 보장하므로(`PartyMappers.meetingPlaceOrNull`) 묶는
+     * 쪽이 더 깔끔해 보인다. 그런데 묶으면 **정보가 하나 사라진다**: 「반쪽으로 왔다」는 사실이다.
+     *
+     * | 프레임 | 셋 다 nullable (지금) | `MeetingPlace?` 로 묶으면 |
+     * |---|---|---|
+     * | 셋 다 있다 | 출발지 교체 | 같다 |
+     * | **일부만 있다** | 화면이 알아채고 **상세 재조회**(`needsDetail`) | 매퍼가 null 로 접어 **조용히 무시** |
+     * | 셋 다 없다 | 손대지 않는다(옛 배포) | 같다 |
+     *
+     * 가운데 줄이 요점이다. 반쪽 프레임은 **서버가 말해 주려다 실패한 것**이고, 그때 화면이 해야 할
+     * 일은 「무시」가 아니라 「다시 묻기」다 — 확정으로 출발지가 옮겨졌는데 앱이 옛 좌표를 들고 있으면
+     * **도착 판정이 영구히 어긋난다**(400 `TOO_FAR_FROM_DEPARTURE`). 묶으면서 그 신호를 살리려면
+     * 「반쪽이었다」는 플래그를 **따로** 들어야 하고, 그러면 묶어서 줄인 복잡도가 그대로 돌아온다.
+     *
+     * 그래서 불변식은 타입이 아니라 **매퍼와 적용부 양쪽에서** 지킨다
+     * (`Ride.withMeetingConfirmed` 가 셋을 다시 확인하고 반쪽이면 재조회를 건다).
+     *
+     * [status] 가 **서버 enum 이름 그대로인 문자열**인 것은 리더가 고정한 계약이다 —
+     * [MemberJoined]·[MemberLeft] 의 [RideStatus] 와 모양이 다르다. 지금 이 자리에 오는 값은
+     * `"COMPLETED"` 하나뿐이고 화면은 그걸 읽기보다 **확정됐다는 사실**을 쓴다.
+     * 상태 전이의 근거가 필요하면 [Snapshot] 이나 상세 재조회가 단일 창구다.
      */
     data class Confirmed(
         val status: String,
         val departureAt: String?,
+        /** 바뀐 출발지(= 만남 장소) 위도. [departureLng]·[departurePlace] 와 **함께**만 쓴다. */
+        val departureLat: Double? = null,
+        /** 바뀐 출발지(= 만남 장소) 경도. */
+        val departureLng: Double? = null,
+        /** 바뀐 출발지(= 만남 장소) 이름. 서버 필드명은 `departure` 다. */
+        val departurePlace: String? = null,
         /** 반영 **뒤**의 방 순번. 순서 판정 규칙은 이 파일 맨 위 표. null 이면 옛 서버다. */
         val version: Long? = null,
     ) : PartyEvent

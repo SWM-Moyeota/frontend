@@ -5,7 +5,6 @@ import com.moyeota.domain.model.NewParty
 import com.moyeota.domain.model.NewReservation
 import com.moyeota.domain.model.PartyDetail
 import com.moyeota.domain.model.PartyEvent
-import com.moyeota.domain.model.PartyFinishException
 import com.moyeota.domain.model.PartyJoinException
 import com.moyeota.domain.model.PartyStatus
 import com.moyeota.domain.model.ReservationDestination
@@ -18,9 +17,11 @@ import kotlinx.coroutines.flow.emptyFlow
 interface RideRepository {
     fun getNearbyParties(): List<Ride>
 
-    // 조회 — GET /api/v1/matching/rooms, /rooms/{partyId}
-    /** 목록 응답에는 좌표·요금·경로가 없다(partyId/출발/도착/인원/정원/상태만). 상세는 [getPartyDetail]. */
-    suspend fun getParties(): List<Ride>
+    // 조회 — GET /api/v1/matching/rooms?swLat&swLng&neLat&neLng, /rooms/{partyId}
+    //
+    // **좌표 없는 전체 목록(`getParties()`)은 지웠다** — 서버가 그 핸들러를 없앴다(`2732cc75`).
+    // 목록을 얻는 길은 뷰포트 조회([getPartiesWithin]) 하나이고, 더미 구현의
+    // [getNearbyParties] 만 좌표 없이 쓴다.
 
     /**
      * 지도 범위(남서 [swLat]/[swLng] ~ 북동 [neLat]/[neLng]) 안의 모집 중 방 목록.
@@ -141,11 +142,11 @@ interface RideRepository {
      *
      * 실패는 모두 [PartyOpenException] 으로 올라온다(409 `ALREADY_JOINED_OTHER_PARTY` /
      * 400 `SAME_DEPARTURE_DESTINATION`·`OUT_OF_SERVICE_AREA`·`INVALID_CAPACITY`·`INVALID_ROUTE_ESTIMATE` /
-     * **403 `NO_SHOW_RESTRICTED`** / 502 `ROUTE_SEARCH_FAILED` / 네트워크). 화면은 그 프로퍼티로
-     * 분기한다 — **한 문구로 뭉개면 안 된다.** 409 는 「잠시 후 다시 시도」가 **영구히 거짓**이고
-     * (아무도 합류하지 않은 ACTIVE 방은 서버 스윕 대상이 아니라 계정이 계속 막힌다), 400 좌표·정원은
-     * 사용자가 **고쳐야** 하는 값이다. 403 은 **기다리면 풀리지만 몇 시간 단위**라 그 역시 「잠시」가
-     * 아니고, 기한을 말하려면 프로필을 함께 읽어야 한다([PartyOpenException.isNoShowRestricted]).
+     * 502 `ROUTE_SEARCH_FAILED` / 네트워크). 화면은 그 프로퍼티로 분기한다 —
+     * **한 문구로 뭉개면 안 된다.** 409 는 「잠시 후 다시 시도」가 **영구히 거짓**이고
+     * (아무도 합류하지 않은 방은 혼자면 15분 모집 만료가 닫지만 그전까지 계정이 막힌다),
+     * 400 좌표·정원은 사용자가 **고쳐야** 하는 값이다. 403 `NO_SHOW_RESTRICTED` 는 **더 이상 오지
+     * 않는다** — 노쇼 제재가 서버에서 사라졌다(`b16551b7`).
      */
     suspend fun createParty(request: NewParty): Ride
 
@@ -159,18 +160,20 @@ interface RideRepository {
      * 흐름이라면 그 화면이 구독하는 [observePartyEvents] 의 첫 [PartyEvent.Snapshot] 이 상세 전체를
      * 주므로, 재조회를 거기에 맡기는 선택도 가능하다.
      *
-     * 돌려주는 [PartyStatus.status] 로 "내가 마지막 자리를 채웠는지"를 알 수 있다 — 정원이 차면 서버가
-     * 그 자리에서 정원 충족 처리까지 끝낸다(`COMPLETED`). 앱은 트리거하지 않는다.
+     * ⚠️ **돌려주는 [PartyStatus.status] 로는 「정원이 찼는지」를 알 수 없다.** 오래 그럴 수 있었다 —
+     * 마지막 자리를 채우면 서버가 그 자리에서 `COMPLETED` 로 넘겼다. **지금은 아니다**: `COMPLETED` 는
+     * 「방장이 약속을 확정한 실시간 방」만 뜻하고, **정원이 차도 `ACTIVE` 다**(`b16551b7`). 서버는
+     * 참여만 `PARTY_FULL` 로 막는다. 정원 판정이 필요하면 인원과 정원을 직접 비교할 것
+     * ([PartyStatus.currentMembers] vs 내가 들어간 방의 정원) — 상태값은 답이 아니다.
      *
      * **예약 방에 합류하는 길도 이것이다** — 서버에 예약 전용 합류 엔드포인트가 없다
-     * ([createReservation]). 다만 예약은 합류한 순간부터 확정이라 **나갈 수 없고**([leaveParty] 가
-     * 409 `CANNOT_LEAVE_CONFIRMED_PARTY`), 출발 시각이 지난 예약은 409 `PARTY_CLOSED` 다.
+     * ([createReservation]). 예약은 합류한 순간부터 확정이지만 **나갈 수 있다**(그 제약은
+     * `b16551b7` 이 없앴다 — [leaveParty] 참고). 출발 시각이 지난 예약은 409 `PARTY_CLOSED` 다.
      *
      * 실패는 모두 [PartyJoinException] 으로 올라온다(401 미로그인 / 409 `ALREADY_JOINED_OTHER_PARTY`·
-     * `PARTY_FULL`·`PARTY_CLOSED` / 404 `PARTY_NOT_FOUND` / **403 `NO_SHOW_RESTRICTED`** / 네트워크).
-     * 화면은 그 프로퍼티로 분기한다. 403 은 「이 방이 안 된다」가 아니라 「**내가** 지금 아무 방에도
-     * 못 들어간다」라서 목록으로 되돌려 보내면 누르는 족족 같은 403 이다
-     * ([PartyJoinException.isNoShowRestricted]).
+     * `PARTY_FULL`·`PARTY_CLOSED` / 404 `PARTY_NOT_FOUND` / 네트워크).
+     * 화면은 그 프로퍼티로 분기한다. 403 `NO_SHOW_RESTRICTED` 는 **더 이상 오지 않는다**
+     * (노쇼 제재가 서버에서 사라졌다).
      *
      * **그중 하나는 실패가 아니다.** [PartyJoinException.isAlreadyInThisParty] 가 true 면 **서버에는
      * 내가 이미 그 방 멤버로 들어가 있다** — 데이터 계층이 방 상세로 확인한 결과이고,
@@ -184,79 +187,110 @@ interface RideRepository {
      * 나가기. DELETE /api/v1/matching/leave/{partyId}. 나가는 주체는 토큰이 정한다.
      * 성공 시 Explore 목록 재조회 필요.
      *
-     * 마지막 멤버가 나가면 방은 CANCELED 로 닫힌다(실측).
+     * 마지막 멤버가 나가면 방은 CANCELED 로 닫힌다(실측). **확정된 실시간 방에서 혼자 남는 경우도
+     * 닫힌다** — 더 모을 수 없고 혼자서는 출발할 수 없기 때문이다(`b16551b7`). 예약 방은 출발 전까지
+     * 다시 모을 수 있어 혼자 남아도 열어 둔다.
      *
      * 그 방의 멤버가 아니면 서버는 403 `NOT_PARTY_MEMBER` 를 주는데, **그 403 은 실패로 올라오지
      * 않는다** — 데이터 계층이 성공으로 되돌린다. 「이미 나갔다」와 「나가기 성공」은 사용자가 할 일이
      * 같기 때문이다(204 응답이 터널에서 유실되고 재시도하면 바로 이 경우가 된다). [joinParty] 의
      * [PartyJoinException.isAlreadyInThisParty] 복구와 대칭이다.
      *
-     * 나머지 실패는 [PartyLeaveException] 이다(409 `PARTY_NOT_RECRUITING` — 매칭이 시작돼 나갈 수 없다 /
+     * 나머지 실패는 [PartyLeaveException] 이다(409 `ARRIVED_MEMBER_CANNOT_LEAVE`·`PARTY_CLOSED` /
      * 404 `PARTY_NOT_FOUND` / 네트워크).
+     *
+     * ### 「확정된 방은 나갈 수 없다」는 **더 이상 사실이 아니다** ★
+     * 서버가 그 규칙을 버렸다(`b16551b7`: 「확정 방에서도 나갈 수 있고」). 지금 나가기를 막는 유일한
+     * 사유는 **내가 출발지 도착을 눌렀는가**다(409 `ARRIVED_MEMBER_CANNOT_LEAVE`) — 도착한 멤버가
+     * 곧 탑승자이고 택시비 정산 대상이라 장부에서 빠질 수 없기 때문이다.
+     *
+     * 그래서 **확정·예약을 이유로 나가기 버튼을 숨긴 자리는 전부 틀렸다.** 서버가 허용하는 일을 앱이
+     * 막는 쪽의 실패라, 사용자에게는 방을 벗어날 길이 없어진다 — 숨길 근거는 **도착 여부** 하나다.
      */
     suspend fun leaveParty(partyId: Long)
 
-    /**
-     * POST /api/v1/matching/rooms/{partyId}/finish (204) — 합승을 끝낸다.
-     * 정원이 찬(`COMPLETED`) 방을 닫는 **유일한 길**이다 — 한 명이 닫으면 **모두의** 방이
-     * `FINISHED` 가 된다. (예전에는 기사가 운행을 끝내는 길이 따로 있어 이쪽이 「1차 배포 모드 전용」
-     * 이었지만, 기사·배차가 사라져 이제 분기가 없다.)
-     *
-     * **방장 전용이다**: Backend #237 이 이 API 를 방장에게만 허용했고, 2026-10-15 **운영에 배포됐다**.
-     * 방장은 저장되는 값이 아니라 **지금 멤버 중 가장 먼저 합류한 사람**이고(`Party.hostId()` =
-     * `min(joinedAt, memberId)`), 방장이 나가면 자동 승계된다.
-     *
-     * **앱은 방장을 식별할 수 있다** — 서버가 멤버마다 `members[].host` 를 내려 준다(Backend #240,
-     * 반영 완료). 내부 PK `hostId` 는 응답에서 제거됐다. 그래서 호출부는 **버튼 노출을 먼저 막고**
-     * (`canFinishParty` = 손으로 닫는 단계 && [Ride.isHostedByMe]), 실패 사유 안내는 그 뒤에 남는
-     * 틈을 받는다 — 승계 신호를 놓치거나 순서가 역전돼 **내 스냅샷이 낡았을** 때 403 이 온다.
-     * **「앱은 방장을 알 수 없다」로 되돌리지 말 것**: 그 서술은 `host` 가 붙기 전의 사실이고,
-     * 그대로 믿으면 방장 게이팅이 근거 없는 추정으로 읽혀 지워진다.
-     *
-     * 실패는 모두 [PartyFinishException] 으로 올라온다 — **403 이 두 가지 뜻**이라
-     * (`NOT_PARTY_HOST`·`NOT_PARTY_MEMBER`, 그리고 409 `PARTY_NOT_COMPLETED`) 화면은 상태 코드가
-     * 아니라 그 예외의 프로퍼티로 분기한다. 모르는 코드·본문 없음은 code = null 이고 화면이 일반
-     * 문구로 떨어진다.
-     */
-    suspend fun finishParty(partyId: Long)
+    // **`finishParty`(「합승 완료」, `POST /rooms/{partyId}/finish`)는 지웠다** — 서버가 그 경로를
+    // 없앴다(`b16551b7`: 「구버전 종료 경로(/finish)…를 지운다」).
+    //
+    // 방을 끝내는 길은 [departParty] 하나이고, 조건이 전혀 다르다:
+    //
+    // | | 옛 「합승 완료」 | 지금 「출발」 |
+    // |---|---|---|
+    // | 방 상태 | 정원이 찬(COMPLETED) 방 | **확정된** 방 |
+    // | 누가 | 방장 | **도착한 방장** |
+    // | 시각 | 아무 때나 | 약속 시각 **뒤** |
+    //
+    // 즉 「정원이 차면 끝낼 수 있다」가 「약속을 정하고 가서 만나야 끝낼 수 있다」로 바뀌었다.
+    // 정원은 이제 종료와 아무 관계가 없다.
 
     /**
-     * POST /api/v1/matching/rooms/{partyId}/confirm (204) — 방장이 **약속 시간을 확정한다**.
-     * 본문은 `{"departureAt": "..."}` 하나이고, 장소는 싣지 않는다 — 약속 장소는 **늘 방의 출발지**다.
+     * POST /api/v1/matching/rooms/{partyId}/confirm (204) — 방장이 **약속 시간과 만남 장소를 확정한다**.
      *
-     * 이게 방을 끝내는 **정식 경로의 첫 단계**다: 확정 → 각자 「출발지 도착」 → 누군가 「출발」.
-     * [finishParty] 는 **확정 전 방에만** 남는다 — 확정된 방에 부르면 서버가 409
-     * `USE_DEPART_FOR_CONFIRMED_PARTY` 로 거절한다.
+     * 이게 방을 끝내는 **정식 경로의 첫 단계**다: 확정 → 각자 「출발지 도착」 → 방장이 「출발」.
+     * 확정 전 방을 끝낼 길은 **없다**(옛 「합승 완료」가 서버에서 사라졌다).
+     *
+     * ### 본문이 한 필드에서 네 필드로 늘었다 ★
+     * `2732cc75` 가 만남 장소를 **필수**로 만들었다(「약속 확정은 만남 장소(위도·경도·이름)를 늘
+     * 받는다. 바꾸지 않으면 앱이 지금 출발지를 그대로 보낸다」). 네 값이 모두 `@NotNull`/`@NotBlank` 라
+     * **하나라도 빠지면 400 `INVALID_REQUEST`** 이고, 그 400 은
+     * [com.moyeota.domain.model.PartyConfirmException] 의 어느 사유도 아니라 화면에 일반 문구로만
+     * 보인다 — 「확정이 안 돼요」라는 신고가 와도 짚을 단서가 없는, 가장 찾기 어려운 실패다.
+     *
+     * ### 확정이 방의 출발지를 **옮긴다** ★
+     * 서버가 받은 장소로 방의 출발지를 덮어쓴다(`Party.confirm`). 도착 판정 반경이 **실제 만나는 곳**을
+     * 기준으로 돌게 하려는 것이다. 그래서 장소를 바꾸지 않을 때도 **지금 출발지를 그대로** 실어야
+     * 한다([latitude]·[longitude]·[placeName] 에 [Ride.originLat]·[Ride.originLng]·[Ride.origin]).
+     * 빈 문자열을 보내면 방 이름이 빈 값이 되고, 좌표를 0 으로 보내면 400 `OUT_OF_SERVICE_AREA` 다.
+     *
+     * 채팅으로 다른 곳을 정했다면 그 좌표·이름을 보내면 된다 — 그게 이 필드가 생긴 이유다.
+     * 단, 도착지와 같은 좌표는 400 `SAME_DEPARTURE_DESTINATION` 이다.
      *
      * ### [departureAt] 의 모양이 곧 성패다 ★
      * ISO-8601 **순간**(instant) 문자열이어야 한다 — `"2026-11-03T08:30:00Z"` 처럼 `Z` 로 끝나거나
      * `+09:00` 같은 오프셋이 붙어야 하고, `java.time.Instant.toString()` 결과를 그대로 넣으면 맞다.
      * **오프셋 없는 로컬 시각(`"2026-11-03T17:30:00"`)은 400 이다** — 서버가 `Instant` 로 읽지 못한다.
-     * 그 400 은 [com.moyeota.domain.model.PartyConfirmException] 의 어느 사유도 아니라
-     * (code 는 `INVALID_REQUEST`) 화면에 일반 문구로 떨어진다 — 원인을 찾기 가장 어려운 실패다.
      *
-     * 서버가 받는 범위는 **지금부터 1시간 안**이고 과거 쪽으로는 1분의 시계 오차만 봐준다. 그래서
-     * 화면은 프리셋(10·20·30·45·60분 후)으로만 고르게 한다 — 자유 입력은 사용자가 만들 수 있는 400 이다.
+     * 서버가 받는 범위는 **지금부터 5분 뒤 ~ 1시간**이다(400 `INVALID_MEETING_TIME`). **하한이
+     * 생겼다** — 예전에는 상한 하나였다. 그래서 프리셋(10·20·30·45·60분 후)도 **누른 순간의 `now`** 로
+     * 계산해야 안전하다: 다이얼로그를 6분 열어 두면 10분 프리셋이 하한 아래로 내려가고, 60분 프리셋은
+     * 1초만 지나도 상한을 넘는다.
      *
-     * 성공하면 **방의 성질이 바뀐다**: 모집이 끝나고(ACTIVE→COMPLETED) 아무도 나갈 수 없다
-     * (409 `CANNOT_LEAVE_CONFIRMED_PARTY`). 화면 갱신은 따로 읽지 않아도 된다 —
-     * SSE [PartyEvent.Confirmed] 가 상태와 약속 시간을 싣고 온다([observePartyEvents]).
+     * ### 성공하면 방의 성질이 바뀐다
+     * ACTIVE→COMPLETED 가 되어 **참여가 막힌다**(`PARTY_CLOSED`). **나가기는 된다** — 확정을 이유로
+     * 막던 규칙은 사라졌다([leaveParty]). 화면 갱신은 따로 읽지 않아도 된다: SSE
+     * [PartyEvent.Confirmed] 가 상태·약속 시간과 **바뀐 출발지 셋**을 싣고 온다([observePartyEvents]).
      *
      * 실패는 모두 [com.moyeota.domain.model.PartyConfirmException] 으로 올라온다
      * (403 `NOT_PARTY_HOST`·`NOT_PARTY_MEMBER` / 409 `NOT_REALTIME_PARTY`·`ALREADY_CONFIRMED`·
-     * `PARTY_NOT_RECRUITING`·`NOT_ENOUGH_MEMBERS` / 400 `INVALID_MEETING_TIME` / 404 / 네트워크).
+     * `PARTY_CLOSED`·`NOT_ENOUGH_MEMBERS` / 400 `INVALID_MEETING_TIME` / 404 / 네트워크).
      * **한 문구로 뭉개면 안 된다** — 사유마다 다음 행동이 다르고, 그 근거는 그 예외의 KDoc 표에 있다.
+     *
+     * @param latitude  만남 장소 위도. 바꾸지 않으면 방의 **지금** 출발지 위도
+     * @param longitude 만남 장소 경도. 바꾸지 않으면 방의 **지금** 출발지 경도
+     * @param placeName 만남 장소 이름(최대 100자). 바꾸지 않으면 방의 **지금** 출발지 이름
      */
-    suspend fun confirmMeeting(partyId: Long, departureAt: String)
+    suspend fun confirmMeeting(
+        partyId: Long,
+        departureAt: String,
+        latitude: Double,
+        longitude: Double,
+        placeName: String,
+    )
 
     /**
      * POST /api/v1/matching/rooms/{partyId}/arrive (204) — **출발지에 도착했다**고 알린다.
      * 본문은 `{"latitude": …, "longitude": …}`, **지금 내 위치**다(방의 출발지 좌표가 아니다 —
-     * 서버가 그 둘의 거리를 재서 100m 안인지 판정한다).
+     * 서버가 그 둘의 거리를 재서 반경 안인지 판정한다).
      *
-     * 받아 주는 조건은 둘이다: 약속이 확정된 방일 것, 그리고 **약속 시간 정각부터**일 것.
-     * (「10분 전부터」가 아니다 — 서버 `Party.arrive` 는 `now < departureAt` 이면 409
-     * `MEETING_NOT_STARTED` 다. 화면이 버튼을 10분 전부터 열면 그 10분 동안 누르는 족족 409 다.)
+     * ⚠️ **반경이 방 종류로 갈린다**: 실시간 **100m**, 예약 **400m**(서버 `Party.arrivalRadiusMeters`).
+     * 예약 방은 출발지가 장소 검색 결과의 중심점이고 확정으로 옮길 수 없어 넓게 잡는다 —
+     * 화면 문구에 「100m」를 하나로 박으면 예약 방 사용자에게 거짓이 된다.
+     *
+     * 받아 주는 조건은 둘이다: 약속이 확정된 방일 것, 그리고 **약속 시간 10분 전부터**일 것
+     * (그보다 이르면 409 `ARRIVAL_NOT_OPEN`). 예전에는 정각부터였다 — `b16551b7` 이 10분 전으로
+     * 당겼고(「출발지 도착을 약속 시간 10분 전부터 받음」), 거절 코드도 `MEETING_NOT_STARTED` 에서
+     * `ARRIVAL_NOT_OPEN` 으로 갈라졌다. **그래서 도착과 출발 사이에 10분의 창이 생긴다** — 도착은
+     * 눌렸는데 출발은 아직 안 되는 구간이고, 화면은 그 구간을 설명해야 한다.
      *
      * **멱등이다.** 이미 도착한 사람이 다시 불러도 204 이고, 최초 도착 시각이 유지되며 version 도
      * SSE 도 움직이지 않는다 — 응답을 놓쳐 다시 보내도 안전하다.
@@ -274,21 +308,30 @@ interface RideRepository {
     /**
      * POST /api/v1/matching/rooms/{partyId}/depart (204, 본문 없음) — **출발한다 = 방을 끝낸다.**
      *
-     * ⚠️ **되돌릴 수 없고, 남에게 제재를 남긴다.** 이 호출이 성공한 순간 방은 FINISHED 가 되고,
-     * 그때까지 도착을 누르지 않은 멤버는 **전부 노쇼로 기록된다**(노쇼 횟수 × 24시간 이용 제한,
-     * 약속 시간부터 센다). 앱에는 취소하는 길이 없다 — 화면은 누르기 전에 반드시 확인을 받아야 한다.
-     * 앱이 `restrictedUntil` 을 **읽기만** 하던 그 제재를, 만드는 쪽이 바로 이 호출이다.
+     * **방을 끝내는 유일한 길이다** — 옛 「합승 완료」(`/finish`)는 서버에서 사라졌다.
      *
-     * **방장 전용이 아니다** — 도착한 멤버면 누구나 누를 수 있다([finishParty] 와 다른 점이다).
-     * 조건은 약속 시간 **뒤**일 것, 멤버 2명 이상일 것, 그리고 **내가 도착해 있을 것**.
+     * ### ⚠️ 되돌릴 수 없고, 오지 않은 사람을 장부에서 지운다
+     * 성공한 순간 방은 FINISHED 가 되고, 그때까지 도착을 누르지 않은 멤버는 **그 방의 탑승자에서
+     * 빠진다**. 노쇼 제재는 없어졌지만(`b16551b7`) 대가가 사라진 건 아니다: 탑승 횟수·탑승 기록·
+     * **택시비 정산 대상**이 모두 「도착을 누른 멤버」 기준이라, 아직 오는 중인 사람을 두고 누르면
+     * 그 사람은 같이 탔는데도 정산에서 빠진다. 취소하는 길은 없다 — 화면은 **도착하지 않은 인원을
+     * 세어 보여 주고** 확인을 받아야 한다.
+     *
+     * ### **방장 전용이다** ★
+     * `b16551b7` 이 바꿨다(「출발은 도착한 방장만 누른다」). 예전에는 도착한 멤버면 누구나였다 —
+     * 즉 **옛 앱은 방장이 아닌 사람에게도 이 버튼을 띄웠고, 이제 그 버튼은 403 `NOT_PARTY_HOST`** 다.
+     * 조건 전부: 방장 · 확정된 방 · 멤버 2명 이상 · 약속 시간 **뒤** · **방장 자신이 도착해 있을 것**.
      *
      * 성공하면 SSE [PartyEvent.Closed] 가 오고 **서버가 그 방의 구독을 끊는다** — 화면은 그 신호로
-     * 닫으면 된다(이 호출의 반환을 기다릴 필요가 없다). 다른 멤버가 먼저 눌렀다면 내 호출은 409
-     * `PARTY_CLOSED` 인데, 그건 실패가 아니라 **종료**로 보여 주는 쪽이 맞다.
+     * 닫으면 된다(이 호출의 반환을 기다릴 필요가 없다). 방이 이미 닫혔다면 409 `PARTY_CLOSED` 인데,
+     * 그건 실패가 아니라 **종료**로 보여 주는 쪽이 맞다.
+     *
+     * 끝난 방(FINISHED)은 **방장이 택시비 정산을 시작할 수 있는 유일한 상태**다
+     * ([com.moyeota.domain.repository.FareSplitRepository]).
      *
      * 실패는 모두 [com.moyeota.domain.model.PartyDepartException] 으로 올라온다
      * (409 `PARTY_CLOSED`·`PARTY_NOT_CONFIRMED`·`NOT_ENOUGH_MEMBERS`·`MEETING_NOT_STARTED`·
-     * `NOT_ARRIVED` / 403 `NOT_PARTY_MEMBER` / 404 / 네트워크).
+     * `NOT_ARRIVED` / 403 `NOT_PARTY_HOST`·`NOT_PARTY_MEMBER` / 404 / 네트워크).
      */
     suspend fun departParty(partyId: Long)
 
@@ -304,9 +347,9 @@ interface RideRepository {
     // 생성 하나**를 들고 나머지는 전부 이쪽으로 위임하는 얇은 껍데기가 된다 — 호출부가
     // 「방 id 를 어느 저장소에 물어야 하나」를 매번 되묻게 되는 구조다. 돌려주는 것도 같은 [Ride] 다.
     //
-    // 노쇼([com.moyeota.domain.repository.NoShowRepository])를 따로 뺀 것과 **반대 방향의 판단**이고
-    // 기준은 하나다: **같은 모델로 같은 동작을 하는가.** 예약은 방이라 그렇고, 노쇼는 끝난 방에
-    // 남은 제재라 아니다.
+    // 택시비 정산([com.moyeota.domain.repository.FareSplitRepository])을 따로 뺀 것과 **반대
+    // 방향의 판단**이고 기준은 하나다: **같은 모델로 같은 동작을 하는가.** 예약은 방이라 그렇고,
+    // 정산은 끝난 방에 붙는 장부라 아니다(돌려주는 모델도 [Ride] 가 아니다).
 
     /**
      * **예약 방 생성.** POST /api/v1/matching/reservations (200, 생성된 방).
@@ -318,16 +361,19 @@ interface RideRepository {
      * 그 0 을 「공짜」로 그리지 말 것.
      *
      * 돌려주는 방은 **처음부터 확정**이다([Ride.isConfirmed] true, [Ride.roomType]
-     * [com.moyeota.domain.model.RoomType.RESERVATION]) — 즉 「약속 시간 정하기」를 띄우면 안 되고
-     * ([confirmMeeting] 이 409 `NOT_REALTIME_PARTY`), **「그만 찾기」도 띄우면 안 된다**
-     * ([leaveParty] 가 409 `CANNOT_LEAVE_CONFIRMED_PARTY`). 예약을 만든 사람에게는 방을 벗어날 길이
-     * 없는 셈이라, 화면은 **만들기 전에** 확인을 받는 쪽이 맞다.
+     * [com.moyeota.domain.model.RoomType.RESERVATION]) — 즉 「약속 시간 정하기」를 띄우면 안 된다
+     * ([confirmMeeting] 이 409 `NOT_REALTIME_PARTY`).
+     *
+     * ⚠️ **「그만 찾기」는 띄워야 한다.** 오래 반대였다 — 예약은 확정 상태라 나갈 수 없다고 적혀
+     * 있었고(409 `CANNOT_LEAVE_CONFIRMED_PARTY`) 그래서 화면이 그 버튼을 숨겼다. 서버가 그 규칙을
+     * 버렸다(`b16551b7`). 숨긴 채로 두면 **예약을 만든 사람에게 방을 벗어날 길이 없다** — 서버가
+     * 허용하는 일을 앱이 막는 쪽이라 사용자에게는 복구 수단이 없다.
      *
      * 성공 뒤 갱신 대상: 홈·탐색의 진행 중 방 배너(진행 중인 방이 하나 생겼다)와, 예약 목록·검색을
      * 보여 주는 화면(새 방이 그 목록에 들어간다 — 서버 필터가 `ACTIVE` 라 바로 보인다).
      *
-     * 실패는 [createParty] 와 **같은 [PartyOpenException]** 으로 올라온다(403 `NO_SHOW_RESTRICTED` /
-     * 409 `ALREADY_JOINED_OTHER_PARTY`·`PARTY_TIME_CONFLICT` / 400 `INVALID_DEPARTURE_TIME`·
+     * 실패는 [createParty] 와 **같은 [PartyOpenException]** 으로 올라온다
+     * (409 `ALREADY_JOINED_OTHER_PARTY`·`PARTY_TIME_CONFLICT` / 400 `INVALID_DEPARTURE_TIME`·
      * `INVALID_CAPACITY`·`INVALID_REQUEST`·`SAME_DEPARTURE_DESTINATION`·`OUT_OF_SERVICE_AREA` /
      * 네트워크). 예약에만 오는 둘은 [PartyOpenException.isPartyTimeConflict]·
      * [PartyOpenException.isInvalidDepartureTime] 이고, 경로 세 코드는 **오지 않는다**
@@ -339,23 +385,10 @@ interface RideRepository {
      */
     suspend fun createReservation(request: NewReservation): Ride
 
-    /**
-     * **기간으로 보는 예약 목록.** GET /api/v1/matching/reservations?from=&to=
-     *
-     * [from]·[to] 는 **ISO-8601 instant 문자열**이고 둘 다 필수다(`"2026-11-13T00:00:00Z"`).
-     * `from >= to` 면 400 `INVALID_TIME_RANGE` — 같은 시각도 거절된다.
-     *
-     * 돌려주는 [Ride] 는 [getParties] 의 것과 **같은 모델이되 채워진 자리가 다르다**:
-     * 출발·도착 좌표가 **둘 다** 있고([getParties] 는 출발만), [Ride.departureAt] 이 채워져 있고,
-     * [Ride.roomType] 이 [com.moyeota.domain.model.RoomType.RESERVATION] 이며
-     * [Ride.isConfirmed] 가 true 다. 요금·경로는 없다(상세를 읽어도 없다 — 서버가 추정하지 않는다).
-     *
-     * **뷰포트와 무관하다** — 지도에 보이는 것만 거르려면 [getReservationsSoon] 다.
-     *
-     * 실패를 전용 예외로 감싸지 않는다(조회의 관례). 400 두 가지는 **앱이 만드는 실패**라
-     * 화면 문구로 가릴 값이 아니고, `from`·`to` 를 앱이 만들므로 애초에 나지 않아야 한다.
-     */
-    suspend fun getReservations(from: String, to: String): List<Ride>
+    // **기간으로 보는 예약 목록(`GET /matching/reservations?from&to`)은 지웠다** — 서버가 그
+    // 핸들러와 `INVALID_TIME_RANGE` 를 함께 없앴다(`2732cc75`: 「앱이 부르지 않는 …」). 실제로 앱이
+    // 부른 적이 없다 — 화면이 쓰는 두 경로는 [getReservationsSoon](지도 범위 + 30분 내)과
+    // [searchReservations](출발지 1km + 하루)다.
 
     /**
      * **곧 출발하는 예약** — 지도 범위 안, 지금부터 **30분 내** 출발.

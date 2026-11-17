@@ -83,7 +83,7 @@ class ChatListMenuTest {
     fun `진행 중인 방은 동승에서 나가고 목록에서 빠진다`() = runTest(analytics.dispatcher) {
         val leftParties = mutableListOf<Long>()
         rides.leave = { leftParties += it }
-        rides.detail = { ride(RideStatus.MATCHED, me(), other(), other("c")) }
+        rides.detail = { ride(RideStatus.CONFIRMED, me(), other(), other("c")) }
         val viewModel = loaded()
         val left = mutableListOf<ChatLeavePlan>()
         backgroundScope.launch { viewModel.left.collect { left += it } }
@@ -139,7 +139,7 @@ class ChatListMenuTest {
     fun `도착한 뒤에는 확인창이 이유만 알리고 아무 요청도 보내지 않는다`() = runTest(analytics.dispatcher) {
         val leftParties = mutableListOf<Long>()
         rides.leave = { leftParties += it }
-        rides.detail = { ride(RideStatus.MATCHED, me(arrived = true), other()) }
+        rides.detail = { ride(RideStatus.CONFIRMED, me(arrived = true), other()) }
         val viewModel = loaded()
 
         leave(viewModel, item(7))
@@ -182,7 +182,7 @@ class ChatListMenuTest {
 
     @Test
     fun `그사이 도착을 눌렀으면 막힌 이유를 확인창으로 보여 준다`() = runTest(analytics.dispatcher) {
-        rides.detail = { ride(RideStatus.MATCHED, me(), other(), other("c")) }
+        rides.detail = { ride(RideStatus.CONFIRMED, me(), other(), other("c")) }
         rides.leave = { throw PartyLeaveException(code = "ARRIVED_MEMBER_CANNOT_LEAVE", serverMessage = null, httpStatus = 409) }
         val viewModel = loaded()
 
@@ -340,7 +340,7 @@ class ChatListMenuTest {
         farePerPerson = 0,
         totalFare = 0,
         status = status,
-        isConfirmed = status == RideStatus.MATCHED,
+        isConfirmed = status == RideStatus.CONFIRMED,
     )
 }
 

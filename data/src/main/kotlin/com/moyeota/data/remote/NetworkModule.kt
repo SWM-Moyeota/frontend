@@ -113,6 +113,10 @@ object NetworkModule {
             chat = retrofit.create(ChatApi::class.java),
             // 인증 API 와 이름이 비슷하지만 반드시 이쪽(apiClient) 이다 — 내 정보 조회는 토큰 필수다.
             user = retrofit.create(UserApi::class.java),
+            // 택시비 정산. 여섯 경로가 /matching/rooms/{partyId}/fare-split 아래지만 [matching] 과
+            // 가른 이유는 FareSplitApi KDoc 에 있다(에러 모델이 다르다). 반드시 apiClient 다 —
+            // 서버가 토큰으로 「보는 사람」을 정해 응답을 만들므로 토큰 없이는 의미가 없는 호출이다.
+            fareSplit = retrofit.create(FareSplitApi::class.java),
         )
     }
 
@@ -162,6 +166,8 @@ object NetworkModule {
         val place: PlaceApi,
         val chat: ChatApi,
         val user: UserApi,
+        /** 택시비 정산 7경로. 토큰 필수이고, 응답이 **보는 사람마다 다르다**(`myRole`·`myAmount`) */
+        val fareSplit: FareSplitApi,
         // 배차(`DispatchApi`)와 긴급 신고(`ReportApi`)는 **없다** — 기사·배차를 걷어내면서 두
         // 인터페이스를 지웠다. 채팅 메시지 신고는 [chat] 안에 있다(다른 기능이다).
     )

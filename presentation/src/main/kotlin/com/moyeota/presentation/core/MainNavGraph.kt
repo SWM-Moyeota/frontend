@@ -42,8 +42,8 @@ import com.moyeota.domain.repository.ActivePartyRepository
 import com.moyeota.domain.repository.AppConfigRepository
 import com.moyeota.domain.repository.AuthRepository
 import com.moyeota.domain.repository.ChatRepository
+import com.moyeota.domain.repository.FareSplitRepository
 import com.moyeota.domain.repository.PlaceRepository
-import com.moyeota.domain.repository.NoShowRepository
 import com.moyeota.domain.repository.RideRecordRepository
 import com.moyeota.domain.repository.RideRepository
 import com.moyeota.presentation.feature.auth.FindIdRoute
@@ -58,6 +58,9 @@ import com.moyeota.presentation.feature.chat.ChatRoomDestinationRoute
 import com.moyeota.presentation.feature.chat.ChatRoute
 import com.moyeota.presentation.feature.explore.ExploreRoute
 import com.moyeota.presentation.feature.explore.JoinConfirmRoute
+import com.moyeota.presentation.feature.faresplit.FareSplitDetailRoute
+import com.moyeota.presentation.feature.faresplit.FareSplitEditMode
+import com.moyeota.presentation.feature.faresplit.FareSplitEditRoute
 import com.moyeota.presentation.feature.home.DestinationConfirmRoute
 import com.moyeota.presentation.feature.home.DestinationRoute
 import com.moyeota.presentation.feature.home.HomeRoute
@@ -67,7 +70,6 @@ import com.moyeota.presentation.feature.matching.RideDetailRoute
 import com.moyeota.presentation.feature.mypage.AccountDeleteRoute
 import com.moyeota.presentation.feature.mypage.MyPageScreen
 import com.moyeota.presentation.feature.mypage.ProfileEditRoute
-import com.moyeota.presentation.feature.mypage.NoShowRecordsRoute
 import com.moyeota.presentation.feature.mypage.RideHistoryRoute
 import com.moyeota.presentation.feature.onboarding.OnboardingSafetyScreen
 import com.moyeota.presentation.feature.onboarding.OnboardingSavingScreen
@@ -104,13 +106,15 @@ fun MainNavGraph(
      */
     rideRecordRepository: RideRecordRepository,
     /**
-     * 38 노쇼 기록·이의 신청(`GET /api/v1/matching/no-shows`).
+     * 39·40 택시비 정산(`/matching/rooms/{partyId}/fare-split` 외 7개).
      *
-     * **필수 인자다** — [rideRecordRepository] 와 같은 이유다. 기본값을 두면 배선을 빠뜨렸을 때
-     * 컴파일이 통과하고 **실행 중에만** 38 이 빈 화면으로 떨어진다. 그 화면은 노쇼로 찍힌 사람이
-     * 이의를 낼 **유일한 창구**라, 조용히 비어 있는 것이 가장 나쁜 실패다.
+     * **필수 인자다** — [rideRecordRepository] 와 같은 이유로 기본값을 두지 않는다. `null` 기본값이나
+     * 자리값 구현을 두면 배선을 빠뜨린 호출부가 **컴파일에서 걸리지 않고** 실행 중에만 정산 화면이
+     * 「불러오지 못했어요」로 떨어진다 — 돈이 걸린 화면에서 그 실패는 서버 장애와 구분되지 않는다.
+     *
+     * 배선은 `AppContainer.fareSplitRepository` 하나다.
      */
-    noShowRepository: NoShowRepository,
+    fareSplitRepository: FareSplitRepository,
     /**
      * 채팅 알림 탭으로 열어 달라는 방. 로그인돼 있고 그래프가 준비되면 그 채팅방을 **스택에 쌓고**
      * [onPendingChatRoomHandled] 로 소비를 알린다. 미로그인이면 무시한다(로그인 뒤 엉뚱한 방을 여는 것보다 낫다).
@@ -135,7 +139,7 @@ fun MainNavGraph(
         chatRepository = chatRepository,
         activePartyRepository = activePartyRepository,
         rideRecordRepository = rideRecordRepository,
-        noShowRepository = noShowRepository,
+        fareSplitRepository = fareSplitRepository,
         pendingChatRoomId = pendingChatRoomId,
         onPendingChatRoomHandled = onPendingChatRoomHandled,
     )
@@ -144,6 +148,11 @@ fun MainNavGraph(
 // Routes.CHAT_ROOM 의 경로 인자 이름. 라우트 문자열과 navArgument 선언이 어긋나면
 // 런타임에야 드러나므로 한 곳에서만 적는다.
 private const val CHAT_ROOM_ID_ARG = "roomId"
+
+// Routes.FARE_SPLIT·FARE_SPLIT_EDIT 의 경로·쿼리 인자 이름. CHAT_ROOM_ID_ARG 와 같은 이유로
+// 한 곳에서만 적는다 — 라우트 문자열과 navArgument 선언이 어긋나면 런타임에야 드러난다.
+private const val FARE_SPLIT_PARTY_ID_ARG = "partyId"
+private const val FARE_SPLIT_START_ARG = "start"
 
 // 하단탭 네 루트 — 탭 전환이 saveState 로 상태를 보관하는 대상이자, 로그아웃 때 그 보관분을 지울 대상.
 private val TabRoutes = listOf(Routes.HOME, Routes.EXPLORE, Routes.CHAT, Routes.MYPAGE)
@@ -170,7 +179,7 @@ private fun MainNavHost(
     chatRepository: ChatRepository,
     activePartyRepository: ActivePartyRepository,
     rideRecordRepository: RideRecordRepository,
-    noShowRepository: NoShowRepository,
+    fareSplitRepository: FareSplitRepository,
     pendingChatRoomId: Long? = null,
     onPendingChatRoomHandled: () -> Unit = {},
 ) {
@@ -483,8 +492,13 @@ private fun MainNavHost(
      *
      * | [Ride] | 목적지 |
      * |---|---|
-     * | RECRUITING · MATCHED(서버 COMPLETED = 정원 충족) | 21 매칭 대기 |
+     * | RECRUITING(서버 ACTIVE — **정원이 찬 방도 여기다**) · CONFIRMED(서버 COMPLETED = 약속 확정) | 21 매칭 대기 |
      * | COMPLETED · CANCELED(끝난 방) | 14 홈 |
+     *
+     * ⚠️ 옛 표는 둘째 값을 「MATCHED = 정원 충족」으로 적고 있었다. 서버가 `COMPLETED` 의 뜻을
+     * **「방장이 약속을 확정한 실시간 방」**으로 바꿨고(`b16551b7`) 정원이 찬 방은 ACTIVE 로 남는다 —
+     * 목적지는 두 값 다 21 이라 결과가 같지만, **근거를 그대로 두면 다음 사람이 「정원이 찼다」를
+     * status 로 판정하는 코드를 또 쓴다**(실제로 그래서 2/3 방에 「다 모였어요」가 떴다).
      *
      * **표가 두 줄이 된 것이 이 함수의 현재 모습이다.** 예전에는 `DISPATCHING`(→ 25 배차 현황)과
      * `ONGOING`(→ 26 운행 중)이 있었고, 「동승 모드인데 배차 단계가 왔다」를 잡아 서버 설정을 다시
@@ -845,6 +859,9 @@ private fun MainNavHost(
                 repository = placeRepository,
                 activeRide = activeRide,
                 onActiveRideClick = { activeRide?.let(::navigateToStage) },
+                // 14 홈의 「아직 보내지 않은 택시비」 배너. 보낼 정산이 없으면 아무것도 그리지 않는다.
+                fareSplitRepository = fareSplitRepository,
+                onOpenFareSplit = { partyId -> navController.navigate(Routes.fareSplit(partyId)) },
                 onSearchClick = {
                     searchInitialQuery = ""
                     createScheduled = false
@@ -997,7 +1014,14 @@ private fun MainNavHost(
                     activePartyViewModel.clearParty()
                     navigateTab(MoyeotaTab.HOME)
                 },
-                // 방이 닫혔다(내·남의 「합승 완료」, 30분 스윕). 끝난 방이라 진행 중 기억을 지우고 홈으로.
+                // 방이 닫혔다 — 도착한 방장의 「출발」, 혼자인 방의 15분 모집 만료, 마지막 멤버
+                // 이탈, 또는 도착자 없는 방의 자동 정리. 끝난 방이라 진행 중 기억을 지우고 홈으로.
+                //
+                // ⚠️ **왜 닫혔는지는 말하지 못한다.** 서버가 `closed` 하나만 보내고 그 data 는 앱이
+                // 읽지 않는다(배포마다 모양이 달랐다 — `PartySseEvent` KDoc). 「내가 출발을 눌렀다」는
+                // 자기 행동이라 설명이 필요 없지만, **확정된 방에서 상대가 나가 취소된 경우**는
+                // 아무것도 하지 않은 사람의 약속이 사라지는 것이라 설명이 필요하다. 그 경로는
+                // `b16551b7`(확정 방에서도 나갈 수 있게 됨) 뒤에 **새로 생겼다.**
                 onPartyClosed = {
                     activePartyViewModel.clearParty()
                     navigateTab(MoyeotaTab.HOME)
@@ -1013,7 +1037,8 @@ private fun MainNavHost(
                 // **다음 단계 화면으로 넘기는 콜백(`onMatchingStarted`)은 없다.** 정원이 차면 서버가
                 // 기사 매칭을 시작하고 앱이 25 배차 현황으로 넘어가던 길이 사라졌다 — 서버가
                 // `DISPATCHING` 을 보낼 수 없고 그 화면도 없다. 정원이 찬 방은 21 에 머물며
-                // 채팅으로 만날 곳을 정하고, 방장의 「합승 완료」가 `onPartyClosed` 로 끝낸다.
+                // 채팅으로 만날 곳과 약속 시간을 정하고, 약속 시간이 지나면 **도착한 방장의
+                // 「출발」**이 `onPartyClosed` 로 끝낸다(옛 「합승 완료」는 서버에서 사라졌다).
                 onOpenChat = activeChatRoomId?.let { roomId -> { openActiveChatRoom(roomId) } },
             )
         }
@@ -1022,6 +1047,11 @@ private fun MainNavHost(
                 repository = rideRepository,
                 partyId = selectedPartyId,
                 onBack = ::back,
+                // 끝난 방에서 할 수 있는 일은 택시비 정산 하나다. 버튼을 띄울지는 화면이 정한다
+                // (`fareSplitEntryLabel` — 끝난 방 + 내가 도착을 누른 경우만).
+                onFareSplit = {
+                    selectedPartyId?.let { id -> navController.navigate(Routes.fareSplit(id)) }
+                },
                 onPartnerClick = { partner ->
                     selectedPartner = partner
                     navController.navigate(Routes.PARTNER_PROFILE)
@@ -1129,7 +1159,6 @@ private fun MainNavHost(
                 userName = userName,
                 onEditProfile = { navController.navigate(Routes.PROFILE_EDIT) },
                 onRideHistory = { navController.navigate(Routes.RIDE_HISTORY) },
-                onNoShowRecords = { navController.navigate(Routes.NO_SHOW_RECORDS) },
                 onLogout = ::requestLogout,
                 onLoginMethods = { navController.navigate(Routes.LOGIN_METHODS) },
                 onDeleteAccount = { navController.navigate(Routes.ACCOUNT_DELETE) },
@@ -1164,20 +1193,8 @@ private fun MainNavHost(
             RideHistoryRoute(
                 repository = rideRecordRepository,
                 onBack = ::back,
-            )
-        }
-        composable(Routes.NO_SHOW_RECORDS) {
-            // 38 노쇼 기록·이의 신청 — GET /api/v1/matching/no-shows, 최대 20건.
-            //
-            // 34 와 달리 **진행 중인 방과 무관**하다. 노쇼는 이미 끝난 방에서만 생기므로
-            // activePartyRepository 를 넘길 이유가 없다.
-            //
-            // 이 화면이 하는 일의 절반은 **이의 신청**이다. 노쇼는 약속 시간부터 (횟수 × 24시간)
-            // 동안 방 만들기·참여를 막는 실제 제재이고, 잘못 찍힌 사람이 그걸 되돌릴 길은 여기뿐이다
-            // — 조회가 실패하면 빈 목록이 아니라 「불러오지 못했어요 · 다시 시도」로 떨어뜨린다.
-            NoShowRecordsRoute(
-                repository = noShowRepository,
-                onBack = ::back,
+                // 요금 줄이 있는 카드 = 그 방에 정산이 있고 내가 당사자다(RideRecord KDoc).
+                onFareSplit = { partyId -> navController.navigate(Routes.fareSplit(partyId)) },
             )
         }
         composable(Routes.LOGIN_METHODS) {
@@ -1202,6 +1219,67 @@ private fun MainNavHost(
                 onSessionEndExpected = { accountDeleteRequested = true },
                 onDeleted = { accountDeleted = true },
                 onSessionKept = { accountDeleteRequested = false },
+            )
+        }
+
+        // J · 택시비 정산 39–40 (신규, 2026-11-12)
+        //
+        // **방 id 를 경로 인자로 받는다** — 화면 바깥 홀더(selectedPartyId·createdPartyId)를 쓰지 않는
+        // 근거는 Routes.kt 의 J 절 주석에 있다(진입점이 셋이고 서로 다른 스택 위치에서 온다).
+        composable(
+            Routes.FARE_SPLIT,
+            arguments = listOf(navArgument(FARE_SPLIT_PARTY_ID_ARG) { type = NavType.LongType }),
+        ) { entry ->
+            // 0 을 null 로 접는다 — 인자가 비면 Bundle 이 0L 을 주고, 그대로 보내면 서버가 404
+            // PARTY_NOT_FOUND 로 답한다. 화면은 그 404 를 「방이 사라졌다」로 말하는데 실제 원인은
+            // 앱의 배선이다. 사실대로 「불러오지 못했어요」로 끝내고 되돌리는 쪽이 낫다.
+            val partyId = entry.arguments?.getLong(FARE_SPLIT_PARTY_ID_ARG)?.takeIf { it > 0L }
+            FareSplitDetailRoute(
+                repository = fareSplitRepository,
+                // 정산이 아직 없을 때 「누가 시작할 수 있는가」를 방 상세로 묻는다
+                // (FareSplitDetailViewModel.absentState — 묻지 않으면 비방장에게 시작 버튼이 뜬다).
+                rideRepository = rideRepository,
+                partyId = partyId,
+                onBack = ::back,
+                onOpenEditor = { start ->
+                    partyId?.let { id -> navController.navigate(Routes.fareSplitEdit(id, start)) }
+                },
+                // 「채팅으로 물어보기」 — 23 동승자 프로필의 onChatClick 과 같은 방식으로 **쌓는다**
+                // (navigateTab 으로 보내면 스택이 갈아엎여 정산 화면으로 돌아올 길이 없다).
+                //
+                // 그 방의 채팅방을 **바로** 열지는 못한다: 정산은 끝난 방의 것이고 그 방의 채팅방 id 를
+                // 아는 곳은 ActivePartyViewModel(진행 중인 방 전용)뿐이다. 목록을 열어 주는 것이
+                // 지금 할 수 있는 정확한 안내이고, 버튼이 뜨는 자리도 두 경우로 좁혀져 있다
+                // (showsChatFallback: 계좌 소실·기간 지남).
+                onOpenChat = { navController.navigate(Routes.CHAT) },
+            )
+        }
+        composable(
+            Routes.FARE_SPLIT_EDIT,
+            arguments = listOf(
+                navArgument(FARE_SPLIT_PARTY_ID_ARG) { type = NavType.LongType },
+                // 기본값이 **수정**이다. 빠뜨린 호출이 시작(POST)으로 가면 이미 있는 정산에 409
+                // FARE_SPLIT_ALREADY_EXISTS 를 만들고, 반대로 수정으로 가면 404 로 끝난다 —
+                // 뒤쪽이 아무것도 바꾸지 않는 실패라 기본값으로 안전하다.
+                navArgument(FARE_SPLIT_START_ARG) {
+                    type = NavType.BoolType
+                    defaultValue = false
+                },
+            ),
+        ) { entry ->
+            val partyId = entry.arguments?.getLong(FARE_SPLIT_PARTY_ID_ARG)?.takeIf { it > 0L }
+            val start = entry.arguments?.getBoolean(FARE_SPLIT_START_ARG) ?: false
+            FareSplitEditRoute(
+                repository = fareSplitRepository,
+                // 시작 폼은 **도착을 누른 멤버**를 방 상세에서만 알 수 있다(fareSplitRiders).
+                // 수정 폼은 이것을 쓰지 않는다 — 탑승자 전원이 이미 정산 상세 안에 있다.
+                rideRepository = rideRepository,
+                partyId = partyId,
+                mode = if (start) FareSplitEditMode.START else FareSplitEditMode.EDIT,
+                onBack = ::back,
+                // 저장 성공 → 39 상세로 되돌아간다. 상세가 복귀하며 다시 읽으므로(onScreenStart)
+                // 여기서 값을 들고 넘기지 않는다 — 두 화면이 각자 상세를 들면 한쪽이 낡는다.
+                onSaved = ::back,
             )
         }
     }

@@ -12,7 +12,7 @@ import com.moyeota.data.repository.RemoteAuthRepository
 import com.moyeota.data.remote.chat.ChatSocket
 import com.moyeota.data.repository.RemoteChatRepository
 import com.moyeota.data.repository.RemotePlaceRepository
-import com.moyeota.data.repository.RemoteNoShowRepository
+import com.moyeota.data.repository.RemoteFareSplitRepository
 import com.moyeota.data.repository.RemoteRideRecordRepository
 import com.moyeota.data.repository.RemoteRideRepository
 import com.moyeota.data.session.DataStoreTokenStorage
@@ -22,7 +22,7 @@ import com.moyeota.domain.repository.AppConfigRepository
 import com.moyeota.domain.repository.AuthRepository
 import com.moyeota.domain.repository.ChatRepository
 import com.moyeota.domain.repository.PlaceRepository
-import com.moyeota.domain.repository.NoShowRepository
+import com.moyeota.domain.repository.FareSplitRepository
 import com.moyeota.domain.repository.RideRecordRepository
 import com.moyeota.domain.repository.RideRepository
 import com.moyeota.domain.session.UserSession
@@ -125,13 +125,18 @@ class AppContainer(context: Context, debugLogging: Boolean) {
         RemoteRideRecordRepository(apis.user, sessionManager)
 
     /**
-     * 38 노쇼 기록·이의 신청. 매칭 API 를 그대로 쓴다 — 서버가 두 경로를 `/api/v1/matching` 아래에
-     * 두었다(`NoShowController`). 따로 Retrofit 인터페이스를 만들면 같은 프리픽스가 두 곳에 생긴다.
+     * 택시비 정산 — 동승이 끝난(FINISHED) 방에서 방장이 사람마다 부담 금액을 적은 장부를 만들고,
+     * 함께 탄 나머지가 토스·은행 앱으로 각자 보낸다. **앱은 돈을 옮기지 않는다.**
      *
-     * [rideRecordRepository] 와 가르는 이유: 그쪽은 **탄** 방(커서 페이징·읽기 전용), 이쪽은 **안 탄
-     * 것으로 기록된** 방이고 이의 신청이라는 **쓰기**까지 있다.
+     * 세션을 넘기는 건 **내 송금 상태 한 자리** 때문이다. 나머지는 서버가 토큰으로 계산해 준다
+     * (`myRole`·`myAmount`). 서버가 `myTransferStatus` 를 보내 주면(Backend PR #328) 이 의존도 쓸
+     * 일이 없어지지만, **그 배포가 닿기 전에는 세션 uuid 로 `transfers` 에서 내 행을 찾는 것이
+     * 유일한 길**이다 — 넘기지 않으면 보내는 사람 화면의 「보냈어요」가 영영 뜨지 않는다
+     * (로컬 실측 2026-11-12).
      */
-    val noShowRepository: NoShowRepository = RemoteNoShowRepository(apis.matching)
+    val fareSplitRepository: FareSplitRepository =
+        RemoteFareSplitRepository(apis.fareSplit, sessionManager)
+
     // 세션을 넘기는 건 메시지의 "내 것" 판정 때문이다(RemoteChatRepository KDoc).
     // 채팅 받기는 실시간(STOMP) + 폴링, 보내기·읽음은 REST 다(소켓 서버는 SEND 를 받지 않는다).
     // 소켓의 TOKEN_EXPIRED 재발급은 HTTP 401 과 같은 잠금을 쓴다(apis.renewAccessToken).

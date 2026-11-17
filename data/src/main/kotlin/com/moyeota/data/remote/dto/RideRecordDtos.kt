@@ -16,7 +16,9 @@ const val RIDE_RECORD_PAGE_SIZE = 20
  * `GET /api/v1/users/me/parties` 한 페이지. 서버 `RideRecordResponse`.
  *
  * **이름이 함정이다.** 경로가 `parties` 라 「내 방 목록」처럼 읽히지만 서버 태그는 「탑승 기록」이고
- * **하차까지 끝난 탑승만** 나온다(서버 `RideRecordJpaRepository` 의 `dropoffTime is not null`).
+ * **끝난 탑승만** 나온다. 그리고 `b16551b7` 부터 **도착을 누른 멤버만** 그 방의 기록을 갖는다
+ * (「탑승 횟수·탑승 기록은 도착한 멤버만 센다」) — 약속 장소에 가지 않은 사람에게는 그 방이
+ * 아예 없다.
  * 진행 중인 방은 절대 들어오지 않는다 — 실측(2026-11-01, 로컬 `:8080`): 내가 유일 멤버인
  * `status=MATCHING` 방을 하나 들고 이 엔드포인트를 불러도 `{"rides":[],"nextCursor":null,"hasNext":false}`
  * 였다. 그래서 이것으로 [com.moyeota.domain.repository.ActivePartyRepository] 의 로컬 기억을
@@ -55,26 +57,42 @@ data class RideRecordPageResponse(
  * 조용히 기본값이 되어 화면이 **모든 기록에 같은 상태 칩**을 그린다. `capacity`·좌표·`route`·
  * `version` 도 같은 이유로 여기 없다.
  *
- * [pickupTime]·[totalFare]·[farePerPerson] 이 **셋 다 null 일 수 있다**: 1차 모드(기사 없이
- * 방장이 합승 종료, 서버 `RideRecord.withoutDriver`)로 끝난 방이 그렇다. 요금은 기사가 입력할 때만
- * 채워진다(서버 `dropOff(fare)`). **0 으로 접지 마라** — 화면이 「0원」을 그리면 거짓말이다.
+ * ### 🔴 `dropoffTime` 은 **없어졌다** — 날짜를 그걸로 그리면 전부 빈칸이 된다 ★
+ * 서버가 하차 시각을 없애고 **승차 시각 하나로 바로잡았다**(`135df701`:
+ * 「탑승 기록의 하차 시각을 승차 시각(pickup_time)으로 바로잡는다」). 지금 `RideRecordItem` 에
+ * 있는 시각은 [pickupTime] 뿐이다.
  *
- * [dropoffTime] 은 목록에 들어오는 조건 자체라 사실상 null 이 아니지만, 서버 스키마가 보장하지
- * 않으므로 nullable 로 둔다(파싱이 터져 목록 전체가 사라지는 것보다 낫다).
+ * `ignoreUnknownKeys` 정책 때문에 **없는 키는 조용히 null 이 된다** — 즉 `dropoffTime` 을 그대로
+ * 받아 두면 파싱은 멀쩡하고 **모든 기록 카드의 날짜만 사라진다.** 에러가 아니라 빈칸이라 QA 가
+ * 「날짜가 왜 안 보이지」로만 보게 되는 자리라서, 필드를 지워 **컴파일로 잡게** 한다.
+ *
+ * ### [pickupTime] 의 뜻도 바뀌었다
+ * 「기사가 탑승 처리한 시각」이 아니라 **방장이 출발을 누른 시각**이다. 아무도 출발을 누르지 않아
+ * 서버가 자동 정리한 방은 **약속 시각**이 들어간다(서버 Swagger 원문).
+ *
+ * ### [totalFare]·[farePerPerson] 은 택시비 정산에서 온다 — **함께 채워지거나 함께 빈다**
+ * 서버 원문: 「정산이 없거나 내가 정산의 받는 사람·보내는 사람이 아니면 null」. 즉 null 은 결함이
+ * 아니라 **「이 방에 정산이 없다」**는 뜻이다. **0 으로 접지 마라** — 화면이 「0원」을 그리면 거짓말이다.
  */
 @Serializable
 data class RideRecordResponse(
     val partyId: Long = 0L,
     val departure: String? = null,
     val destination: String? = null,
+    /** 승차 시각 — **방장이 출발을 누른 시각**(자동 정리된 방은 약속 시각). 이 응답의 유일한 시각이다. */
     val pickupTime: String? = null,
-    val dropoffTime: String? = null,
+    /** 이 방의 택시비 정산에 **받는 사람이 넣은 실제 금액**. 정산이 없으면 null. */
     val totalFare: Int? = null,
     /**
-     * 서버가 계산한 1인 부담. `totalFare / currentMembers` **정수 나눗셈(내림)** 이다.
+     * 내 부담 금액. **1/N 이 아니다** — 방장이 사람마다 적어 넣은 금액이다
+     * (`fe6ba35a`: 「택시비 정산을 방장이 사람마다 부담 금액을 넣는 장부로 다시 짠다」).
      *
-     * **앱이 다시 계산하지 마라.** 앱의 `farePerPersonWon`(14·15 가 쓰는 예상 요금 계산)은
-     * 10원 단위로 올림/반올림하므로, 끌어다 쓰면 기록 화면 금액이 실제 결제액과 어긋난다.
+     * 서버 원문: 「보내는 사람은 받는 사람이 정한 내가 보낼 금액, 받는 사람은 택시비에서 다른
+     * 사람들이 보낼 금액을 뺀 금액」. 그래서 **같은 방을 보는 두 사람이 다른 값을 받는다.**
+     *
+     * **앱이 다시 계산하지 마라.** `totalFare / currentMembers` 로 되돌리면 방장이 손으로 조정한
+     * 금액(누가 더 멀리 갔다 같은 사정)이 전부 뭉개진다. 앱의 `farePerPersonWon`(14·15 의 예상 요금)도
+     * 끌어다 쓰면 안 된다 — 10원 단위로 맞추므로 실제 금액과 어긋난다.
      */
     val farePerPerson: Int? = null,
     /** 함께 탄 인원(나 포함). 정원(`capacity`)이 아니다 — 서버가 정원을 주지 않아 「2/3명」은 못 만든다. */

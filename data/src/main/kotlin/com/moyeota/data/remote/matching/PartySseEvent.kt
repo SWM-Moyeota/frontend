@@ -5,19 +5,21 @@ import com.moyeota.data.remote.dto.MemberJoinedPayload
 import com.moyeota.data.remote.dto.MemberLeftPayload
 import com.moyeota.data.remote.dto.PartyConfirmedPayload
 import com.moyeota.data.remote.dto.PartyDetailResponse
-import com.moyeota.data.remote.dto.RecruitingClosedPayload
 import kotlinx.serialization.json.Json
 
 /**
  * 서버 이벤트 이름(`RedisPartyChangeNotifier` · `PartySseRegistry`). 이 문자열이 계약이다 —
- * **서버가 보내는 일곱 종을 전부 적어 둔다.** 모르는 이름은 조용히 건너뛰므로
+ * **서버가 보내는 여섯 종을 전부 적어 둔다.** 모르는 이름은 조용히 건너뛰므로
  * ([parsePartySseFrame] 의 `else`), 하나를 빠뜨리면 그 변화가 화면에서 **아무 일도 안 일어남**으로만
  * 보인다 — 예전에 넷만 알던 앱이 약속 확정·도착을 영영 못 본 이유가 그것이다.
+ *
+ * `recruiting-closed` 는 **지웠다**(`b16551b7`). 빠뜨린 게 아니라 서버가 더 보내지 않는다 —
+ * 정원이 차도 방은 ACTIVE 로 남아 「모집이 끝났다」는 전이 자체가 없어졌고, 모집을 끝내는 건
+ * [EVENT_CONFIRMED] 하나다. 되살려 두면 올 수 없는 프레임의 분기를 화면이 영원히 들고 있게 된다.
  */
 internal const val EVENT_CONNECTED = "connected"
 internal const val EVENT_MEMBER_JOINED = "member-joined"
 internal const val EVENT_MEMBER_LEFT = "member-left"
-internal const val EVENT_RECRUITING_CLOSED = "recruiting-closed"
 internal const val EVENT_CONFIRMED = "confirmed"
 internal const val EVENT_MEMBER_ARRIVED = "member-arrived"
 internal const val EVENT_CLOSED = "closed"
@@ -44,10 +46,13 @@ sealed interface PartySseEvent {
      */
     data class MemberLeft(val payload: MemberLeftPayload) : PartySseEvent
 
-    /** `recruiting-closed` — `{"status": "COMPLETED", "version": N}` */
-    data class RecruitingClosed(val payload: RecruitingClosedPayload) : PartySseEvent
-
-    /** `confirmed` — `{"status": "COMPLETED", "departureAt": "...", "version": N}` */
+    /**
+     * `confirmed` — `{"status": "COMPLETED", "departureAt": "...",
+     * "departureLat": …, "departureLng": …, "departure": "...", "version": N}`.
+     *
+     * 출발지 셋이 함께 온다 — 확정이 방의 출발지를 만남 장소로 옮기기 때문이다
+     * ([com.moyeota.data.remote.dto.PartyConfirmedPayload] 에 무시하면 무슨 일이 벌어지는지 적었다).
+     */
     data class Confirmed(val payload: PartyConfirmedPayload) : PartySseEvent
 
     /**
@@ -96,7 +101,6 @@ internal fun parsePartySseFrame(type: String?, data: String): PartySseFrame = wh
     EVENT_CONNECTED -> decode(type) { PartySseEvent.Snapshot(sseJson.decodeFromString(data)) }
     EVENT_MEMBER_JOINED -> decode(type) { PartySseEvent.MemberJoined(sseJson.decodeFromString(data)) }
     EVENT_MEMBER_LEFT -> decode(type) { PartySseEvent.MemberLeft(sseJson.decodeFromString(data)) }
-    EVENT_RECRUITING_CLOSED -> decode(type) { PartySseEvent.RecruitingClosed(sseJson.decodeFromString(data)) }
     EVENT_CONFIRMED -> decode(type) { PartySseEvent.Confirmed(sseJson.decodeFromString(data)) }
     EVENT_MEMBER_ARRIVED -> parseMemberArrived(data)
     EVENT_CLOSED -> PartySseFrame.Received(PartySseEvent.Closed)

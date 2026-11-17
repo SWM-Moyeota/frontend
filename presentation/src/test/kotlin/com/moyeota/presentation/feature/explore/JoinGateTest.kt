@@ -107,7 +107,7 @@ class JoinGateTest {
     fun `이미 참여 중인 방이 마감돼도 돌아가기다`() {
         assertEquals(
             JoinGate.ALREADY_JOINED,
-            joinGate(RideStatus.MATCHED, joinedCount = 3, capacity = 3, iAmMember = true),
+            joinGate(RideStatus.CONFIRMED, joinedCount = 3, capacity = 3, iAmMember = true),
         )
     }
 

@@ -96,7 +96,7 @@ internal fun chatLeavePlan(chatRoomId: Long, ride: Ride?): ChatLeavePlan {
         partyId = partyId,
         isHost = ride.isHostedByMe,
         alone = ride.members.size == 1,
-        cancelsMeeting = ride.status == RideStatus.MATCHED && ride.members.size == 2,
+        cancelsMeeting = ride.status == RideStatus.CONFIRMED && ride.members.size == 2,
         capacity = ride.capacity,
         memberCount = ride.members.size,
     )

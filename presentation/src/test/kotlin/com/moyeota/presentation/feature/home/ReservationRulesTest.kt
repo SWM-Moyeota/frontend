@@ -451,7 +451,10 @@ class ReservationRulesTest {
     private fun failure(code: String?, httpStatus: Int? = 400) =
         PartyOpenException(code = code, serverMessage = null, httpStatus = httpStatus)
 
-    /** 「다시 시도」류를 403·409 에 붙이지 않는다 — `FinishFailureMessageTest` 가 세운 규칙이다. */
+    /**
+     * 「다시 시도」류를 403·409 에 붙이지 않는다 — 옛 `FinishFailureMessageTest` 가 세운 규칙이고
+     * (그 파일은 「합승 완료」와 함께 사라졌다) 지금은 `MeetingFailureMessageTest` 가 이어 받았다.
+     */
     private fun assertNoRetryPromise(message: String) {
         listOf("다시 시도", "잠시 후", "잠시만", "재시도").forEach { forbidden ->
             assertFalse("재시도를 약속한다: $message", message.contains(forbidden))
@@ -459,22 +462,32 @@ class ReservationRulesTest {
     }
 
     /**
-     * ★ 403 `NO_SHOW_RESTRICTED` — **재시도할 수 없는 실패**다. 끝나는 시각이 서버에 있고
-     * 그때까지는 몇 번 눌러도 같은 403 이다.
+     * 🔴 **노쇼 제재는 사라졌다** — 「노쇼 제재는 왜 막혔는지만 말하고 재시도를 약속하지 않는다」를
+     * 이 테스트로 **대체했다**.
      *
-     * 그 시각(`restrictedUntil`)을 **여기서 말하지 않는다**: 이 화면은 그 값을 읽지 않으므로
-     * 숫자를 적으면 지어내는 것이고, 「마이페이지에서 보세요」는 이 화면이 확인할 수 없는 약속이다.
+     * 옛 테스트는 403 `NO_SHOW_RESTRICTED` 가 「노쇼 제재 중에는 방을 만들 수 없어요」로 떨어지는
+     * 것을 못 박았고, **「재시도할 수 없는 실패」의 표본**이었다. 서버가 노쇼 기능을 통째로 지웠다
+     * (`b16551b7`, V37 이 테이블까지 떨어뜨린다) — `PartyOpenException.isNoShowRestricted` 가 함께
+     * 사라져 컴파일로 잡혔다.
+     *
+     * **그 테스트가 못 박던 두 사실의 운명이 다르다:**
+     *
+     * | 사실 | 지금 |
+     * |---|---|
+     * | 「403·409 에 재시도를 약속하지 않는다」 | **여전히 유효하다** → [assertNoRetryPromise] 가 남은 사유 전체를 훑는다(아래 테스트) |
+     * | 「노쇼 제재 중이라고 말한다」 | **거짓이 됐다** → 그 문구가 모르는 코드로 떨어지는지를 이 테스트가 본다 |
+     *
+     * 모르는 코드로 떨어뜨리는 것이 맞는 처방이다: 서버가 다시 비슷한 제재를 만들어도 앱은
+     * **지어내지 않는다.** 올 수 없는 사유에 문구를 두면 그 자리가 영영 검증되지 않고, 그 문구를
+     * 읽은 개발자는 아직 제재가 있는 줄로 읽는다.
      */
     @Test
-    fun `노쇼 제재는 왜 막혔는지만 말하고 재시도를 약속하지 않는다`() {
-        val message = reservationOpenFailureMessage(failure(PartyOpenException.NO_SHOW_RESTRICTED, httpStatus = 403))
+    fun `사라진 노쇼 제재는 문구를 갖지 않는다`() {
+        val message = reservationOpenFailureMessage(failure("NO_SHOW_RESTRICTED", httpStatus = 403))
 
-        assertEquals("노쇼 제재 중에는 방을 만들 수 없어요. 제재가 끝나면 다시 만들 수 있어요", message)
-        assertNoRetryPromise(message)
-        assertTrue("왜 막혔는지 말해야 한다", message.contains("노쇼"))
-        // 모르는 숫자·다른 화면을 가리키지 않는다
-        assertFalse(message, message.contains("시까지"))
-        assertFalse(message, message.contains("마이페이지"))
+        assertEquals(RESERVATION_OPEN_FAILED_MESSAGE, message)
+        assertFalse("서버에 없는 제재를 말한다: $message", message.contains("노쇼"))
+        assertFalse("서버에 없는 제재를 말한다: $message", message.contains("제재"))
     }
 
     /**
@@ -588,23 +601,40 @@ class ReservationRulesTest {
     }
 
     /**
-     * ★ **나갈 수 없다는 사실을 두 자리가 같은 문장으로 말한다.**
+     * 🔴 ★ **「나갈 수 없다」가 「시각을 바꿀 수 없다」로 바뀌었다** — 뒤집힌 자리다.
      *
-     * 예약 방은 만들어진 순간부터 확정이라 나가기가 **언제나** 409
-     * `CANNOT_LEAVE_CONFIRMED_PARTY` 다(서버 소스 실측). 실시간 방은 「그만 찾기」로 빠져나올 수
-     * 있어서, 이 말을 빼면 사용자는 **되돌릴 수 있다고 배운 동작**으로 되돌릴 수 없는 약속을 한다.
+     * 옛 문장: 「예약 방은 합류하면 **나갈 수 없어요**. 출발 시각에 안 가면 **노쇼로 기록돼요**」.
+     * 근거는 「예약 방은 만들어진 순간부터 확정이라 나가기가 언제나 409
+     * `CANNOT_LEAVE_CONFIRMED_PARTY` 다」였다. **서버가 그 규칙과 그 코드, 그리고 노쇼 기능까지
+     * 함께 지웠다**(`b16551b7` · V37) — 두 문장이 **다 거짓**이 됐다.
+     *
+     * 단순한 오타가 아니다: 이 문구는 21 대기 화면이 예약 방에서 **나가기를 숨기던 전제의 얼굴**
+     * 이었고(`canLeaveParty` 의 `!ride.isConfirmed`), 그 전제를 믿은 사용자는 들어간 예약 방을
+     * **벗어날 수 없다고 생각한 채 머문다.** 서버가 허용하는 일을 앱이 말로 막는 쪽이라 사용자가
+     * 복구할 수 없다.
+     *
+     * ### 그래도 이 자리가 남는 이유 — **바꿀 수 없는 것이 남아 있다**
+     * 예약 방의 출발 시각은 **처음부터 확정**이고 다시 정할 수 없다(409 `NOT_REALTIME_PARTY`).
+     * 실시간 방은 들어간 뒤 방장이 시간을 정하므로 사용자는 **시간을 나중에 맞출 수 있는 것으로
+     * 배워 왔다** — 그 차이를 누르기 전에 말해야 한다. 「되돌릴 수 없는 것」이 「나가기」에서
+     * **「시간」**으로 옮겨 간 것이다.
      */
     @Test
-    fun `예약은 나갈 수 없다는 사실을 만들기와 합류 양쪽에서 같은 말로 알린다`() {
+    fun `예약은 시각을 바꿀 수 없다는 사실을 만들기와 합류 양쪽에서 같은 말로 알린다`() {
         val creating = reservationCommitmentNotice(joining = false)
         val joining = reservationCommitmentNotice(joining = true)
 
-        assertEquals("예약 방은 만들면 나갈 수 없어요. 출발 시각에 안 가면 노쇼로 기록돼요", creating)
-        assertEquals("예약 방은 합류하면 나갈 수 없어요. 출발 시각에 안 가면 노쇼로 기록돼요", joining)
-        // 두 문장의 **뒷문장이 같다** — 같은 대가를 두 화면이 다른 무게로 말하지 않는다
-        val consequence = "출발 시각에 안 가면 노쇼로 기록돼요"
+        assertEquals("예약 방은 만든 뒤에 출발 시각을 바꿀 수 없어요. 못 가게 되면 미리 나와 주세요", creating)
+        assertEquals("예약 방은 합류한 뒤에 출발 시각을 바꿀 수 없어요. 못 가게 되면 미리 나와 주세요", joining)
+        // 두 문장의 **뒷문장이 같다** — 같은 사실을 두 화면이 다른 무게로 말하지 않는다
+        val consequence = "출발 시각을 바꿀 수 없어요. 못 가게 되면 미리 나와 주세요"
         assertTrue(creating, creating.endsWith(consequence))
         assertTrue(joining, joining.endsWith(consequence))
+        // 🔴 **서버가 버린 두 사실을 말하지 않는다** — 둘 다 사용자를 가두는 쪽의 거짓이다
+        listOf(creating, joining).forEach { copy ->
+            assertFalse("서버가 허용하는 일을 못 한다고 말한다: $copy", copy.contains("나갈 수 없"))
+            assertFalse("서버에 없는 제재로 겁을 준다: $copy", copy.contains("노쇼"))
+        }
         // 확인할 수 없는 알림을 약속하지 않는다(서버에 예약 리마인더가 있지만 앱이 발송을 모른다)
         listOf(creating, joining).forEach { copy ->
             assertFalse(copy, copy.contains("알림"))

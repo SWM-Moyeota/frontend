@@ -9,7 +9,6 @@ import com.moyeota.data.remote.matching.PartyEventSource
 import com.moyeota.data.remote.partyArriveException
 import com.moyeota.data.remote.partyConfirmException
 import com.moyeota.data.remote.partyDepartException
-import com.moyeota.data.remote.partyFinishException
 import com.moyeota.data.remote.realtimeMatchException
 import com.moyeota.data.remote.partyJoinException
 import com.moyeota.data.remote.readApiError
@@ -29,7 +28,6 @@ import com.moyeota.domain.model.PartyConfirmException
 import com.moyeota.domain.model.PartyDepartException
 import com.moyeota.domain.model.PartyDetail
 import com.moyeota.domain.model.PartyEvent
-import com.moyeota.domain.model.PartyFinishException
 import com.moyeota.domain.model.PartyJoinException
 import com.moyeota.domain.model.PartyLeaveException
 import com.moyeota.domain.model.PartyOpenException
@@ -74,9 +72,8 @@ class RemoteRideRepository(
 
     override fun getNearbyParties(): List<Ride> = local.getNearbyParties()
 
-    override suspend fun getParties(): List<Ride> = api.getParties().list.map { it.toRide() }
-
-    // 전체 목록과 같은 경로 + 쿼리 파라미터 4개. 매퍼가 departureLat/Lng 를 originLat/Lng 로 옮긴다.
+    // 목록은 뷰포트 조회 하나다 — 좌표 없는 전체 목록이 서버에서 사라졌다.
+    // 매퍼가 departureLat/Lng 를 originLat/Lng 로 옮긴다.
     override suspend fun getPartiesWithin(
         swLat: Double,
         swLng: Double,
@@ -184,20 +181,7 @@ class RemoteRideRepository(
         throw partyLeaveException(failure, error)
     }
 
-    /**
-     * 실패를 전부 [PartyFinishException] 으로 좁힌다 — **403 과 409 가 각각 두 가지 뜻**이라
-     * 화면이 상태 코드만으로는 안내 문구를 가를 수 없다(그 예외 KDoc 참고).
-     *
-     * 에러 본문은 스트림이라 한 번만 읽을 수 있다 — 읽어서 들고 넘긴다([readApiError]).
-     * 합류와 달리 멤버십 복구 조회는 없다: 완료는 서버가 **검사를 먼저** 하고 상태를 바꾸므로,
-     * 실패했으면 방은 그대로다(확인할 것이 없다).
-     */
-    override suspend fun finishParty(partyId: Long) {
-        val failure = runCatching { api.finishParty(partyId) }.exceptionOrNull() ?: return
-        // runCatching 은 취소까지 삼키므로 되던져 화면 이탈이 에러로 보이지 않게 한다.
-        if (failure is CancellationException) throw failure
-        throw partyFinishException(failure, failure.readApiError())
-    }
+    // `finishParty` 는 지웠다 — 서버가 `/finish` 를 없앴다. 방을 끝내는 길은 [departParty] 하나다.
 
     /**
      * 약속 시간 확정. 실패는 전부 [PartyConfirmException] 으로 좁힌다 — **403 과 409 가 각각 여러 뜻**이라
@@ -207,12 +191,31 @@ class RemoteRideRepository(
      * [PartyEvent.Confirmed] 에 실려 오기 때문이다([observePartyEvents]). 여기서 상세를 한 번 더 읽으면
      * 21 대기 화면이 같은 내용을 두 경로로 받아, 어느 쪽이 최신인지 순번으로 다시 가려야 한다.
      *
-     * [departureAt] 은 **검사하지 않고 그대로 싣는다.** 모양(ISO-8601 instant)과 범위(1시간 안)의 판정은
-     * 서버가 하고, 앱이 같은 검사를 두 벌 들면 서버가 범위를 바꿀 때 한쪽만 따라간다 — 화면은 애초에
-     * 만들 수 없는 값을 못 만들게(프리셋) 막는 쪽으로 책임을 진다.
+     * [departureAt] 은 **검사하지 않고 그대로 싣는다.** 모양(ISO-8601 instant)과 범위(지금부터 5분 뒤
+     * ~ 1시간)의 판정은 서버가 하고, 앱이 같은 검사를 두 벌 들면 서버가 범위를 바꿀 때 한쪽만
+     * 따라간다 — 화면은 애초에 만들 수 없는 값을 못 만들게(프리셋) 막는 쪽으로 책임을 진다.
+     *
+     * ### 만남 장소 셋도 **검사하지 않는다** — 다만 호출부가 반드시 채워야 한다
+     * 서버가 넷을 전부 `@NotNull`/`@NotBlank` 로 요구하므로(`2732cc75`) 빈 값은 400
+     * `INVALID_REQUEST` 다. 그 400 은 [PartyConfirmException] 의 어느 사유도 아니라서 화면에 일반
+     * 문구로만 보인다 — 여기서 기본값으로 메우면 **그 사실이 숨는다.** 그래서 이 저장소는 넷을
+     * 전부 필수 인자로 받고, 「바꾸지 않았다」는 호출부가 방의 지금 출발지를 그대로 넘기는 것으로
+     * 표현한다([com.moyeota.domain.repository.RideRepository.confirmMeeting] KDoc).
      */
-    override suspend fun confirmMeeting(partyId: Long, departureAt: String) {
-        val failure = runCatching { api.confirmMeeting(partyId, ConfirmMeetingRequestDto(departureAt)) }
+    override suspend fun confirmMeeting(
+        partyId: Long,
+        departureAt: String,
+        latitude: Double,
+        longitude: Double,
+        placeName: String,
+    ) {
+        val request = ConfirmMeetingRequestDto(
+            departureAt = departureAt,
+            departureLat = latitude,
+            departureLng = longitude,
+            departure = placeName,
+        )
+        val failure = runCatching { api.confirmMeeting(partyId, request) }
             .exceptionOrNull() ?: return
         // runCatching 은 취소까지 삼키므로 되던져 화면 이탈이 에러로 보이지 않게 한다.
         if (failure is CancellationException) throw failure
@@ -240,7 +243,7 @@ class RemoteRideRepository(
      * 출발 — 방을 끝낸다. 실패는 전부 [PartyDepartException] 으로 좁힌다.
      *
      * **되돌림도, 복구 조회도 없다.** 서버가 검사를 먼저 하고 상태를 바꾸므로 실패했으면 방은 그대로다
-     * ([finishParty] 와 같은 사정). 성공했을 때의 뒤처리(노쇼 기록·방 종료)는 모두 서버 쪽이고,
+     * (확정과 같은 사정). 성공했을 때의 뒤처리(탑승자 확정·방 종료)는 모두 서버 쪽이고,
      * 화면은 SSE [PartyEvent.Closed] 로 닫는다.
      *
      * 409 `PARTY_CLOSED` 를 성공으로 접지 **않는** 이유는 [com.moyeota.data.remote.partyDepartException]
@@ -300,10 +303,9 @@ class RemoteRideRepository(
         throw partyOpenException(failure, failure.readApiError())
     }
 
-    // 조회 셋은 실패를 감싸지 않는다(이 저장소의 조회 관례 — getParties·getPartyDetail 과 같다).
-    // 세 호출 모두 **재정렬하지 않는다**: 받은 순서가 서버의 정렬이다.
-    override suspend fun getReservations(from: String, to: String): List<Ride> =
-        api.getReservations(from = from, to = to).list.map { it.toRide() }
+    // 예약 조회 둘은 실패를 감싸지 않는다(이 저장소의 조회 관례 — getPartyDetail 과 같다).
+    // 둘 다 **재정렬하지 않는다**: 받은 순서가 서버의 정렬이다.
+    // (기간 조회 `getReservations(from, to)` 는 서버에서 사라져 함께 지웠다.)
 
     // 파라미터 순서가 getPartiesWithin 과 같다(남서 → 북동) — 섞이면 서버가 400 INVALID_MAP_BOUNDS 다.
     override suspend fun getReservationsSoon(

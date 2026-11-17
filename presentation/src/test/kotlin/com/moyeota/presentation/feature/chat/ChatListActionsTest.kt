@@ -45,7 +45,7 @@ class ChatListActionsTest {
         farePerPerson = 0,
         totalFare = 0,
         status = status,
-        isConfirmed = status == RideStatus.MATCHED,
+        isConfirmed = status == RideStatus.CONFIRMED,
         roomType = roomType,
     )
 
@@ -106,7 +106,7 @@ class ChatListActionsTest {
     @Test
     fun `약속이 정해진 방도 도착 전이면 나갈 수 있다`() {
         val confirmed = ride(
-            RideStatus.MATCHED,
+            RideStatus.CONFIRMED,
             listOf(member("a", isHost = true), member("b"), member("me", isMe = true)),
         )
         val plan = chatLeavePlan(7, confirmed) as ChatLeavePlan.LeaveParty
@@ -115,7 +115,7 @@ class ChatListActionsTest {
 
     @Test
     fun `약속이 정해진 둘뿐인 방에서 나가면 약속이 취소된다`() {
-        val pair = ride(RideStatus.MATCHED, listOf(member("a", isHost = true), member("me", isMe = true)))
+        val pair = ride(RideStatus.CONFIRMED, listOf(member("a", isHost = true), member("me", isMe = true)))
         val plan = chatLeavePlan(7, pair) as ChatLeavePlan.LeaveParty
         assertTrue(plan.cancelsMeeting)
     }
@@ -130,7 +130,7 @@ class ChatListActionsTest {
     @Test
     fun `도착을 누른 뒤에는 나갈 수 없다`() {
         val arrived = ride(
-            RideStatus.MATCHED,
+            RideStatus.CONFIRMED,
             listOf(member("a", isHost = true), member("me", isMe = true, arrived = true)),
         )
         assertTrue(chatLeavePlan(7, arrived) is ChatLeavePlan.Blocked)

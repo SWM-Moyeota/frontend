@@ -48,7 +48,7 @@ class JoinAnalyticsTest {
      * 테스트가 다 통과하면서 고친 게 사라지는 모양이다.
      */
     @Test
-    fun `다른 방에 막혔을 때 그 방이 확정된 방이면 출발로 끝내라고 안내한다`() {
+    fun `다른 방에 막혔을 때 그 방이 확정된 방이면 되돌릴 수 없다고 안내한다`() {
         val repo = FakeRideRepository().apply {
             detail = { held }
             join = { throw joinError(PartyJoinException.ALREADY_JOINED_OTHER_PARTY, httpStatus = 409) }
@@ -59,7 +59,9 @@ class JoinAnalyticsTest {
         vm.join()
 
         assertEquals(
-            "약속이 정해진 방에 참여 중이에요. 출발지에서 「출발」을 눌러 그 방을 끝낸 뒤에 합류할 수 있어요",
+            // 문구가 바뀐 근거는 `JoinFailureMessageTest` 의 같은 가지에 적어 두었다 —
+            // 서버가 「확정 방은 나갈 수 없다」를 버렸다(`b16551b7`).
+            "약속이 정해진 방에 참여 중이에요. 그 방에서 나오면 다시 들어갈 수 없어요",
             vm.joinState.value.errorMessage,
         )
         assertNull(vm.joinState.value.joinedPartyId)

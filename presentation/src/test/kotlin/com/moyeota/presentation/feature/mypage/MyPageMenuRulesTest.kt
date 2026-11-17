@@ -71,7 +71,7 @@ class MyPageMenuRulesTest {
 
         assertNull("안내 카드가 빈 채로 남았다", groups.group(MyPageGroupLabel.INFO))
         // 주소와 무관한 세 그룹은 그대로 있어야 한다 — 로그아웃·탈퇴가 사라지면 갇힌다.
-        assertEquals(listOf("지난 탑승 기록", "노쇼 기록"), groups.rowTexts(MyPageGroupLabel.RIDES))
+        assertEquals(listOf("지난 탑승 기록"), groups.rowTexts(MyPageGroupLabel.RIDES))
         assertEquals(listOf("알림 설정"), groups.rowTexts(MyPageGroupLabel.SETTINGS))
         assertEquals(listOf("로그인 수단 관리", "로그아웃", "탈퇴하기"), groups.rowTexts(MyPageGroupLabel.ACCOUNT))
     }
@@ -156,7 +156,6 @@ class MyPageMenuRulesTest {
                 is MyPageAction.SendMail,
                 -> true
                 MyPageAction.RideHistory,
-                MyPageAction.NoShowRecords,
                 MyPageAction.LoginMethods,
                 MyPageAction.Logout,
                 MyPageAction.DeleteAccount,
@@ -223,7 +222,8 @@ class MyPageMenuRulesTest {
      *
      * ### 금지어에서 「탑승 기록」이 빠진 이유 (2026-11-01)
      * **전제가 깨졌다 — 서버가 이제 준다.** `GET /api/v1/users/me/parties` 가 생겨
-     * 하차까지 끝난 탑승 기록을 돌려준다(실측: 기록 2건, `dropoffTime` 내림차순 + 커서 페이징).
+     * 끝난 탑승 기록을 돌려준다(실측: 기록 2건, 승차 시각 내림차순 + 커서 페이징 — 서버가
+     * `dropoffTime` 을 지우고 `pickupTime` 하나로 바로잡았다, 백엔드 `135df701`).
      * 그래서 「지난 탑승 기록」 행이 들어왔고(34 재도입, `docs/BACKEND-GAP-CLEANUP.md` §6)
      * 이 목록에 그 말이 남아 있으면 **행을 추가하는 순간 이 테스트가 빨개진다.**
      *
@@ -265,40 +265,46 @@ class MyPageMenuRulesTest {
         assertFalse("기록 보기는 되돌릴 수 없는 동작이 아니다", row.danger)
     }
 
-    // ─────────────────────────── 노쇼 기록 (2026-11-06) ───────────────────────────
+    // ─────────────────────────── 노쇼 기록 제거 (2026-11-12) ───────────────────────────
 
     /**
-     * 38 로 들어가는 입구가 **있어야** 한다. 이 행이 없으면 노쇼로 찍힌 사용자가 **이의를 낼 길이
-     * 앱 안에 하나도 없다** — 제재는 방 만들기·합류를 403 `NO_SHOW_RESTRICTED` 로 막기만 하고,
-     * 그 403 을 받는 화면들은 기록도 이의 경로도 모른다.
+     * ★ **「노쇼 기록」 행이 돌아오면 안 된다.** 2026-11-06 에 넣었고 2026-11-12 에 지웠다 —
+     * 서버가 노쇼 기능을 통째로 없애면서(백엔드 `b16551b7`, 마이그레이션 V37 이 기록·제재·이의
+     * 테이블을 DROP) 그 행이 여는 두 엔드포인트가 **둘 다 404** 가 됐다.
      *
-     * 「지난 탑승 기록」 **다음**이어야 한다: 같은 「탑승」 카드 안에서 평소에 보는 것이 위고,
-     * 사고가 났을 때 보는 것이 아래다(계정 카드가 로그아웃 → 탈퇴 순인 것과 같은 기준).
+     * 되살리면 증상이 **고장으로 보이지 않는다**: 행은 멀쩡히 눌리고 화면은 「불러오지 못했어요」로
+     * 떨어져, 사용자는 자기 기록이 안 보이는 것을 서버 장애로 읽고 기다린다. 영원히 오지 않는다.
+     *
+     * 금지어 목록(`서버가 주지 않는 것으로 행을 만들지 않는다`)에 함께 넣지 않은 이유는 **판정이
+     * 다르기** 때문이다. 그쪽은 「행 이름에 이 말이 들어 있나」인데, 지금 막아야 하는 것은 이름이
+     * 아니라 **동작**이다 — `MyPageAction` 에서 `NoShowRecords` 가 사라졌으므로 행을 다시 만들려면
+     * 이 테스트가 아니라 컴파일이 먼저 막는다. 그래서 여기서는 **행 자체가 한 줄뿐인가**를 못 박아
+     * 「이름만 바꿔 되살리는」 경로까지 걸린다.
      */
     @Test
-    fun `노쇼 기록 행이 지난 탑승 기록 다음에 있다`() {
+    fun `탑승 그룹에는 지난 탑승 기록 한 줄뿐이다`() {
         val rows = myPageGroups(allLinks).group(MyPageGroupLabel.RIDES)!!.rows
 
-        assertEquals(listOf("지난 탑승 기록", "노쇼 기록"), rows.map { it.text })
-        assertEquals(MyPageAction.NoShowRecords, rows[1].action)
-        // › (앱 안)이어야 한다. ↗ 로 달면 사용자는 브라우저가 열릴 줄 알고 누른다.
-        assertEquals(MyPageRowMark.CHEVRON, rows[1].mark)
-        assertFalse("기록 보기는 되돌릴 수 없는 동작이 아니다", rows[1].danger)
+        assertEquals(listOf("지난 탑승 기록"), rows.map { it.text })
+        // 이름을 바꿔 되살리는 길도 막는다 — 서버에 노쇼가 없으니 어떤 이름이어도 404 다.
+        myPageGroups(allLinks).flatMap { it.rows }.forEach { row ->
+            assertFalse("노쇼 행이 돌아왔다: ${row.text}", row.text.contains("노쇼"))
+        }
     }
 
     /**
-     * **행 이름이 제재를 단정하지 않는다.** 「이용 제한」·「제재 내역」으로 적으면 제한이 걸린 적
-     * 없는 사용자(절대다수)가 자기 계정에 제재가 있다고 읽는다. 이 행이 여는 화면은 기록 목록이고,
-     * 지금 제한 여부는 **배너**가 서버 `restrictedUntil` 로만 말한다.
+     * 행이 하나 빠졌다고 **그룹이 사라지지는 않는다.** 「탑승」은 `myPageGroups` 의 마지막
+     * `filter { it.rows.isNotEmpty() }` 에 걸릴 수 있는 그룹이 하나 더 생긴 셈인데, 남은 한 줄이
+     * 조건 없이 생기므로 지금은 걸리지 않는다 — 그 한 줄까지 조건부가 되는 날 이 테스트가 먼저 빨개진다.
+     *
+     * 「설정」으로 합치지 않은 이유는 `myPageGroups` KDoc 에 있다(↗ 와 › 를 한 카드에 섞지 않는다).
      */
     @Test
-    fun `노쇼 기록 행 이름이 제재를 단정하지 않는다`() {
-        val text = myPageGroups(allLinks).group(MyPageGroupLabel.RIDES)!!.rows[1].text
+    fun `행이 하나뿐이어도 탑승 그룹은 맨 위에 남는다`() {
+        val groups = myPageGroups(allLinks)
 
-        assertEquals("노쇼 기록", text)
-        listOf("제재", "이용 제한", "정지").forEach { forbidden ->
-            assertFalse("제재를 단정하는 행 이름이다: $text", text.contains(forbidden))
-        }
+        assertEquals(MyPageGroupLabel.RIDES, groups.first().label)
+        assertEquals(1, groups.first().rows.size)
     }
 
     /**

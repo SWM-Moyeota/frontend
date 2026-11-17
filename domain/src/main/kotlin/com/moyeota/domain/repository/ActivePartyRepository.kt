@@ -32,7 +32,7 @@ interface ActivePartyRepository {
      *
      * "진행 중"은 [Ride.status] 가
      * [RECRUITING][com.moyeota.domain.model.RideStatus.RECRUITING] ·
-     * [MATCHED][com.moyeota.domain.model.RideStatus.MATCHED] 중 하나인 경우다.
+     * [MATCHED][com.moyeota.domain.model.RideStatus.CONFIRMED] 중 하나인 경우다.
      * (COMPLETED·CANCELED 는 끝난 방이다.) 기사·배차 단계가 사라져 **진행 중은 이 둘뿐**이다.
      *
      * **네트워크 실패로는 예외를 던지지 않고 null 을 돌려준다** — 호출부는 배너를 숨기기만 하면 된다.

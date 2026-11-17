@@ -54,7 +54,7 @@ data class OpenReservationRequestDto(
  *
  * ### 엔벨로프 키가 `list` 다 — 노쇼 목록만 `noShows` 다
  * 세 예약 엔드포인트가 모두 `list` 를 쓴다(방 목록 [PartyListResponse] 와 같다). 같은 매칭 도메인에서
- * [MyNoShowListResponse] 하나만 `noShows` 이므로 서로 베끼지 말 것 — 틀리면 에러 없이
+ * 응답마다 엔벨로프 키가 달랐으니 서로 베끼지 말 것 — 틀리면 에러 없이
  * **항상 빈 목록**이다.
  *
  * ### 서버 record 가 둘인데 DTO 를 하나로 두는 이유 ★

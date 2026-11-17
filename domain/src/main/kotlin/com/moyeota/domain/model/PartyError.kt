@@ -58,25 +58,12 @@ class PartyJoinException(
     /** 404 `PARTY_NOT_FOUND` — 방이 사라졌다. 목록에서 빼야 한다. */
     val isPartyNotFound: Boolean get() = code == "PARTY_NOT_FOUND" || (code == null && httpStatus == 404)
 
-    /**
-     * 403 `NO_SHOW_RESTRICTED` — **노쇼로 이용이 제한된 상태다.** 기다리면 풀리지만,
-     * 「잠시 후 다시 시도」로 뭉개면 **몇 시간 뒤까지 같은 403** 이라 사용자는 영원히 재시도한다.
-     *
-     * 근거는 [PartyOpenException.isNoShowRestricted] 에 한 번만 적어 두었다(기한을 어디서 얻는지,
-     * 왜 추천 조회에는 이 사유가 없는지까지). 이쪽에서 특히 다른 점은 **합류 흐름의 다른 409 들과
-     * 섞이기 쉽다**는 것이다: [isAlreadyJoined]·[isPartyFull] 은 「이 방이 안 된다」이고 이 403 은
-     * 「**내가** 지금 아무 방에도 못 들어간다」다. 전자는 다른 방을 권하면 되지만 후자는 다른 방도
-     * 전부 막혀 있어, 목록으로 되돌려 보내면 누르는 족족 같은 403 이다.
-     */
-    val isNoShowRestricted: Boolean get() = code == NO_SHOW_RESTRICTED
+    // 403 `NO_SHOW_RESTRICTED` 사유는 **지웠다.** 서버가 노쇼 기록·제재를 전부 없애(`b16551b7`,
+    // 마이그레이션 V37) `ensureNotRestricted` 검사 자체가 사라졌다 — 이 403 은 다시 오지 않는다.
+    // 남겨 두면 화면이 영원히 안 들어오는 분기를 들고 있게 되고, 그 분기의 문구(「기다리면 풀려요」)는
+    // 어떤 실패에도 맞지 않는 말이 된다.
 
     companion object {
-        /**
-         * 403 — 노쇼 제재 중. 서버 `PartyService.ensureNotRestricted` 가 합류의 **첫 검사**라
-         * 「정원이 찼나·닫혔나」보다 먼저 걸린다(즉 이 403 과 409 는 함께 오지 않는다).
-         */
-        const val NO_SHOW_RESTRICTED = "NO_SHOW_RESTRICTED"
-
         /**
          * 서버가 **재합류에도 이 코드를 준다.** `PartyService.join` 이 `party.join()` 보다 먼저
          * `existsOngoingByMemberId` 를 보고, 그 질의가 합류 대상 방을 제외하지 않기 때문이다 —
@@ -100,82 +87,18 @@ class PartyJoinException(
     }
 }
 
-/**
- * 「합승 완료」 실패를 화면이 **사유별로 안내할 수 있는 형태**로 좁힌 예외
- * ([RideRepository.finishParty][com.moyeota.domain.repository.RideRepository.finishParty] 전용).
- *
- * 따로 둔 이유는 이 액션의 **403 이 두 가지 뜻**을 갖는데 **HTTP 상태로는 갈리지 않기** 때문이다 —
- * `NOT_PARTY_MEMBER`(이 방 멤버가 아니다)와 `NOT_PARTY_HOST`(멤버이지만 방장이 아니다)다. 예전에는
- * 둘이 「합승을 완료하지 못했어요」 하나로 떨어져서, **방장이 아니라서 막힌 사람이 다음에 뭘 해야
- * 하는지 알 수 없었다** — 같은 버튼을 다시 눌러도 같은 403 이다.
- *
- * 그래서 **상태 코드로는 폴백하지 않는다.** 403 을 「방장만 할 수 있어요」로 뭉개면 방 멤버가 아닌
- * 사람에게 방장을 찾으라고 말하게 된다. 코드를 모르면 [code] 는 null 이고 화면은 **일반 문구**로
- * 떨어진다 — 서버가 코드를 늘려도 앱이 틀린 말을 하지 않는다.
- *
- * 409 는 지금 `PARTY_NOT_COMPLETED` 하나뿐이다. `DRIVER_ALREADY_ASSIGNED` 도 있었지만 서버가
- * 기사·배차와 함께 **에러 코드째 지웠다**(서버 `MatchingErrorCode` 에 없다) — 올 수 없는 코드를
- * 받아 두면 화면이 영원히 안 쓰는 분기를 들고 있게 된다.
- *
- * 분기 근거를 프로퍼티로 노출하는 건 [PartyJoinException] 과 같은 이유다 — 서버 코드 문자열 비교가
- * 화면으로 새어 나가면 서버가 enum 이름을 바꿀 때 조용히 어긋난다.
- */
-class PartyFinishException(
-    /** 서버 `MatchingErrorCode` 이름(`NOT_PARTY_HOST` 등). 본문이 없거나 파싱 실패면 null. */
-    val code: String?,
-    /** 서버가 준 한국어 원문 message. 없으면 null. */
-    val serverMessage: String?,
-    /** HTTP 상태 코드. 응답 자체가 없으면(네트워크 실패) null. 문구 분기에는 쓰지 않는다 — 위 KDoc 참고. */
-    val httpStatus: Int? = null,
-    cause: Throwable? = null,
-) : RuntimeException(serverMessage ?: code ?: "합승을 완료하지 못했습니다.", cause) {
+// **`PartyFinishException` 은 지웠다** — 「합승 완료」(`POST /matching/rooms/{partyId}/finish`)가
+// 서버에서 사라졌다(`b16551b7`: 「구버전 종료 경로(/finish)…를 지운다」). 그 예외가 좁혀 두었던 다섯
+// 사유도 함께 의미를 잃었다:
+//
+// | 옛 사유 | 지금 |
+// |---|---|
+// | `PARTY_NOT_COMPLETED` (정원이 안 찼다) | 서버가 정원을 **종료 조건으로 보지 않는다**. 방을 끝내는 조건은 「확정 + 약속 시간 뒤 + 방장이 도착」이다 |
+// | `USE_DEPART_FOR_CONFIRMED_PARTY` | 「출발」이 **유일한 길**이 됐으니 다른 길로 안내할 것이 없다 |
+// | `NOT_PARTY_HOST`·`NOT_PARTY_MEMBER`·`PARTY_NOT_FOUND` | [PartyDepartException] 이 같은 사유를 든다 |
+//
+// 방을 끝내는 실패는 전부 [PartyDepartException] 하나로 모였다.
 
-    /**
-     * 403 `NOT_PARTY_HOST` — **방장만** 완료할 수 있다(Backend #237).
-     *
-     * 방장은 서버가 저장하는 값이 아니라 **지금 멤버 중 가장 먼저 합류한 사람**이다
-     * (`Party.hostId()` = `min(joinedAt, memberId)`). 그래서 방장이 나가면 다음으로 이른 멤버에게
-     * 자동 승계된다.
-     *
-     * 그 승계는 **SSE 변경분에 실려 온다**(`member-left` 의 `hostPublicId` = 이벤트를 반영한 뒤의
-     * 방장). 그래도 이 403 은 **남는다** — 그 신호는 한 번뿐이고 재발행되지 않아(SSE at-most-once),
-     * 프레임이 유실되거나 순서가 역전되면 내 스냅샷이 낡은 채로 버튼을 보여 줄 수 있다. 화면은
-     * **누가 눌러야 하는지**를 말해 줘야 하고, 그 순간에는 방장이 누구인지 확신할 수 없으므로
-     * 이름이 아니라 **조건**으로 말한다.
-     */
-    val isNotHost: Boolean get() = code == NOT_PARTY_HOST
-
-    /** 403 `NOT_PARTY_MEMBER` — 이 방의 멤버가 아니다. [isNotHost] 와 **같은 403 이지만 뜻이 다르다**. */
-    val isNotMember: Boolean get() = code == NOT_PARTY_MEMBER
-
-    /** 409 `PARTY_NOT_COMPLETED` — 정원이 아직 다 차지 않았다(서버는 COMPLETED 방만 닫아 준다). */
-    val isNotCompleted: Boolean get() = code == PARTY_NOT_COMPLETED
-
-    /**
-     * 409 `USE_DEPART_FOR_CONFIRMED_PARTY` — **약속이 정해진 방**이다. 이 경로로는 끝낼 수 없고
-     * 「출발」(`POST /rooms/{id}/depart`)만 받는다. 노쇼 기록이 거기서 생기므로 서버가 길을 하나로 묶었다.
-     *
-     * 화면이 확정된 방에서 이 버튼을 **숨기는데도** 남겨 두는 이유는 [isNotHost] 와 같다 — 확정
-     * 사실은 SSE 로 오고, 그 프레임을 놓치면 낡은 스냅샷으로 버튼을 보여 줄 수 있다. 그 틈에 눌린
-     * 것을 받아 **다음에 눌러야 할 버튼 이름**을 말해 준다.
-     */
-    val isUseDepartForConfirmedParty: Boolean get() = code == USE_DEPART_FOR_CONFIRMED_PARTY
-
-    /** 404 `PARTY_NOT_FOUND` — 방이 사라졌다. */
-    val isPartyNotFound: Boolean get() = code == PARTY_NOT_FOUND
-
-    /**
-     * 서버 `MatchingErrorCode` 중 **이 엔드포인트가 실제로 던지는** 코드만 둔다. 문자열을 아는 곳을
-     * 여기 하나로 묶어 데이터 계층과 화면이 각자 들고 있지 않게 한다.
-     */
-    companion object {
-        const val NOT_PARTY_MEMBER = "NOT_PARTY_MEMBER"
-        const val NOT_PARTY_HOST = "NOT_PARTY_HOST"
-        const val PARTY_NOT_COMPLETED = "PARTY_NOT_COMPLETED"
-        const val USE_DEPART_FOR_CONFIRMED_PARTY = "USE_DEPART_FOR_CONFIRMED_PARTY"
-        const val PARTY_NOT_FOUND = "PARTY_NOT_FOUND"
-    }
-}
 
 /**
  * 「걸어서 가까운 방」 추천 조회가 실패했다(`POST /matching/rooms/realtime`).
@@ -183,12 +106,6 @@ class PartyFinishException(
  * **빈 목록은 여기로 오지 않는다** — 후보가 없는 건 정상이고 성공이다. 이 예외는 조회 자체가
  * 안 된 경우뿐이다.
  *
- * **`NO_SHOW_RESTRICTED` 사유는 여기 없다 — 빠진 게 아니다.** 서버가 그 403 을 던지는 자리는
- * `PartyService.ensureNotRestricted` 한 곳이고 호출처는 `open`·`reserve`·`join` 셋뿐이라, 이
- * 추천 조회(`PartyService.realtimeMatch`)는 **검사를 거치지 않는다**. 즉 제재당한 사용자도 후보를
- * 둘러볼 수 있고, 합류를 누르는 순간에만 막힌다([PartyJoinException.isNoShowRestricted]).
- * 여기에 사유를 더하면 서버가 허용하는 탐색을 앱이 임의로 막는 분기가 생긴다
- * (근거 전문은 [PartyOpenException.isNoShowRestricted]).
  */
 class RealtimeMatchException(
     /** 서버 `MatchingErrorCode` 이름. 본문이 없거나 파싱 실패면 null. */
@@ -246,16 +163,16 @@ class RealtimeMatchException(
  * (출발 시각이 있는가)이 곧 분기 근거다. 같은 함수 안의 지역 값이라 어긋날 길이 없다.
  *
  * 반대로 가르면 서버가 **같은 record 로 응답하는 두 액션**(`OpenPartyResponse`)에 예외가 둘이 되고,
- * 겹치는 다섯 코드(`ALREADY_JOINED_OTHER_PARTY`·`SAME_DEPARTURE_DESTINATION`·`OUT_OF_SERVICE_AREA`·
- * `INVALID_CAPACITY`·`NO_SHOW_RESTRICTED`)의 프로퍼티가 두 벌이 된다 — 한쪽만 서버 변경을 따라갈
- * 자리를 다섯 개 만드는 셈이다.
+ * 겹치는 네 코드(`ALREADY_JOINED_OTHER_PARTY`·`SAME_DEPARTURE_DESTINATION`·`OUT_OF_SERVICE_AREA`·
+ * `INVALID_CAPACITY`)의 프로퍼티가 두 벌이 된다 — 한쪽만 서버 변경을 따라갈
+ * 자리를 넷 만드는 셈이다.
  *
  * **그래서 [isInvalidCapacity] 만은 호출부가 「무엇을 만들려 했는지」를 알아야 문장이 완성된다.**
  * 그 자리는 presentation 이 모드별 문구 함수를 갈라 두는 쪽으로 해결한다(실시간 「1~3명」,
  * 예약 「2~3명」) — 그 한 곳만 갈리고 나머지는 공유한다.
  *
- * 생성만 오래 예외가 없었다. 합류는 [PartyJoinException] 으로 6갈래, 완료는 [PartyFinishException] 으로
- * 5갈래인데 생성은 **모든 실패가 「잠시 후 다시 시도해 주세요」 하나**였다. 그게 특히 나쁜 까닭은 이
+ * 생성만 오래 예외가 없었다. 합류는 [PartyJoinException] 으로 6갈래, 출발은 [PartyDepartException] 으로
+ * 7갈래인데 생성은 **모든 실패가 「잠시 후 다시 시도해 주세요」 하나**였다. 그게 특히 나쁜 까닭은 이
  * 엔드포인트의 실패가 **기다려서 풀리는 것과 사용자가 고쳐야 하는 것으로 갈리기** 때문이다:
  *
  * | 사유 | 서버 코드(HTTP) | 기다리면 풀리나 |
@@ -265,7 +182,11 @@ class RealtimeMatchException(
  * | 서비스 지역 밖 좌표 | `OUT_OF_SERVICE_AREA` (400) | **아니다.** 다른 곳을 골라야 한다 |
  * | 정원이 1~3 이 아니다 | `INVALID_CAPACITY` (400) | **아니다.** 앱이 잘못 보냈다 |
  * | 경로 엔진 장애·경로 없음 | `ROUTE_SEARCH_FAILED` (502) · `INVALID_ROUTE_ESTIMATE`·`ROUTE_NOT_FOUND` (400) | 장애면 그렇다 |
- * | 노쇼로 이용이 제한됐다 | `NO_SHOW_RESTRICTED` (403) | **기다리면 풀린다** — 다만 몇 시간 단위다 |
+ *
+ * **표의 사유가 전부 「아니다」로 모인 건 우연이 아니다.** 오래 유일한 예외였던 403
+ * `NO_SHOW_RESTRICTED`(노쇼 제재 — 기다리면 풀리는 실패)가 서버에서 사라졌다(`b16551b7`).
+ * 즉 **생성 실패에 「잠시 후 다시 시도」가 맞는 자리는 장애(502) 하나뿐**이고, 나머지는 전부
+ * 사용자가 무언가를 고쳐야 한다.
  *
  * **예약 생성에만 오는 둘**(실시간에는 오지 않는다):
  *
@@ -285,7 +206,7 @@ class RealtimeMatchException(
  * `ActivePartyRepository.resolve()` 가 방을 찾아야 뜬다 — 그래서 화면은 이 409 를 받으면 **문구로
  * 안내하는 동시에 진행 중 방 조회를 되살려야** 한다. 그 둘 다 「잠시 후 다시 시도」 아래에서는 할 수 없다.
  *
- * 분기 근거를 프로퍼티로 노출하는 건 [PartyJoinException]·[PartyFinishException] 과 같은 이유다 —
+ * 분기 근거를 프로퍼티로 노출하는 건 [PartyJoinException]·[PartyDepartException] 과 같은 이유다 —
  * 서버 코드 문자열 비교가 화면으로 새어 나가면 서버가 enum 이름을 바꿀 때 조용히 어긋난다.
  * 그리고 **상태 코드로 폴백하지 않는다**(400 이 네 가지, 502 가 한 가지다): 코드를 모르면 [code] 는
  * null 이고 화면은 **일반 문구**로 떨어진다. 서버가 코드를 늘려도 앱이 틀린 말을 하지 않는다.
@@ -395,41 +316,12 @@ class PartyOpenException(
             code == ROUTE_NOT_FOUND ||
             httpStatus == 502
 
-    /**
-     * 403 `NO_SHOW_RESTRICTED` — **노쇼로 이용이 제한된 상태다.** 이 사유의 설명은 여기 한 번만
-     * 적어 둔다([PartyJoinException.isNoShowRestricted]
-     * 가 이 KDoc 을 가리킨다).
-     *
-     * ### 이 403 은 「기다리면 풀리는」 유일한 생성 실패이고, 그래서 가장 위험하다 ★
-     * 위 표의 다른 사유는 전부 「사용자가 고쳐야 하거나 장애」다. 이것만 **시간이 지나면 저절로
-     * 풀린다** — 그래서 「잠시 후 다시 시도해 주세요」가 **문법적으로는 맞는데 실질적으로는
-     * 거짓**인 유일한 자리다: 제한은 노쇼 1건당 **24시간**이고 여러 건이면 쌓인다(서버
-     * `NoShowSanction.RESTRICTION_PER_COUNT`). 「잠시」를 믿은 사용자는 몇 시간 동안 같은 403 을
-     * 맞으며 버튼을 누른다.
-     *
-     * ### 기한은 이 예외가 모른다 — 프로필을 함께 읽어야 한다 ★
-     * 서버 본문은 `{"code":"NO_SHOW_RESTRICTED","message":"노쇼로 이용이 제한된 상태입니다."}`
-     * 뿐이다. **끝나는 시각이 없다.** 그 답은 `GET /api/v1/local/users/info` 의
-     * [UserProfileInfo.restrictedUntil] 하나뿐이므로, 화면은 이 사유를 받으면
-     * [com.moyeota.domain.repository.AuthRepository.getMyProfile] 을 **이어서 호출해** 문장을 완성해야
-     * 한다(「노쇼로 오늘 18:30까지 방을 만들 수 없어요」). 그 조회가 실패하면 기한 없이 사유만
-     * 말하면 된다 — 기한을 **지어내지 말 것**(24시간 × 횟수를 앱이 다시 세면 서버가 규칙을 바꿀 때
-     * 틀린 시각을 단정한다).
-     *
-     * ### 「왜 제한됐나」로 데려갈 곳이 있다
-     * [NoShowRecord] 목록(`GET /matching/no-shows`)이 그 근거이고, 억울하면 거기서 이의를 낸다
-     * ([com.moyeota.domain.repository.NoShowRepository]). 이 403 의 안내는 그 화면으로 가는 길을
-     * 함께 주는 쪽이 맞다 — 사유만 말하고 끝내면 사용자가 할 수 있는 일이 기다리는 것뿐이 된다.
-     *
-     * ### 추천 조회에는 이 사유가 없다 — 「없는데 왜 없지」를 의심하지 말 것
-     * 서버에서 이 403 을 던지는 자리는 `PartyService.ensureNotRestricted` **한 곳**이고 호출처는
-     * `open`·`reserve`·`join` **셋뿐**이다. 「걸어서 가까운 방」 추천(`POST /matching/rooms/realtime`)은
-     * 그 검사를 **거치지 않으므로** [RealtimeMatchException] 에는 이 사유가 없다 — 빠진 게 아니라
-     * 서버가 막지 않는 것이다. 제재당한 사용자도 후보를 둘러볼 수 있고, 합류를 누르는 순간
-     * [PartyJoinException.isNoShowRestricted] 로 막힌다. 거기에 사유를 추가하면 **서버가 허용하는
-     * 탐색을 앱이 임의로 막는** 분기가 생긴다.
-     */
-    val isNoShowRestricted: Boolean get() = code == NO_SHOW_RESTRICTED
+    // 403 `NO_SHOW_RESTRICTED` 사유는 **지웠다** — 서버가 노쇼 제재를 없애(`b16551b7`,
+    // 마이그레이션 V37) `ensureNotRestricted` 가 사라졌다. 이 403 은 다시 오지 않는다.
+    //
+    // 지우면서 함께 사라진 요구가 하나 있다: 예전에는 이 사유를 받으면 **기한을 얻으려고 프로필
+    // (`GET /local/users/info` 의 `restrictedUntil`)을 이어서 읽어야** 했다. 그 필드는 서버에 키만
+    // 남았고 값이 늘 null 이므로 그 연쇄 호출도 의미가 없다 — 되살리지 말 것.
 
     /**
      * 서버 `MatchingErrorCode` 중 **이 두 엔드포인트가 실제로 던지는** 코드만 둔다
@@ -455,19 +347,6 @@ class PartyOpenException(
 
         /** 400 — 예약 전용. 출발 시각이 지금 뒤 ~ 7일 안이 아니다([isInvalidDepartureTime]). */
         const val INVALID_DEPARTURE_TIME = "INVALID_DEPARTURE_TIME"
-
-        /**
-         * 403 — 노쇼 제재 중. 서버 `open`·`reserve` 양쪽의 **첫 검사**라(`ensureNotRestricted` 가
-         * 경로 추정·시간 검증보다 앞이다) 경로 조회조차 돌지 않는다 — 즉 이 403 과 502 는
-         * 함께 오지 않는다.
-         *
-         * [PartyJoinException.NO_SHOW_RESTRICTED] 가 **같은 문자열을 따로 선언한다.**
-         * 「이 엔드포인트가 던지는 코드 목록」이 각 예외에서 혼자 읽혀야 한다는 이 파일의 규칙을
-         * 따른 것이다([PartyArriveException] 의 companion KDoc) — `NOT_PARTY_MEMBER`·
-         * `PARTY_NOT_FOUND` 가 이미 네 예외에 흩어져 있는 것과 같은 선택이고, 둘을 한 상수로 묶으면
-         * 두 액션 중 하나가 서버에서 검사를 잃어도 목록이 그대로 남는다.
-         */
-        const val NO_SHOW_RESTRICTED = "NO_SHOW_RESTRICTED"
     }
 }
 
@@ -482,16 +361,23 @@ class PartyOpenException(
  * 들고 있으니 화면상 나는 아직 그 방에 있다. 합류가 409 를 성공으로 되돌리는 것
  * ([PartyJoinException.isAlreadyInThisParty])과 **대칭**인 처방이다.
  *
- * 그래서 화면까지 올라오는 실패는 둘뿐이다:
+ * 그래서 화면까지 올라오는 실패는 셋뿐이다:
  *
  * | 사유 | 서버 코드(HTTP) | 사용자가 할 일 |
  * |---|---|---|
- * | 모집 중이 아니다 | `PARTY_NOT_RECRUITING` (409) | 매칭이 시작돼 나갈 수 없다 — 기다린다 |
+ * | **내가 도착을 눌렀다** | `ARRIVED_MEMBER_CANNOT_LEAVE` (409) | 나갈 수 없다 — 출발을 기다린다 |
+ * | 방이 닫혔다 | `PARTY_CLOSED` (409) | 홈으로 돌아간다 |
  * | 방이 없다 | `PARTY_NOT_FOUND` (404) | 홈으로 돌아간다(이미 닫힌 방이다) |
  * | 그 밖·네트워크 | 코드 없음 | 다시 시도한다 |
+ *
+ * ### 「확정된 방은 나갈 수 없다」는 **더 이상 사실이 아니다** ★
+ * 오래 그랬고 앱의 여러 화면이 그 전제로 쓰여 있었다(예약 방에 「그만 찾기」를 숨기는 것까지).
+ * 서버가 그 규칙을 버렸다(`b16551b7`: 「확정 방에서도 나갈 수 있고, 확정 방에서 혼자 남으면 닫는다」).
+ * 그 전제로 **버튼을 숨겨 둔 자리는 전부 사용자를 가두는 쪽으로 틀렸다** — 서버가 허용하는 일을
+ * 앱이 막는 것이라 사용자에게는 복구할 길이 없다.
  */
 class PartyLeaveException(
-    /** 서버 `MatchingErrorCode` 이름(`PARTY_NOT_RECRUITING` 등). 본문이 없거나 파싱 실패면 null. */
+    /** 서버 `MatchingErrorCode` 이름(`ARRIVED_MEMBER_CANNOT_LEAVE` 등). 본문이 없거나 파싱 실패면 null. */
     val code: String?,
     /** 서버가 준 한국어 원문 message. 없으면 null. */
     val serverMessage: String?,
@@ -501,28 +387,34 @@ class PartyLeaveException(
 ) : RuntimeException(serverMessage ?: code ?: "방에서 나가지 못했습니다.", cause) {
 
     /**
-     * 409 `PARTY_NOT_RECRUITING` — 모집 단계를 벗어난 방이다(기사 매칭이 시작됐다).
+     * 409 `PARTY_CLOSED` — **이미 닫힌 방**이다(FINISHED·CANCELED). 나갈 방이 없다.
      *
-     * 화면은 이 단계에서 나가기 버튼을 이미 비활성으로 바꾸지만(21 의 `canLeaveParty`), 전이를
-     * 알아채기까지 한 주기가 비어 그 틈에 눌릴 수 있다 — 그때 「나가지 못했어요」가 아니라 **왜**
-     * 못 나가는지 말해 줘야 한다.
+     * 화면은 방이 닫히면 대기 화면을 떠나지만(SSE `closed`), 그 프레임을 놓치면 낡은 스냅샷으로
+     * 버튼을 열어 둘 수 있다 — 그 틈에 눌린 것을 받는다. 그때 「나가지 못했어요」가 아니라
+     * **이미 끝난 방이라고** 말하고 화면을 닫아야 한다.
+     *
+     * 옛 이름은 `PARTY_NOT_RECRUITING` 이었다. 서버가 `Party.leave` 의 검사를 `validateOpen()`
+     * 하나로 묶으면서 이 코드로 통일됐다(`b16551b7`).
      */
-    val isNotRecruiting: Boolean get() = code == PARTY_NOT_RECRUITING
+    val isPartyClosed: Boolean get() = code == PARTY_CLOSED
 
     /**
-     * 409 `CANNOT_LEAVE_CONFIRMED_PARTY` — **약속이 정해진 방은 아무도 나갈 수 없다.**
+     * 409 `ARRIVED_MEMBER_CANNOT_LEAVE` — **출발지 도착을 누른 뒤에는 나갈 수 없다.**
      *
-     * 예약 방은 합류 순간부터 확정이라 **처음부터 끝까지** 이 답이 온다. 실시간 방은 방장이 약속
-     * 시간을 확정한 뒤부터다. 끝내는 길은 「출발」 하나뿐이고, 가지 않으면 노쇼로 남는다.
+     * ### 확정이 아니라 **도착**이 나가기를 막는다 ★
+     * 예전에는 「약속이 정해진 방은 아무도 나갈 수 없다」(`CANNOT_LEAVE_CONFIRMED_PARTY`)였다.
+     * 서버가 그 규칙을 **버렸다**(`b16551b7`: 「확정 방에서도 나갈 수 있고, 확정 방에서 혼자 남으면
+     * 닫는다」). 지금 나가기를 막는 유일한 사유가 이것이고, 조건도 「방이 어떤 상태인가」가 아니라
+     * **「내가 도착을 눌렀는가」**다.
      *
-     * 화면이 확정된 방에서 나가기를 **이미 막는데도**(21 의 `canLeaveParty`) 남겨 두는 이유는
-     * [isNotRecruiting] 과 같다 — 확정 사실은 SSE 로 오므로 그 프레임을 놓치면 낡은 스냅샷으로
-     * 버튼을 열어 둘 수 있고, 그 틈에 눌린 것을 받는다.
+     * 이유는 정산이다 — 도착한 멤버가 곧 탑승자이고(서버 `Party.riderIds`) 택시비 정산 대상이다.
+     * 도착을 누른 뒤 빠져나가면 같이 탔는데도 장부에서 사라진다. 그래서 되돌릴 길이 없다:
+     * **도착 취소 API 는 없다.** 화면은 도착 버튼을 「누르면 이 방에 묶인다」로 보여 줘야 한다.
      *
-     * [isNotRecruiting] 과 **뜻이 다르다**: 그쪽은 이미 끝난 방이고 이쪽은 **아직 살아 있는데
-     * 약속에 묶인 방**이다. 사용자가 할 일도 다르다 — 앞은 홈으로, 뒤는 약속 장소로.
+     * [isPartyClosed] 와 **뜻이 다르다**: 그쪽은 이미 끝난 방(홈으로 보내면 된다)이고 이쪽은
+     * **아직 살아 있는데 내가 묶인 방**(출발을 기다려야 한다)이다.
      */
-    val isCannotLeaveConfirmed: Boolean get() = code == CANNOT_LEAVE_CONFIRMED_PARTY
+    val isArrivedMemberCannotLeave: Boolean get() = code == ARRIVED_MEMBER_CANNOT_LEAVE
 
     /** 404 `PARTY_NOT_FOUND` — 방이 사라졌다. 나갈 방이 없으므로 홈으로 보내면 된다. */
     val isPartyNotFound: Boolean get() = code == PARTY_NOT_FOUND || (code == null && httpStatus == 404)
@@ -535,8 +427,8 @@ class PartyLeaveException(
          * 되돌린다). 화면이 이 코드를 보게 되면 그건 되돌림이 빠졌다는 뜻이다 — 위 KDoc 참고.
          */
         const val NOT_PARTY_MEMBER = "NOT_PARTY_MEMBER"
-        const val PARTY_NOT_RECRUITING = "PARTY_NOT_RECRUITING"
-        const val CANNOT_LEAVE_CONFIRMED_PARTY = "CANNOT_LEAVE_CONFIRMED_PARTY"
+        const val PARTY_CLOSED = "PARTY_CLOSED"
+        const val ARRIVED_MEMBER_CANNOT_LEAVE = "ARRIVED_MEMBER_CANNOT_LEAVE"
         const val PARTY_NOT_FOUND = "PARTY_NOT_FOUND"
     }
 }
@@ -582,10 +474,10 @@ class PartyMembershipLostException(
  *
  * 예외가 하나면 **어느 버튼을 눌렀는지**가 타입에서 사라지고, 화면은 그걸 자기 쪽 플래그로 다시
  * 들고 있어야 한다 — 그 플래그가 어긋나는 순간 사용자는 누르지도 않은 동작의 안내를 받는다.
- * [PartyFinishException] 이 "403 이 두 가지 뜻인데 HTTP 상태로는 안 갈린다"로 생긴 것과 같은 형태의
- * 문제이고, 여기서는 **코드 하나가 두 가지 뜻인데 액션으로만 갈린다.**
+ * 지금은 사라진 `PartyFinishException`(「합승 완료」)이 "403 이 두 가지 뜻인데 HTTP 상태로는 안
+ * 갈린다"로 생긴 것과 같은 형태의 문제이고, 여기서는 **코드 하나가 두 가지 뜻인데 액션으로만 갈린다.**
  *
- * 나머지 모양은 [PartyFinishException] 과 같다. **상태 코드로 폴백하지 않는다**(403 이 두 가지,
+ * **상태 코드로 폴백하지 않는다**(403 이 두 가지,
  * 409 가 네 가지다) — 코드를 모르면 [code] 는 null 이고 화면은 **일반 문구**로 떨어진다. 서버가
  * 코드를 늘려도 앱이 틀린 말을 하지 않는다. 분기 근거를 프로퍼티로 노출하는 것도 같은 이유다 —
  * 서버 코드 문자열 비교가 화면으로 새어 나가면 서버가 enum 이름을 바꿀 때 조용히 어긋난다.
@@ -606,7 +498,7 @@ class PartyConfirmException(
     /**
      * 403 `NOT_PARTY_HOST` — **방장만** 약속 시간을 정할 수 있다.
      *
-     * [PartyFinishException.isNotHost] 와 같은 사정이다: 방장은 저장값이 아니라 **지금 멤버 중 가장
+     * [PartyDepartException.isNotHost] 와 같은 사정이다: 방장은 저장값이 아니라 **지금 멤버 중 가장
      * 먼저 합류한 사람**이고 승계가 SSE 한 번으로만 전해지므로, 버튼을 가려도 내 스냅샷이 낡으면
      * 이 403 이 남는다. 화면은 이름이 아니라 **조건**으로 말해야 한다.
      */
@@ -634,20 +526,32 @@ class PartyConfirmException(
      */
     val isAlreadyConfirmed: Boolean get() = code == ALREADY_CONFIRMED
 
-    /** 409 `PARTY_NOT_RECRUITING` — 모집 단계를 벗어난 방이다(이미 닫혔다). */
-    val isNotRecruiting: Boolean get() = code == PARTY_NOT_RECRUITING
+    /**
+     * 409 `PARTY_CLOSED` — 이미 닫힌 방이다(FINISHED·CANCELED).
+     *
+     * 옛 이름은 `PARTY_NOT_RECRUITING` 이었다. **「정원이 찼다」는 더 이상 여기 오지 않는다** —
+     * 서버가 정원이 찬 방도 ACTIVE 로 두고 확정을 받기 때문이다(`b16551b7`).
+     */
+    val isPartyClosed: Boolean get() = code == PARTY_CLOSED
 
     /** 409 `NOT_ENOUGH_MEMBERS` — 혼자 있는 방이다. 서버는 2명 이상인 방만 확정해 준다. */
     val isNotEnoughMembers: Boolean get() = code == NOT_ENOUGH_MEMBERS
 
     /**
-     * 400 `INVALID_MEETING_TIME` — 약속 시간이 **지금부터 1시간 안**이 아니다(서버 `MAX_CONFIRM_AHEAD`,
-     * 과거 쪽으로는 1분의 시계 오차만 봐준다).
+     * 400 `INVALID_MEETING_TIME` — 약속 시간이 **지금부터 5분 뒤 ~ 1시간** 사이가 아니다
+     * (서버 `Party.MIN_CONFIRM_AHEAD`·`MAX_CONFIRM_AHEAD`).
      *
-     * **화면이 프리셋(10·20·30·45·60분 후)으로만 시간을 고르게 하는 이유가 이것이다** — 자유 입력은
-     * 사용자가 만들 수 있는 400 이 되고, 그 400 은 "다시 시도"로 풀리지 않는다. 그래도 사유를 남겨
-     * 두는 건 **60분 프리셋이 경계에 붙어 있기** 때문이다: 고르고 누르기까지 1초만 지나도 서버 쪽
-     * `now` 가 밀려 거절될 수 있다.
+     * **하한이 생겼다.** 예전에는 과거 쪽으로 1분의 시계 오차만 봐주는 상한 하나였는데, 지금은
+     * **5분 뒤보다 이른 시간도 거절된다**(`b16551b7`). 그래서 양쪽 경계가 다 위험하다:
+     *
+     * | 프리셋 | 위험 | 왜 |
+     * |---|---|---|
+     * | 10분 후 | **하한** | 다이얼로그를 6분 열어 두면 남은 시간이 4분이 된다 |
+     * | 60분 후 | **상한** | 고르고 누르기까지 1초만 지나도 상한을 넘는다 |
+     *
+     * **화면이 프리셋으로만 시간을 고르게 하는 이유가 이것이다** — 자유 입력은 사용자가 만들 수
+     * 있는 400 이 되고, 그 400 은 "다시 시도"로 풀리지 않는다. 그리고 프리셋이 안전한 건
+     * **누른 순간의 `now`** 로 계산할 때뿐이다(다이얼로그를 연 시각으로 계산하면 둘 다 터진다).
      */
     val isInvalidMeetingTime: Boolean get() = code == INVALID_MEETING_TIME
 
@@ -663,7 +567,7 @@ class PartyConfirmException(
         const val NOT_PARTY_HOST = "NOT_PARTY_HOST"
         const val NOT_REALTIME_PARTY = "NOT_REALTIME_PARTY"
         const val ALREADY_CONFIRMED = "ALREADY_CONFIRMED"
-        const val PARTY_NOT_RECRUITING = "PARTY_NOT_RECRUITING"
+        const val PARTY_CLOSED = "PARTY_CLOSED"
         const val NOT_ENOUGH_MEMBERS = "NOT_ENOUGH_MEMBERS"
         const val INVALID_MEETING_TIME = "INVALID_MEETING_TIME"
         const val PARTY_NOT_FOUND = "PARTY_NOT_FOUND"
@@ -752,7 +656,7 @@ class PartyArriveException(
      * 서버 `MatchingErrorCode` 중 **이 엔드포인트가 실제로 던지는** 코드만 둔다
      * (`PartyService.arrive` → `Location` 검증 → `Party.arrive` → `ensureAttendanceOpen`).
      * 출발과 겹치는 네 개를 [PartyDepartException] 이 또 선언하는 건 **일부러**다 —
-     * 「이 엔드포인트가 던지는 코드 목록」이 각 예외에서 혼자 읽혀야 한다([PartyFinishException] ·
+     * 「이 엔드포인트가 던지는 코드 목록」이 각 예외에서 혼자 읽혀야 한다([PartyConfirmException] ·
      * [PartyLeaveException] 이 `NOT_PARTY_MEMBER` 를 각자 들고 있는 것과 같다).
      */
     companion object {
@@ -771,19 +675,26 @@ class PartyArriveException(
  * ([RideRepository.departParty][com.moyeota.domain.repository.RideRepository.departParty] 전용).
  *
  * **이 액션은 되돌릴 수 없다.** 성공하면 방이 그 자리에서 끝나고(FINISHED), 그 순간 도착하지 않은
- * 멤버가 전부 **노쇼로 기록된다**(노쇼 횟수 × 24시간 이용 제한, 약속 시간부터 센다). 앱에는 그걸
- * 취소하는 길이 없다 — 이의 신청은 서버 쪽 별도 경로다. 그래서 화면은 누르기 전에 확인을 받아야 하고,
- * 실패했을 때 **왜** 못 했는지도 정확히 말해야 한다("다시 시도"는 아무것도 바꾸지 않는다).
+ * 멤버는 **그 방의 탑승자에서 빠진다**. 노쇼 제재는 서버에서 사라졌지만(`b16551b7`) 대가가 없어진
+ * 건 아니다: 탑승 횟수·탑승 기록·**택시비 정산 대상**이 전부 「도착을 누른 멤버」 기준이라, 아직
+ * 오는 중인 사람을 두고 누르면 그 사람은 같이 탔는데도 장부에서 사라진다. 앱에는 취소하는 길이
+ * 없다(이의 신청 경로도 함께 사라졌다). 그래서 화면은 누르기 전에 확인을 받아야 하고, 실패했을 때
+ * **왜** 못 했는지도 정확히 말해야 한다("다시 시도"는 아무것도 바꾸지 않는다).
  *
- * 방장 전용이 **아니다** — 도착한 멤버면 누구나 누를 수 있다(`NOT_PARTY_HOST` 가 이 목록에 없는 이유다).
+ * **방장 전용이다** — `b16551b7` 이 바꿨다(「출발은 도착한 방장만 누른다」). 예전에는 도착한 멤버면
+ * 누구나였고 그래서 `NOT_PARTY_HOST` 가 이 목록에 없었다.
  * 겹치는 코드를 도착([PartyArriveException])과 따로 두는 근거는 [PartyConfirmException] 의 표에 있다.
  *
  * | 사유 | 서버 코드(HTTP) | 사용자가 할 일 |
  * |---|---|---|
+ * | **내가 방장이 아니다** | `NOT_PARTY_HOST` (403) | 방장이 누를 때까지 기다린다 |
  * | 내가 아직 도착을 안 눌렀다 | `NOT_ARRIVED` (409) | **먼저 「출발지 도착했어요」를 누른다** |
  * | 약속 시간 전이다 | `MEETING_NOT_STARTED` (409) | 기다린다 |
  * | 혼자 남았다 | `NOT_ENOUGH_MEMBERS` (409) | 혼자서는 출발할 수 없다 |
  * | 약속이 안 정해졌다 / 방이 닫혔다 | `PARTY_NOT_CONFIRMED` · `PARTY_CLOSED` (409) | 화면을 다시 읽는다 |
+ *
+ * **이 예외가 방을 끝내는 실패의 전부다** — 「합승 완료」(`/finish`)가 서버에서 사라지면서
+ * `PartyFinishException` 이 지워졌고, 그쪽이 들던 사유들은 여기로 모였다.
  */
 class PartyDepartException(
     /** 서버 `MatchingErrorCode` 이름(`NOT_ARRIVED` 등). 본문이 없거나 파싱 실패면 null. */
@@ -805,15 +716,38 @@ class PartyDepartException(
     val isNotArrived: Boolean get() = code == NOT_ARRIVED
 
     /**
-     * 409 `MEETING_NOT_STARTED` — **약속 시간 전**이다. 출발은 약속 시간 **뒤**에만 된다
-     * (도착은 정각부터, 출발은 그 뒤 — 같은 코드지만 도착에서의 문장과 다르다).
+     * 403 `NOT_PARTY_HOST` — **방장만 출발을 누를 수 있다.**
+     *
+     * 이 사유는 `b16551b7` 에서 **새로 생겼다**(「출발은 도착한 방장만 누른다」). 예전에는 도착한
+     * 멤버면 누구나 눌러 방을 끝낼 수 있었다 — 즉 **옛 앱은 방장이 아닌 사람에게도 「출발」을 띄웠고,
+     * 이제 그 버튼은 403 이다.** 숨기지 않으면 눌러도 아무 일이 일어나지 않는 버튼이 남는다.
+     *
+     * 방장은 저장값이 아니라 **지금 멤버 중 가장 먼저 합류한 사람**이고(서버 `earliestJoinedMemberId`)
+     * 방장이 나가면 자동 승계된다. 승계는 SSE `member-left` 의 `hostPublicId` 한 번으로만 오므로,
+     * 버튼을 가려도 내 스냅샷이 낡으면 이 403 이 남는다. 화면은 이름이 아니라 **조건**으로 말한다.
+     */
+    val isNotHost: Boolean get() = code == NOT_PARTY_HOST
+
+    /**
+     * 409 `MEETING_NOT_STARTED` — **약속 시간 전**이다. 출발은 약속 시간 **뒤**에만 된다.
+     *
+     * 도착과 **열리는 시각이 다르다**: 도착은 약속 10분 전부터(그보다 이르면 `ARRIVAL_NOT_OPEN`),
+     * 출발은 약속 시각 뒤부터다. 즉 **둘 사이에 10분의 창**이 있다 — 도착은 눌렸는데 출발은 아직
+     * 안 되는 구간이고, 화면이 그 구간을 「왜 안 눌리지」로 남기면 안 된다.
      */
     val isMeetingNotStarted: Boolean get() = code == MEETING_NOT_STARTED
 
     /** 409 `NOT_ENOUGH_MEMBERS` — 멤버가 2명 미만이다. 혼자 남은 방은 출발할 수 없다. */
     val isNotEnoughMembers: Boolean get() = code == NOT_ENOUGH_MEMBERS
 
-    /** 409 `PARTY_NOT_CONFIRMED` — 약속 시간이 정해지지 않은 방이다. 확정 전 방은 「합승 완료」로 끝낸다. */
+    /**
+     * 409 `PARTY_NOT_CONFIRMED` — 약속 시간이 정해지지 않은 방이다.
+     *
+     * **확정 전 방을 끝낼 길은 없다.** 예전에는 「합승 완료」로 끝낼 수 있었지만 그 경로가 서버에서
+     * 사라졌다. 지금 확정 전 방에서 할 수 있는 일은 **확정하거나 나가는 것** 둘뿐이므로, 이 사유를
+     * 받으면 「먼저 약속 시간을 정하세요」로 안내해야 한다(방장) 또는 「방장이 약속을 정하면
+     * 출발할 수 있어요」(멤버).
+     */
     val isNotConfirmed: Boolean get() = code == PARTY_NOT_CONFIRMED
 
     /**
@@ -833,10 +767,10 @@ class PartyDepartException(
 
     /**
      * 서버 `MatchingErrorCode` 중 **이 엔드포인트가 실제로 던지는** 코드만 둔다
-     * (`PartyService.depart` → `Party.depart` → `ensureAttendanceOpen`).
-     * `NOT_PARTY_HOST` 는 **없다** — 출발은 방장 전용이 아니다(위 KDoc).
+     * (`PartyService.depart` → `Party.depart` 의 검사 순서 그대로).
      */
     companion object {
+        const val NOT_PARTY_HOST = "NOT_PARTY_HOST"
         const val NOT_ARRIVED = "NOT_ARRIVED"
         const val MEETING_NOT_STARTED = "MEETING_NOT_STARTED"
         const val NOT_ENOUGH_MEMBERS = "NOT_ENOUGH_MEMBERS"

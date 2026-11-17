@@ -69,7 +69,6 @@ class RideRecordMappersTest {
         assertEquals("강남역", first.departure)
         assertEquals("판교역", first.destination)
         assertEquals("2026-10-31T19:15:17.550211Z", first.pickupTime)
-        assertEquals("2026-10-31T19:15:17.571486Z", first.dropoffTime)
         assertEquals(16500, first.totalFare)
         assertEquals(16500, first.farePerPerson)
         assertEquals(1, first.memberCount)
@@ -106,8 +105,8 @@ class RideRecordMappersTest {
         assertNull("탑승 시각이 0 이나 빈 문자열로 접혔다", record.pickupTime)
         assertNull("총 요금이 0 으로 접혔다 — 화면이 「0원」을 그린다", record.totalFare)
         assertNull("1인 부담이 0 으로 접혔다 — 화면이 「0원」을 그린다", record.farePerPerson)
-        // 하차 시각과 인원은 그대로 와야 한다(요금만 없는 기록이다)
-        assertEquals("2026-10-20T09:03:00Z", record.dropoffTime)
+        // 인원은 그대로 와야 한다(요금만 없는 기록이다). 하차 시각 단정은 지웠다 — 서버가
+        // 그 필드를 없애고 승차 시각 하나로 바로잡았다(`135df701`).
         assertEquals(3, record.memberCount)
     }
 

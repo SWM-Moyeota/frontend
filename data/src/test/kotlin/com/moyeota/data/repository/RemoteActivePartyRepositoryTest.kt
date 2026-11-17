@@ -64,10 +64,18 @@ class RemoteActivePartyRepositoryTest {
         assertEquals("기억이 맞았는데 채팅방 목록까지 불렀다", 0, chats.myRoomsCalls)
     }
 
-    /** 정원이 막 찬 방(서버 COMPLETED → 도메인 MATCHED)도 진행 중이다. 여기서 놓치면 매칭 순간을 잃는다. */
+    /**
+     * 약속이 확정된 방(서버 COMPLETED → 도메인 [RideStatus.CONFIRMED])도 진행 중이다.
+     * 여기서 놓치면 **약속 장소로 가야 하는 사람의 홈 배너가 사라진다**.
+     *
+     * 이 테스트는 오래 「정원 충족 상태 MATCHED」였다. 서버가 COMPLETED 의 뜻을 바꿔
+     * (`b16551b7`: 「COMPLETED 는 방장이 약속을 확정한 실시간 방만 뜻한다. 정원이 차도 ACTIVE」)
+     * 이름과 이유가 함께 바뀌었다 — **정원이 찬 방은 이제 [RideStatus.RECRUITING] 으로 오고**,
+     * 그쪽은 위의 다른 테스트가 덮는다.
+     */
     @Test
-    fun `정원 충족 상태 MATCHED 도 진행 중으로 본다`() = runBlocking {
-        val rides = FakeRideRepository(details = mapOf(10L to ride(id = 10, status = RideStatus.MATCHED)))
+    fun `약속이 확정된 방도 진행 중으로 본다`() = runBlocking {
+        val rides = FakeRideRepository(details = mapOf(10L to ride(id = 10, status = RideStatus.CONFIRMED)))
         val storage = FakeActivePartyStorage(RememberedParty("10", MY_UUID))
 
         val resolved = repository(rides, FakeChatRepository(), storage).resolve()
@@ -99,7 +107,7 @@ class RemoteActivePartyRepositoryTest {
 
     @Test
     fun `내가 멤버가 아닌 방이면 기억을 지운다`() = runBlocking {
-        val notMine = ride(id = 10, status = RideStatus.MATCHED, memberUuid = "someone-else")
+        val notMine = ride(id = 10, status = RideStatus.CONFIRMED, memberUuid = "someone-else")
         val rides = FakeRideRepository(details = mapOf(10L to notMine))
         val storage = FakeActivePartyStorage(RememberedParty("10", MY_UUID))
 
@@ -114,7 +122,7 @@ class RemoteActivePartyRepositoryTest {
         val rides = FakeRideRepository(
             details = mapOf(
                 7L to ride(id = 7, status = RideStatus.COMPLETED),
-                8L to ride(id = 8, status = RideStatus.MATCHED),
+                8L to ride(id = 8, status = RideStatus.CONFIRMED),
             ),
         )
         val chats = FakeChatRepository(
@@ -148,7 +156,7 @@ class RemoteActivePartyRepositoryTest {
      */
     @Test
     fun `계정이 바뀌면 이전 계정의 기억을 무시하고 지운다`() = runBlocking {
-        val rides = FakeRideRepository(details = mapOf(99L to ride(id = 99, status = RideStatus.MATCHED)))
+        val rides = FakeRideRepository(details = mapOf(99L to ride(id = 99, status = RideStatus.CONFIRMED)))
         val storage = FakeActivePartyStorage(RememberedParty("99", "previous-user-uuid"))
 
         val resolved = repository(rides, FakeChatRepository(), storage).resolve()
@@ -206,7 +214,7 @@ class RemoteActivePartyRepositoryTest {
      */
     @Test
     fun `목록이 partyId 를 주면 채팅방 상세를 읽지 않는다`() = runBlocking {
-        val rides = FakeRideRepository(details = mapOf(8L to ride(id = 8, status = RideStatus.MATCHED)))
+        val rides = FakeRideRepository(details = mapOf(8L to ride(id = 8, status = RideStatus.CONFIRMED)))
         val chats = FakeChatRepository(rooms = listOf(myChatRoom(roomId = 1, partyId = 8)))
 
         val resolved = repository(rides, chats, FakeActivePartyStorage(null)).resolve()
@@ -225,7 +233,7 @@ class RemoteActivePartyRepositoryTest {
      */
     @Test
     fun `목록에 partyId 가 없으면 채팅방 상세로 건져 온다`() = runBlocking {
-        val rides = FakeRideRepository(details = mapOf(8L to ride(id = 8, status = RideStatus.MATCHED)))
+        val rides = FakeRideRepository(details = mapOf(8L to ride(id = 8, status = RideStatus.CONFIRMED)))
         val chats = FakeChatRepository(
             rooms = listOf(myChatRoom(roomId = 2, partyId = 0)),
             partyIdsByRoom = mapOf(2L to 8L),
@@ -256,7 +264,7 @@ class RemoteActivePartyRepositoryTest {
     /** 채팅방 상세가 실패해도 다음 후보로 넘어간다 — 한 방의 네트워크 실패가 복구 경로 전체를 막으면 안 된다. */
     @Test
     fun `채팅방 상세가 실패해도 다른 후보를 계속 본다`() = runBlocking {
-        val rides = FakeRideRepository(details = mapOf(8L to ride(id = 8, status = RideStatus.MATCHED)))
+        val rides = FakeRideRepository(details = mapOf(8L to ride(id = 8, status = RideStatus.CONFIRMED)))
         val chats = FakeChatRepository(
             rooms = listOf(myChatRoom(roomId = 2, partyId = 0), myChatRoom(roomId = 1, partyId = 0)),
             partyIdsByRoom = mapOf(1L to 8L),
@@ -407,14 +415,18 @@ private class FakeRideRepository(
     ): List<MatchCandidate> = emptyList()
 
     override fun getNearbyParties(): List<Ride> = emptyList()
-    override suspend fun getParties(): List<Ride> = emptyList()
     override suspend fun getPartiesWithin(swLat: Double, swLng: Double, neLat: Double, neLng: Double): List<Ride> =
         emptyList()
     override suspend fun createParty(request: NewParty): Ride = error("쓰이지 않는다")
     override suspend fun joinParty(partyId: Long): PartyStatus = error("쓰이지 않는다")
     override suspend fun leaveParty(partyId: Long) = error("쓰이지 않는다")
-    override suspend fun finishParty(partyId: Long) = error("쓰이지 않는다")
-    override suspend fun confirmMeeting(partyId: Long, departureAt: String) = error("쓰이지 않는다")
+    override suspend fun confirmMeeting(
+        partyId: Long,
+        departureAt: String,
+        latitude: Double,
+        longitude: Double,
+        placeName: String,
+    ) = error("쓰이지 않는다")
     override suspend fun arriveAtDeparture(partyId: Long, latitude: Double, longitude: Double) =
         error("쓰이지 않는다")
     override suspend fun departParty(partyId: Long) = error("쓰이지 않는다")
@@ -425,11 +437,10 @@ private class FakeRideRepository(
         destinationLng: Double,
     ): RouteEstimate = error("쓰이지 않는다")
 
-    // 예약 넷. 이 테스트(「지금 타고 있는 방」 복원)는 예약을 보지 않는다 — 진행 중 방의 단일 출처는
+    // 예약 셋. 이 테스트(「지금 타고 있는 방」 복원)는 예약을 보지 않는다 — 진행 중 방의 단일 출처는
     // 로컬 기억 + 상세 조회이고, 예약 방도 결국 **같은 상세**로 복원된다(예약 전용 상세가 없다).
-    // 그래서 생성은 끊고, 조회 셋은 빈 목록이 가장 정직한 기본값이다(추천과 같은 판단).
+    // 그래서 생성은 끊고, 조회 둘은 빈 목록이 가장 정직한 기본값이다(추천과 같은 판단).
     override suspend fun createReservation(request: NewReservation): Ride = error("쓰이지 않는다")
-    override suspend fun getReservations(from: String, to: String): List<Ride> = emptyList()
     override suspend fun getReservationsSoon(
         swLat: Double,
         swLng: Double,

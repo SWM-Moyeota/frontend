@@ -48,7 +48,6 @@ class RemoteRideRecordRepositoryTest {
         departure = "강남역",
         destination = "판교역",
         pickupTime = "2026-10-31T19:15:17.550211Z",
-        dropoffTime = "2026-10-31T19:15:17.571486Z",
         totalFare = 16500,
         farePerPerson = 16500,
         currentMembers = 1,

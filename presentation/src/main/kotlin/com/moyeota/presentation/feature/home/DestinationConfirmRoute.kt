@@ -62,13 +62,13 @@ private const val OPEN_FAILED_MESSAGE = "동승 방을 만들지 못했어요. �
  * 다르다(「그 방에서 나온 뒤 합류해 주세요」 — 그쪽은 돌아갈 곳이 목록이라 할 일이 다르다).
  *
  * 돌아갈 곳을 **홈**으로 적는 이유: 진행 중인 방으로 들어가는 길은 홈 배너뿐이다(21 의
- * `finishFailureMessage` 가 멤버 아님에 쓰는 「홈에서 진행 중인 방을 확인해 주세요」와 같은 근거).
+ * `departFailureMessage` 가 멤버 아님에 쓰는 「홈에서 진행 중인 방을 확인해 주세요」와 같은 근거).
  */
 internal const val ALREADY_IN_PARTY_MESSAGE = "이미 참여 중인 방이 있어요. 홈에서 진행 중인 방을 확인해 주세요"
 
 /**
  * 방 생성 실패를 사용자 문구로 옮긴다 — 실패마다 **다음 행동이 다르다**
- * (20 합류의 `joinFailureMessage`·21 완료의 `finishFailureMessage` 와 같은 자리·같은 이유).
+ * (20 합류의 `joinFailureMessage`·21 출발의 `departFailureMessage` 와 같은 자리·같은 이유).
  *
  * | 사유 | 서버 코드(HTTP) | 사용자가 할 일 |
  * |---|---|---|
@@ -226,10 +226,12 @@ class CreatePartyViewModel(private val repository: RideRepository) : ViewModel()
                 _uiState.update {
                     it.copy(
                         creating = false,
-                        // **같은 예외, 다른 표.** 예약에만 오는 세 코드(403 `NO_SHOW_RESTRICTED` ·
-                        // 409 `PARTY_TIME_CONFLICT` · 400 `INVALID_DEPARTURE_TIME`)가 실시간 표에
-                        // 없어서, 한 함수로 뭉개면 그 셋이 전부 「잠시 후 다시 시도해 주세요」가 된다
-                        // — 세 가지 모두 기다려서 풀리지 않는다([reservationOpenFailureMessage]).
+                        // **같은 예외, 다른 표.** 예약에만 오는 두 코드(409 `PARTY_TIME_CONFLICT` ·
+                        // 400 `INVALID_DEPARTURE_TIME`)가 실시간 표에 없어서, 한 함수로 뭉개면 둘이
+                        // 전부 「잠시 후 다시 시도해 주세요」가 된다 — 둘 다 기다려서 풀리지 않고
+                        // **다른 시간을 골라야** 풀린다([reservationOpenFailureMessage]).
+                        // (셋째였던 403 `NO_SHOW_RESTRICTED` 는 서버가 노쇼 기능을 통째로 지워
+                        // 사라졌다 — `b16551b7`, V37.)
                         errorMessage = if (departureAt != null) {
                             reservationOpenFailureMessage(e)
                         } else {

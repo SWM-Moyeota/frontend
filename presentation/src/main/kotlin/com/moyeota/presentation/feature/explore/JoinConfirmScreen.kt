@@ -401,7 +401,7 @@ internal data class JoinStatusBadge(val kind: NoticeKind, val text: String)
  */
 internal fun joinStatusBadge(status: RideStatus): JoinStatusBadge = when (status) {
     RideStatus.RECRUITING -> JoinStatusBadge(NoticeKind.SUCCESS, "모집 중")
-    RideStatus.MATCHED -> JoinStatusBadge(NoticeKind.WAITING, "모집 마감된 방")
+    RideStatus.CONFIRMED -> JoinStatusBadge(NoticeKind.WAITING, "약속이 정해진 방")
     RideStatus.COMPLETED -> JoinStatusBadge(NoticeKind.INFO, "합승이 끝난 방")
     RideStatus.CANCELED -> JoinStatusBadge(NoticeKind.ERROR, "취소된 방")
 }
