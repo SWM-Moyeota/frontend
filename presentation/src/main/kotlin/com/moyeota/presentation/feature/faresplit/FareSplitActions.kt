@@ -37,16 +37,37 @@ import android.net.Uri
  * `resolveActivity` 로 미리 묻지 않는 이유: API 30 부터 패키지 가시성 제한 때문에 `queries` 선언이
  * 없으면 **설치돼 있어도 null** 을 준다. 그러면 토스가 있는 기기에서 버튼이 사라진다.
  * `startActivity` 는 암시적 VIEW 인텐트에 그 제한을 받지 않으므로 **던지게 하고 잡는다.**
+ *
+ * ### `supertoss` 스킴만 연다 ★ (PR #106 리뷰)
+ * 서버 문자열은 신뢰 경계 밖이다. 서버 오류나 중간자로 `https://…`(피싱 페이지)·`intent://`·다른 앱
+ * 스킴이 들어오면, 금액·계좌가 떠 있는 화면에서 사용자를 그대로 엉뚱한 곳으로 보낸다. 그래서
+ * 스킴이 [TOSS_DEEPLINK_SCHEME] 가 아니면 **열지 않고 false** — 화면은 「열지 못했다」와 같은 길
+ * (복사 버튼)로 간다. `SecurityException`(내보내지 않은 액티비티로 해석되는 URI)도 같은 실패로 받는다.
  */
 internal fun Context.openTossTransfer(deeplink: String): Boolean {
-    if (deeplink.isBlank()) return false
+    if (!isTossDeeplink(deeplink)) return false
 
     return try {
         startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(deeplink)))
         true
     } catch (e: ActivityNotFoundException) {
         false
+    } catch (e: SecurityException) {
+        false
     }
+}
+
+/** 토스 송금 딥링크의 스킴. 서버 `tossDeeplink` 주석의 `supertoss://send?…` 와 같다. */
+internal const val TOSS_DEEPLINK_SCHEME = "supertoss"
+
+/**
+ * 열어도 되는 토스 딥링크인가 — **스킴이 정확히 [TOSS_DEEPLINK_SCHEME]** 이어야 한다(대소문자 무시).
+ * `Uri` 를 쓰지 않는 순수 함수라 단위 테스트가 값으로 못 박는다(`FareSplitActionGateTest`).
+ */
+internal fun isTossDeeplink(deeplink: String): Boolean {
+    val schemeEnd = deeplink.indexOf("://")
+    if (schemeEnd <= 0) return false
+    return deeplink.substring(0, schemeEnd).equals(TOSS_DEEPLINK_SCHEME, ignoreCase = true)
 }
 
 /**

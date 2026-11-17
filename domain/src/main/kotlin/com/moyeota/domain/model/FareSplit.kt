@@ -290,6 +290,17 @@ data class FareSplitDetail(
     /** 닫힌 시각(ISO-8601 문자열 그대로). [FareSplitStatus.OPEN] 이면 null. */
     val closedAt: String?,
 ) {
+    /**
+     * **계좌번호·딥링크를 찍지 않는다**(PR #106 리뷰). `data class` 의 자동 `toString()` 은 모든 필드를
+     * 그대로 내놓아, 누군가 로그나 예외 메시지에 이 객체를 넣는 순간 계좌번호가 새어 나간다 — 서버는
+     * 같은 값을 암호화해 저장하고 정산이 끝나면 지운다. 끝 네 자리만 남긴다.
+     */
+    override fun toString(): String =
+        "FareSplitDetail(partyId=$partyId, status=$status, totalFare=$totalFare, myRole=$myRole, " +
+            "myAmount=$myAmount, myTransferStatus=$myTransferStatus, bank=$bank, " +
+            "accountNumber=${maskAccountNumber(accountNumber)}, tossDeeplink=${if (tossDeeplink == null) "null" else "****"}, " +
+            "transfers=${transfers.size}건, createdAt=$createdAt, closedAt=$closedAt)"
+
     /** 진행 중인가. **계좌번호·딥링크·모든 동작이 이 값에 묶여 있다**(닫히면 서버가 409 로 막는다). */
     val isOpen: Boolean get() = status == FareSplitStatus.OPEN
 
@@ -372,7 +383,11 @@ data class ManualTransfer(
     val bankDisplayName: String,
     val accountNumber: String,
     val amount: Int,
-)
+) {
+    /** 계좌번호를 찍지 않는다 — [FareSplitDetail.toString] 과 같은 이유. */
+    override fun toString(): String =
+        "ManualTransfer(bankDisplayName=$bankDisplayName, accountNumber=${maskAccountNumber(accountNumber)}, amount=$amount)"
+}
 
 /**
  * 한 사람이 부담할 금액 — 서버 `FareSplitRequest.Payment` 와 짝이다.
@@ -418,7 +433,11 @@ data class FareSplitDraft(
      * ([FareSplitPolicy.splitEvenly]).
      */
     val shares: List<FareShare>,
-)
+) {
+    /** 계좌번호를 찍지 않는다 — [FareSplitDetail.toString] 과 같은 이유. */
+    override fun toString(): String =
+        "FareSplitDraft(totalFare=$totalFare, bankCode=$bankCode, accountNumber=${maskAccountNumber(accountNumber)}, shares=$shares)"
+}
 
 /**
  * 홈 배너(「아직 보내지 않은 택시비」)의 한 줄 — 서버 `MyFareSplitListResponse.MyFareSplitItem` 과 짝.
@@ -638,3 +657,13 @@ enum class FareSplitDraftProblem {
  */
 val Ride.fareSplitRiders: List<User>
     get() = members.filter { it.hasArrived }
+
+/**
+ * 계좌번호를 **끝 네 자리만** 남기고 가린다(`****5678`). 로그·디버그 문자열 전용이다 — 화면에 보여 줄
+ * 계좌번호는 이 함수를 거치지 않는다(받는 사람이 복사해야 하는 값이다).
+ */
+internal fun maskAccountNumber(accountNumber: String?): String = when {
+    accountNumber == null -> "null"
+    accountNumber.length <= 4 -> "****"
+    else -> "****" + accountNumber.takeLast(4)
+}

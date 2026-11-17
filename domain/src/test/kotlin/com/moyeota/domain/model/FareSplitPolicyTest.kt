@@ -321,4 +321,16 @@ class FareSplitPolicyTest {
         totalFare = 0,
         status = RideStatus.COMPLETED,
     )
+
+    /** 🔴 계좌번호는 디버그 문자열에도 끝 네 자리만 남긴다(PR #106 리뷰) — 로그 한 줄이 계좌번호를 흘리지 않게. */
+    @Test
+    fun `계좌번호는 디버그 문자열에서 가린다`() {
+        val transfer = ManualTransfer(bankDisplayName = "카카오뱅크", accountNumber = "3333012345678", amount = 6240)
+        val text = transfer.toString()
+
+        assertFalse(text, text.contains("3333012345678"))
+        assertTrue(text, text.contains("****5678"))
+        assertEquals("****", maskAccountNumber("123"))
+        assertEquals("null", maskAccountNumber(null))
+    }
 }

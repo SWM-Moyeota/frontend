@@ -31,11 +31,13 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.core.designsystem.theme.MoyeotaType
+import com.moyeota.core.designsystem.theme.MoyeotaSpacing
 import com.moyeota.domain.model.FareSplitParticipant
 import com.moyeota.domain.model.MyFareSplit
 import com.moyeota.domain.model.TransferStatus
 import com.moyeota.domain.repository.FareSplitRepository
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -68,9 +70,11 @@ class FareSplitBannerViewModel(private val repository: FareSplitRepository) : Vi
     private val _items = MutableStateFlow<List<MyFareSplit>>(emptyList())
     val items: StateFlow<List<MyFareSplit>> = _items.asStateFlow()
 
-    init {
-        refresh()
-    }
+    // `init` 에서 읽지 않는다 — 홈의 복귀 효과(`onScreenStart`)가 **첫 진입도** 부른다. 둘 다 읽으면
+    // 첫 진입에 같은 조회가 두 번 나가고 응답 순서도 보장되지 않는다(PR #106 리뷰).
+
+    /** 진행 중인 조회. 새 조회가 시작되면 취소해 늦게 온 낡은 응답이 목록을 덮지 못하게 한다. */
+    private var refreshJob: Job? = null
 
     /**
      * 홈이 보일 때마다 다시 읽는다 — **이 목록을 갱신하는 다른 수단이 없다.**
@@ -88,7 +92,8 @@ class FareSplitBannerViewModel(private val repository: FareSplitRepository) : Vi
      * 판단이지만, 배너에는 「낡음」을 말할 자리가 없어 그냥 유지한다).
      */
     fun refresh() {
-        viewModelScope.launch {
+        refreshJob?.cancel()
+        refreshJob = viewModelScope.launch {
             try {
                 _items.value = repository.getMyFareSplits(TransferStatus.NOT_SENT)
             } catch (e: CancellationException) {
@@ -150,8 +155,8 @@ fun FareSplitBanner(
             .shadow(8.dp, RoundedCornerShape(18.dp), spotColor = MoyeotaColor.Primary500.copy(alpha = 0.16f))
             .clip(RoundedCornerShape(18.dp))
             .background(MoyeotaColor.SurfaceCanvas)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+            .padding(horizontal = MoyeotaSpacing.ScreenGutter, vertical = MoyeotaSpacing.Sm),
+        verticalArrangement = Arrangement.spacedBy(MoyeotaSpacing.Xs),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
@@ -214,7 +219,7 @@ private fun FareSplitBannerRow(item: MyFareSplit, onClick: () -> Unit) {
                 )
             }
         }
-        Spacer(Modifier.size(8.dp))
+        Spacer(Modifier.size(MoyeotaSpacing.Xs))
         Text(text = "보내기 ›", style = MoyeotaType.ButtonMd, color = MoyeotaColor.Primary600)
     }
 }
@@ -247,7 +252,7 @@ private fun FareSplitBannerPreview() {
             ),
         ),
         onItemClick = {},
-        modifier = Modifier.padding(16.dp),
+        modifier = Modifier.padding(MoyeotaSpacing.Md),
     )
 }
 

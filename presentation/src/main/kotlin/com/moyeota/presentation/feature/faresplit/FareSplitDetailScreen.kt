@@ -36,6 +36,7 @@ import com.moyeota.core.designsystem.component.SecondaryButton
 import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.core.designsystem.theme.MoyeotaType
+import com.moyeota.core.designsystem.theme.MoyeotaSpacing
 import com.moyeota.domain.model.Bank
 import com.moyeota.domain.model.FareSplitBank
 import com.moyeota.domain.model.FareSplitDetail
@@ -123,8 +124,8 @@ fun FareSplitDetailScreen(
                 .weight(1f)
                 .fillMaxWidth()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+                .padding(horizontal = MoyeotaSpacing.ScreenGutter, vertical = MoyeotaSpacing.Md),
+            verticalArrangement = Arrangement.spacedBy(MoyeotaSpacing.Sm),
         ) {
             StatusCard(detail = detail)
 
@@ -154,15 +155,15 @@ fun FareSplitDetailScreen(
 
             FareSplitHint(text = APP_DOES_NOT_MOVE_MONEY)
             if (detail.isOpen) FareSplitHint(text = EXPIRY_NOTICE)
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(MoyeotaSpacing.Xxs))
         }
 
         // 하단 고정 영역 — 역할마다 **딱 하나의 채워진 버튼**만 둔다.
         Column(modifier = Modifier.fillMaxWidth().background(MoyeotaColor.SurfaceCanvas)) {
             HorizontalDivider(color = MoyeotaColor.Hairline)
             Column(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = MoyeotaSpacing.ScreenGutter, vertical = MoyeotaSpacing.Sm),
+                verticalArrangement = Arrangement.spacedBy(MoyeotaSpacing.Xs),
             ) {
                 if (actionErrorMessage != null) {
                     NoticeBanner(kind = NoticeKind.ERROR, text = actionErrorMessage)
@@ -360,8 +361,8 @@ private fun TransferRow(
     val actions = transferActionsOf(detail, transfer)
 
     Column(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.fillMaxWidth().padding(vertical = MoyeotaSpacing.Xxs),
+        verticalArrangement = Arrangement.spacedBy(MoyeotaSpacing.Xs),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             FareSplitInitialCircle(transfer.displayName)
@@ -379,7 +380,7 @@ private fun TransferRow(
                 }
                 Text(text = fareWonLabel(transfer.amount), style = MoyeotaType.BodySm, color = MoyeotaColor.TextBody)
             }
-            Spacer(Modifier.size(8.dp))
+            Spacer(Modifier.size(MoyeotaSpacing.Xs))
             FareSplitBadgeChip(transferStatusLabel(transfer.status))
         }
 
@@ -548,8 +549,8 @@ fun FareSplitAbsentScreen(
                 .weight(1f)
                 .fillMaxWidth()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+                .padding(horizontal = MoyeotaSpacing.ScreenGutter, vertical = MoyeotaSpacing.Md),
+            verticalArrangement = Arrangement.spacedBy(MoyeotaSpacing.Sm),
         ) {
             FareSplitCard {
                 FareSplitSectionTitle("아직 택시비 정산이 없어요")
@@ -568,8 +569,8 @@ fun FareSplitAbsentScreen(
         Column(modifier = Modifier.fillMaxWidth().background(MoyeotaColor.SurfaceCanvas)) {
             HorizontalDivider(color = MoyeotaColor.Hairline)
             Column(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = MoyeotaSpacing.ScreenGutter, vertical = MoyeotaSpacing.Sm),
+                verticalArrangement = Arrangement.spacedBy(MoyeotaSpacing.Xs),
             ) {
                 if (canStart) {
                     PrimaryCtaButton(text = "택시비 정산 시작하기", onClick = onStart)

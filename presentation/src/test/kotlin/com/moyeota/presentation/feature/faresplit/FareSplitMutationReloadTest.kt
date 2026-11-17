@@ -8,6 +8,7 @@ import com.moyeota.domain.model.MyFareSplit
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.TransferStatus
 import com.moyeota.domain.repository.FareSplitRepository
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -167,6 +168,37 @@ class FareSplitMutationReloadTest {
         advanceUntilIdle()
 
         assertEquals(listOf("get", "markNotReceived($SENDER_A)", "get"), repository.calls)
+    }
+
+    /**
+     * 🔴 **재조회가 끝날 때까지 버튼 빗장을 풀지 않는다**(PR #106 리뷰).
+     *
+     * 예전에는 쓰기 뒤의 재조회를 새 코루틴으로 띄우고 바로 `finally` 로 빠져, 재조회 응답이 오기 전에
+     * `actionInProgress` 가 false 가 됐다. 그 틈에 사용자는 **낡은 상세 위에서** 같은 버튼을 다시 누를 수
+     * 있고, 두 재조회의 응답이 순서 없이 화면을 덮는다. 재조회를 붙잡아 두고 빗장을 본다.
+     */
+    @Test
+    fun `쓰기 뒤 재조회가 끝나기 전에는 버튼을 잠가 둔다`() = runTest(mainDispatcher) {
+        val gate = CompletableDeferred<Unit>()
+        val base = RecordingRepository()
+        val repository = object : FareSplitRepository by base {
+            var gets = 0
+            override suspend fun getFareSplit(partyId: Long): FareSplitDetail? {
+                gets += 1
+                if (gets == 2) gate.await() // 쓰기 뒤의 재조회만 붙잡는다
+                return base.getFareSplit(partyId)
+            }
+        }
+        val vm = viewModel(repository)
+        advanceUntilIdle()
+
+        vm.markSent()
+        advanceUntilIdle()
+        assertTrue("재조회가 끝나기 전에 빗장이 풀렸다", vm.actionInProgress.value)
+
+        gate.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(false, vm.actionInProgress.value)
     }
 
     // ─────────────────── 실패 뒤 처리 ───────────────────

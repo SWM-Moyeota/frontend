@@ -28,6 +28,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import com.moyeota.core.designsystem.theme.MoyeotaSpacing
 
 class HomeViewModel(
     private val repository: PlaceRepository,
@@ -241,7 +242,7 @@ fun HomeRoute(
                 FareSplitBannerHost(
                     repository = repo,
                     onOpen = onOpenFareSplit,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    modifier = Modifier.padding(horizontal = MoyeotaSpacing.ScreenGutter, vertical = MoyeotaSpacing.Xs),
                 )
             }
         },

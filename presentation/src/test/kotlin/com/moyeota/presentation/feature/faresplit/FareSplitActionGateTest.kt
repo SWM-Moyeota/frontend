@@ -363,4 +363,19 @@ class FareSplitActionGateTest {
     fun `보내는 사람에게는 수정 안내를 적지 않는다`() {
         assertNull(editBlockReason(detail(role = FareSplitRole.SENDER)))
     }
+
+    /**
+     * 🔴 **서버가 준 딥링크라도 `supertoss` 스킴만 연다**(PR #106 리뷰). 다른 스킴이 오면 「열지 못했다」와
+     * 같은 길(복사 버튼)로 간다 — 금액·계좌가 떠 있는 화면에서 사용자를 피싱 페이지나 다른 앱으로 보내지 않는다.
+     */
+    @Test
+    fun `토스 딥링크는 supertoss 스킴만 연다`() {
+        assertTrue(isTossDeeplink("supertoss://send?amount=6233&bank=카카오뱅크&accountNo=3333012345678"))
+        assertTrue(isTossDeeplink("SUPERTOSS://send?amount=1"))
+        assertFalse(isTossDeeplink("https://toss.im/send"))
+        assertFalse(isTossDeeplink("intent://send#Intent;scheme=supertoss;end"))
+        assertFalse(isTossDeeplink("supertossx://send"))
+        assertFalse(isTossDeeplink("://send"))
+        assertFalse(isTossDeeplink(""))
+    }
 }

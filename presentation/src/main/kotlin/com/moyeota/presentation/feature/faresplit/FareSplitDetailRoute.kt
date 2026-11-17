@@ -19,6 +19,7 @@ import com.moyeota.presentation.core.BackStateScaffold
 import com.moyeota.presentation.core.ErrorBox
 import com.moyeota.presentation.core.LoadingBox
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -88,6 +89,9 @@ class FareSplitDetailViewModel(
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
 
     /** 쓰기 호출이 도는 중. 세 버튼을 **함께** 잠근다 — 한 행을 누른 뒤 다른 행을 누르면 재조회가 겹친다. */
+    /** 진행 중인 상세 조회. 새 조회가 시작되면 취소한다([load]). */
+    private var loadJob: Job? = null
+
     private val _actionInProgress = MutableStateFlow(false)
     val actionInProgress: StateFlow<Boolean> = _actionInProgress.asStateFlow()
 
@@ -110,6 +114,8 @@ class FareSplitDetailViewModel(
      */
     fun onScreenStart() {
         if (_uiState.value is UiState.Loading) return
+        // 쓰기가 진행 중이면 그 쓰기가 끝나며 다시 읽는다 — 여기서 또 읽으면 두 응답이 순서 없이 겹친다
+        if (_actionInProgress.value) return
         load(showLoading = false)
     }
 
@@ -161,12 +167,15 @@ class FareSplitDetailViewModel(
             try {
                 block()
                 // ★ 본문이 없다 — 다시 읽는 것이 유일한 진실이다.
-                load(showLoading = false)
+                // **기다린다.** 예전에는 `load()`(새 코루틴을 띄우고 바로 반환)를 불러 재조회가 끝나기 전에
+                // 아래 `finally` 가 빗장을 풀었다 — 그 틈에 낡은 상세 위에서 버튼이 다시 열리고, 두 재조회의
+                // 응답이 순서 없이 화면을 덮었다(PR #106 리뷰). 빗장은 새 상세가 화면에 앉은 뒤에 푼다.
+                reloadAfterMutation()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: FareSplitException) {
                 _actionError.value = fareSplitFailureMessage(e, action)
-                if (needsReloadAfter(e)) load(showLoading = false)
+                if (needsReloadAfter(e)) reloadAfterMutation()
             } catch (e: Exception) {
                 _actionError.value = fareSplitGenericFailure(action)
             } finally {
@@ -176,22 +185,36 @@ class FareSplitDetailViewModel(
     }
 
     /**
+     * 쓰기 뒤의 재조회 — **호출한 코루틴이 끝까지 기다린다.** 진행 중이던 다른 재조회(화면 복귀)는 먼저
+     * 취소한다: 그 응답은 쓰기 **전**의 상세라, 늦게 도착하면 방금 바뀐 화면을 되돌린다.
+     */
+    private suspend fun reloadAfterMutation() {
+        loadJob?.cancel()
+        fetch(showLoading = false)
+    }
+
+    /**
      * 상세를 읽는다. [showLoading] 이 false 면 **보던 화면을 지우지 않는다** — 쓰기 뒤의 재조회와
      * 화면 복귀가 그 경우다(깜빡이면 사용자가 자기가 누른 결과를 못 본다).
      */
     private fun load(showLoading: Boolean) {
-        viewModelScope.launch {
-            if (showLoading) _uiState.value = UiState.Loading
-            try {
-                val detail = repository.getFareSplit(partyId)
-                _uiState.value = if (detail == null) absentState() else UiState.Ready(detail)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: FareSplitException) {
-                _uiState.value = failureState(fareSplitFailureMessage(e, FareSplitAction.LOAD))
-            } catch (e: Exception) {
-                _uiState.value = failureState(fareSplitGenericFailure(FareSplitAction.LOAD))
-            }
+        // 한 번에 하나만 — 새 조회가 시작되면 이전 조회의 응답은 버린다(늦게 온 낡은 응답이 덮지 못하게)
+        loadJob?.cancel()
+        loadJob = viewModelScope.launch { fetch(showLoading) }
+    }
+
+    /** 상세를 한 번 읽어 화면 상태에 싣는다. [load] 와 [reloadAfterMutation] 이 함께 쓴다. */
+    private suspend fun fetch(showLoading: Boolean) {
+        if (showLoading) _uiState.value = UiState.Loading
+        try {
+            val detail = repository.getFareSplit(partyId)
+            _uiState.value = if (detail == null) absentState() else UiState.Ready(detail)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: FareSplitException) {
+            _uiState.value = failureState(fareSplitFailureMessage(e, FareSplitAction.LOAD))
+        } catch (e: Exception) {
+            _uiState.value = failureState(fareSplitGenericFailure(FareSplitAction.LOAD))
         }
     }
 

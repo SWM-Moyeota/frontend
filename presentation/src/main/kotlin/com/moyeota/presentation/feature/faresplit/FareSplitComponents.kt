@@ -32,6 +32,7 @@ import com.moyeota.core.designsystem.component.NoticeKind
 import com.moyeota.core.designsystem.component.StatusBadge
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.core.designsystem.theme.MoyeotaType
+import com.moyeota.core.designsystem.theme.MoyeotaSpacing
 import kotlinx.coroutines.delay
 
 /**
@@ -74,8 +75,8 @@ internal fun FareSplitCard(
             .clip(RoundedCornerShape(16.dp))
             .background(MoyeotaColor.SurfaceCard)
             .border(1.dp, MoyeotaColor.Hairline, RoundedCornerShape(16.dp))
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+            .padding(MoyeotaSpacing.Md),
+        verticalArrangement = Arrangement.spacedBy(MoyeotaSpacing.Sm),
         content = content,
     )
 }
@@ -189,7 +190,7 @@ internal fun CopyButton(
             .clip(CircleShape)
             .background(MoyeotaColor.Primary50)
             .clickable { copied = onCopy() }
-            .padding(horizontal = 12.dp),
+            .padding(horizontal = MoyeotaSpacing.Sm),
         contentAlignment = Alignment.Center,
     ) {
         Text(text = text, style = MoyeotaType.ButtonSm, color = tint, maxLines = 1)
@@ -223,7 +224,7 @@ internal fun CopyableValueRow(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        Spacer(Modifier.size(8.dp))
+        Spacer(Modifier.size(MoyeotaSpacing.Xs))
         CopyButton(label = "복사", onCopy = { onCopy(label, copyValue) })
     }
 }

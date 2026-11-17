@@ -44,6 +44,7 @@ import com.moyeota.core.designsystem.component.SecondaryButton
 import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.core.designsystem.theme.MoyeotaType
+import com.moyeota.core.designsystem.theme.MoyeotaSpacing
 import com.moyeota.domain.model.Bank
 
 /**
@@ -114,8 +115,8 @@ fun FareSplitEditScreen(
                 .weight(1f)
                 .fillMaxWidth()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+                .padding(horizontal = MoyeotaSpacing.ScreenGutter, vertical = MoyeotaSpacing.Md),
+            verticalArrangement = Arrangement.spacedBy(MoyeotaSpacing.Sm),
         ) {
             if (readOnlyReason != null) {
                 NoticeBanner(kind = NoticeKind.ERROR, text = readOnlyReason)
@@ -187,14 +188,14 @@ fun FareSplitEditScreen(
                 FareSplitHint(START_IRREVERSIBLE_NOTICE)
             }
             FareSplitHint(APP_DOES_NOT_MOVE_MONEY)
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(MoyeotaSpacing.Xxs))
         }
 
         Column(modifier = Modifier.fillMaxWidth().background(MoyeotaColor.SurfaceCanvas)) {
             HorizontalDivider(color = MoyeotaColor.Hairline)
             Column(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = MoyeotaSpacing.ScreenGutter, vertical = MoyeotaSpacing.Sm),
+                verticalArrangement = Arrangement.spacedBy(MoyeotaSpacing.Xs),
             ) {
                 // 서버가 보낸 실패가 1순위다 — 앱이 미리 보지 못한 사유이므로 더 새 정보다.
                 val notice = errorMessage ?: submitBlockMessage(block)
@@ -241,7 +242,7 @@ private fun BankSelectRow(label: String?, enabled: Boolean, onClick: () -> Unit)
             .height(52.dp)
             .border(1.dp, MoyeotaColor.Hairline, RoundedCornerShape(12.dp))
             .then(if (enabled) Modifier.clickable { onClick() } else Modifier)
-            .padding(horizontal = 16.dp),
+            .padding(horizontal = MoyeotaSpacing.ScreenGutter),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
@@ -285,7 +286,7 @@ private fun BankPickerDialog(selectedCode: String?, onPick: (Bank) -> Unit, onDi
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable { onPick(bank) }
-                            .padding(vertical = 12.dp),
+                            .padding(vertical = MoyeotaSpacing.Sm),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
@@ -323,7 +324,7 @@ private fun AmountRow(
     onValueChange: (String) -> Unit,
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        modifier = Modifier.fillMaxWidth().padding(vertical = MoyeotaSpacing.Xxs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(modifier = Modifier.weight(1f)) {
@@ -338,7 +339,7 @@ private fun AmountRow(
                 Text(text = "받는 분", style = MoyeotaType.CaptionMd, color = MoyeotaColor.TextMute)
             }
         }
-        Spacer(Modifier.size(8.dp))
+        Spacer(Modifier.size(MoyeotaSpacing.Xs))
         Box(modifier = Modifier.width(140.dp)) {
             MoyeotaTextField(
                 value = value,
