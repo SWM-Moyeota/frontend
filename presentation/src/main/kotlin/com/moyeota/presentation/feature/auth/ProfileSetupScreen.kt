@@ -236,13 +236,15 @@ fun ProfileSetupScreen(
             Text(
                 // 실명·성별은 가입 시 서버에 저장된다 — "저장하지 않아요"로 안내하면 사실과 다르다.
                 // 「매칭 안전을 위해서만」은 지웠다 — 성별은 매칭에 쓰이지 않는다(2026-10-13).
-                text = "실명은 본인 확인에만 쓰고 탑승 상대에게는 보이지 않아요",
+                // 「모든 칸이 필요해요」를 맨 앞에 둔다(2026-11-17 QA) — 서버가 아래 항목을 **전부** 필수로 받는데
+                // 칸 안의 예시 글자가 값처럼 보여 「이건 안 써도 되나」로 읽혔다.
+                text = "모든 칸을 채워야 가입할 수 있어요. 실명은 본인 확인에만 쓰고 탑승 상대에게는 보이지 않아요",
                 style = MoyeotaType.BodySm,
                 color = MoyeotaColor.TextMute,
             )
 
-            Spacer(Modifier.height(24.dp))
-            ProfileAvatarPlaceholder(modifier = Modifier.align(Alignment.CenterHorizontally))
+            // 사람 실루엣 동그라미는 **지웠다**(2026-11-17 QA). 누를 수 있게 생겼는데 눌러도 아무 일이 없었고,
+            // 사진은 가입이 아니라 마이페이지에서 고른다 — 그 사실은 화면 아래 안내가 말한다.
             Spacer(Modifier.height(32.dp))
             ProfileSectionHeader(
                 title = "프로필",
@@ -308,7 +310,8 @@ fun ProfileSetupScreen(
                 value = birthDigits,
                 onValueChange = { new -> birthDigits = new.filter { it.isDigit() }.take(8) },
                 label = "생년월일",
-                placeholder = "2000-01-01",
+                // 「예:」를 붙인다 — 회색 「2000-01-01」이 이미 채워진 값처럼 보였다(2026-11-17 QA)
+                placeholder = "예: 2000-01-01",
                 errorText = birthError,
                 // 다 쓰고 나서 "가입할 수 없어요"를 보는 대신 미리 안다. 오류가 있으면 필드가 그쪽을 띄운다
                 helperText = BirthDateHelperText,
@@ -361,7 +364,7 @@ fun ProfileSetupScreen(
                     onPhoneDigitsChange(phoneDigits)
                 },
                 label = "휴대폰 번호",
-                placeholder = "010-1234-5678",
+                placeholder = "예: 010-1234-5678",
                 // 형식 오류(앱 판정)를 서버 응답 문구보다 앞세운다 — 고칠 곳이 더 구체적이다
                 errorText = phoneError ?: phoneVerify.phoneMessage,
                 // 「다음」이 왜 잠겨 있는지를 비활성 버튼만으로는 알 수 없다 — 아직 인증을 시작하지
@@ -401,7 +404,8 @@ fun ProfileSetupScreen(
                 // 규칙상 영소문자만 허용된다 — 대문자를 눌러도 조용히 낮춰 받는다
                 onValueChange = { new -> loginId = new.filter { !it.isWhitespace() }.lowercase().take(20) },
                 label = "아이디",
-                placeholder = "moyeota",
+                // 예시 대신 **규칙**을 적는다(서버 `^[a-z][a-z0-9_]{3,19}$`) — 「moyeota」는 이미 쓰는 아이디처럼 보였다
+                placeholder = "영문 소문자로 시작, 4~20자",
                 errorText = loginIdError,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
             )
@@ -436,9 +440,11 @@ fun ProfileSetupScreen(
                 value = email,
                 onValueChange = { new -> email = new.filter { !it.isWhitespace() } },
                 label = "이메일",
-                placeholder = "moyeota@example.com",
+                placeholder = "예: moyeota@example.com",
                 errorText = emailError,
-                helperText = "비밀번호를 잊었을 때 쓰는 주소예요",
+                // 「비밀번호를 잊었을 때 쓰는 주소예요」는 **사실이 아니었다** — 비밀번호 재설정은 문자 인증이고
+                // (백엔드 `3cba9fa5`), 서버는 이 주소를 계정 정보로 저장만 한다(2026-11-17 QA).
+                helperText = "계정 정보로 보관하는 주소예요",
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
             )
 
@@ -453,9 +459,10 @@ fun ProfileSetupScreen(
                     .padding(horizontal = 16.dp, vertical = 12.dp),
             ) {
                 Text(
-                    // 여전히 참이다 — 업로드 경로는 서버에 없다. 2026-10-15 배포로 생긴 건
-                    // **제공 이미지 16장 중 고르기**이고, 그것도 가입이 아니라 36 프로필 수정에서 한다.
-                    text = "사진은 올리지 않아요",
+                    // 업로드 경로는 서버에 없다. 2026-10-15 배포로 생긴 건 **제공 이미지 16장 중 고르기**이고,
+                    // 그것도 가입이 아니라 36 프로필 수정에서 한다. 예전 「사진은 올리지 않아요」는 바로 아래의
+                    // 「프로필 사진이 보여요」와 맞물려 사진이 있는지 없는지 헷갈리게 했다(2026-11-17 QA).
+                    text = "프로필 사진은 가입한 뒤 마이페이지에서 골라요",
                     style = MoyeotaType.BodySm,
                     fontWeight = FontWeight.SemiBold,
                     color = MoyeotaColor.InkPrimary,
@@ -536,33 +543,6 @@ private fun ProfileSectionHeader(title: String, description: String) {
             style = MoyeotaType.BodySm,
             color = MoyeotaColor.TextMute,
         )
-    }
-}
-
-// 아바타 기본색 — 예전 파란 기 도는 전용 색(#D8E0F2/#8296C8)을 회색 토큰으로 모았다(디자인 QA G1).
-// 비어 있는 자리를 뜻하는 실루엣이라 브랜드 파랑을 띨 이유가 없다.
-private val AvatarOuter = MoyeotaColor.Border
-private val AvatarInner = MoyeotaColor.TextPlaceholder
-
-// 와이어프레임의 사람 실루엣 아바타 (사진 업로드 없음 — 정책상 미지원)
-@Composable
-private fun ProfileAvatarPlaceholder(modifier: Modifier = Modifier) {
-    Box(modifier = modifier.size(88.dp).clip(CircleShape)) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            drawCircle(color = AvatarOuter)
-            // 머리
-            drawCircle(
-                color = AvatarInner,
-                radius = size.width * 0.155f,
-                center = Offset(size.width / 2f, size.height * 0.40f),
-            )
-            // 어깨
-            drawCircle(
-                color = AvatarInner,
-                radius = size.width * 0.30f,
-                center = Offset(size.width / 2f, size.height * 0.98f),
-            )
-        }
     }
 }
 

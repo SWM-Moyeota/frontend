@@ -271,6 +271,20 @@ class ProductClaimsTest {
      * 있는데 비워 둔** 상태가 된다. 그리고 이 줄이 가리키는 길(24 채팅방 롱프레스)은 실제로
      * 있다 — `ChatUiMessage.canReport` · `ChatRepository.reportMessage`.
      */
+    /**
+     * **노쇼 제재는 없다.** 서버가 노쇼 기록·제재를 통째로 지웠다(백엔드 `b16551b7`). 그런데 서약에는
+     * 「무단 취소가 반복되면 이용이 제한돼요」·「오지 않으면 이용이 제한될 수 있어요」가 남아 있었다
+     * (2026-11-17 QA) — 전부 동의해야 가입되는 화면이 지킬 수단 없는 제재에 동의를 받고 있었다.
+     */
+    @Test
+    fun `매너 서약은 없는 이용 제한을 약속하지 않는다`() {
+        val all = mannerPledgeItems.joinToString(" ") { it.title + " " + (it.description ?: "") }
+
+        assertFalse(all, all.contains("이용이 제한"))
+        assertFalse(all, all.contains("제재"))
+        assertFalse(all, all.contains("노쇼"))
+    }
+
     @Test
     fun `매너 서약은 신고 창구가 생긴 것을 말한다`() {
         val pledge = mannerPledgeItems.single { it.title.contains("불쾌한 말과 행동") }

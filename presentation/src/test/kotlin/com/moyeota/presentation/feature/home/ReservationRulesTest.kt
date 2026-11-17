@@ -27,24 +27,23 @@ class ReservationRulesTest {
 
     // ─────────────────────────── 정원 ───────────────────────────
 
-    /** 서버 계약: 실시간 `Capacity` 는 1~3, **예약은 2~3**. 벗어나면 400 `INVALID_CAPACITY`. */
+    /**
+     * 서버 계약: 실시간·예약 모두 **2~3**(실시간 최소 2 는 백엔드 `80957504`). 1 을 보내면 400 이고, 앱은 그
+     * 400 을 「잠시 후 다시 시도」로 보여 줬다 — 영원히 실패하는 선택지를 띄우지 않는다.
+     */
     @Test
-    fun `정원 선택지는 모드마다 다르다 - 예약은 1 을 지운다`() {
-        assertEquals(listOf(1, 2, 3), capacityChoices(DepartureMode.NOW))
+    fun `정원 선택지는 두 모드 모두 2~3명이다`() {
+        assertEquals(listOf(2, 3), capacityChoices(DepartureMode.NOW))
         assertEquals(listOf(2, 3), capacityChoices(DepartureMode.SCHEDULED))
     }
 
-    /**
-     * **1 을 고른 채 「시간 정하기」로 바꾸는 길이 있다** — 그 상태는 보낼 수 없으므로 접는다.
-     * 고른 값 자체는 화면이 그대로 들고 있어서 모드를 되돌리면 1 이 살아 있다(여기서는 변환만 본다).
-     */
+    /** 저장된 옛 상태의 1(예전 「혼자 출발」)이 남아 있어도 보내는 값은 2 다. */
     @Test
-    fun `예약으로 바꾸면 1명은 2명으로 접힌다`() {
+    fun `예전에 고른 1명은 어느 모드든 2명으로 접힌다`() {
         assertEquals(2, capacityFor(DepartureMode.SCHEDULED, 1))
-        assertEquals(2, capacityFor(DepartureMode.SCHEDULED, 2))
+        assertEquals(2, capacityFor(DepartureMode.NOW, 1))
+        assertEquals(2, capacityFor(DepartureMode.NOW, 2))
         assertEquals(3, capacityFor(DepartureMode.SCHEDULED, 3))
-        // 실시간에서는 1 이 유효한 선택이다 — 접지 않는다(혼자 타기를 상품으로 인정한 결정)
-        assertEquals(1, capacityFor(DepartureMode.NOW, 1))
     }
 
     /** 화면에 없는 값이 들어와도 **가장 가까운 유효값**이다 — 서버가 막아 주는 것과 앱이 보내지 않는 것은 다른 보호막이다. */
@@ -52,7 +51,7 @@ class ReservationRulesTest {
     fun `범위 밖 정원은 가장 가까운 유효값이 된다`() {
         assertEquals(3, capacityFor(DepartureMode.NOW, 9))
         assertEquals(3, capacityFor(DepartureMode.SCHEDULED, 9))
-        assertEquals(1, capacityFor(DepartureMode.NOW, 0))
+        assertEquals(2, capacityFor(DepartureMode.NOW, 0))
         assertEquals(2, capacityFor(DepartureMode.SCHEDULED, 0))
     }
 
@@ -528,7 +527,7 @@ class ReservationRulesTest {
         assertFalse("실시간 범위를 말하면 고를 수 없는 값을 고르라고 하게 된다", message.contains("1~3"))
         // 실시간 쪽은 그대로다 — 두 문구가 서로를 덮지 않는다
         assertEquals(
-            "인원은 1~3명까지만 정할 수 있어요",
+            "인원은 2~3명이어야 해요",
             openFailureMessage(failure(PartyOpenException.INVALID_CAPACITY)),
         )
     }
@@ -593,7 +592,7 @@ class ReservationRulesTest {
         // 「계산 중」처럼 곧 나올 것처럼 말하지 않는다 — 서버가 끝까지 주지 않는다
         assertFalse(RESERVATION_NO_ESTIMATE_NOTICE, RESERVATION_NO_ESTIMATE_NOTICE.contains("계산"))
         // 서버가 보내는 알림(예약 리마인더)을 **약속하지 않는다** — 앱이 확인할 수 없는 말이다
-        listOf(RESERVATION_NO_ESTIMATE_NOTICE, RESERVATION_CAPACITY_NOTICE, RESERVATION_NEEDS_TIME_NOTICE)
+        listOf(RESERVATION_NO_ESTIMATE_NOTICE, RESERVATION_NEEDS_TIME_NOTICE)
             .forEach { copy ->
                 assertFalse("없는 알림을 약속한다: $copy", copy.contains("알림"))
                 assertFalse("없는 알림을 약속한다: $copy", copy.contains("알려 드려요"))
@@ -640,13 +639,6 @@ class ReservationRulesTest {
             assertFalse(copy, copy.contains("알림"))
             assertFalse(copy, copy.contains("알려 드려요"))
         }
-    }
-
-    @Test
-    fun `예약 정원 안내는 2명부터라는 사실만 말한다`() {
-        assertEquals("예약 방은 2명부터 만들 수 있어요", RESERVATION_CAPACITY_NOTICE)
-        // 혼자 출발 안내와 **함께 뜨지 않는다** — 예약에서 정원은 1 이 될 수 없다
-        assertNull(soloCapacityNotice(capacityFor(DepartureMode.SCHEDULED, 1)))
     }
 
     @Test

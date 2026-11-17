@@ -115,7 +115,7 @@ fun LoginFormScreen(
                 // 대문자를 눌러도 조용히 소문자로 받아 "규칙에 맞는데 왜 안 되지" 를 없앤다.
                 onValueChange = { new -> loginId = new.filter { !it.isWhitespace() }.lowercase() },
                 label = "아이디",
-                placeholder = "moyeota",
+                placeholder = "아이디를 입력해 주세요",
                 enabled = !submitting,
                 keyboardOptions = KeyboardOptions(
                     keyboardType = KeyboardType.Ascii,

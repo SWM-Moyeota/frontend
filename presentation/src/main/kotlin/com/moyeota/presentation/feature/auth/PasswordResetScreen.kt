@@ -136,7 +136,7 @@ internal fun PasswordResetScreen(
                         onLoginIdChange(loginId)
                     },
                     label = "아이디",
-                    placeholder = "moyeota",
+                    placeholder = "아이디를 입력해 주세요",
                     enabled = !verify.verifying,
                     keyboardOptions = KeyboardOptions(
                         keyboardType = KeyboardType.Ascii,
@@ -161,7 +161,7 @@ internal fun PasswordResetScreen(
                         onPhoneDigitsChange(phoneDigits)
                     },
                     label = "휴대폰 번호",
-                    placeholder = "010-1234-5678",
+                    placeholder = "예: 010-1234-5678",
                     errorText = verify.phoneMessage,
                     helperText = if (verify.stage == PhoneVerifyStage.Idle) "가입할 때 쓴 번호를 입력해 주세요" else null,
                     enabled = !verify.verifying,

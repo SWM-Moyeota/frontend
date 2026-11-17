@@ -58,6 +58,7 @@ import com.moyeota.domain.model.RoomType
 import com.moyeota.domain.model.User
 import com.naver.maps.geometry.LatLng
 import java.time.Instant
+import com.moyeota.presentation.core.HostBadge
 import com.moyeota.presentation.core.MeBadge
 import com.moyeota.presentation.core.MemberAvatar
 import com.moyeota.presentation.core.displayNickname
@@ -557,7 +558,12 @@ private fun MemberRow(
                     color = if (clickable) MoyeotaColor.InkPrimary else MoyeotaColor.TextMute,
                 )
                 Spacer(Modifier.width(8.dp))
-                if (member.isMe) MeBadge() else PartnerBadge()
+                // 방을 만든 사람이 「동승자」로만 보이면 누구에게 약속을 물어야 할지 알 수 없다(2026-11-17 QA)
+                when {
+                    member.isMe -> MeBadge()
+                    member.isHost -> HostBadge()
+                    else -> PartnerBadge()
+                }
             }
             Text(
                 text = if (clickable) "${member.rideCountLabel}$othersLabel" else "탈퇴한 회원$othersLabel",

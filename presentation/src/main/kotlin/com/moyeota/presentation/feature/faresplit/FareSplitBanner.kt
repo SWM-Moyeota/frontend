@@ -213,7 +213,8 @@ private fun FareSplitBannerRow(item: MyFareSplit, onClick: () -> Unit) {
                 Text(
                     text = route,
                     style = MoyeotaType.CaptionMd,
-                    color = MoyeotaColor.TextAsh,
+                    // TextAsh 는 지도 위 배너에서 거의 보이지 않았다(2026-11-17 QA) — 받는 사람 줄과 같은 회색
+                    color = MoyeotaColor.TextMute,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
