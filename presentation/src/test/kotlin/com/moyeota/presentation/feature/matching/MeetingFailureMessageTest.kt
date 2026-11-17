@@ -85,14 +85,16 @@ class MeetingFailureMessageTest {
     }
 
     /**
-     * 프리셋 안내와 거절 문구가 **같은 범위**를 말해야 한다 — 한쪽만 고치면 앱이 서버와 다른
+     * 휠 안내와 거절 문구가 **같은 범위**를 말해야 한다 — 한쪽만 고치면 앱이 서버와 다른
      * 약속을 하고, 사용자는 「10분부터라더니 왜 거절되지」를 묻게 된다.
      */
     @Test
-    fun `프리셋 안내와 거절 문구가 같은 범위를 말한다`() {
-        assertTrue(MEETING_PRESET_LIMIT_NOTE, MEETING_PRESET_LIMIT_NOTE.contains("10분"))
-        assertTrue(MEETING_PRESET_LIMIT_NOTE, MEETING_PRESET_LIMIT_NOTE.contains("1시간"))
-        assertEquals(listOf(10, 20, 30, 45, 60), MEETING_PRESET_MINUTES)
+    fun `휠 안내와 거절 문구가 같은 범위를 말한다`() {
+        assertTrue(MEETING_TIME_LIMIT_NOTE, MEETING_TIME_LIMIT_NOTE.contains("10분"))
+        assertTrue(MEETING_TIME_LIMIT_NOTE, MEETING_TIME_LIMIT_NOTE.contains("1시간"))
+        assertTrue(MEETING_TIME_LIMIT_NOTE, MEETING_TIME_LIMIT_NOTE.contains("5분 단위"))
+        assertEquals(10, MEETING_EARLIEST_MINUTES)
+        assertEquals(60, MEETING_LATEST_MINUTES)
     }
 
     /**
@@ -493,7 +495,7 @@ class MeetingFailureMessageTest {
                 departHostNotice(null),
                 MEETING_CONFIRM_HELP,
                 MEETING_CONFIRM_DIALOG_BODY,
-                MEETING_PRESET_LIMIT_NOTE,
+                MEETING_TIME_LIMIT_NOTE,
                 departConfirmMessage(2),
                 departConfirmMessage(0),
                 CONFIRM_PLACE_UNKNOWN_MESSAGE,

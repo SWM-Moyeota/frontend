@@ -8,20 +8,19 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
@@ -32,6 +31,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -40,11 +40,12 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import com.moyeota.core.designsystem.component.DangerTextButton
 import com.moyeota.core.designsystem.component.MapOverlayPill
 import com.moyeota.core.designsystem.component.MapPlaceholder
-import com.moyeota.core.designsystem.component.DangerTextButton
 import com.moyeota.core.designsystem.component.MapSheetScaffold
-import com.moyeota.core.designsystem.component.MoyeotaChip
 import com.moyeota.core.designsystem.component.MoyeotaConfirmDialog
 import com.moyeota.core.designsystem.component.MoyeotaTopBar
 import com.moyeota.core.designsystem.component.NavigationBarSpacer
@@ -52,15 +53,20 @@ import com.moyeota.core.designsystem.component.NoticeBanner
 import com.moyeota.core.designsystem.component.NoticeKind
 import com.moyeota.core.designsystem.component.PrimaryCtaButton
 import com.moyeota.core.designsystem.component.RouteMapView
+import com.moyeota.core.designsystem.component.SecondaryButton
 import com.moyeota.core.designsystem.component.SectionLabel
+import com.moyeota.core.designsystem.component.SnapWheelPicker
 import com.moyeota.core.designsystem.component.SoftButton
 import com.moyeota.core.designsystem.component.StatusBarSpacer
+import com.moyeota.core.designsystem.component.WheelPickerFrame
 import com.moyeota.core.designsystem.component.decodePolyline
 import com.moyeota.core.designsystem.component.fitMapCamera
 import com.moyeota.core.designsystem.component.latLngOrNull
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.core.designsystem.theme.MoyeotaShape
 import com.moyeota.core.designsystem.theme.MoyeotaSpacing
 import com.moyeota.core.designsystem.theme.MoyeotaType
+import com.moyeota.core.designsystem.theme.modalShadow
 import com.moyeota.core.designsystem.theme.tabularNums
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
@@ -68,11 +74,11 @@ import com.moyeota.domain.model.User
 import com.moyeota.domain.model.isHostedByMe
 import com.moyeota.presentation.core.HostBadge
 import com.moyeota.presentation.core.MeBadge
-import com.moyeota.presentation.core.location.UserCoordinates
 import com.moyeota.presentation.core.MemberAvatar
 import com.moyeota.presentation.core.displayNickname
 import com.moyeota.presentation.core.hostDisplayNameOrNull
 import com.moyeota.presentation.core.isWithdrawn
+import com.moyeota.presentation.core.location.UserCoordinates
 import com.moyeota.presentation.core.rideCountLabel
 import com.moyeota.presentation.core.showsHostBadge
 import java.time.Instant
@@ -247,15 +253,11 @@ fun MatchWaitingScreen(
     var departConfirming by remember { mutableStateOf(false) }
     // 약속 확정 확인 — **어느 프리셋을 눌렀는지**를 함께 들고 있어야 다이얼로그가 그 시각을
     // 되읽어 줄 수 있다(칩에는 「10분」만 적혀 있다). null 이면 다이얼로그가 닫힌 상태다.
-    /**
-     * 확정 다이얼로그가 들고 있는 선택. null 이면 닫혀 있다.
-     *
-     * **시각을 함께 들고 있는 게 요점이다** — 칩을 누르는 그 순간 한 번 만들어, 다이얼로그 제목과
-     * 서버로 보내는 값이 **같은 값**을 쓴다. 분만 들고 있으면 제목과 요청이 시계를 따로 읽어,
-     * 그 사이 분이 바뀌면 본 것과 다른 시각이 확정된다
-     * (`MatchWaitingViewModel.confirmMeeting` KDoc, 실측 2026-11-06).
-     */
-    var confirmingPreset by remember { mutableStateOf<ConfirmingPreset?>(null) }
+    /** 약속 시간 시트가 열려 있는가([MeetingTimeSheet]). */
+    var meetingSheetOpen by remember { mutableStateOf(false) }
+
+    /** 휠에서 고른 약속 시각. null 이면 아직 안 굴렸다 — 휠은 가장 이른 시각을 가리킨다([meetingSelectedTime]). */
+    var pickedMeetingAt by remember { mutableStateOf<Instant?>(null) }
 
     // 약속 흐름의 **단일 판정**. 화면 어디서도 조건을 다시 세우지 않는다 — meetingStage KDoc 의 표가
     // 리더가 정한 화면 상태표 그대로이고, 아래 `when` 이 빠진 가지를 컴파일에서 잡아 준다.
@@ -337,11 +339,11 @@ fun MatchWaitingScreen(
             //
             // 약속 흐름의 두 단계는 푸터가 더 길다. **추정치여도 되는 값**이라(MapSheetDefaults
             // KDoc: 어긋나면 펼침에서 남는 지도 높이만 달라진다) 블록 높이를 눈대중으로 더한다.
-            // 그래도 더해 주는 이유: 접힘 상태에서 프리셋 칩이나 권한 안내가 잘리면 **접힌 화면에서
+            // 그래도 더해 주는 이유: 접힘 상태에서 「약속 시간 정하기」나 권한 안내가 잘리면 **접힌 화면에서
             // 아무것도 할 수 없다** — 접힘은 「지도를 넓게 보는 상태」일 뿐이어야 한다.
             collapsedSheetHeight = when {
-                // 「몇 분 뒤에 만날까요?」 + 칩 한 줄 + 1시간 한도 안내
-                stage == MeetingStage.CONFIRM_BY_ME -> 288.dp
+                // 약속 안내 세 줄 + 「약속 시간 정하기」 버튼(휠은 시트로 연다)
+                stage == MeetingStage.CONFIRM_BY_ME -> 260.dp
                 // 권한 안내 배너 + 「위치 권한 허용」 버튼이 도착 버튼 자리를 둘로 늘린다.
                 // 거기에 「도착을 알리면 나갈 수 없어요」 두 줄이 더 붙는다([ARRIVE_LOCKS_IN_NOTICE]).
                 stage == MeetingStage.ARRIVE_OPEN && !locationGranted -> 304.dp
@@ -573,15 +575,21 @@ fun MatchWaitingScreen(
                 // 약속 흐름 — 단계가 **정확히 하나의 블록**을 고른다. `when` 을 열거형 전체로 두어
                 // 서버에 단계가 늘면(MeetingStage 에 값이 더해지면) 컴파일이 먼저 깨지게 한다.
                 when (stage) {
-                    // 방장: 「몇 분 뒤에 만날까요?」 + 프리셋 칩. 자유 입력을 두지 않는 근거는
-                    // MEETING_PRESET_MINUTES KDoc — 서버가 1시간 안만 받아서, 못 고르게 하는 UI 가 낫다.
+                    // 방장: 「약속 시간 정하기」 → 시각 휠 시트([MeetingTimeSheet]). 휠은 키가 커서 늘 보이는 이
+                    // 하단 영역에 두면 시트가 화면을 넘는다 — 버튼 하나만 두고 휠은 시트로 연다.
                     MeetingStage.CONFIRM_BY_ME -> {
-                        MeetingPresetBlock(
+                        Text(
+                            text = MEETING_CONFIRM_HELP,
+                            style = MoyeotaType.CaptionMd,
+                            color = MoyeotaColor.TextMute,
+                            modifier = Modifier.padding(horizontal = MoyeotaSpacing.ScreenGutter),
+                        )
+                        Spacer(Modifier.height(MoyeotaSpacing.Xxs))
+                        PrimaryCtaButton(
+                            // 보내는 중에는 진행을 적는다 — 흐려지기만 하면 왜 안 눌리는지 알 수 없다.
+                            text = if (actionInProgress) "약속 시간을 정하는 중…" else "약속 시간 정하기",
+                            onClick = { meetingSheetOpen = true },
                             enabled = !actionInProgress,
-                            selectedMinutes = confirmingPreset?.minutes,
-                            onPick = { minutes ->
-                                confirmingPreset = ConfirmingPreset(minutes, meetingPresetIso(now, minutes))
-                            },
                             modifier = Modifier.padding(horizontal = MoyeotaSpacing.ScreenGutter),
                         )
                         Spacer(Modifier.height(MoyeotaSpacing.Xs))
@@ -750,21 +758,18 @@ fun MatchWaitingScreen(
     // 버렸다(`b16551b7`). 사용자를 묶는 것은 이제 **도착**이고, 그 말은 도착 버튼 앞에 있다
     // ([ARRIVE_LOCKS_IN_NOTICE]).
     //
-    // 제목이 고른 **시각을 숫자로 되읽어 준다.** 칩에는 「10분」만 적혀 있어서, 그게 몇 시인지
-    // 확인할 기회가 여기 한 번뿐이다. 그래서 **여기 적힌 시각이 그대로 서버로 간다** —
-    // 칩을 누른 순간 만든 값([confirmingPresetAt])을 제목도 요청도 함께 쓴다.
-    confirmingPreset?.let { preset ->
-        val timeLabel = meetingTimeLabel(preset.departureAt)
-        MoyeotaConfirmDialog(
-            title = meetingConfirmTitle(timeLabel),
-            body = MEETING_CONFIRM_DIALOG_BODY,
-            confirmText = "약속 정하기",
-            onConfirm = {
-                confirmingPreset = null
-                onConfirmMeeting(preset.departureAt)
+    // 시트가 확인 다이얼로그를 겸한다 — 무엇이 바뀌는지([MEETING_CONFIRM_DIALOG_BODY])를 휠 위에 적고, 버튼이
+    // 고른 시각을 그대로 되읽는다(「오후 2:05에 만나기」). **버튼에 적힌 시각이 그대로 서버로 간다.**
+    if (meetingSheetOpen && stage == MeetingStage.CONFIRM_BY_ME) {
+        MeetingTimeSheet(
+            now = now,
+            picked = pickedMeetingAt,
+            onPick = { pickedMeetingAt = it },
+            onConfirm = { at ->
+                meetingSheetOpen = false
+                onConfirmMeeting(at.toString())
             },
-            dismissText = "아직이요",
-            onDismiss = { confirmingPreset = null },
+            onDismiss = { meetingSheetOpen = false },
         )
     }
 
@@ -820,65 +825,81 @@ fun MatchWaitingScreen(
 }
 
 /**
- * 「몇 분 뒤에 만날까요?」 + 프리셋 칩 — **방장에게만** 보이는 약속 확정 블록.
+ * 「몇 시에 만날까요?」 시트 — **방장에게만** 열리는 약속 확정 시트. 확인 다이얼로그를 겸한다.
  *
- * 칩에는 숫자만 적고(「10분」) 단위는 위의 물음이 말한다 — 393dp 폭에서 「10분 뒤」 다섯 개는 줄을
- * 넘긴다. 몇 시가 되는지는 **확인 다이얼로그가 되읽어 준다**([meetingConfirmTitle]).
+ * 휠 한 줄이 곧 약속 시각(「오후 2:05」)이다. 시·분 휠 두 개로 나누지 않은 이유: 고를 수 있는 범위가 1시간뿐이라
+ * 열 칸 남짓이면 다 들어가고, 자정을 넘는 범위(23:30 → 00:30)에서 시·분을 따로 굴리면 고를 수 없는 조합이 생긴다.
+ * 휠에는 서버가 받는 시각만 있다([meetingTimeOptions]).
  *
- * 누르면 바로 보내지 않고 [onPick] 으로 확인 다이얼로그를 띄운다 — 확정은 **한 번만** 할 수 있고
- * (409 `ALREADY_CONFIRMED`) 모집을 끝낸다. 누른 칩이 [selectedMinutes] 로 돌아와 선택 상태로
- * 남으므로 다이얼로그 뒤에서 **무엇을 눌렀는지** 보인다.
+ * 확정은 **한 번만** 할 수 있고(409 `ALREADY_CONFIRMED`) 모집을 끝낸다 — 그래서 무엇이 바뀌는지를 휠 위에 적고,
+ * 버튼이 고른 시각을 되읽는다. 버튼에 적힌 시각이 곧 보내는 값이다.
  *
- * 「그 순간부터 아무도 방을 나갈 수 없다」는 **지웠다** — 서버가 그 규칙을 버렸다(`b16551b7`).
+ * 시계([now])가 도는 동안 가장 이른 시각이 목록에서 빠지면 휠은 남은 것 중 가장 이른 시각으로 옮겨 간다
+ * ([meetingSelectedTime]) — 빠진 값을 들고 확정하지 않는다.
  *
- * [MoyeotaChip] 을 쓰는 이유: 16 매칭 조건 칩과 **같은 종류의 선택**이고, 전용 버튼을 새로 만들면
- * 같은 일을 하는 두 번째 칩 모양이 생긴다(디자인 시스템 규칙: 2개 이상 화면에서 쓰이는 것만 승격).
+ * 모양은 24 채팅의 메시지 동작 시트(아래에 붙은 카드 + 뒤 어둡게)를 따랐다 — 디자인 시스템에 시트 컴포넌트가 없다.
  */
 @Composable
-private fun MeetingPresetBlock(
-    enabled: Boolean,
-    selectedMinutes: Int?,
-    onPick: (Int) -> Unit,
-    modifier: Modifier = Modifier,
+private fun MeetingTimeSheet(
+    now: Instant,
+    picked: Instant?,
+    onPick: (Instant) -> Unit,
+    onConfirm: (Instant) -> Unit,
+    onDismiss: () -> Unit,
 ) {
-    Column(modifier = modifier.fillMaxWidth()) {
-        Text(
-            // 보내는 중에는 물음 대신 진행을 적는다 — 칩이 흐려지기만 하면 왜 안 눌리는지 알 수 없다.
-            // 중복 제출은 `runAction` 이 이미 막으므로, 여기서는 **그 사실을 보여 주기만** 한다.
-            text = if (enabled) MEETING_PRESET_PROMPT else "약속 시간을 정하는 중…",
-            style = MoyeotaType.BodyStrong,
-            color = MoyeotaColor.InkPrimary,
-        )
-        Spacer(Modifier.height(MoyeotaSpacing.Xxs))
-        Text(
-            text = MEETING_CONFIRM_HELP,
-            style = MoyeotaType.CaptionMd,
-            color = MoyeotaColor.TextMute,
-        )
-        Spacer(Modifier.height(MoyeotaSpacing.Xxs))
-        // 칩을 **자기 폭대로** 두고 줄을 가로 스크롤로 만든다. `weight(1f)` 로 다섯 칸을 균등
-        // 분할하면 기본 글꼴에서는 들어맞지만(칩당 ≈67dp), 글꼴 크기를 키운 기기에서 14sp 가
-        // 그만큼 커져 「10분」이 두 줄로 접히거나 잘린다 — 접근성 설정 하나로 깨지는 레이아웃이다.
-        // 자기 폭이면 기본에서는 스크롤이 생기지 않고(≈314dp < 361dp), 커졌을 때만 밀린다.
-        // 칩 사이 8dp — 칩은 보이는 높이 36dp 에 터치 48dp 라(공용 칩) 위아래 여백은 칩이 이미 갖는다.
-        Row(
-            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(MoyeotaSpacing.Xs),
+    // 목록은 5분 정각이 바뀔 때만 달라진다 — 시계가 10초마다 돌아도 휠을 다시 만들지 않게 양 끝으로 묶는다
+    val options = meetingTimeOptions(now)
+    val stableOptions = remember(options.firstOrNull(), options.lastOrNull()) { options }
+    val selected = meetingSelectedTime(stableOptions, picked) ?: return
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { onDismiss() },
+            contentAlignment = Alignment.BottomCenter,
         ) {
-            MEETING_PRESET_MINUTES.forEach { minutes ->
-                MoyeotaChip(
-                    text = "${minutes}분",
-                    selected = selectedMinutes == minutes,
-                    onClick = { if (enabled) onPick(minutes) },
-                    enabled = enabled,
+            Column(
+                modifier = Modifier
+                    .padding(horizontal = MoyeotaSpacing.ScreenGutter, vertical = MoyeotaSpacing.Lg)
+                    .fillMaxWidth()
+                    .modalShadow(MoyeotaShape.Dialog)
+                    .clip(MoyeotaShape.Dialog)
+                    .background(MoyeotaColor.SurfaceCanvas)
+                    // 시트 안을 눌러도 닫히지 않게 한다
+                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { }
+                    .padding(MoyeotaSpacing.Md),
+            ) {
+                Text(text = MEETING_TIME_PROMPT, style = MoyeotaType.HeadingMd, color = MoyeotaColor.InkPrimary)
+                Spacer(Modifier.height(MoyeotaSpacing.Xxs))
+                Text(text = MEETING_CONFIRM_DIALOG_BODY, style = MoyeotaType.BodySm, color = MoyeotaColor.TextBody)
+                Spacer(Modifier.height(MoyeotaSpacing.Sm))
+                WheelPickerFrame(modifier = Modifier.fillMaxWidth()) {
+                    SnapWheelPicker(
+                        items = stableOptions.map { meetingTimeLabel(it.toString()).orEmpty() },
+                        selectedIndex = stableOptions.indexOf(selected),
+                        onSelectedIndexChange = { index -> stableOptions.getOrNull(index)?.let(onPick) },
+                        label = "약속 시각",
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                Text(
+                    text = meetingMinutesFromNowLabel(now, selected),
+                    style = MoyeotaType.BodySm,
+                    color = MoyeotaColor.TextBody,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth(),
                 )
+                Spacer(Modifier.height(MoyeotaSpacing.Xxs))
+                Text(text = MEETING_TIME_LIMIT_NOTE, style = MoyeotaType.CaptionMd, color = MoyeotaColor.TextMute)
+                Spacer(Modifier.height(MoyeotaSpacing.Sm))
+                PrimaryCtaButton(
+                    text = meetingConfirmButtonText(meetingTimeLabel(selected.toString())),
+                    onClick = { onConfirm(selected) },
+                )
+                Spacer(Modifier.height(MoyeotaSpacing.Xxs))
+                SecondaryButton(text = "아직이요", onClick = onDismiss)
             }
         }
-        Text(
-            text = MEETING_PRESET_LIMIT_NOTE,
-            style = MoyeotaType.CaptionMd,
-            color = MoyeotaColor.TextMute,
-        )
     }
 }
 
