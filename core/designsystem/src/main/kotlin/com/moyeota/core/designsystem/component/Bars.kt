@@ -35,7 +35,13 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.unit.dp
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.core.designsystem.theme.MoyeotaSpacing
 import com.moyeota.core.designsystem.theme.MoyeotaType
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 
 // 시스템 상태바 인셋만큼의 여백.
 //
@@ -60,27 +66,64 @@ fun NavigationBarSpacer(modifier: Modifier = Modifier) {
     Spacer(modifier = modifier.fillMaxWidth().windowInsetsBottomHeight(WindowInsets.navigationBars))
 }
 
-// 상단 앱바: 뒤로가기 + 타이틀 (+우측 액션)
+/**
+ * 하위 화면의 상단 앱바 — 뒤로가기 + **가운데 제목** (+ 오른쪽 행동). 디자인 문서 top-app-bar(56dp, heading-lg).
+ *
+ * 15·16·20·21·22·채팅방이 저마다 왼쪽 정렬 18sp Bold 머리줄을 손으로 그리던 것을 이 하나로 모은다
+ * (디자인 QA G7). 탭 첫 화면(채팅 목록·마이페이지·탐색)은 이게 아니라 [MoyeotaTabHeader] 를 쓴다.
+ *
+ * - 제목은 한 줄, 넘치면 말줄임. 좌우로 [titleInset] 만큼 비워 아이콘과 겹치지 않는다 — 오른쪽 행동이
+ *   48dp 아이콘 둘이면(채팅방) 호출부가 104dp 를 넘긴다
+ * - [subtitle] 은 제목 아래 한 줄(채팅방의 「3명 참여 중」)
+ * - 뒤로가기는 48dp [IconButton] — 24dp 화살표의 왼쪽 끝이 16dp 화면 여백에 맞도록 4dp 만 띄운다
+ */
 @Composable
 fun MoyeotaTopBar(
     title: String,
     onBack: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
+    subtitle: String? = null,
+    titleInset: Dp = 56.dp,
+    actionsEndPadding: Dp = 16.dp,
     actions: @Composable () -> Unit = {},
 ) {
     Box(modifier = modifier.fillMaxWidth().height(56.dp)) {
         if (onBack != null) {
-            IconButton(onClick = onBack, modifier = Modifier.align(Alignment.CenterStart).padding(start = 8.dp)) {
-                BackArrowIcon()
+            IconButton(
+                onClick = onBack,
+                modifier = Modifier.align(Alignment.CenterStart).padding(start = 4.dp),
+            ) {
+                BackArrowIcon(modifier = Modifier.semantics { contentDescription = "뒤로 가기" })
             }
         }
-        Text(
-            text = title,
-            style = MoyeotaType.HeadingMd,
-            modifier = Modifier.align(Alignment.Center),
-        )
+        if (title.isNotEmpty() || subtitle != null) {
+            Column(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .padding(horizontal = titleInset)
+                    .semantics(mergeDescendants = true) { heading() },
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    text = title,
+                    style = MoyeotaType.HeadingLg,
+                    color = MoyeotaColor.InkPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (subtitle != null) {
+                    Text(
+                        text = subtitle,
+                        style = MoyeotaType.CaptionMd,
+                        color = MoyeotaColor.TextMute,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
         Row(
-            modifier = Modifier.align(Alignment.CenterEnd).padding(end = 16.dp),
+            modifier = Modifier.align(Alignment.CenterEnd).padding(end = actionsEndPadding),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             actions()
@@ -88,16 +131,51 @@ fun MoyeotaTopBar(
     }
 }
 
-// 아이콘 라이브러리 없이 그리는 뒤로가기 화살표
+/**
+ * 탭 첫 화면(동승 · 채팅 · 마이페이지)의 머리줄 — 왼쪽 정렬 큰 제목 + (있으면) 오른쪽 행동.
+ *
+ * 하위 화면의 [MoyeotaTopBar] 와 일부러 다르다: 탭 첫 화면에는 뒤로 갈 곳이 없고, 큰 제목이 "지금 어느
+ * 탭인가"를 말한다. 예전엔 세 탭의 제목이 18sp·20sp, 왼쪽 여백 16dp·24dp 로 제각각이었다(디자인 QA G7).
+ */
 @Composable
-fun BackArrowIcon(modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier.size(20.dp)) {
-        val stroke = 2.dp.toPx()
-        val cx = size.width
+fun MoyeotaTabHeader(
+    title: String,
+    modifier: Modifier = Modifier,
+    trailing: (@Composable () -> Unit)? = null,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(52.dp)
+            .padding(start = MoyeotaSpacing.ScreenGutter, end = if (trailing != null) 4.dp else MoyeotaSpacing.ScreenGutter),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = title,
+            style = MoyeotaType.HeadingXl,
+            color = MoyeotaColor.InkPrimary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f).semantics { heading() },
+        )
+        if (trailing != null) trailing()
+    }
+}
+
+/**
+ * 아이콘 라이브러리 없이 그리는 뒤로가기 화살표 — 24dp, 선 굵기 1.75dp(디자인 문서의 24px 아이콘 · [Icons] 와 같은 값).
+ * 스크린리더 이름은 감싸는 버튼이 준다.
+ */
+@Composable
+fun BackArrowIcon(modifier: Modifier = Modifier, tint: Color = MoyeotaColor.InkPrimary) {
+    Canvas(modifier = modifier.size(24.dp)) {
+        val stroke = IconStrokeWidth.toPx() * (size.width / 24.dp.toPx())
+        val w = size.width
         val cy = size.height / 2f
-        drawLine(MoyeotaColor.InkPrimary, Offset(cx * 0.15f, cy), Offset(cx * 0.9f, cy), stroke, StrokeCap.Round)
-        drawLine(MoyeotaColor.InkPrimary, Offset(cx * 0.15f, cy), Offset(cx * 0.5f, cy * 0.35f), stroke, StrokeCap.Round)
-        drawLine(MoyeotaColor.InkPrimary, Offset(cx * 0.15f, cy), Offset(cx * 0.5f, cy * 1.65f), stroke, StrokeCap.Round)
+        // 24dp 격자: 몸통 5→19, 화살촉은 가운데에서 ±7
+        drawLine(tint, Offset(w * 0.21f, cy), Offset(w * 0.79f, cy), stroke, StrokeCap.Round)
+        drawLine(tint, Offset(w * 0.21f, cy), Offset(w * 0.50f, cy - w * 0.29f), stroke, StrokeCap.Round)
+        drawLine(tint, Offset(w * 0.21f, cy), Offset(w * 0.50f, cy + w * 0.29f), stroke, StrokeCap.Round)
     }
 }
 
@@ -131,7 +209,8 @@ fun MoyeotaBottomBar(
                     modifier = Modifier.clickable { onSelect(tab) }.padding(horizontal = 16.dp, vertical = 6.dp),
                 ) {
                     TabIcon(tab = tab, tint = color)
-                    Text(text = tab.label, style = MoyeotaType.CaptionSm, color = color)
+                    // 디자인 문서 bottom-nav 는 caption-md(12/500) — 11sp 는 배지 전용이다(G3)
+                    Text(text = tab.label, style = MoyeotaType.CaptionMd, color = color)
                 }
             }
         }
@@ -221,7 +300,7 @@ private fun DrawScope.drawTaxiIcon(tint: Color, stroke: Stroke) {
 }
 
 // 채팅 — 꼬리 달린 말풍선 (모서리 라운드까지 한 붓으로)
-private fun DrawScope.drawChatIcon(tint: Color, stroke: Stroke) {
+internal fun DrawScope.drawChatIcon(tint: Color, stroke: Stroke) {
     val w = size.width
     val h = size.height
     val l = w * 0.10f

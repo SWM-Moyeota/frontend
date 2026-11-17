@@ -6,15 +6,12 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
@@ -23,8 +20,10 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.moyeota.core.designsystem.component.MoyeotaTextField
 import com.moyeota.core.designsystem.component.SecondaryButton
+import com.moyeota.core.designsystem.component.TextLinkButton
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.core.designsystem.theme.MoyeotaType
+import com.moyeota.core.designsystem.theme.tabularNums
 import com.moyeota.domain.model.AuthError
 import com.moyeota.domain.model.AuthException
 import com.moyeota.domain.model.AuthPolicy
@@ -631,31 +630,28 @@ internal fun PhoneVerificationBlock(
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
+        // 이 블록의 글자 링크(「번호 변경」·「로그인하러 가기」·「다시 받기」)는 전부 [TextLinkButton] 이다 —
+        // 글자 크기 그대로(≈16dp) 눌리고 눌림 표시도 없던 자리를 48dp 터치 + 물결로 넓혔다(디자인 QA G12).
+        // 링크의 안쪽 여백(8dp)만큼 바깥으로 밀어 글자 끝을 입력칸 가장자리에 맞춘다.
         if (state.stage == PhoneVerifyStage.Verified) {
-            Spacer(Modifier.height(10.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                // Success500(흰 바탕 2.5:1)은 12sp 에서 흐리다 — 한 단계 진한 Success600
                 Text(
                     text = "휴대폰 인증 완료",
-                    style = MoyeotaType.CaptionMd,
-                    fontWeight = FontWeight.Bold,
-                    color = MoyeotaColor.Success500,
+                    style = MoyeotaType.ButtonSm,
+                    color = MoyeotaColor.Success600,
                     modifier = Modifier.weight(1f),
                 )
                 // 번호를 고치려면 인증을 버려야 한다(서버가 토큰을 번호에 묶는다) — 실수로 고쳐지는 대신
                 // 명시적으로 누르게 하고, 누르면 1단계로 되돌아간다.
-                Text(
+                TextLinkButton(
                     text = "번호 변경",
-                    style = MoyeotaType.CaptionMd,
-                    fontWeight = FontWeight.Bold,
-                    color = MoyeotaColor.Primary500,
-                    modifier = Modifier.clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = onPhoneEditRequested,
-                    ),
+                    onClick = onPhoneEditRequested,
+                    style = MoyeotaType.ButtonSm,
+                    modifier = Modifier.offset(x = 8.dp),
                 )
             }
             return@Column
@@ -663,17 +659,11 @@ internal fun PhoneVerificationBlock(
 
         if (state.alreadyRegistered) {
             // 문구는 번호 입력란 아래(errorText)에 이미 떠 있다 — 여기서는 갈 길만 준다.
-            Spacer(Modifier.height(10.dp))
-            Text(
+            TextLinkButton(
                 text = "로그인하러 가기",
-                style = MoyeotaType.CaptionMd,
-                fontWeight = FontWeight.Bold,
-                color = MoyeotaColor.Primary500,
-                modifier = Modifier.clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = onGoToLogin,
-                ),
+                onClick = onGoToLogin,
+                style = MoyeotaType.ButtonSm,
+                modifier = Modifier.offset(x = (-8).dp),
             )
         }
 
@@ -704,39 +694,31 @@ internal fun PhoneVerificationBlock(
 
         // 「남은 시간 2:43」 + 「다시 받기」 — 07 인증 코드 화면이 쓰던 배치 그대로다.
         // 버튼 두 개를 나란히 두지 않은 이유: 반쪽 너비에 "인증번호 다시 받기"가 들어가지 않는다.
-        Spacer(Modifier.height(10.dp))
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                // 만료되면 남은 시간 대신 입력칸 아래 오류 문구가 상황을 말한다
+                // 만료되면 남은 시간 대신 입력칸 아래 오류 문구가 상황을 말한다.
+                // 초가 바뀔 때마다 글자 폭이 흔들리지 않게 숫자 폭을 고정한다
                 text = if (codeRemaining > 0) "남은 시간 ${formatRemainingSeconds(codeRemaining)}" else "",
-                style = MoyeotaType.CaptionMd,
-                fontWeight = FontWeight.Bold,
+                style = MoyeotaType.ButtonSm.tabularNums(),
                 color = MoyeotaColor.Waiting600,
             )
-            Text(
+            // 못 누를 때는 흐린 글자(TextPlaceholder)로 남는다 — 쿨다운 중이라는 뜻
+            TextLinkButton(
                 text = state.requestButtonLabel(nowMillis),
-                style = MoyeotaType.CaptionMd,
-                fontWeight = FontWeight.Bold,
-                color = if (canRequest) MoyeotaColor.Primary500 else MoyeotaColor.TextAsh,
-                modifier = if (canRequest) {
-                    Modifier.clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = onRequestCode,
-                    )
-                } else {
-                    Modifier
-                },
+                onClick = onRequestCode,
+                enabled = canRequest,
+                style = MoyeotaType.ButtonSm,
+                modifier = Modifier.offset(x = 8.dp),
             )
         }
 
         // 6자리를 채우면 자동으로 확인하므로, 이 버튼은 **네트워크 실패처럼 같은 입력으로 다시
         // 눌러야 하는** 경우를 위해 남겨 둔다.
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(4.dp))
         SecondaryButton(
             text = if (state.verifying) "확인 중…" else "확인",
             onClick = onSubmitCode,

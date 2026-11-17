@@ -62,9 +62,12 @@ jobs:
         env:
           NAVER_MAPS_CLIENT_ID: ${{ secrets.NAVER_MAPS_CLIENT_ID }}
           MIXPANEL_TOKEN: ${{ secrets.MIXPANEL_TOKEN }}
+          # Mixpanel 과 같은 이벤트를 받는다. 비면 그 도구만 꺼지고 빌드는 된다(docs/ANALYTICS.md).
+          AMPLITUDE_API_KEY: ${{ secrets.AMPLITUDE_API_KEY }}
+          POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           # 메타 광고 설치 측정. 비면 SDK 가 켜지지 않아 설치가 메타로 안 간다(docs/ANALYTICS.md).
           FACEBOOK_CLIENT_TOKEN: ${{ secrets.FACEBOOK_CLIENT_TOKEN }}
-        run: ./gradlew :app:assembleDebug :data:testDebugUnitTest :presentation:testDebugUnitTest --no-daemon
+        run: ./gradlew :app:assembleDebug :app:testDebugUnitTest :data:testDebugUnitTest :presentation:testDebugUnitTest --no-daemon
 
       - name: Upload test report
         if: failure()
@@ -72,6 +75,7 @@ jobs:
         with:
           name: test-report
           path: |
+            app/build/reports/tests/testDebugUnitTest
             data/build/reports/tests/testDebugUnitTest
             presentation/build/reports/tests/testDebugUnitTest
           retention-days: 7

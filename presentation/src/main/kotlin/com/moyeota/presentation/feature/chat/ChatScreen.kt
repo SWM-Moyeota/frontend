@@ -37,6 +37,8 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -45,6 +47,7 @@ import com.moyeota.presentation.core.ErrorBox
 import com.moyeota.presentation.core.LoadingBox
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -55,35 +58,46 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.AvatarCircle
 import com.moyeota.core.designsystem.component.BackArrowIcon
+import com.moyeota.core.designsystem.component.ChevronIcon
+import com.moyeota.core.designsystem.component.IconStrokeWidth
+import com.moyeota.core.designsystem.component.MoreVerticalIcon
 import com.moyeota.core.designsystem.component.MoyeotaBottomBar
+import com.moyeota.core.designsystem.component.MoyeotaConfirmDialog
+import com.moyeota.core.designsystem.component.MoyeotaIconSize
 import com.moyeota.core.designsystem.component.MoyeotaTab
+import com.moyeota.core.designsystem.component.MoyeotaTopBar
 import com.moyeota.core.designsystem.component.NoticeBanner
 import com.moyeota.core.designsystem.component.NoticeKind
+import com.moyeota.core.designsystem.component.PrimaryCtaButton
+import com.moyeota.core.designsystem.component.SearchIcon
+import com.moyeota.core.designsystem.component.SecondaryButton
+import com.moyeota.core.designsystem.component.SectionLabel
 import com.moyeota.core.designsystem.component.StatusBarSpacer
+import com.moyeota.core.designsystem.component.TextLinkButton
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.core.designsystem.theme.MoyeotaShape
+import com.moyeota.core.designsystem.theme.MoyeotaSpacing
 import com.moyeota.core.designsystem.theme.MoyeotaType
+import com.moyeota.core.designsystem.theme.modalShadow
+import com.moyeota.core.designsystem.theme.tabularNums
 import com.moyeota.domain.model.ChatReportReason
 
-// 와이어프레임 색 (core token 미정의 — 화면 재현용)
-private val CanvasBg = Color(0xFFF5F7FA)
-private val GrayMute = Color(0xFF8A93A0)
-private val GrayAsh = Color(0xFF9AA1AC)
-private val GraySlate = Color(0xFF4B5563)
-private val InputPillBg = Color(0xFFF1F3F7)
-private val BubbleShadow = Color(0x1A1B2A4A)
+/**
+ * 말풍선 모서리 — 디자인 문서 chat-bubble 의 rounded.lg(20dp). 꼬리 쪽 한 모서리만 [BubbleTailRadius] 로
+ * 좁혀 누가 한 말인지 방향을 남긴다.
+ */
+private val BubbleRadius = 20.dp
+private val BubbleTailRadius = 6.dp
 
 /**
  * 「바닥에 붙어 있다」고 보는 거리. 이 안에 있으면 새 메시지가 올 때 따라 내려가고, 그보다 위로
@@ -354,7 +368,7 @@ private val PreviewMessages = listOf(
  * 이동(디스크립션):
  * - 뒤로 → 22 탑승 상세 (onBack)
  * - 「⋮」 → 24a 메뉴 열림 (내부 상태)
- * - 상단 「매칭 화면으로 →」 배너 탭 → 21 매칭 대기 (onOpenMatching — 진행 중인 방의 채팅방일 때만 보인다)
+ * - 상단 「매칭 화면으로」 배너 탭 → 21 매칭 대기 (onOpenMatching — 진행 중인 방의 채팅방일 때만 보인다)
  * - 24a 「채팅방 알림 끄기/켜기」 → 24 (서버 음소거 토글 — onToggleMute, 부제에 「알림 꺼짐」)
  * - 24a 「채팅방 나가기」 → **항상 재확인 다이얼로그** → 14 홈 (onLeaveChat)
  * - **상대 말풍선 롱프레스** → 신고 액션 시트 → 사유 시트 → 24 (onReportMessage).
@@ -508,7 +522,9 @@ fun ChatScreen(
         if (stickToBottom) listScroll.animateScrollTo(listScroll.maxValue)
     }
 
-    Box(modifier = Modifier.fillMaxSize().background(CanvasBg)) {
+    // 흰 바탕(디자인 QA R1·G2). 예전 회색 바탕은 흰 상대 말풍선을 그림자로 띄워야 보였다 — 바탕을 희게 두고
+    // 상대 말풍선을 옅은 회색 면으로 칠하면 그림자 없이 구분된다(디자인 문서 chat-bubble-partner).
+    Box(modifier = Modifier.fillMaxSize().background(MoyeotaColor.SurfaceCanvas)) {
         Column(modifier = Modifier.fillMaxSize().imePadding()) {
             // 헤더 (흰 배경). 검색을 열면 제목 줄이 통째로 검색 바로 바뀐다 — 제목 아래에 한 줄 더 얹는
             // 것보다 대화가 보이는 높이를 안 뺏고, 「지금 검색 중」이 분명하다.
@@ -520,60 +536,26 @@ fun ChatScreen(
                         onQueryChange = onSearchQueryChange,
                         onClose = onCloseSearch,
                     )
-                } else Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Box(
-                        modifier = Modifier.clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                        ) { onBack() },
-                    ) {
-                        BackArrowIcon(modifier = Modifier.size(22.dp))
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    // 부제가 경로(역지오코딩된 전체 주소)로 바뀌면서 길어졌다. weight 로 남는 폭을
-                    // 다 쓰되 **말줄임**한다 — 예전처럼 폭을 안 잡으면 두 줄로 흘러 우측 아이콘을 덮는다.
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = roomTitle,
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MoyeotaColor.InkPrimary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Text(
-                            text = if (muted) "$roomSubtitle · 알림 꺼짐" else roomSubtitle,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = GrayMute,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    Box(
-                        modifier = Modifier.clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                        ) { onOpenSearch() },
-                    ) {
-                        SearchBoxIcon()
-                    }
-                    Spacer(Modifier.width(14.dp))
-                    Box(
-                        modifier = Modifier
-                            .size(28.dp)
-                            .clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null,
-                            ) { menuOpen = true },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        KebabIcon()
-                    }
+                } else {
+                    // 다른 하위 화면과 같은 공용 앱바(디자인 QA R2·G7) — 가운데 제목 + 부제, 48dp 아이콘 버튼 둘.
+                    // 예전엔 22dp 뒤로가기·28dp 상자 친 검색 아이콘·맨 점 셋이 눌림 표시 없이 붙어 있었다.
+                    // 부제가 경로(역지오코딩된 전체 주소)로 길어질 수 있어 앱바가 한 줄 말줄임한다.
+                    MoyeotaTopBar(
+                        title = roomTitle,
+                        subtitle = if (muted) "$roomSubtitle · 알림 꺼짐" else roomSubtitle,
+                        onBack = onBack,
+                        // 오른쪽 아이콘 버튼 둘(48 × 2 + 끝 여백 4)을 피해 제목을 가운데에 둔다
+                        titleInset = 104.dp,
+                        actionsEndPadding = MoyeotaSpacing.Xxs,
+                        actions = {
+                            IconButton(onClick = onOpenSearch) {
+                                SearchIcon(modifier = Modifier.semantics { contentDescription = "대화 내용 검색" })
+                            }
+                            IconButton(onClick = { menuOpen = true }) {
+                                MoreVerticalIcon(modifier = Modifier.semantics { contentDescription = "채팅방 메뉴" })
+                            }
+                        },
+                    )
                 }
             }
 
@@ -587,35 +569,37 @@ fun ChatScreen(
                 )
             }
 
-            // 「매칭 화면으로 →」 — 진행 중인 방의 채팅방에서만 뜬다
+            // 「매칭 화면으로」 — 진행 중인 방의 채팅방에서만 뜬다.
+            // 바탕은 옅은 회색(디자인 QA R3) — 옅은 파랑 띠는 입력 바의 파란 전송 버튼과 강조를 다퉜다.
+            // 화살표 글자(→) 대신 그린 꺾쇠를 쓴다(G10). 띠 전체가 누르는 자리라 높이를 48dp 로 채운다.
             if (!search.open && onOpenMatching != null) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(44.dp)
-                        .background(MoyeotaColor.Primary50)
+                        .height(48.dp)
+                        .background(MoyeotaColor.SurfaceSoft)
                         .clickable { onOpenMatching() }
-                        .padding(horizontal = 28.dp),
+                        .padding(horizontal = MoyeotaSpacing.ScreenGutter),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     // 왼쪽 문구만 줄어든다 — weight 없이 두면 좁은 폰에서 오른쪽 링크가 밀려 잘린다
                     Text(
                         text = "진행 중인 탑승이 있어요",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MoyeotaColor.InkPrimary,
+                        style = MoyeotaType.BodySm,
+                        color = MoyeotaColor.TextBody,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
                     )
-                    Spacer(Modifier.width(10.dp))
+                    Spacer(Modifier.width(MoyeotaSpacing.Xs))
                     Text(
-                        text = "매칭 화면으로 →",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
+                        text = "매칭 화면으로",
+                        style = MoyeotaType.BodySm,
+                        fontWeight = FontWeight.SemiBold,
                         color = MoyeotaColor.Primary600,
                         maxLines = 1,
                     )
+                    ChevronIcon(size = MoyeotaIconSize.Sm, tint = MoyeotaColor.Primary600)
                 }
             }
 
@@ -625,7 +609,7 @@ fun ChatScreen(
                     modifier = Modifier
                         .fillMaxSize()
                         .verticalScroll(listScroll)
-                        .padding(horizontal = 16.dp, vertical = 18.dp),
+                        .padding(horizontal = MoyeotaSpacing.ScreenGutter, vertical = MoyeotaSpacing.Md),
                 ) {
                     messages.forEachIndexed { index, message ->
                         // 신고 길은 **신고할 수 있는 말풍선에만** 붙는다([ChatUiMessage.canReport]) —
@@ -650,20 +634,21 @@ fun ChatScreen(
                                 indication = null,
                             ) { menuOpen = false },
                     ) {
+                        // 진짜 겹침(드롭다운)이라 그림자를 남긴다 — 다이얼로그와 같은 Modal 높이 하나(G4).
+                        // 메뉴 버튼 바로 아래(앱바 밑 4dp)에 연다.
                         Column(
                             modifier = Modifier
                                 .align(Alignment.TopEnd)
-                                .padding(top = 51.dp, end = 16.dp)
+                                .padding(top = MoyeotaSpacing.Xxs, end = MoyeotaSpacing.ScreenGutter)
                                 .width(164.dp)
-                                .shadow(8.dp, RoundedCornerShape(18.dp), spotColor = BubbleShadow)
-                                .clip(RoundedCornerShape(18.dp))
+                                .modalShadow(MoyeotaShape.Card)
+                                .clip(MoyeotaShape.Card)
                                 .background(MoyeotaColor.SurfaceCanvas),
                         ) {
                             Text(
                                 // 서버 음소거 토글 — 눌러서 끄고, 다시 눌러 켠다(예전엔 끄기만 있는 로컬 상태였다)
                                 text = if (muted) "채팅방 알림 켜기" else "채팅방 알림 끄기",
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Bold,
+                                style = MoyeotaType.BodyMd,
                                 color = MoyeotaColor.InkPrimary,
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -671,14 +656,14 @@ fun ChatScreen(
                                         onToggleMute()
                                         menuOpen = false
                                     }
-                                    .padding(horizontal = 20.dp, vertical = 14.dp),
+                                    .heightIn(min = 48.dp)
+                                    .padding(horizontal = MoyeotaSpacing.Md, vertical = MoyeotaSpacing.Sm),
                             )
                             if (canLeave) {
-                            HorizontalDivider(color = MoyeotaColor.Hairline, modifier = Modifier.padding(horizontal = 20.dp))
+                            HorizontalDivider(color = MoyeotaColor.Hairline, modifier = Modifier.padding(horizontal = MoyeotaSpacing.Md))
                             Text(
                                 text = "채팅방 나가기",
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Bold,
+                                style = MoyeotaType.BodyMd,
                                 color = MoyeotaColor.InkPrimary,
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -691,22 +676,22 @@ fun ChatScreen(
                                         // 다이얼로그 자체가 도달 불가능한 죽은 코드였다(실기 QA).
                                         leaveConfirmOpen = true
                                     }
-                                    .padding(horizontal = 20.dp, vertical = 14.dp),
+                                    .heightIn(min = 48.dp)
+                                    .padding(horizontal = MoyeotaSpacing.Md, vertical = MoyeotaSpacing.Sm),
                             )
                             }
-                            HorizontalDivider(color = MoyeotaColor.Hairline, modifier = Modifier.padding(horizontal = 20.dp))
+                            HorizontalDivider(color = MoyeotaColor.Hairline, modifier = Modifier.padding(horizontal = MoyeotaSpacing.Md))
                             // 신고를 **여기서 실행할 수는 없다** — 서버가 `chatMessageId` 를 필수로 받아
                             // 어떤 메시지인지 정해지지 않으면 보낼 수 없다. 그렇다고 입구를 롱프레스
                             // 하나로 두면 **안전 기능인데 아무도 못 찾는다**(눌러도 시각 반응이 없어
                             // 우연히 발견될 여지도 없다). 실행은 못 해도 **안내는 여기 둘 수 있다.**
                             Text(
                                 text = "신고는 메시지를 꾹 눌러요",
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Medium,
+                                style = MoyeotaType.CaptionMd,
                                 color = MoyeotaColor.TextMute,
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = 20.dp, vertical = 12.dp),
+                                    .padding(horizontal = MoyeotaSpacing.Md, vertical = MoyeotaSpacing.Sm),
                             )
                         }
                     }
@@ -726,7 +711,7 @@ fun ChatScreen(
                     NoticeBanner(
                         kind = if (reportOutcome.accepted) NoticeKind.SUCCESS else NoticeKind.ERROR,
                         text = reportOutcome.message,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                        modifier = Modifier.padding(horizontal = MoyeotaSpacing.ScreenGutter, vertical = MoyeotaSpacing.Xs),
                     )
                 }
                 // 전송·수신 실패 안내 — 입력한 내용은 지우지 않는다
@@ -734,7 +719,7 @@ fun ChatScreen(
                     NoticeBanner(
                         kind = NoticeKind.ERROR,
                         text = errorMessage,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                        modifier = Modifier.padding(horizontal = MoyeotaSpacing.ScreenGutter, vertical = MoyeotaSpacing.Xs),
                     )
                 }
                 // 글자 수 — **입력창 바로 위**. 한도에 가까워지면 나타나고, 넘기면 강조된다
@@ -749,25 +734,25 @@ fun ChatScreen(
                 inputUi.counter?.let { counter ->
                     Text(
                         text = counter,
-                        fontSize = 12.sp,
-                        fontWeight = if (inputUi.overLimit) FontWeight.Bold else FontWeight.Medium,
+                        style = MoyeotaType.CaptionMd.tabularNums(),
+                        fontWeight = if (inputUi.overLimit) FontWeight.SemiBold else FontWeight.Medium,
                         // 넘긴 상태는 **실제로 막힌** 상태라 경고색이 맞다(16 의 1인 안내와 반대 —
                         // 그쪽은 정상 선택이라 회색이다). 넘기기 전 예고는 보조 문구색 그대로 둔다.
-                        color = if (inputUi.overLimit) MoyeotaColor.Danger500 else GrayAsh,
+                        color = if (inputUi.overLimit) MoyeotaColor.Danger500 else MoyeotaColor.TextMute,
                         textAlign = TextAlign.End,
-                        modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 8.dp),
+                        modifier = Modifier.fillMaxWidth().padding(start = MoyeotaSpacing.ScreenGutter, end = MoyeotaSpacing.ScreenGutter, top = MoyeotaSpacing.Xs),
                     )
                 }
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = MoyeotaSpacing.ScreenGutter, vertical = MoyeotaSpacing.Sm),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Box(
                         modifier = Modifier
                             .weight(1f)
                             .height(48.dp)
-                            .background(InputPillBg, RoundedCornerShape(24.dp))
-                            .padding(horizontal = 20.dp),
+                            .background(MoyeotaColor.SurfaceSoft, MoyeotaShape.Pill)
+                            .padding(horizontal = MoyeotaSpacing.Md),
                         contentAlignment = Alignment.CenterStart,
                     ) {
                         BasicTextField(
@@ -781,23 +766,24 @@ fun ChatScreen(
                             modifier = Modifier.fillMaxWidth(),
                         )
                         if (input.isEmpty()) {
-                            Text(text = "메시지 보내기", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = GrayAsh)
+                            Text(text = "메시지 보내기", style = MoyeotaType.BodyMd, color = MoyeotaColor.TextPlaceholder)
                         }
                     }
-                    Spacer(Modifier.width(12.dp))
+                    Spacer(Modifier.width(MoyeotaSpacing.Xs))
                     // 전송 — 공백만 입력·한도 초과·전송 중이면 비활성([chatInputUi]).
                     // 한도 초과로 잠긴 경우의 **이유는 바로 위 카운터**가 들고 있다.
+                    // 비활성은 다른 버튼과 같은 SurfaceDisabled + 흐린 화살표(G5) — 예전 회색 원 위 흰 화살표는
+                    // 대비가 낮아 화살표가 거의 사라졌다.
                     Box(
                         modifier = Modifier
                             .size(48.dp)
-                            .background(
-                                if (sendEnabled) MoyeotaColor.Primary500 else MoyeotaColor.TextAsh,
-                                CircleShape,
-                            )
-                            .clickable(enabled = sendEnabled) { onSend() },
+                            .clip(CircleShape)
+                            .background(if (sendEnabled) MoyeotaColor.Primary500 else MoyeotaColor.SurfaceDisabled)
+                            .clickable(enabled = sendEnabled, role = Role.Button) { onSend() }
+                            .semantics { contentDescription = "메시지 보내기" },
                         contentAlignment = Alignment.Center,
                     ) {
-                        SendArrowIcon()
+                        SendArrowIcon(tint = if (sendEnabled) MoyeotaColor.TextOnDark else MoyeotaColor.TextPlaceholder)
                     }
                 }
             }
@@ -809,74 +795,27 @@ fun ChatScreen(
             }
         }
 
-        // 채팅방 나가기 재확인 다이얼로그 — 나가기를 누르면 **항상** 거친다(되돌릴 수 없다)
+        // 채팅방 나가기 재확인 다이얼로그 — 나가기를 누르면 **항상** 거친다(되돌릴 수 없다).
+        //
+        // 공용 확인 다이얼로그를 쓰고 **확인을 빨강**으로 둔다(디자인 QA R3·G11). 예전엔 손으로 그린
+        // 다이얼로그에 파란 「나가기」를 달았다 — 되돌릴 수 없는 이탈에 주 행동 색을 쓴 것이다.
+        //
+        // 본문은 「되돌릴 수 없다」를 먼저 적는다 — 이 다이얼로그가 있는 이유다. 서버가 나간 참여자를
+        // 되살리지 못하고(chat_room_user 복합키에 leftAt 만 찍힌다) 앱에도 다시 들어가는 화면이 없다.
         if (leaveConfirmOpen) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(MoyeotaColor.Scrim)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                    ) { leaveConfirmOpen = false },
-                contentAlignment = Alignment.Center,
-            ) {
-                Column(
-                    modifier = Modifier
-                        .padding(horizontal = 32.dp)
-                        .fillMaxWidth()
-                        .shadow(12.dp, RoundedCornerShape(18.dp), spotColor = BubbleShadow)
-                        .clip(RoundedCornerShape(18.dp))
-                        .background(MoyeotaColor.SurfaceCanvas)
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                        ) { }
-                        .padding(24.dp),
-                ) {
-                    Text(
-                        text = "채팅방을 나갈까요?",
-                        style = MoyeotaType.HeadingMd,
-                        color = MoyeotaColor.InkPrimary,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    // 「되돌릴 수 없다」를 먼저 적는다 — 이 다이얼로그가 있는 이유다.
-                    // 서버가 나간 참여자를 되살리지 못하고(chat_room_user 복합키에 leftAt 만 찍힌다)
-                    // 앱에도 다시 들어가는 화면이 없다.
-                    Text(
-                        text = "한 번 나가면 이 대화로 다시 들어올 수 없어요.\n" +
-                            "채팅방 나가기는 탑승 이탈과 별개라 진행 중인 탑승은 유지돼요.",
-                        style = MoyeotaType.BodySm,
-                        color = GraySlate,
-                    )
-                    Spacer(Modifier.height(20.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(44.dp)
-                                .background(MoyeotaColor.SurfaceSoft, RoundedCornerShape(12.dp))
-                                .clickable { leaveConfirmOpen = false },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(text = "취소", style = MoyeotaType.ButtonMd, color = GraySlate)
-                        }
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(44.dp)
-                                .background(MoyeotaColor.Primary500, RoundedCornerShape(12.dp))
-                                .clickable {
-                                    leaveConfirmOpen = false
-                                    onLeaveChat() // → 14 홈
-                                },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(text = "나가기", style = MoyeotaType.ButtonMd, color = MoyeotaColor.TextOnDark)
-                        }
-                    }
-                }
-            }
+            MoyeotaConfirmDialog(
+                title = "채팅방을 나갈까요?",
+                body = "한 번 나가면 이 대화로 다시 들어올 수 없어요.\n" +
+                    "채팅방 나가기는 탑승 이탈과 별개라 진행 중인 탑승은 유지돼요.",
+                confirmText = "나가기",
+                onConfirm = {
+                    leaveConfirmOpen = false
+                    onLeaveChat() // → 14 홈
+                },
+                dismissText = "취소",
+                onDismiss = { leaveConfirmOpen = false },
+                destructive = true,
+            )
         }
 
         // 신고 액션 시트 — 꾹 누른 말풍선 하나에 대한 동작 목록. 지금은 한 줄뿐이지만 24a 메뉴와
@@ -889,7 +828,7 @@ fun ChatScreen(
             )
         }
 
-        // 사유 선택 시트 — 나가기 다이얼로그와 같은 모양(Scrim + 18dp 라운드 카드).
+        // 사유 선택 시트 — Scrim + 다이얼로그 모서리(20dp) 카드.
         if (target != null && reasonPickerOpen) {
             ReportReasonSheet(
                 quotedText = target.text,
@@ -927,7 +866,7 @@ fun ChatScreen(
 
 /**
  * 메시지 하나에 대한 동작 시트 — 모양은 24a 메뉴 오버레이를 그대로 베꼈다
- * (전면 `Box` + 배경 탭 닫기 + 18dp 라운드 + 그림자. Scrim 은 나가기 다이얼로그 쪽을 따랐다 —
+ * (전면 `Box` + 배경 탭 닫기 + 다이얼로그 모서리 + Modal 그림자. Scrim 은 확인 다이얼로그 쪽을 따랐다 —
  * 24a 와 달리 이건 「무엇을 눌렀는지」가 중요해서 뒤를 가려 대상이 분명해야 한다).
  * **새 디자인을 만들지 않았다**:
  * 이 앱에는 `ModalBottomSheet` 선례가 한 건도 없고(디자인시스템에 시트 컴포넌트가 없다),
@@ -953,10 +892,10 @@ private fun MessageActionSheet(
     ) {
         Column(
             modifier = Modifier
-                .padding(horizontal = 16.dp, vertical = 24.dp)
+                .padding(horizontal = MoyeotaSpacing.ScreenGutter, vertical = MoyeotaSpacing.Lg)
                 .fillMaxWidth()
-                .shadow(8.dp, RoundedCornerShape(18.dp), spotColor = BubbleShadow)
-                .clip(RoundedCornerShape(18.dp))
+                .modalShadow(MoyeotaShape.Dialog)
+                .clip(MoyeotaShape.Dialog)
                 .background(MoyeotaColor.SurfaceCanvas)
                 // 시트 안을 눌러도 닫히지 않게 한다 — 나가기 다이얼로그와 같은 처리
                 .clickable(
@@ -966,31 +905,29 @@ private fun MessageActionSheet(
         ) {
             Text(
                 text = "이 메시지 신고하기",
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold,
+                style = MoyeotaType.BodyMd,
                 color = MoyeotaColor.InkPrimary,
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable { onReport() }
-                    .padding(horizontal = 20.dp, vertical = 16.dp),
+                    .padding(horizontal = MoyeotaSpacing.Md, vertical = MoyeotaSpacing.Md),
             )
-            HorizontalDivider(color = MoyeotaColor.Hairline, modifier = Modifier.padding(horizontal = 20.dp))
+            HorizontalDivider(color = MoyeotaColor.Hairline, modifier = Modifier.padding(horizontal = MoyeotaSpacing.Md))
             Text(
                 text = "취소",
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold,
-                color = GraySlate,
+                style = MoyeotaType.BodyMd,
+                color = MoyeotaColor.TextBody,
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable { onDismiss() }
-                    .padding(horizontal = 20.dp, vertical = 16.dp),
+                    .padding(horizontal = MoyeotaSpacing.Md, vertical = MoyeotaSpacing.Md),
             )
         }
     }
 }
 
 /**
- * 사유 선택 시트. 모양은 **나가기 확인 다이얼로그**(이 파일의 Scrim + 18dp 카드)를 베꼈다.
+ * 사유 선택 시트. 모양은 **공용 확인 다이얼로그**(Scrim + 20dp 모서리 카드)에 맞췄다.
  *
  * 색에 대한 판단: 빨강([com.moyeota.core.designsystem.theme.MoyeotaColor] 의 Danger/Safety 계열)을
  * **쓰지 않는다.** 이 앱에서 빨강 신고 요소는 27 긴급 신고(112 통화)로 가는 길이고
@@ -1031,10 +968,10 @@ private fun ReportReasonSheet(
     ) {
         Column(
             modifier = Modifier
-                .padding(horizontal = 24.dp)
+                .padding(horizontal = MoyeotaSpacing.Lg)
                 .fillMaxWidth()
-                .shadow(12.dp, RoundedCornerShape(18.dp), spotColor = BubbleShadow)
-                .clip(RoundedCornerShape(18.dp))
+                .modalShadow(MoyeotaShape.Dialog)
+                .clip(MoyeotaShape.Dialog)
                 .background(MoyeotaColor.SurfaceCanvas)
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
@@ -1054,7 +991,7 @@ private fun ReportReasonSheet(
                 // 홑낫표로 인용한다 — 공통 규칙(인용값은 「」)
                 text = "「${quotedText}」",
                 style = MoyeotaType.BodySm,
-                color = GraySlate,
+                color = MoyeotaColor.TextBody,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -1075,7 +1012,7 @@ private fun ReportReasonSheet(
                             )
                             // 되돌릴 수 없는 신고의 입력이라 터치 타깃을 48dp 로 채운다
                             .heightIn(min = 48.dp)
-                            .padding(vertical = 13.dp),
+                            .padding(vertical = MoyeotaSpacing.Sm),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         // ★ **색만으로 선택을 표시하지 않는다.** 이 앱에는 색 하나로만 가르는 자리가
@@ -1085,8 +1022,8 @@ private fun ReportReasonSheet(
                         Spacer(Modifier.width(12.dp))
                         Text(
                             text = label,
-                            fontSize = 14.sp,
-                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                            style = MoyeotaType.BodyMd,
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                             color = if (selected) MoyeotaColor.Primary600 else MoyeotaColor.InkPrimary,
                         )
                     }
@@ -1108,8 +1045,8 @@ private fun ReportReasonSheet(
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(min = 96.dp)
-                        .background(InputPillBg, RoundedCornerShape(12.dp))
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                        .background(MoyeotaColor.SurfaceSoft, MoyeotaShape.Card)
+                        .padding(horizontal = MoyeotaSpacing.Md, vertical = MoyeotaSpacing.Sm),
                 ) {
                     BasicTextField(
                         value = description,
@@ -1123,18 +1060,17 @@ private fun ReportReasonSheet(
                     if (description.isEmpty()) {
                         Text(
                             text = "어떤 점이 문제였는지 알려 주세요",
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = GrayAsh,
+                            style = MoyeotaType.BodyMd,
+                            color = MoyeotaColor.TextPlaceholder,
                         )
                     }
                 }
                 submit.counter?.let { counter ->
-                    Spacer(Modifier.height(6.dp))
+                    Spacer(Modifier.height(MoyeotaSpacing.Xxs))
                     Text(
                         text = counter,
-                        style = MoyeotaType.CaptionMd,
-                        color = if (submit.overLimit) MoyeotaColor.Danger600 else GrayMute,
+                        style = MoyeotaType.CaptionMd.tabularNums(),
+                        color = if (submit.overLimit) MoyeotaColor.Danger600 else MoyeotaColor.TextMute,
                     )
                 }
             }
@@ -1144,37 +1080,22 @@ private fun ReportReasonSheet(
                 NoticeBanner(kind = NoticeKind.ERROR, text = failureMessage)
             }
 
-            Spacer(Modifier.height(20.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(44.dp)
-                        .background(MoyeotaColor.SurfaceSoft, RoundedCornerShape(12.dp))
-                        .clickable { onDismiss() },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(text = "취소", style = MoyeotaType.ButtonMd, color = GraySlate)
-                }
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(44.dp)
-                        .background(
-                            // 잠긴 상태를 **색으로도** 말한다 — 눌리지 않는 이유는 위 카운터나
-                            // 안 고른 사유 줄에 이미 보인다.
-                            if (submit.submitEnabled) MoyeotaColor.Primary500 else MoyeotaColor.SurfaceSoft,
-                            RoundedCornerShape(12.dp),
-                        )
-                        .clickable(enabled = submit.submitEnabled) { reason?.let(onSubmit) },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        text = if (submitting) "보내는 중" else "신고하기",
-                        style = MoyeotaType.ButtonMd,
-                        color = if (submit.submitEnabled) MoyeotaColor.TextOnDark else GrayAsh,
-                    )
-                }
+            Spacer(Modifier.height(MoyeotaSpacing.Lg))
+            // 앱의 CTA 한 가족(G5) — 손으로 그린 44dp r12 상자 둘 대신 공용 알약 버튼을 나란히 둔다.
+            // 잠긴 「신고하기」는 공용 비활성 색(SurfaceDisabled)으로 말한다 — 눌리지 않는 이유는 위 카운터나
+            // 안 고른 사유 줄에 이미 보인다.
+            Row(horizontalArrangement = Arrangement.spacedBy(MoyeotaSpacing.Xs)) {
+                SecondaryButton(
+                    text = "취소",
+                    onClick = onDismiss,
+                    modifier = Modifier.weight(1f),
+                )
+                PrimaryCtaButton(
+                    text = if (submitting) "보내는 중" else "신고하기",
+                    onClick = { reason?.let(onSubmit) },
+                    enabled = submit.submitEnabled,
+                    modifier = Modifier.weight(1f),
+                )
             }
         }
     }
@@ -1197,44 +1118,53 @@ private fun MessageRow(
             horizontalArrangement = Arrangement.End,
         ) {
             if (message.meta != null) {
-                Text(text = message.meta, fontSize = 11.sp, fontWeight = FontWeight.Medium, color = GrayAsh)
-                Spacer(Modifier.width(8.dp))
+                Text(text = message.meta, style = MoyeotaType.CaptionSm, color = MoyeotaColor.TextMute)
+                Spacer(Modifier.width(MoyeotaSpacing.Xs))
             }
-            // 내 말풍선 — Primary500 / 흰 글씨 (토큰 chat-bubble)
+            // 내 말풍선 — Primary500 / 흰 글씨 (토큰 chat-bubble-mine)
             Box(
                 modifier = Modifier
                     .widthIn(max = 260.dp)
                     .background(
                         MoyeotaColor.Primary500,
-                        RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = 18.dp, bottomEnd = 6.dp),
+                        RoundedCornerShape(
+                            topStart = BubbleRadius,
+                            topEnd = BubbleRadius,
+                            bottomStart = BubbleRadius,
+                            bottomEnd = BubbleTailRadius,
+                        ),
                     )
-                    .padding(horizontal = 16.dp, vertical = 11.dp),
+                    .padding(horizontal = MoyeotaSpacing.Md, vertical = MoyeotaSpacing.Xs),
             ) {
-                Text(text = message.text, fontSize = 14.sp, fontWeight = FontWeight.Medium, color = MoyeotaColor.TextOnDark)
+                Text(text = message.text, style = MoyeotaType.BodyMd, color = MoyeotaColor.TextOnDark)
             }
         }
     } else {
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
             // 이름은 바로 아래에 따로 적으므로 아바타에는 사진만 준다 — 못 받았으면 회색 원이다.
             AvatarCircle(size = 32.dp, imageUrl = message.senderImageUrl)
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(MoyeotaSpacing.Xs))
             Column {
                 Text(
                     text = message.senderName.orEmpty(),
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = GrayMute,
+                    style = MoyeotaType.CaptionMd,
+                    color = MoyeotaColor.TextMute,
                 )
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(MoyeotaSpacing.Xxs))
                 Row(verticalAlignment = Alignment.Bottom) {
-                    // 상대 말풍선 — 와이어프레임: 흰 카드 + 그림자 (토큰 chat-bubble)
-                    val peerBubbleShape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = 6.dp, bottomEnd = 18.dp)
+                    // 상대 말풍선 — 옅은 회색 면, **그림자 없음**(토큰 chat-bubble-partner, 디자인 QA R1).
+                    // 예전엔 흰 카드 + 그림자였다 — 대화 목록의 말풍선마다 그림자가 붙어 화면 전체가 떠 보였다.
+                    val peerBubbleShape = RoundedCornerShape(
+                        topStart = BubbleRadius,
+                        topEnd = BubbleRadius,
+                        bottomStart = BubbleTailRadius,
+                        bottomEnd = BubbleRadius,
+                    )
                     val reportInteraction = remember { MutableInteractionSource() }
                     Box(
                         modifier = Modifier
                             .widthIn(max = 260.dp)
-                            .shadow(4.dp, peerBubbleShape, spotColor = BubbleShadow)
-                            .background(MoyeotaColor.SurfaceCard, peerBubbleShape)
+                            .background(MoyeotaColor.SurfaceSoft, peerBubbleShape)
                             // 롱프레스는 **padding 보다 앞**에 둔다 — 뒤에 두면 말풍선 안쪽 여백이
                             // 눌리지 않는 띠가 돼서 「글자 위를 정확히 눌러야 열린다」가 된다.
                             // 짧은 탭은 아무 일도 하지 않는다(onClick 이 빈 람다): 이 앱에 메시지
@@ -1249,13 +1179,13 @@ private fun MessageRow(
                                     onLongClick = { onRequestReport(message) },
                                 ),
                             )
-                            .padding(horizontal = 16.dp, vertical = 11.dp),
+                            .padding(horizontal = MoyeotaSpacing.Md, vertical = MoyeotaSpacing.Xs),
                     ) {
-                        Text(text = message.text, fontSize = 14.sp, fontWeight = FontWeight.Medium, color = MoyeotaColor.InkPrimary)
+                        Text(text = message.text, style = MoyeotaType.BodyMd, color = MoyeotaColor.InkPrimary)
                     }
                     if (message.timeLabel != null) {
-                        Spacer(Modifier.width(6.dp))
-                        Text(text = message.timeLabel, fontSize = 11.sp, fontWeight = FontWeight.Medium, color = GrayAsh)
+                        Spacer(Modifier.width(MoyeotaSpacing.Xxs))
+                        Text(text = message.timeLabel, style = MoyeotaType.CaptionSm, color = MoyeotaColor.TextMute)
                     }
                 }
             }
@@ -1279,25 +1209,21 @@ private fun SearchHeader(
     val keyboard = LocalSoftwareKeyboardController.current
     LaunchedEffect(Unit) { focus.requestFocus() }
 
+    // 앱바와 같은 56dp 줄 · 48dp 뒤로가기(G12). 예전엔 22dp 화살표가 눌림 표시 없이 눌렸다.
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 12.dp),
+        modifier = Modifier.fillMaxWidth().height(56.dp).padding(start = MoyeotaSpacing.Xxs, end = MoyeotaSpacing.ScreenGutter),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            modifier = Modifier.clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-            ) { onClose() },
-        ) {
-            BackArrowIcon(modifier = Modifier.size(22.dp))
+        IconButton(onClick = onClose) {
+            BackArrowIcon(modifier = Modifier.semantics { contentDescription = "검색 닫기" })
         }
-        Spacer(Modifier.width(12.dp))
+        Spacer(Modifier.width(MoyeotaSpacing.Xxs))
         Box(
             modifier = Modifier
                 .weight(1f)
                 .height(40.dp)
-                .background(InputPillBg, RoundedCornerShape(20.dp))
-                .padding(horizontal = 16.dp),
+                .background(MoyeotaColor.SurfaceSoft, MoyeotaShape.Pill)
+                .padding(horizontal = MoyeotaSpacing.Md),
             contentAlignment = Alignment.CenterStart,
         ) {
             BasicTextField(
@@ -1310,21 +1236,13 @@ private fun SearchHeader(
                 modifier = Modifier.fillMaxWidth().focusRequester(focus),
             )
             if (query.isEmpty()) {
-                Text(text = "대화 내용 검색", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = GrayAsh)
+                Text(text = "대화 내용 검색", style = MoyeotaType.BodyMd, color = MoyeotaColor.TextPlaceholder)
             }
         }
         if (query.isNotEmpty()) {
-            Spacer(Modifier.width(10.dp))
-            Text(
-                text = "지우기",
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Bold,
-                color = MoyeotaColor.Primary600,
-                modifier = Modifier.clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                ) { onQueryChange("") },
-            )
+            Spacer(Modifier.width(MoyeotaSpacing.Xxs))
+            // 48dp 터치 + 눌림 물결(G12) — 글자 크기대로만 눌리던 링크
+            TextLinkButton(text = "지우기", onClick = { onQueryChange("") })
         }
     }
 }
@@ -1354,36 +1272,23 @@ private fun SearchResults(
                 modifier = Modifier
                     .fillMaxSize()
                     .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                    .padding(horizontal = MoyeotaSpacing.ScreenGutter, vertical = MoyeotaSpacing.Sm),
             ) {
-                Text(
-                    text = "검색 결과 ${results.size}개${if (search.hasMore) " 이상" else ""}",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MoyeotaColor.TextMute,
-                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp),
-                )
-                results.forEach { message ->
+                SectionLabel(text = "검색 결과 ${results.size}개${if (search.hasMore) " 이상" else ""}")
+                // 흰 바탕 위 줄 목록 — 흰 카드를 줄마다 띄우지 않고 얇은 선으로 나눈다(C1 의 채팅 목록과 같은 방침)
+                results.forEachIndexed { index, message ->
+                    if (index > 0) HorizontalDivider(color = MoyeotaColor.Hairline)
                     SearchResultRow(message = message, keyword = keyword)
-                    Spacer(Modifier.height(8.dp))
                 }
                 if (search.errorMessage != null) {
-                    NoticeBanner(kind = NoticeKind.ERROR, text = search.errorMessage, modifier = Modifier.padding(vertical = 6.dp))
+                    NoticeBanner(kind = NoticeKind.ERROR, text = search.errorMessage, modifier = Modifier.padding(vertical = MoyeotaSpacing.Xs))
                 }
                 if (search.hasMore) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(44.dp)
-                            .background(MoyeotaColor.SurfaceCanvas, RoundedCornerShape(12.dp))
-                            .clickable(enabled = !search.loadingMore) { onLoadMore() },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
+                    Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        TextLinkButton(
                             text = if (search.loadingMore) "불러오는 중…" else "이전 결과 더 보기",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = if (search.loadingMore) GrayMute else MoyeotaColor.Primary600,
+                            onClick = onLoadMore,
+                            enabled = !search.loadingMore,
                         )
                     }
                 }
@@ -1394,8 +1299,8 @@ private fun SearchResults(
 
 @Composable
 private fun SearchHint(text: String) {
-    Box(modifier = Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
-        Text(text = text, fontSize = 14.sp, fontWeight = FontWeight.Medium, color = GrayMute)
+    Box(modifier = Modifier.fillMaxSize().padding(MoyeotaSpacing.Lg), contentAlignment = Alignment.Center) {
+        Text(text = text, style = MoyeotaType.BodyMd, color = MoyeotaColor.TextMute)
     }
 }
 
@@ -1404,27 +1309,26 @@ private fun SearchResultRow(message: ChatUiMessage, keyword: String) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(MoyeotaColor.SurfaceCanvas, RoundedCornerShape(14.dp))
-            .padding(horizontal = 14.dp, vertical = 12.dp),
+            .padding(vertical = MoyeotaSpacing.Sm),
     ) {
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = if (message.isMine) "나" else (message.senderName ?: "동승자"),
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold,
+                style = MoyeotaType.CaptionMd,
+                fontWeight = FontWeight.SemiBold,
                 color = if (message.isMine) MoyeotaColor.Primary600 else MoyeotaColor.TextBody,
                 modifier = Modifier.weight(1f),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
             message.timeLabel?.let {
-                Text(text = it, fontSize = 11.sp, fontWeight = FontWeight.Medium, color = GrayAsh)
+                Text(text = it, style = MoyeotaType.CaptionSm, color = MoyeotaColor.TextMute)
             }
         }
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(MoyeotaSpacing.Xxs))
         Text(
             text = highlightKeyword(message.text, keyword),
-            fontSize = 14.sp,
+            style = MoyeotaType.BodyMd,
             color = MoyeotaColor.InkPrimary,
             maxLines = 3,
             overflow = TextOverflow.Ellipsis,
@@ -1432,11 +1336,11 @@ private fun SearchResultRow(message: ChatUiMessage, keyword: String) {
     }
 }
 
-/** 본문에서 검색어와 겹치는 구간 전부를 굵게·파랗게. 대소문자를 가리지 않는다(서버 LIKE 도 그렇다) */
+/** 본문에서 검색어와 겹치는 구간 전부를 세미볼드·파랗게(Bold 는 버튼·디스플레이 전용 — G3). 대소문자를 가리지 않는다(서버 LIKE 도 그렇다) */
 internal fun highlightKeyword(text: String, keyword: String): AnnotatedString = buildAnnotatedString {
     append(text)
     for (range in keywordRanges(text, keyword)) {
-        addStyle(SpanStyle(color = MoyeotaColor.Primary600, fontWeight = FontWeight.Bold), range.first, range.last + 1)
+        addStyle(SpanStyle(color = MoyeotaColor.Primary600, fontWeight = FontWeight.SemiBold), range.first, range.last + 1)
     }
 }
 
@@ -1454,47 +1358,19 @@ internal fun keywordRanges(text: String, keyword: String): List<IntRange> {
     return ranges
 }
 
+/**
+ * 전송 화살표(위쪽) — 공용 아이콘 세트에 같은 모양이 없어 여기 남긴다. 24dp 격자 · 선 굵기는 공용
+ * 아이콘과 같은 [IconStrokeWidth](G10).
+ */
 @Composable
-private fun SearchBoxIcon(modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier.size(28.dp)) {
-        val w = size.width
-        val stroke = 1.6.dp.toPx()
-        drawRoundRect(
-            color = Color(0xFFD8DEE8),
-            cornerRadius = androidx.compose.ui.geometry.CornerRadius(6.dp.toPx()),
-            style = Stroke(stroke),
-        )
-        drawCircle(
-            color = GraySlate,
-            radius = w * 0.16f,
-            center = Offset(w * 0.44f, w * 0.44f),
-            style = Stroke(stroke),
-        )
-        drawLine(GraySlate, Offset(w * 0.58f, w * 0.58f), Offset(w * 0.72f, w * 0.72f), stroke, StrokeCap.Round)
-    }
-}
-
-@Composable
-private fun KebabIcon(modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier.size(20.dp)) {
+private fun SendArrowIcon(modifier: Modifier = Modifier, tint: Color = MoyeotaColor.TextOnDark) {
+    Canvas(modifier = modifier.size(MoyeotaIconSize.Lg)) {
         val w = size.width
         val h = size.height
-        val r = 1.7.dp.toPx()
-        drawCircle(MoyeotaColor.InkPrimary, r, Offset(w / 2f, h * 0.2f))
-        drawCircle(MoyeotaColor.InkPrimary, r, Offset(w / 2f, h * 0.5f))
-        drawCircle(MoyeotaColor.InkPrimary, r, Offset(w / 2f, h * 0.8f))
-    }
-}
-
-@Composable
-private fun SendArrowIcon(modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier.size(20.dp)) {
-        val w = size.width
-        val h = size.height
-        val stroke = 2.dp.toPx()
-        drawLine(Color.White, Offset(w * 0.5f, h * 0.85f), Offset(w * 0.5f, h * 0.15f), stroke, StrokeCap.Round)
-        drawLine(Color.White, Offset(w * 0.5f, h * 0.15f), Offset(w * 0.2f, h * 0.45f), stroke, StrokeCap.Round)
-        drawLine(Color.White, Offset(w * 0.5f, h * 0.15f), Offset(w * 0.8f, h * 0.45f), stroke, StrokeCap.Round)
+        val stroke = IconStrokeWidth.toPx()
+        drawLine(tint, Offset(w * 0.5f, h * 0.8f), Offset(w * 0.5f, h * 0.2f), stroke, StrokeCap.Round)
+        drawLine(tint, Offset(w * 0.5f, h * 0.2f), Offset(w * 0.25f, h * 0.45f), stroke, StrokeCap.Round)
+        drawLine(tint, Offset(w * 0.5f, h * 0.2f), Offset(w * 0.75f, h * 0.45f), stroke, StrokeCap.Round)
     }
 }
 
@@ -1526,7 +1402,8 @@ private fun ReportReasonMark(selected: Boolean) {
             .background(if (selected) MoyeotaColor.Primary500 else MoyeotaColor.SurfaceCanvas)
             .border(
                 width = if (selected) 0.dp else 1.5.dp,
-                color = if (selected) MoyeotaColor.Primary500 else MoyeotaColor.Hairline,
+                // 빈 원의 테두리는 BorderStrong — Hairline(1.15:1)으로는 고를 수 있는 원이 보이지 않았다
+                color = if (selected) MoyeotaColor.Primary500 else MoyeotaColor.BorderStrong,
                 shape = CircleShape,
             ),
         contentAlignment = Alignment.Center,

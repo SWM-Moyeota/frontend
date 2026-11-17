@@ -57,8 +57,27 @@ sealed interface UserNameState {
          * (`noShowSanction`)이 기기 시간대로 한다 — 문자열을 자르면 KST 오후가 오전으로 보인다.
          */
         val restrictedUntil: String? = null,
+        /**
+         * 로그인 아이디. 로컬 로그인이 없는 계정이거나 조회에 실패했거나 구버전 서버면 null 이고,
+         * 그때 36 프로필 수정은 「아이디」 행을 숨긴다([profileLoginIdOrNull]).
+         * 이름·사진과 **같은 한 번의 조회**에서 오므로 같은 상태에 싣는다(위 「노쇼 제재」 단락과 같은 근거).
+         */
+        val loginId: String? = null,
     ) : UserNameState
 }
+
+/**
+ * 36 프로필 수정의 「아이디」 행에 **보여 줄 값** — null 이면 행을 통째로 숨긴다.
+ *
+ * 숨기는 경우가 셋이다: 로컬 로그인이 없는 계정(서버가 null 을 준다), 조회 실패·로딩 중, 그리고
+ * 공백뿐인 값. 셋째는 매퍼가 이미 걸러 오지만(`UserMappers`) 화면 쪽에서도 한 번 더 본다 —
+ * 라벨만 있고 값이 빈 행은 「아이디가 지워졌다」로 읽힌다.
+ *
+ * 비활성 입력칸으로 그리지 않는다. 회색 입력칸은 「지금은 못 바꾸지만 언젠가 눌러서 바꾼다」로 읽히는데,
+ * 아이디는 바꾸는 경로 자체가 없다(서버에 수정 API 가 없다) — 그래서 행은 **라벨 + 값** 모양이다.
+ */
+internal fun profileLoginIdOrNull(state: UserNameState): String? =
+    (state as? UserNameState.Resolved)?.loginId?.trim()?.takeIf { it.isNotEmpty() }
 
 /**
  * 세션당 한 번만 이름을 받아 오는 공용 홀더.
@@ -141,6 +160,8 @@ class UserProfileViewModel(
                     // 만들기·합류가 403 으로 거절하며 그 자리에서 말해 준다.
                     noShowCount = info?.noShowCount ?: 0,
                     restrictedUntil = info?.restrictedUntil,
+                    // 조회 실패면 null — 36 은 그때 「아이디」 행을 숨긴다(없는 값을 지어내지 않는다).
+                    loginId = info?.loginId,
                 )
             }
         }

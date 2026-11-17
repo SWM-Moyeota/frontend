@@ -10,9 +10,11 @@ import com.moyeota.domain.model.ChatRoom
 import com.moyeota.domain.model.MyChatRoom
 
 /**
- * 조회·상태 변경은 REST, 대화의 실시간 구간(수신·전송·읽음)은 STOMP(WebSocket)다.
- * 소켓이 붙어 있지 않을 때를 위해 같은 일을 하는 REST 경로를 함께 둔다 — [trySendMessage] 가
- * 거짓을 돌려주면 [sendMessage] 로 보낸다.
+ * 조회·상태 변경·**보내기·읽음**은 REST, 실시간 **받기**만 STOMP(WebSocket)다.
+ *
+ * 채팅 소켓 서버가 API 서버에서 분리되면서(2026-11) 소켓은 연결 유지와 전달만 한다 — STOMP SEND 를
+ * 보내면 `ERROR SEND_NOT_SUPPORTED` 다. 그래서 예전의 `trySendMessage`·`tryMarkAsRead`(소켓 우선,
+ * REST 폴백)는 지웠고 [sendMessage]·[markAsRead] 하나씩만 남았다.
  *
  * 요청 주체는 전부 **Bearer 토큰**이 정한다 — 채팅 컨트롤러도 `@CurrentUser` 로 전환돼
  * 더 이상 userId 를 파라미터로 받지 않는다. 실패는 전부
@@ -52,7 +54,8 @@ interface ChatRepository {
     suspend fun setNotificationMuted(chatRoomId: Long, muted: Boolean)
 
     /**
-     * POST /api/v1/chat-rooms/{chatRoomId}/users/read/{readMessageId}. 성공 후 목록의 안읽음 배지 갱신 필요.
+     * POST /api/v1/chat-rooms/{chatRoomId}/users/read/{readMessageId} (200). 성공 후 목록의 안읽음 배지 갱신 필요.
+     * **메시지마다 부르지 않는다** — 호출부가 약 3초에 한 번, 마지막으로 읽은 id 만 묶어 보낸다.
      * 서버는 읽음 위치를 **5초 모았다가 한 번에** 반영한다(Backend #188) — 바로 저장되지 않아도 정상이다.
      * 내 목록 조회(`GET /chat-rooms/me`) 직전에는 내 것만 먼저 반영하므로 방금 읽은 방이 안 읽음으로 보이진 않는다.
      */
@@ -73,7 +76,8 @@ interface ChatRepository {
      *
      * 수집하는 동안만 연결되고, 끊기면 알아서 다시 붙는다. 실패는 흐름을 끝내지 않고 재시도로 삼킨다.
      * 서버는 지난 메시지를 다시 주지 않으므로 호출부는 [ChatRealtimeEvent.Connected] 마다 [getMessagesAfter] 로
-     * 공백을 메워야 한다 — 이것만 하면 연결이 살아 있는 동안은 폴링이 필요 없다.
+     * 공백을 메워야 한다. 연결 중에도 [ChatMessage.seq] 가 건너뛰면 같은 조회로 그 자리를 메운다.
+     * 구독이 거절되면 [ChatRealtimeEvent.Stopped] 를 내고 끝난다.
      */
     fun observeRoom(chatRoomId: Long): Flow<ChatRealtimeEvent>
 
@@ -88,28 +92,12 @@ interface ChatRepository {
     ): ChatMessagePage
 
     /**
-     * 실시간 연결로 메시지를 보낸다 — STOMP SEND `/pub/chat-rooms/{id}/messages`.
-     *
-     * **응답이 없다.** 서버 핸들러는 void 라 저장 결과가 프레임으로 돌아오지 않고, 저장된 메시지가
-     * [observeRoom] 으로 온다(보낸 사람도 같은 구독을 받는다). 그래서 참을 돌려줘도 "저장됐다"가 아니라
-     * **"살아 있는 연결에 써 넣었다"**는 뜻이다 — 화면은 되돌아온 메시지를 확인으로 삼고, 오지 않으면
-     * 실패로 보여야 한다.
-     *
-     * 연결이 없으면 거짓을 돌려준다. 그때는 [sendMessage] 로 보낸다 — **둘 중 하나만** 써야 한다.
-     * 보낸 뒤 확인이 늦다고 REST 로 다시 보내면 같은 메시지가 두 번 저장된다.
-     */
-    suspend fun trySendMessage(chatRoomId: Long, content: String): Boolean = false
-
-    /**
-     * 읽음 지점을 실시간 연결로 알린다 — STOMP SEND `/pub/chat-rooms/{id}/read`.
-     * 새 메시지마다 한 번씩 일어나는 일이라 소켓이 붙어 있으면 REST 왕복을 아낀다.
-     * 연결이 없으면 거짓 — 그때는 [markAsRead] 를 쓴다.
-     */
-    suspend fun tryMarkAsRead(chatRoomId: Long, readMessageId: Long): Boolean = false
-
-    /**
      * POST /api/v1/chat-rooms/{chatRoomId}/messages (201). 내용은 1~1000자, 빈 문자열이면 400.
-     * 실시간 연결이 없을 때의 경로다 — 연결돼 있으면 [trySendMessage] 가 먼저다.
+     *
+     * **방마다 한 번에 하나씩, 부른 순서대로 나간다.** 앞 요청의 응답(201 또는 실패)을 받기 전에는 같은 방의
+     * 다음 요청을 보내지 않는다 — REST 요청은 서로 독립이라 연달아 쏘면 다른 서버·스레드로 가서 저장 순서가
+     * 뒤집힐 수 있다(STOMP 는 연결 하나라 저절로 지켜졌다). 실패해도 **다시 보내지 않는다** — 예외를 올리고
+     * 다음 요청으로 넘어간다. 다시 보낼지는 사용자가 정한다.
      *
      * 응답은 다른 조회와 같은 메시지 shape 이며 발신자 publicId 가 실려 있으므로
      * 방금 보낸 메시지부터 [ChatMessage.isMine] 이 참이다(예전의 "내 id 학습" 부수효과는 사라졌다).

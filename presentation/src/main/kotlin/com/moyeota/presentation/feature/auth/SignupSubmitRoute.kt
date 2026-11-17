@@ -24,8 +24,7 @@ import kotlinx.coroutines.launch
 /**
  * 가입 제출 — 12 매너 서약의 「동의하고 가입 완료」 뒤에 있는 유일한 서버 호출 지점.
  *
- * 가입은 로그인시키지 않는다(서버가 토큰 대신 uuid 만 준다). 그래서 **가입 성공 직후
- * 같은 자격증명으로 로그인을 이어서 호출**해야 13 완료 화면 다음에 홈이 열린다.
+ * 로컬 가입은 성공 후 같은 자격증명으로 로그인한다. 소셜 가입은 가입 응답으로 바로 세션을 연다.
  */
 class SignupViewModel(private val repository: AuthRepository) : ViewModel() {
 
@@ -47,6 +46,7 @@ class SignupViewModel(private val repository: AuthRepository) : ViewModel() {
          * 고칠 곳이 닉네임 한 글자인데 문자부터 다시 받게 하는 셈이다.
          */
         val phoneNotVerified: Boolean = false,
+        val socialExpired: Boolean = false,
     )
 
     private val _uiState = MutableStateFlow(UiState())
@@ -60,10 +60,11 @@ class SignupViewModel(private val repository: AuthRepository) : ViewModel() {
      */
     private var registered = false
 
-    fun submit(draft: SignupDraft) {
+    fun submit(draft: SignupDraft, signupToken: String? = null) {
         if (_uiState.value.submitting) return // 중복 제출 차단 (공통 규칙)
         val newUser = draft.toNewUser()
-        if (newUser == null) {
+        val socialUser = signupToken?.let { draft.toNewSocialUser(it) }
+        if (newUser == null && socialUser == null) {
             _uiState.update { it.copy(errorMessage = "가입 정보가 부족해요. 이전 단계를 다시 확인해 주세요") }
             return
         }
@@ -77,16 +78,21 @@ class SignupViewModel(private val repository: AuthRepository) : ViewModel() {
                 )
             }
             try {
+                if (socialUser != null) {
+                    repository.registerSocial(socialUser)
+                } else if (newUser != null) {
                 if (!registered) {
                     repository.register(newUser)
                     registered = true
                 }
                 // 자동 로그인 — 여기서 토큰이 저장되고 authState 가 Authenticated 로 바뀐다
                 repository.login(newUser.loginId, newUser.password)
+                }
                 _uiState.update { it.copy(submitting = false, done = true) }
                 // 핵심 퍼널 1단계 — 가입 **그리고** 자동 로그인까지 성공한 뒤에만. 재시도로 가입을 건너뛰고
                 // 로그인만 성공해도 이 자리에서 1회. 성별·연령대는 서버가 돌려주지 않아 가입 폼 값에서만 나온다.
-                Analytics.track(AnalyticsEvent.SignupCompleted(newUser.gender, ageBand(newUser.birthDate)))
+                Analytics.track(AnalyticsEvent.SignupCompleted(requireNotNull(draft.gender), ageBand(requireNotNull(draft.birthDate))))
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e
             } catch (e: Exception) {
                 val error = (e as? AuthException)?.error
                 // 닉네임 중복만 따로 표시한다 — 이 화면에 없는 필드라 되돌아갈 경로를 함께 줘야 한다
@@ -99,6 +105,7 @@ class SignupViewModel(private val repository: AuthRepository) : ViewModel() {
                         errorMessage = e.authUserMessage(),
                         nicknameDuplicated = duplicated,
                         phoneNotVerified = needsReverify,
+                        socialExpired = error == AuthError.SOCIAL_SIGNUP_EXPIRED || error == AuthError.SOCIAL_ALREADY_REGISTERED,
                     )
                 }
             }
@@ -121,6 +128,9 @@ fun MannerPledgeRoute(
     onCompleted: () -> Unit = {},
     onEditNickname: () -> Unit = {},
     onReverifyPhone: () -> Unit = {},
+    signupToken: String? = null,
+    /** 인자는 로그인 화면에 띄울 사유 문구다 — 만료(USER402)와 이미 가입(USER403)의 안내가 다르다. */
+    onRestartSocial: (String) -> Unit = {},
 ) {
     val viewModel: SignupViewModel = viewModel(factory = SignupViewModel.factory(repository))
     val state by viewModel.uiState.collectAsState()
@@ -129,9 +139,15 @@ fun MannerPledgeRoute(
         if (state.done) onCompleted()
     }
 
+    LaunchedEffect(state.socialExpired) {
+        if (state.socialExpired) {
+            onRestartSocial(state.errorMessage ?: authErrorMessage(AuthError.SOCIAL_SIGNUP_EXPIRED))
+        }
+    }
+
     MannerPledgeScreen(
         onBack = onBack,
-        onComplete = { viewModel.submit(draft) },
+        onComplete = { viewModel.submit(draft, signupToken) },
         submitting = state.submitting,
         errorMessage = state.errorMessage,
         // 닉네임 중복일 때만 10 으로 돌아가는 길을 준다 — 다른 실패는 여기서 재시도하면 된다

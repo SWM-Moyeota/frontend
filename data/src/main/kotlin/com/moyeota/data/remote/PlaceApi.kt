@@ -33,7 +33,19 @@ interface PlaceApi {
         @Query("longitude") longitude: Double,
     ): Response<AddressResponseDto>
 
-    // 204 No Content. 소유자는 Bearer 토큰에서 나온다(@CurrentUser) — userId 쿼리 파라미터는 사라졌다.
+    /**
+     * 즐겨찾기 등록. 204 No Content. 소유자는 Bearer 토큰에서 나온다(@CurrentUser) —
+     * userId 쿼리 파라미터는 사라졌다.
+     *
+     * **실패는 409 두 가지**이고 상태 코드만으로는 안 갈린다(운영 OpenAPI 에 409 가 빠져 있다 —
+     * 컨트롤러 `@ApiResponses` 누락):
+     * - `FAVORITE_PLACE_DUPLICATED` "이미 등록된 장소입니다."
+     * - `FAVORITE_PLACE_LIMIT_EXCEEDED` "자주가는 장소는 최대 10개까지만 등록할 수 있습니다."
+     *   ([com.moyeota.domain.model.FavoritePlacePolicy.MAX_COUNT])
+     *
+     * 좌표가 비면 400 `INVALID_COORDINATES` 다(실측). 판별·전환은
+     * [com.moyeota.data.remote.toFavoritePlaceException] 이 한다.
+     */
     @POST("api/v1/users/me/favorite-places")
     suspend fun addFavoritePlace(@Body request: FavoritePlaceRequestDto)
 

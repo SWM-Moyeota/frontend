@@ -84,6 +84,11 @@ data class ChatMessageResponse(
     val deleted: Boolean = false,
     /** 보낸 사람 닉네임. 서버가 주지 않아 참여자 목록에서 채운다 — 오면 쓰는 관용 필드. */
     val senderNickname: String? = null,
+    /**
+     * 방 안 순번(채팅 소켓 서버 분리, 2026-11). REST 응답과 WS 프레임 **양쪽에** 실린다.
+     * 서버가 방마다 빈틈없이 1씩 매기므로 화면 순서와 빈 번호 감지의 근거다. 구버전 서버는 주지 않아 null.
+     */
+    val seq: Long? = null,
 )
 
 // 커서 페이징 응답 (ChatMessageSlice)

@@ -2,8 +2,6 @@ package com.moyeota.presentation.feature.auth
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -19,19 +17,18 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.NavigationBarSpacer
 import com.moyeota.core.designsystem.component.PrimaryCtaButton
+import com.moyeota.core.designsystem.component.SectionLabel
 import com.moyeota.core.designsystem.component.StatusBarSpacer
+import com.moyeota.core.designsystem.component.TextLinkButton
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.core.designsystem.theme.MoyeotaTheme
 import com.moyeota.core.designsystem.theme.MoyeotaType
@@ -46,7 +43,7 @@ fun SignupCompleteScreen(
     onExplore: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    Column(modifier = modifier.fillMaxSize().background(MoyeotaColor.SurfaceSoft)) {
+    Column(modifier = modifier.fillMaxSize().background(MoyeotaColor.SurfaceCanvas)) {
         StatusBarSpacer()
 
         Column(
@@ -60,7 +57,7 @@ fun SignupCompleteScreen(
             Spacer(Modifier.height(32.dp))
             Text(
                 text = "가입이 끝났어요",
-                style = MoyeotaType.DisplayMd.copy(fontSize = 26.sp),
+                style = MoyeotaType.DisplayMd,
                 color = MoyeotaColor.InkPrimary,
                 modifier = Modifier.align(Alignment.CenterHorizontally),
             )
@@ -73,36 +70,31 @@ fun SignupCompleteScreen(
             )
 
             Spacer(Modifier.height(40.dp))
-            Text(
-                text = "이렇게 이용해요",
-                style = MoyeotaType.BodySm.copy(fontSize = 14.sp),
-                fontWeight = FontWeight.Bold,
-                color = MoyeotaColor.InkPrimary,
-            )
-            Spacer(Modifier.height(12.dp))
+            SectionLabel(text = "이렇게 이용해요")
+            Spacer(Modifier.height(4.dp))
             completeGuideSteps.forEachIndexed { index, step ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    // 순서 번호는 회색 원 — 옅은 파란 원 셋이 위 체크 배지·아래 CTA 와 파랑을 다투지 않게 한다
                     Box(
-                        modifier = Modifier.size(26.dp).background(MoyeotaColor.Primary50, CircleShape),
+                        modifier = Modifier.size(24.dp).background(MoyeotaColor.SurfaceSoft, CircleShape),
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(
                             text = "${index + 1}",
                             style = MoyeotaType.CaptionMd,
-                            fontWeight = FontWeight.Bold,
-                            color = MoyeotaColor.Primary500,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MoyeotaColor.TextBody,
                         )
                     }
-                    Spacer(Modifier.width(11.dp))
+                    Spacer(Modifier.width(12.dp))
                     Text(
                         text = step,
-                        style = MoyeotaType.BodySm.copy(fontSize = 14.sp),
-                        fontWeight = FontWeight.Medium,
-                        color = Color(0xFF4B5563),
+                        style = MoyeotaType.BodyMd,
+                        color = MoyeotaColor.TextBody,
                     )
                 }
                 if (index != completeGuideSteps.lastIndex) {
-                    Spacer(Modifier.height(18.dp))
+                    Spacer(Modifier.height(16.dp))
                 }
             }
             Spacer(Modifier.height(24.dp))
@@ -113,20 +105,15 @@ fun SignupCompleteScreen(
                 text = "탑승할 사람 찾기",
                 onClick = onStart,
             )
-            Spacer(Modifier.height(16.dp))
-            Text(
+            Spacer(Modifier.height(4.dp))
+            // 글자 크기 그대로 눌리던 링크를 48dp 터치 + 물결로(디자인 QA G12)
+            TextLinkButton(
                 text = "앱 먼저 둘러보기",
-                style = MoyeotaType.BodySm,
-                fontWeight = FontWeight.Medium,
+                onClick = onExplore,
                 color = MoyeotaColor.TextMute,
-                modifier = Modifier
-                    .align(Alignment.CenterHorizontally)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = onExplore,
-                    ),
+                modifier = Modifier.align(Alignment.CenterHorizontally),
             )
+            Spacer(Modifier.height(4.dp))
         }
         NavigationBarSpacer()
     }

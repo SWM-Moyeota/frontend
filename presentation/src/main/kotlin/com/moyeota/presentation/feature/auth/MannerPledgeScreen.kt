@@ -1,6 +1,5 @@
 package com.moyeota.presentation.feature.auth
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -16,31 +15,32 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import com.moyeota.core.designsystem.component.CheckIcon
+import com.moyeota.core.designsystem.component.MoyeotaIconSize
 import com.moyeota.core.designsystem.component.MoyeotaTopBar
 import com.moyeota.core.designsystem.component.NavigationBarSpacer
 import com.moyeota.core.designsystem.component.NoticeBanner
 import com.moyeota.core.designsystem.component.NoticeKind
 import com.moyeota.core.designsystem.component.PrimaryCtaButton
 import com.moyeota.core.designsystem.component.StatusBarSpacer
+import com.moyeota.core.designsystem.component.TextLinkButton
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.core.designsystem.theme.MoyeotaShape
 import com.moyeota.core.designsystem.theme.MoyeotaTheme
 import com.moyeota.core.designsystem.theme.MoyeotaType
 
@@ -83,18 +83,13 @@ fun MannerPledgeScreen(
     val checks = remember { mutableStateListOf(*Array(mannerPledgeItems.size) { false }) }
     val allChecked = checks.all { it }
 
-    Column(modifier = modifier.fillMaxSize().background(MoyeotaColor.SurfaceSoft)) {
+    Column(modifier = modifier.fillMaxSize().background(MoyeotaColor.SurfaceCanvas)) {
         StatusBarSpacer()
         MoyeotaTopBar(
             title = "",
             onBack = onBack,
             actions = {
-                Text(
-                    text = "2 / 2",
-                    style = MoyeotaType.BodySm,
-                    fontWeight = FontWeight.Medium,
-                    color = Color(0xFF8A93A0),
-                )
+                Text(text = "2 / 2", style = MoyeotaType.BodySm, color = MoyeotaColor.TextMute)
             },
         )
         PledgeStepProgressBar(progress = 1f)
@@ -111,56 +106,50 @@ fun MannerPledgeScreen(
                 style = MoyeotaType.DisplayMd,
                 color = MoyeotaColor.InkPrimary,
             )
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(12.dp))
             Text(
                 text = "모여타는 서로를 믿고 타는 서비스예요",
-                style = MoyeotaType.BodySm.copy(fontSize = 14.sp),
+                style = MoyeotaType.BodySm,
                 color = MoyeotaColor.TextMute,
             )
 
             Spacer(Modifier.height(24.dp))
             // 「아래 내용에 모두 동의해요」 체크 시 하위 4개 일괄 on/off
+            // 「모두 동의」 줄은 옅은 파랑이 아니라 회색 면이다 — 이 화면의 파랑은 체크 표시와 아래 CTA 에만 둔다
+            // (디자인 QA G1·G8). 줄 전체가 누르는 자리라 물결이 보이게 모서리에 맞춰 자른다(G12).
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(MoyeotaColor.Primary50, RoundedCornerShape(16.dp))
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                    ) {
+                    .clip(MoyeotaShape.Card)
+                    .background(MoyeotaColor.SurfaceSoft)
+                    .clickable {
                         val target = !allChecked
                         for (i in checks.indices) checks[i] = target
                     }
-                    .padding(horizontal = 20.dp, vertical = 17.dp),
+                    .padding(horizontal = 16.dp, vertical = 16.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                PledgeCheckCircle(checked = allChecked, size = 26.dp)
-                Spacer(Modifier.width(13.dp))
+                PledgeCheckCircle(checked = allChecked, size = PledgeCheckSize)
+                // 아래 항목들의 글자 시작선(4 + 48 + 8 = 60dp)과 맞춘다: 16 + 24 + 20
+                Spacer(Modifier.width(20.dp))
                 Text(
                     text = "아래 내용에 모두 동의해요",
-                    style = MoyeotaType.BodyMd,
-                    fontWeight = FontWeight.Bold,
-                    color = MoyeotaColor.Primary600,
+                    style = MoyeotaType.BodyStrong,
+                    color = MoyeotaColor.InkPrimary,
                 )
             }
 
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(8.dp))
             Text(
                 text = "동의 내용은 가입 시점 기준으로 적용돼요",
                 style = MoyeotaType.CaptionMd,
-                fontWeight = FontWeight.Medium,
-                color = Color(0xFF9AA1AC),
+                color = MoyeotaColor.TextMute,
                 modifier = Modifier.align(Alignment.End),
             )
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(8.dp))
 
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .shadow(4.dp, RoundedCornerShape(18.dp), spotColor = Color(0x0F1B2A4A))
-                    .background(MoyeotaColor.SurfaceCanvas, RoundedCornerShape(18.dp))
-                    .padding(vertical = 8.dp),
-            ) {
+            // 흰 화면 위라 그림자 카드 없이 항목을 화면에 바로 놓고 구분선만 둔다(디자인 QA G4)
+            Column(modifier = Modifier.fillMaxWidth()) {
                 mannerPledgeItems.forEachIndexed { index, item ->
                     PledgeItemRow(
                         item = item,
@@ -170,7 +159,7 @@ fun MannerPledgeScreen(
                     if (index != mannerPledgeItems.lastIndex) {
                         HorizontalDivider(
                             color = MoyeotaColor.Hairline,
-                            modifier = Modifier.padding(start = 56.dp, end = 20.dp),
+                            modifier = Modifier.padding(start = 60.dp),
                         )
                     }
                 }
@@ -189,22 +178,15 @@ fun MannerPledgeScreen(
                     else -> null
                 }
                 if (recovery != null) {
-                    Spacer(Modifier.height(8.dp))
-                    Text(
+                    // 글자 크기 그대로 눌리던 링크를 48dp 터치 + 물결로(디자인 QA G12)
+                    TextLinkButton(
                         text = recovery.first,
-                        style = MoyeotaType.BodySm,
-                        fontWeight = FontWeight.Bold,
-                        color = MoyeotaColor.Primary500,
-                        modifier = Modifier
-                            .align(Alignment.CenterHorizontally)
-                            .clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null,
-                                onClick = recovery.second,
-                            ),
+                        onClick = recovery.second,
+                        modifier = Modifier.align(Alignment.CenterHorizontally),
                     )
+                } else {
+                    Spacer(Modifier.height(12.dp))
                 }
-                Spacer(Modifier.height(12.dp))
             }
             PrimaryCtaButton(
                 text = "동의하고 가입 완료",
@@ -276,29 +258,31 @@ private fun PledgeItemRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            // 항목 텍스트 탭 → 해당 정책 상세 (미연결, 동작 없음)
+            // 항목 텍스트 탭 → 해당 정책 상세 (미연결, 동작 없음). 아무 일도 하지 않으므로 눌림 표시도 두지 않는다
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
             ) { /* 미연결 */ }
-            .padding(horizontal = 20.dp, vertical = 14.dp),
+            .padding(horizontal = 4.dp, vertical = 4.dp),
         verticalAlignment = Alignment.Top,
     ) {
-        PledgeCheckCircle(
-            checked = checked,
-            size = 24.dp,
-            modifier = Modifier.clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onToggle,
-            ),
-        )
-        Spacer(Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f)) {
+        // 24dp 원만 눌리던 체크를 48dp 터치 + 원형 물결로 넓혔다(디자인 QA G12). 원은 터치 상자 가운데에
+        // 그려져, 4dp 줄 여백 + 12dp = 화면 여백에서 16dp 안쪽 — 위 「모두 동의」 줄의 원과 같은 세로선이다.
+        Box(
+            modifier = Modifier
+                .minimumInteractiveComponentSize()
+                .clip(CircleShape)
+                .toggleable(value = checked, role = Role.Checkbox, onValueChange = { onToggle() }),
+            contentAlignment = Alignment.Center,
+        ) {
+            PledgeCheckCircle(checked = checked, size = PledgeCheckSize)
+        }
+        Spacer(Modifier.width(8.dp))
+        // 첫 줄 가운데(12 + 본문 줄높이 절반)가 48dp 터치 상자의 가운데(24dp)에 오도록 위를 띄운다
+        Column(modifier = Modifier.weight(1f).padding(top = 12.dp, bottom = 8.dp)) {
             Text(
                 text = item.title,
-                style = MoyeotaType.BodyMd,
-                fontWeight = FontWeight.Bold,
+                style = MoyeotaType.BodyStrong,
                 color = MoyeotaColor.InkPrimary,
             )
             // 설명이 없는 항목은 제목만 — 빈 줄을 띄우면 문구가 지워진 자리가 드러난다
@@ -307,15 +291,17 @@ private fun PledgeItemRow(
                 Text(
                     text = item.description,
                     style = MoyeotaType.CaptionMd,
-                    fontWeight = FontWeight.Medium,
-                    color = Color(0xFF8A93A0),
+                    color = MoyeotaColor.TextMute,
                 )
             }
         }
     }
 }
 
-// 와이어프레임 모양 그대로의 원형 체크 (체크 시 Primary 채움 + 흰 체크표시)
+/** 「모두 동의」와 항목이 같은 크기의 원을 쓴다 — 크기가 다르면 두 줄의 원이 같은 세로선에 서지 않는다 */
+private val PledgeCheckSize = 24.dp
+
+// 원형 체크 (체크 시 Primary 채움 + 흰 체크표시). 미체크 테두리는 입력칸과 같은 BorderStrong
 @Composable
 private fun PledgeCheckCircle(
     checked: Boolean,
@@ -331,32 +317,12 @@ private fun PledgeCheckCircle(
                 } else {
                     Modifier
                         .background(MoyeotaColor.SurfaceCanvas, CircleShape)
-                        .border(1.5.dp, Color(0xFFD1D5DB), CircleShape)
+                        .border(1.5.dp, MoyeotaColor.BorderStrong, CircleShape)
                 },
             ),
         contentAlignment = Alignment.Center,
     ) {
-        if (checked) {
-            Canvas(modifier = Modifier.size(size / 2)) {
-                val stroke = 2.dp.toPx()
-                val w = this.size.width
-                val h = this.size.height
-                drawLine(
-                    color = Color.White,
-                    start = Offset(w * 0.08f, h * 0.55f),
-                    end = Offset(w * 0.38f, h * 0.85f),
-                    strokeWidth = stroke,
-                    cap = StrokeCap.Round,
-                )
-                drawLine(
-                    color = Color.White,
-                    start = Offset(w * 0.38f, h * 0.85f),
-                    end = Offset(w * 0.92f, h * 0.18f),
-                    strokeWidth = stroke,
-                    cap = StrokeCap.Round,
-                )
-            }
-        }
+        if (checked) CheckIcon(size = MoyeotaIconSize.Sm, tint = MoyeotaColor.TextOnDark)
     }
 }
 
@@ -367,13 +333,13 @@ private fun PledgeStepProgressBar(progress: Float, modifier: Modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp)
             .height(4.dp)
-            .background(Color(0xFFE6EAF0), RoundedCornerShape(2.dp)),
+            .background(MoyeotaColor.Hairline, MoyeotaShape.Small),
     ) {
         Box(
             Modifier
                 .fillMaxWidth(progress)
                 .height(4.dp)
-                .background(MoyeotaColor.Primary500, RoundedCornerShape(2.dp)),
+                .background(MoyeotaColor.Primary500, MoyeotaShape.Small),
         )
     }
 }

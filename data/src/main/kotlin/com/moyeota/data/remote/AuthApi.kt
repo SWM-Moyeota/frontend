@@ -1,8 +1,15 @@
 package com.moyeota.data.remote
 
+import com.moyeota.data.remote.dto.FindLoginIdResponse
+import com.moyeota.data.remote.dto.GoogleLoginRequestDto
 import com.moyeota.data.remote.dto.LoginRequestDto
 import com.moyeota.data.remote.dto.NicknameCheckRequestDto
 import com.moyeota.data.remote.dto.NicknameCheckResponse
+import com.moyeota.data.remote.dto.PasswordResetConfirmRequestDto
+import com.moyeota.data.remote.dto.PasswordResetSendRequestDto
+import com.moyeota.data.remote.dto.PasswordResetSendResponse
+import com.moyeota.data.remote.dto.PasswordResetVerifyRequestDto
+import com.moyeota.data.remote.dto.PasswordResetVerifyResponse
 import com.moyeota.data.remote.dto.PhoneCheckRequestDto
 import com.moyeota.data.remote.dto.PhoneCheckResponse
 import com.moyeota.data.remote.dto.RefreshTokenRequestDto
@@ -11,6 +18,8 @@ import com.moyeota.data.remote.dto.RegisterResponse
 import com.moyeota.data.remote.dto.SmsSendRequestDto
 import com.moyeota.data.remote.dto.SmsVerifyRequestDto
 import com.moyeota.data.remote.dto.SmsVerifyResponse
+import com.moyeota.data.remote.dto.SocialLoginResponse
+import com.moyeota.data.remote.dto.SocialRegisterRequestDto
 import com.moyeota.data.remote.dto.TokenResponse
 import retrofit2.Call
 import retrofit2.http.Body
@@ -77,6 +86,42 @@ interface AuthApi {
     suspend fun login(@Body request: LoginRequestDto): TokenResponse
 
     /**
+     * 구글 로그인. 200 인데 **본문의 `status` 로 둘로 갈린다** — `LOGIN`(토큰 쌍) / `SIGNUP_REQUIRED`(가입 대기표).
+     * 안 쓰는 칸은 키 자체가 빠진다([SocialLoginResponse] KDoc).
+     *
+     * 경로 기준: `user/social/presentation/SocialAuthController.java`
+     * (`@RequestMapping("/api/v1/auth")` + `@PostMapping("/login/google")`, 백엔드 `origin/develop`).
+     * 컨트롤러는 [login] 과 다른 파일이지만 **프리픽스가 같아 permitAll 구간에 들어온다** — 로그인 전(무토큰)
+     * 호출이라 이 API(Bearer 미부착)에 있어야 한다. 세션에 만료된 토큰이 남은 채 인증 클라이언트로 보내면
+     * permitAll 경로인데도 JWT 필터가 401 을 낸다([checkPhone] KDoc 의 실측과 같은 함정).
+     *
+     * 실패: 400 `INVALID_REQUEST`(idToken 누락) · 401 `USER401`(위조·만료·다른 앱용·email 없음) ·
+     * 503 `USER404`(가입 대기표 저장소 장애).
+     * **401 이 [login] 의 `USER102` 와 코드가 다르다** — 둘을 한 값으로 읽으면 구글 로그인 실패에
+     * 「아이디 또는 비밀번호」 안내가 뜬다.
+     *
+     * 실서버 미검증 — 구글 SDK 연동 전이라 진짜 idToken 을 만들 수 없다. 모양은 백엔드 소스와
+     * `http/social-login.http` 기준이다.
+     */
+    @POST("api/v1/auth/login/google")
+    suspend fun loginWithGoogle(@Body request: GoogleLoginRequestDto): SocialLoginResponse
+
+    /**
+     * 소셜 회원가입. **201 이 토큰 쌍이다**([TokenResponse]) — uuid 만 주는 [register] 와 다르다.
+     * 비밀번호가 없어 가입 뒤 따로 로그인할 수단이 없으므로 서버가 가입과 함께 토큰을 준다.
+     *
+     * 경로 기준: `SocialAuthController.register` (`@PostMapping("/social/register")` + `@ResponseStatus(CREATED)`).
+     * **`/auth/register` 가 아니다** — 한 조각(`social/`)을 빠뜨리면 로컬 가입으로 들어가 `loginId` 누락
+     * 400 `INVALID_REQUEST` 를 받는데, 그 400 은 입력 검증 실패와 구분이 안 된다.
+     *
+     * 실패: 400 `USER113`·`USER207`·`USER105`·`USER107`·`INVALID_REQUEST` · 401 `USER402`(대기표 없음·만료) ·
+     * 409 `USER403`(이미 가입된 구글 계정)·`USER104`·`USER108` · 503 `USER404`.
+     * **실패해도 `signupToken`·`verificationToken` 은 소진되지 않는다**(서버가 저장을 다 끝낸 뒤에 지운다).
+     */
+    @POST("api/v1/auth/social/register")
+    suspend fun registerSocial(@Body request: SocialRegisterRequestDto): TokenResponse
+
+    /**
      * 200 / 401 UNAUTHORIZED. 회전 방식이라 성공 응답의 refreshToken 까지 저장해야 한다.
      *
      * OkHttp [okhttp3.Authenticator] 는 non-suspend 컨텍스트라 여기서만 [Call] 을 쓴다
@@ -120,4 +165,56 @@ interface AuthApi {
      */
     @POST("api/v1/auth/phone/check")
     suspend fun checkPhone(@Body request: PhoneCheckRequestDto): PhoneCheckResponse
+
+    /**
+     * 아이디 찾기 인증번호 발송. **204 No Content**.
+     *
+     * 경로 기준: `AuthController.sendFindLoginIdCode` (Backend #314). 본문은 가입 인증과 같은 `SmsSendRequest` 다.
+     * 가입 발송([sendSmsCode])과 **번호 검사가 정반대다** — 그쪽은 가입된 번호를 409 로 끊고,
+     * 여기는 가입되지 **않은** 번호를 문자 비용을 쓰기 전에 404 `USER114` 로 끊는다.
+     * 쿨다운(1분)과 하루 횟수는 가입 인증과 **같은 칸에 센다** — 429 `USER202`·`USER203` 이 그대로 온다.
+     */
+    @POST("api/v1/auth/find-id/send")
+    suspend fun sendFindLoginIdCode(@Body request: SmsSendRequestDto)
+
+    /**
+     * 아이디 찾기 확인. 200 `{"loginId":"<아이디 전체>"}` — 가리지 않은 전체 아이디다.
+     *
+     * 실패 코드는 가입 인증 확인과 같다(400 `USER204`·`USER205`, 429 `USER206`).
+     */
+    @POST("api/v1/auth/find-id/verify")
+    suspend fun findLoginId(@Body request: SmsVerifyRequestDto): FindLoginIdResponse
+
+    /**
+     * 비밀번호 재설정 인증번호 요청. **202 Accepted** + 접수번호.
+     *
+     * 경로 기준: `PasswordResetController` (`/api/v1/auth/password-reset`, Backend #331).
+     * **아이디·번호가 가입 정보와 맞는지와 무관하게 같은 202 가 온다** — 계정 존재 여부를 흘리지 않으려는
+     * 서버 설계다. 문자는 맞을 때만 별도 작업으로 나가므로 앱은 「보냈다」고 단정하면 안 된다.
+     *
+     * 제한에 걸리면 429 `USER306` + `Retry-After` 다. 문자 쿨다운·하루 횟수를 가입 인증과 같은 칸에 세고,
+     * 여기에 계정당 시간당 10회·IP 당 분당 30회가 더 있는데 **넷 다 같은 코드로 온다.**
+     */
+    @POST("api/v1/auth/password-reset/send")
+    suspend fun sendPasswordResetCode(@Body request: PasswordResetSendRequestDto): PasswordResetSendResponse
+
+    /**
+     * 재설정 인증번호 확인. 200 `{"resetToken":"…","expiresIn":600}`.
+     *
+     * 번호가 아니라 **접수번호(`requestId`)** 로 확인한다. 틀려도 접수는 살아 있고 5번까지 받는다 —
+     * 400 `USER301` 은 「틀림·만료·없는 접수」가 한 코드로 뭉친 값이고, 5번을 넘기면 429 `USER306` 이다.
+     */
+    @POST("api/v1/auth/password-reset/verify")
+    suspend fun verifyPasswordResetCode(@Body request: PasswordResetVerifyRequestDto): PasswordResetVerifyResponse
+
+    /**
+     * 새 비밀번호 저장. **204 No Content**.
+     *
+     * 성공하면 서버가 그 계정의 리프레시 토큰을 전부 취소한다 — 다른 기기는 재발급 때 로그아웃된다.
+     * 400 이 넷으로 갈린다: `USER302`(토큰 무효·만료) · `USER303`(확인 값 불일치) · `USER304`(규칙 위반) ·
+     * `USER305`(지금 비밀번호와 같다). 302 만 「인증부터 다시」이고 나머지는 입력을 고치면 된다 —
+     * **검증에 실패해도 토큰은 소진되지 않는다.**
+     */
+    @POST("api/v1/auth/password-reset/confirm")
+    suspend fun confirmPasswordReset(@Body request: PasswordResetConfirmRequestDto)
 }

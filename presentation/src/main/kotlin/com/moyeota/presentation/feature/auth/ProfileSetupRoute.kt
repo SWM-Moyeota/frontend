@@ -124,6 +124,8 @@ fun ProfileSetupRoute(
     onNext: (SignupDraft) -> Unit = {},
     onGoToLogin: () -> Unit = {},
     reverifyPhoneRequest: Int = 0,
+    social: Boolean = false,
+    initialName: String = "",
 ) {
     val viewModel: NicknameCheckViewModel =
         viewModel(factory = NicknameCheckViewModel.factory(repository))
@@ -140,6 +142,8 @@ fun ProfileSetupRoute(
     }
 
     ProfileSetupScreen(
+        social = social,
+        initialName = initialName,
         onBack = onBack,
         onNext = onNext,
         nicknameCheck = checkState,

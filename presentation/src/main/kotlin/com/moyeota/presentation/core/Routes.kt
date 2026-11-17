@@ -2,6 +2,7 @@ package com.moyeota.presentation.core
 
 // v15 와이어프레임 화면 번호 · 화면 ID 매핑
 object Routes {
+    const val LOGIN_METHODS = "mypage/login-methods" // 로그인 수단 관리
     // A · 온보딩
     const val ONBOARDING_SAVING = "onboarding/saving"        // 01 O01
     const val ONBOARDING_TRUST = "onboarding/trust"          // 02 O02
@@ -10,6 +11,11 @@ object Routes {
     // B · 로그인
     const val LOGIN = "auth/login"                           // 04 S01
     const val LOGIN_FORM = "auth/login-form"                 // 04a 신규 (아이디 로그인)
+
+    // 04b 아이디 찾기 · 04c 비밀번호 재설정 (신규, 2026-11) — 백엔드 #314 · #331.
+    // 둘 다 04a 위에 쌓이고, 끝나면 04a 로 되돌아간다. iOS 가 먼저 붙인 화면이다(frontend-ios #47).
+    const val FIND_ID = "auth/find-id"                       // 04b 신규 (아이디 찾기)
+    const val PASSWORD_RESET = "auth/password-reset"         // 04c 신규 (비밀번호 재설정)
 
     // B' · 부가 인증 05~09 — **가입 그래프에 등록하지 않는다**
     //

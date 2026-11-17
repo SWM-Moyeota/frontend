@@ -20,56 +20,64 @@ import com.moyeota.domain.model.Place
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.repository.RideRepository
 import com.moyeota.presentation.core.ErrorBox
-import com.moyeota.presentation.core.LoadingBox
 import com.moyeota.presentation.core.TabStateScaffold
 import com.moyeota.presentation.core.location.rememberMyLocationState
 import com.moyeota.presentation.feature.home.reservationDates
 import com.naver.maps.geometry.LatLng
 import java.time.Instant
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.filterNotNull
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
 
-/**
- * 카메라가 멈춘 뒤 조회까지 두는 여유.
- *
- * 팬·줌을 연타하면 idle 이 연달아 들어오는데, 중간 범위마다 서버를 때릴 이유가 없다.
- * 손을 뗀 직후의 체감 지연으로 느껴지지 않을 만큼만 둔다.
- */
-private const val BOUNDS_DEBOUNCE_MS = 400L
-
-/**
- * 같은 범위 재조회 주기 — 방은 다른 사람의 생성·합류·나가기로 계속 바뀐다.
- *
- * **이 주기는 화면이 보이는 동안에만 돈다**([ExploreViewModel.onScreenStart]). 탐색은 하단탭이라
- * 다른 화면이 위에 올라와도 ViewModel 이 백스택에 살아 있어서, 게이트가 없으면 21 매칭 대기·채팅에
- * 머무는 내내 4초마다 범위 조회가 나갔다(QA D-1: 21 체류 135초에 34회).
- */
-private const val NEARBY_POLL_INTERVAL_MS = 4_000L
+// 같은 범위 재조회 주기([NEARBY_POLL_INTERVAL_MS], 15초)·카운트다운·지도 디바운스([BOUNDS_DEBOUNCE_MS])와 그
+// 시계([ExploreRefreshCycle])는 `ExploreRefresh.kt` 에 있다 — 예약 조회([ReservationFinderViewModel])가 같은
+// 규칙으로 돌아야 해서 한 곳으로 옮겼다.
+//
+// **이 주기는 화면이 보이는 동안에만 돈다**([ExploreViewModel.onScreenStart]). 탐색은 하단탭이라
+// 다른 화면이 위에 올라와도 ViewModel 이 백스택에 살아 있어서, 게이트가 없으면 21 매칭 대기·채팅에
+// 머무는 내내 범위 조회가 나갔다(QA D-1: 4초 주기 시절 21 체류 135초에 34회).
 
 /**
  * 몇 번 연속으로 갱신에 실패하면 「최신 정보를 받지 못했어요」를 띄우는가 ([staleAfterPollFailures]).
  *
- * **3회 = 12초**([NEARBY_POLL_INTERVAL_MS] × 3). 1회로 두면 터널·엘리베이터처럼 금방 복구되는
- * 끊김마다 경고가 깜빡이고, 그러면 사용자가 곧 무시하게 된다. 반대로 상한이 **아예 없으면**
- * (고치기 전의 동작) 실패가 조용히 버려져 낡은 마커가 **영구히** 남고, 사용자는 이미 사라진 방의
- * 「합류」를 눌러 20 에서야 「사라진 방이에요」를 본다.
+ * ### 무엇을 세는가 — 카운트다운을 지도와 떼어 낸 뒤(2026-11, 오너 UX 피드백 2차)
+ * **보여 주는 목록을 다시 읽으려다 실패한 횟수**를, 무엇이 그 조회를 불렀는지와 상관없이 마지막 성공부터 센다
+ * — 자동 갱신(0 에 닿음)·지도 이동(디바운스 뒤 조회)·새로고침 버튼·「다시 시도」·화면 복귀가 모두 같은
+ * 카운터에 들어간다. **성공 한 번**이 0 으로 돌린다. 끊긴 조회(가려짐·더 새 입력)는 세지 않는다 — 세면 지도를
+ * 두 번 움직인 것만으로 경고가 뜬다. 「곧 출발」·「날짜로 찾기」에서 **다른 목록**(날짜·도착지·모드)으로
+ * 바뀌면 그 목록은 성공해야 줄이 생기고, 그 성공이 카운터를 0 으로 돌린다 — 앞 목록의 실패가 새 목록의
+ * 「낡음」으로 번지지 않는다(그 전의 실패는 「불러오지 못했어요」다).
  *
- * 12초는 「탭했을 때 이미 틀린 목록일 수 있다」를 의심하기 시작할 만한 시간이고(방이 차고 비는 주기가
- * 분 단위다), 지하철 역 사이 터널(보통 1~2분)보다는 짧아 **진짜 끊김은 반드시 드러난다.**
+ * 예전에는 패스(범위 하나)마다 새로 셌다. 지도를 움직이면 패스가 바뀌었으니 「지도 이동 실패」는 셀 자리가
+ * 없었다. 지금은 지도 이동이 패스를 열지 않으므로 끊어 셀 경계가 없고, **지도 이동 실패가 오히려 가장 분명한
+ * 낡음**이다 — 실패하면 화면의 목록은 지금 보는 동네의 것이 아니다. 화면 복귀로도 0 이 되지 않는다:
+ * 가려진 동안 목록은 더 오래됐을 뿐 새로워지지 않았다.
+ *
+ * ### 왜 2회인가 — 같은 두 조건을 다시 맞춘다
+ * | 조건 | 4초 × 3 = 12초(예전) | 2회 · 15초 시계 |
+ * |---|---|---|
+ * | 한 번의 끊김으로는 알리지 않는다 | ✓ | ✓ — 두 번의 **서로 다른** 시도가 실패해야 한다 |
+ * | 지하철 역 사이 터널(보통 1~2분)보다 짧다 — **진짜 끊김은 반드시 드러난다** | ✓ | ✓ — 보이는 동안 자동 갱신이 15초마다 반드시 한 번 읽으므로 첫 실패부터 **길어야 30초** |
+ *
+ * 지도 이동은 그 사이에 시도를 **더할** 뿐이라 알림을 앞당길 수는 있어도 늦추지 않는다(위 30초가 상한이다).
+ * 1회로 두면 터널·엘리베이터처럼 금방 복구되는 끊김마다 경고가 깜빡이고, 그러면 사용자가 곧 무시하게 된다.
+ * 3회(45초)는 「탭했을 때 이미 틀린 목록일 수 있다」를 너무 오래 숨긴다 — 방이 차고 비는 주기가 분 단위라
+ * 45초면 목록의 상당 부분이 바뀌어 있다. 반대로 상한이 **아예 없으면**(고치기 전의 동작) 실패가 조용히 버려져
+ * 낡은 마커가 **영구히** 남고, 사용자는 이미 사라진 방의 「합류」를 눌러 20 에서야 「사라진 방이에요」를 본다.
+ *
+ * 이미 켜진 「낡음」 표시는 조회가 한 번 성공해야 꺼진다.
  */
-internal const val STALE_NOTICE_FAILURES = 3
+internal const val STALE_NOTICE_FAILURES = 2
 
 class ExploreViewModel(private val repository: RideRepository) : ViewModel() {
 
     sealed interface UiState {
+        /**
+         * 아직 한 번도 읽지 못했다(첫 조회·에러 화면의 「다시 시도」). 화면은 지도와 빈 목록을 그리고
+         * 새로고침 버튼의 도는 고리만으로 기다리게 한다 — 가운데 스피너를 두지 않는다(버튼이 없는 위치 권한 거부
+         * 경로는 목록 맨 위의 작은 스피너, `showListLoadingFallback`).
+         */
         data object Loading : UiState
 
         /**
@@ -81,54 +89,43 @@ class ExploreViewModel(private val repository: RideRepository) : ViewModel() {
         data class Error(val message: String) : UiState
     }
 
-    /**
-     * 조회 요청 1건.
-     *
-     * [seq] 는 「같은 범위를 다시 읽어라」(재시도)를 구분하기 위한 것 —
-     * StateFlow 는 같은 값을 다시 방출하지 않아 seq 없이는 재시도가 씹힌다.
-     */
-    private data class LoadRequest(val bounds: MapBounds, val manual: Boolean, val seq: Int)
-
     private val _uiState = MutableStateFlow<UiState>(UiState.Loading)
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
 
-    private val request = MutableStateFlow<LoadRequest?>(null)
-    private var seq = 0
+    /** 마지막으로 받은 지도 범위 — 이 ViewModel 의 조회 입력 전부다. */
+    private var bounds: MapBounds? = null
+
+    /** 마지막 성공 뒤 연속 실패 횟수 — 무엇이 부른 조회든 같이 센다([STALE_NOTICE_FAILURES]). */
+    private var failures = 0
 
     /**
-     * 화면이 지금 **보이는가** — 조회·폴링의 유일한 스위치다([nearbyPollStep]).
+     * 갱신 시계와 조회 칸(`ExploreRefresh.kt`). **화면이 보이는 동안만** 돈다 — 가시성은 [onScreenStart]·
+     * [onScreenStop] 으로 받는다.
      *
      * 이 ViewModel 은 탐색의 `NavBackStackEntry` 에 매여 있어 다른 화면이 위에 올라와도 살아 있고,
      * `viewModelScope` 는 화면이 보이는지 보지 않는다. 그래서 신호 없이는 21 매칭 대기·채팅에 머무는
-     * 동안에도 범위 조회가 계속 나간다 — 「평상시 네트워크 0」을 그 루프가 상쇄했다(QA D-1).
-     *
-     * 플래그가 아니라 [MutableStateFlow] 인 이유는 **요청과 같은 흐름에 묶기** 위해서다
-     * ([observeRequests]): 가려지는 순간 그 범위의 폴링이 함께 취소되고, 다시 보이면 같은 요청으로
-     * 패스가 새로 시작돼 **즉시 1회** 조회된다. 21 매칭 대기가 `realtimeAlive` 로 폴백을 켜고 끄는 것과
-     * 같은 모양이다 — 판정을 순수 함수 한 곳에 모으고 루프는 그 결과만 따른다.
+     * 동안에도 범위 조회가 계속 나간다 — 「평상시 네트워크 0」을 그 루프가 상쇄했다(QA D-1). 가려지는 순간
+     * 카운트다운·나가 있던 조회가 함께 끊기고, 다시 보이면 마지막 범위로 **즉시 1회** 읽은 뒤 15부터 센다.
      */
-    private val visible = MutableStateFlow(false)
+    private val cycle = ExploreRefreshCycle<MapBounds>(viewModelScope, ::load)
 
     /**
-     * **보이는 상태에서 조회를 시작한** 마지막 요청의 [LoadRequest.seq].
+     * 지도 오른쪽 아래 **카운트다운 새로고침 버튼**이 그릴 것(`ExploreRefresh.kt`). 조회가 나가 있으면
+     * [ExploreRefreshUi.refreshing], 아니면 다음 자동 갱신까지 남은 초다.
      *
-     * 같은 seq 로 패스가 다시 들어왔다면 조회 범위가 바뀐 게 아니라 **화면이 다시 보이기 시작한 것**이다.
-     * 그때는 디바운스 없이 곧바로 읽는다([nearbyPollStep]) — 돌아왔는데 주기만큼 옛 목록이 남아 있으면
-     * 이미 사라진 방의 「합류」를 누르게 된다.
+     * 첫 조회 전에는 「조회 중」으로 시작한다 — 화면이 열리자마자 즉시 1회 읽기 때문이다.
      */
-    private var shownSeq = 0
-
-    init { observeRequests() }
+    val refresh: StateFlow<ExploreRefreshUi> = cycle.ui
 
     /**
-     * 화면이 보이기 시작했다 — **즉시 1회 조회**하고 주기 갱신을 재개한다.
+     * 화면이 보이기 시작했다 — **즉시 1회 조회**하고 카운트다운을 15부터 새로 센다.
      *
      * 탭 복귀·앱 복귀·위에 있던 화면의 pop 이 모두 이 길로 온다(`LifecycleStartEffect`).
      * 숨어 있던 동안 보던 목록은 그대로 두고 그 위에 새 결과를 덮으므로 로딩으로 깜빡이지 않는다([load]).
-     * 첫 조회가 실패해 에러 화면이던 경우도 여기서 함께 복구된다(목록이 없으면 즉시 조회 대상이다).
+     * 첫 조회가 실패해 에러 화면이던 경우도 여기서 함께 복구된다.
      */
     fun onScreenStart() {
-        visible.value = true
+        cycle.setVisible(true)
     }
 
     /**
@@ -138,18 +135,22 @@ class ExploreViewModel(private val repository: RideRepository) : ViewModel() {
      * 새로 읽은 결과로 덮는 게 맞기 때문이다.
      */
     fun onScreenStop() {
-        visible.value = false
+        cycle.setVisible(false)
     }
 
     /**
      * 지도에 보이는 영역이 바뀌었다(카메라 idle). 첫 진입 시에는 기준점 범위로 한 번 호출한다.
      *
+     * 새 범위는 곧바로 읽되([nearbyLoadTiming] — 목록이 있으면 [BOUNDS_DEBOUNCE_MS] 뒤) **카운트다운은 건드리지
+     * 않는다** — 지도를 조금씩 옮겨 보는 동안에도 숫자는 끝까지 내려가고, 0 에서 그때의 범위로 다시 읽는다.
+     *
      * 지도 마커와 시트 목록은 **여기서 받아온 하나의 목록**에서 나온다 — 화면 밖 방이
      * 리스트에만 남아 있는 상태를 만들지 않는다.
      */
     fun onVisibleBoundsChange(bounds: MapBounds) {
-        if (request.value?.bounds == bounds) return // idle 이 같은 범위로 다시 와도 재조회하지 않는다
-        request.value = LoadRequest(bounds, manual = false, seq = ++seq)
+        if (this.bounds == bounds) return // idle 이 같은 범위로 다시 와도 재조회하지 않는다
+        this.bounds = bounds
+        cycle.update(bounds, nearbyLoadTiming(listShown = hasParties()))
     }
 
     /**
@@ -161,97 +162,60 @@ class ExploreViewModel(private val repository: RideRepository) : ViewModel() {
      * 그래서 「첫 범위」라는 뜻을 여기서 지킨다 — 복귀는 [onScreenStart] 가 마지막 범위로 처리한다.
      */
     fun onInitialBounds(bounds: MapBounds) {
-        if (request.value != null) return
+        if (this.bounds != null) return
         onVisibleBoundsChange(bounds)
     }
 
-    /** 에러 화면의 「다시 시도」 — 마지막으로 본 범위를 그대로 다시 읽는다. */
+    /**
+     * 에러 화면의 「다시 시도」 — 마지막으로 본 범위를 그대로 다시 읽는다. 카운트다운은 그대로다.
+     *
+     * 에러 화면을 지도 + 빈 목록(+ 도는 버튼)으로 바꿔 눌렀다는 것을 보여 준다. 자동 갱신의 재시도는
+     * 에러 화면을 그대로 둔다 — 15초마다 에러 화면과 지도가 번갈아 깜빡이지 않게.
+     */
     fun refresh() {
-        val current = request.value ?: return // 아직 범위조차 못 받은 상태면 재시도할 대상이 없다
-        request.value = current.copy(manual = true, seq = ++seq)
+        if (!cycle.isRunning) return // 아직 범위조차 못 받았거나 가려져 있다
+        if (_uiState.value is UiState.Error) _uiState.value = UiState.Loading
+        cycle.retry()
     }
 
     /**
-     * 요청 하나를 조회 + 주기 갱신 루프로 처리한다 — **보이는 동안만.**
+     * 지도의 **새로고침 버튼** — 지금 범위를 즉시 다시 읽고 카운트다운을 15부터 다시 센다.
      *
-     * 범위([request])와 가시성([visible])을 하나의 흐름으로 합치는 것이 이 함수의 핵심이다.
-     * `collectLatest` 가 둘 중 **어느 쪽이 바뀌어도** 앞 패스를 취소하므로 세 가지가 한꺼번에 성립한다.
-     *
-     * | 바뀐 것 | 일어나는 일 |
-     * |---|---|
-     * | 새 범위(카메라 idle) | 앞 범위의 조회·폴링이 취소되고 새 범위로 다시 시작 — 낡은 결과가 남지 않는다 |
-     * | 가려짐 | 진행 중인 조회와 폴링이 **함께 죽는다**(다음 신호까지 아무것도 하지 않는다) |
-     * | 다시 보임 | 같은 요청으로 패스가 새로 시작 → **즉시 1회 조회** 후 주기 재개 |
-     *
-     * 가려진 동안에는 `delay` 조차 돌지 않는다 — 깨어나 아무 일도 하지 않는 주기 자체가 없어진다.
+     * 목록이 있으면 로딩으로 덮지 않는다([load]) — 버튼이 도는 동안 보던 목록은 그대로다. 조회가 나가 있는
+     * 동안 눌린 것은 버린다([ExploreRefreshCycle.refreshNow]).
      */
-    private fun observeRequests() {
-        viewModelScope.launch {
-            combine(request.filterNotNull(), visible, ::Pair).collectLatest { (req, shown) ->
-                val step = nearbyPollStep(
-                    visible = shown,
-                    manual = req.manual,
-                    hasParties = hasParties(),
-                    requestSeq = req.seq,
-                    shownSeq = shownSeq,
-                )
-                if (step == NearbyPollStep.STOP) return@collectLatest
-                // 디바운스 **전에** 적어 둔다 — 기다리는 동안 가려졌다 돌아오면 그때는 복귀로 보고
-                // 또 기다리지 않게 한다(카메라는 이미 멈춰 있다).
-                shownSeq = req.seq
-                if (step == NearbyPollStep.DEBOUNCE_THEN_QUERY) delay(BOUNDS_DEBOUNCE_MS)
-                load(req.bounds)
-                // 연속 실패 횟수는 **패스마다 0 에서 시작한다** — 범위가 바뀌거나 화면이 다시 보이면
-                // 새 패스이고, 그때는 직전 범위에서의 실패를 이어 셈할 이유가 없다.
-                var failures = 0
-                while (isActive) {
-                    delay(NEARBY_POLL_INTERVAL_MS)
-                    val parties = runCatching { req.bounds.query() }.getOrNull()
-                    if (parties == null) {
-                        // 실패해도 보던 목록은 그대로 둔다(지도를 에러 화면으로 바꾸지 않는다).
-                        // 다만 **버리지 않고 세어 둔다** — 상한이 없던 동안 낡은 마커가 영구히 남았다.
-                        failures++
-                        if (staleAfterPollFailures(failures)) markStale()
-                        continue
-                    }
-                    failures = 0
-                    _uiState.value = UiState.Success(parties)
-                }
-            }
-        }
+    fun refreshNow() {
+        cycle.refreshNow()
     }
 
     /**
-     * 들고 있는 목록은 그대로 두고 「낡음」만 켠다 — 화면이 그 사실을 비차단으로 알린다.
+     * 범위 하나를 읽어 화면에 반영한다 — 무엇이 불렀든(자동 갱신·지도 이동·버튼·복귀) 같은 길이다.
      *
-     * 목록이 없는 상태(Loading·Error)에서는 아무것도 하지 않는다: 보여 줄 게 없으면 「낡았다」가
-     * 아니라 첫 조회 실패이고, 그쪽은 [load] 가 에러 화면으로 다룬다.
+     * 성공하면 그 목록으로 바꾼다(「낡음」도 꺼진다). 실패하면 **보여 줄 목록이 있느냐**로 갈린다: 있으면
+     * 목록을 남기고 연속 실패를 센다([staleAfterPollFailures]) — 지도를 통째로 에러 화면으로 바꾸지 않는다
+     * (21 대기 화면과 같은 판단). 없으면(첫 조회) 에러 화면이다.
      */
-    private fun markStale() {
-        val current = _uiState.value
-        if (current is UiState.Success && !current.stale) {
-            _uiState.value = current.copy(stale = true)
-        }
-    }
-
     private suspend fun load(bounds: MapBounds) {
-        val hadParties = hasParties()
-        // 이미 목록이 있으면 Loading 으로 덮지 않는다. 지도가 화면에서 사라졌다 돌아오면
-        // 카메라가 초기 위치로 되돌아가고, 그 idle 이 또 조회를 부르는 되먹임이 생긴다.
-        if (!hadParties) _uiState.value = UiState.Loading
-        _uiState.value = try {
-            UiState.Success(bounds.query())
+        val parties = try {
+            bounds.query()
         } catch (e: CancellationException) {
-            // 범위가 바뀌었거나 **화면이 가려져** 취소된 것 — 실패가 아니므로 에러 화면으로 바꾸지 않는다.
-            // 가시성 게이트가 생긴 뒤로는 이 길을 자주 지난다(첫 조회 중에 탭을 옮기면 매번).
+            // 범위가 바뀌었거나 **화면이 가려져** 끊긴 것 — 실패가 아니므로 세지도, 에러로 바꾸지도 않는다
             throw e
         } catch (e: Exception) {
-            // 갱신 실패로 지도를 통째로 에러 화면으로 바꾸지 않는다(21 대기 화면과 같은 판단) —
-            // 보던 목록을 남기고 다음 주기에 다시 읽는다. 처음부터 실패한 경우만 에러 화면.
-            // 이 실패가 계속되면 주기 루프가 연속 횟수를 세어 「낡음」을 알린다([markStale]) —
-            // 목록을 남기는 것과 **아무 말도 안 하는 것**은 다르다.
-            if (hadParties) return
-            UiState.Error("동승 목록을 불러오지 못했어요")
+            null
+        }
+        if (parties != null) {
+            failures = 0
+            _uiState.value = UiState.Success(parties)
+            return
+        }
+        failures++
+        val current = _uiState.value
+        if (current is UiState.Success) {
+            // 목록은 남기고 **버리지 않고 세어 둔다** — 상한이 없던 동안 낡은 마커가 영구히 남았다
+            if (staleAfterPollFailures(failures) && !current.stale) _uiState.value = current.copy(stale = true)
+        } else {
+            _uiState.value = UiState.Error("동승 목록을 불러오지 못했어요")
         }
     }
 
@@ -289,7 +253,14 @@ fun ExploreRoute(
     searchDestination: Place? = null,
     onJoinParty: (Ride) -> Unit = {},
     onOngoingRideClick: () -> Unit = {},
-    onCreateRoomClick: () -> Unit = {},
+    /**
+     * 「새 동승 방 만들기」 — **지금 보고 있는 탭의 뜻을 함께 넘긴다.**
+     *
+     * 인자는 「16 모달을 시간 정하기로 열까」다. 예약 탭(`SOON`·`BY_DATE`)을 보다 누른 사람은 **예약
+     * 방을 찾다가 없어서** 만들러 가는 것이라, 거기서 「지금 출발」로 열면 사용자가 방금까지 한 일을
+     * 화면이 잊은 꼴이 된다. 실시간 탭에서는 지금까지와 같다(false).
+     */
+    onCreateRoomClick: (scheduled: Boolean) -> Unit = {},
     /** 도착지를 고르러 15 목적지로. **null 이면 칩을 그리지 않는다**(배선 안 된 버튼을 보여 주지 않는다) */
     onPickSearchDestination: (() -> Unit)? = null,
     onClearSearchDestination: () -> Unit = {},
@@ -308,7 +279,7 @@ fun ExploreRoute(
     // 날짜는 **오늘로부터의 일수**로 들고 있는다(LocalDate 는 Parcelable 이 아니다 —
     // 16 모달의 `dateOffset` 과 같은 처방).
     var dateOffset by rememberSaveable { mutableIntStateOf(0) }
-    // 날짜 칩·출발 시각 표기의 기준 시각. **화면이 보일 때마다 다시 읽는다** — 탐색은 하단탭이라
+    // 날짜 띠·출발 시각 표기의 기준 시각. **화면이 보일 때마다 다시 읽는다** — 탐색은 하단탭이라
     // ViewModel 이 백스택에 남고, 고정 기준을 쓰면 자정을 넘긴 뒤에도 어제가 「오늘」로 남는다
     // (그 날짜는 서버 창을 벗어나 400 `INVALID_SEARCH_DATE` 다). 리컴포지션마다 읽지 않는 이유는
     // 그러면 칩 목록이 1초마다 새로 만들어져 고른 칩이 손가락 아래에서 움직이기 때문이다.
@@ -347,7 +318,7 @@ fun ExploreRoute(
     // 보는 시간이 늘어난다) ② 백스택에 가린 엔트리는 CREATED 까지 내려가므로 「다른 화면이 위에 올라옴」도
     // STARTED 로 똑같이 잡히고, 앱 백그라운드(ON_STOP)도 함께 잡힌다.
     //
-    // **예약 모드에서는 실시간 폴링을 끈다.** 그 목록은 화면에 없고(모드가 하나다) 4초마다
+    // **예약 모드에서는 실시간 폴링을 끈다.** 그 목록은 화면에 없고(모드가 하나다) 15초마다
     // 뷰포트를 다시 읽는 비용만 남는다 — 가시성 게이트가 이미 「보이지 않으면 멈춘다」를 아는
     // 스위치이므로([ExploreViewModel.visible]) 같은 스위치를 모드에도 쓴다. ViewModel 에 모드를
     // 알려 줄 필요가 없고, 모드를 되돌리면 그 자리에서 1회 조회 후 주기가 재개된다.
@@ -356,14 +327,22 @@ fun ExploreRoute(
         onStopOrDispose { viewModel.onScreenStop() }
     }
 
-    // 예약 조회는 **화면에 돌아올 때마다 한 번** 다시 읽는다(폴링이 없는 대신이다 —
-    // [ReservationFinderViewModel] KDoc). 기준 시각도 여기서 갱신해 자정을 넘긴 뒤의 「오늘」을
-    // 바로잡는다. 실시간 모드일 때는 아무 일도 하지 않는다(요청이 null 이라 조회가 없다).
-    LifecycleStartEffect(mode) {
+    // 예약 조회도 **보이는 동안만** 돈다 — 「곧 출발」·「날짜로 찾기」 모두 15초 주기 갱신을 한다(실시간과
+    // 같은 이유, `ExploreRefresh.kt`). 같은 가시성 스위치를 쓴다([ReservationFinderViewModel.onScreenStart]).
+    // 기준 시각도 여기서 갱신해 자정을 넘긴 뒤의 「오늘」을 바로잡는다. 실시간 모드일 때는 요청이 null 이라
+    // 아무것도 조회하지 않고 시계도 돌지 않는다.
+    //
+    // **키에 `mode` 를 두지 않는다.** 두면 「곧 출발」↔「날짜로 찾기」를 오갈 때마다 가려졌다 다시 보인 것이
+    // 되어 카운트다운이 15로 돌아가고, 바뀌기 전 모드의 조회가 한 번 더 나간다. 두 모드는 같은 목록 자리라
+    // 숫자는 이어 센다 — 새 조회는 요청([ReservationFinderViewModel.request])이 즉시 읽는다.
+    LifecycleStartEffect(finderViewModel) {
         now = Instant.now()
-        if (mode.isReservation) finderViewModel.retry()
-        onStopOrDispose { }
+        finderViewModel.onScreenStart()
+        onStopOrDispose { finderViewModel.onScreenStop() }
     }
+    // 예전에는 위 효과가 모드마다 다시 돌며 기준 시각도 갱신했다 — 그 몫은 남긴다(자정을 넘긴 채 모드를 바꾸면
+    // 날짜 띠가 오늘로 바로잡힌다).
+    LaunchedEffect(mode) { now = Instant.now() }
 
     // 조회 입력이 바뀔 때마다(모드·지도 범위·내 좌표·날짜·도착지) 요청을 다시 올린다.
     // 입력이 모자라면 [reservationQueryOrNull] 이 null 을 주고 ViewModel 은 목록을 비운다 —
@@ -385,9 +364,8 @@ fun ExploreRoute(
     LaunchedEffect(reservationQuery) { finderViewModel.request(reservationQuery) }
 
     // 첫 조회는 지도를 기다리지 않고 기준 범위로 먼저 쏜다.
-    // 지도는 Success 상태에서만 붙으므로(로딩 화면에는 지도가 없다) 지도의 첫 idle 을
-    // 기다리면 Loading 에서 영영 못 나온다. 권한을 거부해 지도가 아예 없는 경로도 같다.
-    // 실좌표가 뒤늦게 잡히면 지도 카메라가 그리로 옮겨가며 idle → 실제 범위로 다시 조회된다.
+    // 지도의 첫 idle 을 기다리면 그만큼 첫 목록이 늦고, 권한을 거부해 지도가 아예 없는 경로는 영영
+    // 범위를 받지 못한다. 실좌표가 뒤늦게 잡히면 지도 카메라가 그리로 옮겨가며 idle → 실제 범위로 다시 조회된다.
     //
     // 탭을 다녀오면 이 이펙트가 **다시** 실행되지만, 그때 쓸 범위는 기준점이 아니라
     // 보던 카메라다 — [ExploreViewModel.onInitialBounds] 가 이미 범위를 받은 뒤의 호출을 무시한다.
@@ -418,22 +396,49 @@ fun ExploreRoute(
     val list = remember(realtime?.parties, activeRide?.id) {
         exploreList(realtime?.parties.orEmpty(), activeRide?.id)
     }
-    val finderItems = (finderState as? ReservationFinderViewModel.UiState.Success)?.items.orEmpty()
+    val finderSuccess = finderState as? ReservationFinderViewModel.UiState.Success
+    val finderItems = finderSuccess?.items.orEmpty()
+    // 지도 오른쪽 아래 카운트다운 버튼 — 주기 갱신이 도는 모드에서 그린다([exploreAutoRefreshes], 지금은 세 모드 모두).
+    // 모드마다 **그 목록을 읽는 ViewModel** 의 카운트다운을 보여 주고, 누르면 그쪽을 다시 읽는다.
+    val realtimeRefresh by viewModel.refresh.collectAsState()
+    val finderRefresh by finderViewModel.refresh.collectAsState()
     val feed = remember(finderItems, activeRide?.id) { reservationFeed(finderItems, activeRide?.id) }
 
-    // 로딩·에러에서도 하단탭은 남긴다 — 조회 실패로 탭 이동이 막히면 안 된다 (QA F-1)
     when {
+        // 실시간 첫 조회가 실패했다 — 에러에서도 하단탭은 남긴다(조회 실패로 탭 이동이 막히면 안 된다, QA F-1).
+        //
         // **예약 모드에서는 실시간 조회 상태가 화면을 가리지 않는다.** 그 폴링은 멈춰 있어서
         // (위 LifecycleStartEffect) 그 상태는 지금 보고 있는 목록과 무관하고, 전체 화면 에러로
-        // 덮으면 모드를 되돌릴 칩까지 사라져 **빠져나올 길이 없다**. 반대로 실시간 모드에서는
-        // 지금까지와 똑같이 세 상태를 그린다.
-        mode.isReservation || realtime != null -> ExploreScreen(
+        // 덮으면 모드를 되돌릴 칩까지 사라져 **빠져나올 길이 없다**.
+        !mode.isReservation && current is ExploreViewModel.UiState.Error -> TabStateScaffold(MoyeotaTab.EXPLORE, onTabSelect) {
+            ErrorBox(message = current.message, onRetry = viewModel::refresh)
+        }
+        // **실시간 첫 조회도 이 화면으로 그린다**(2026-11, 오너 UX 피드백 2차) — 예전에는 가운데 스피너
+        // 한 장(`LoadingBox`)이 지도·모드 칩까지 덮었다. 지금은 지도와 빈 목록을 바로 그리고, 기다림은 새로고침
+        // 버튼의 도는 고리 하나로만 보인다(예약 모드의 새 조회와 같은 규칙 — 버튼이 없는 위치 권한 거부 경로는 목록 맨
+        // 위의 작은 스피너, `showListLoadingFallback`). 전체 화면으로 남는 것은 에러뿐이다.
+        else -> ExploreScreen(
             parties = list.parties,
+            loading = current is ExploreViewModel.UiState.Loading,
             // 빈 목록 문구가 이 값으로 갈린다 — 모드에 맞는 쪽을 넘긴다
             myPartyHidden = if (mode.isReservation) feed.myPartyHidden else list.myPartyHidden,
-            // 「낡음」은 실시간 주기 조회의 신호다. 예약 모드에서는 화면이 그리지 않지만
-            // (ExploreScreen 이 모드를 본다) 값 자체도 Success 가 아니면 false 다.
-            stale = realtime?.stale == true,
+            // 「낡음」은 **갱신의 연속 실패** 신호다 — 지금 보이는 목록을 읽는 쪽의 값을 넘긴다.
+            stale = when (mode) {
+                ExploreMode.REALTIME -> realtime?.stale == true
+                ExploreMode.SOON, ExploreMode.BY_DATE -> finderSuccess?.stale == true
+            },
+            refresh = when (mode) {
+                ExploreMode.REALTIME -> realtimeRefresh
+                // 물어볼 것이 없으면(「날짜로 찾기」가 내 위치를 기다리는 중) 시계도 돌지 않는다 — 멈춘 숫자를
+                // 그리지 않는다. 그 사이 목록 자리는 「내 위치를 확인하는 중이에요」가 말한다.
+                ExploreMode.SOON, ExploreMode.BY_DATE -> finderRefresh.takeIf { reservationQuery != null }
+            }?.takeIf { exploreAutoRefreshes(mode) },
+            onRefreshClick = {
+                when (mode) {
+                    ExploreMode.REALTIME -> viewModel.refreshNow()
+                    ExploreMode.SOON, ExploreMode.BY_DATE -> finderViewModel.refreshNow()
+                }
+            },
             activeRide = activeRide,
             locationGranted = myLocation.isGranted,
             myLocation = myFix,
@@ -452,7 +457,8 @@ fun ExploreRoute(
             ),
             onJoinParty = onJoinParty,
             onOngoingRideClick = onOngoingRideClick,
-            onCreateRoomClick = onCreateRoomClick,
+            // 탭의 뜻을 여기서 한 번만 번역한다 — 화면은 모드를 모른 채 버튼만 그린다
+            onCreateRoomClick = { onCreateRoomClick(createOpensScheduled(mode)) },
             onRequestLocationPermission = myLocation.onRequestPermission,
             onVisibleBoundsChange = { bounds ->
                 // 지도는 하나이고 두 목록이 같은 신호를 쓴다 — 실시간 조회는 ViewModel 이 받고,
@@ -471,12 +477,6 @@ fun ExploreRoute(
             onClearSearchDestination = onClearSearchDestination,
             onTabSelect = onTabSelect,
         )
-        current is ExploreViewModel.UiState.Error -> TabStateScaffold(MoyeotaTab.EXPLORE, onTabSelect) {
-            ErrorBox(message = current.message, onRetry = viewModel::refresh)
-        }
-        else -> TabStateScaffold(MoyeotaTab.EXPLORE, onTabSelect) {
-            LoadingBox()
-        }
     }
 }
 
@@ -545,64 +545,14 @@ internal fun samePartyId(a: String, b: String): Boolean {
 }
 
 /**
- * 수집 패스 한 번이 할 일 — [nearbyPollStep] 의 판정 결과.
- */
-internal enum class NearbyPollStep {
-    /** 아무것도 하지 않고 다음 신호를 기다린다(화면이 보이지 않는다) */
-    STOP,
-
-    /** 지금 바로 조회하고 주기 갱신을 시작한다 */
-    QUERY_NOW,
-
-    /** 팬·줌 중간 범위다 — 잠깐 기다린 뒤 조회한다 */
-    DEBOUNCE_THEN_QUERY,
-}
-
-/**
- * 탐색 목록 조회를 **지금 할지, 기다릴지, 아예 하지 않을지.**
- *
- * 폴링을 화면 가시성에 묶는 판정을 이 한 곳에 모은다(21 매칭 대기의 `shouldPollFallback` 과 같은 자리).
- * 위에서부터 읽는다 — 앞의 조건이 뒤를 가린다.
- *
- * | 판정 | 조건 | 이유 |
- * |---|---|---|
- * | [NearbyPollStep.STOP] | [visible] 이 false | **이 함수의 존재 이유.** 보이지 않는 화면이 서버를 부를 이유가 없다 |
- * | [NearbyPollStep.QUERY_NOW] | [manual] (「다시 시도」) | 사용자가 방금 누른 것이다. 기다리면 버튼이 먹지 않은 것처럼 보인다 |
- * | [NearbyPollStep.QUERY_NOW] | [hasParties] 가 false | 첫 조회이거나 에러 화면이다 — 보여줄 게 없으니 늦출 이득이 없다 |
- * | [NearbyPollStep.QUERY_NOW] | [requestSeq] == [shownSeq] | **탭 복귀**(범위는 그대로인데 패스가 다시 들어왔다). 숨어 있던 동안의 변화를 주기만큼 미루면 이미 사라진 방에 합류를 누르게 된다 |
- * | [NearbyPollStep.DEBOUNCE_THEN_QUERY] | 그 밖(새 범위 + 목록 있음) | 팬·줌을 연타하면 idle 이 연달아 온다. 중간 범위마다 서버를 때리지 않는다 |
- *
- * 숨어 있는 동안 지도 카메라가 바뀌는 일은 없다(가려진 화면은 컴포지션에서 내려가 idle 이 오지 않는다).
- * 그래도 바뀐 범위가 들어와 있었다면 그 요청은 **새 seq** 라 복귀 때 디바운스 한 번 뒤에 그 범위로 조회된다 —
- * 어느 쪽이든 돌아온 뒤에는 보이는 범위로 다시 읽는다.
- *
- * @param visible 화면이 사용자에게 보이는가(`LifecycleStartEffect` 로 받는다)
- * @param manual 에러 화면의 「다시 시도」로 생긴 요청인가
- * @param hasParties 지금 화면에 그릴 목록을 들고 있는가
- * @param requestSeq 이번 패스가 처리할 요청의 순번
- * @param shownSeq 보이는 상태에서 마지막으로 조회를 시작한 요청의 순번
- */
-internal fun nearbyPollStep(
-    visible: Boolean,
-    manual: Boolean,
-    hasParties: Boolean,
-    requestSeq: Int,
-    shownSeq: Int,
-): NearbyPollStep = when {
-    !visible -> NearbyPollStep.STOP
-    manual || !hasParties || requestSeq == shownSeq -> NearbyPollStep.QUERY_NOW
-    else -> NearbyPollStep.DEBOUNCE_THEN_QUERY
-}
-
-/**
- * 갱신 실패를 **사용자에게 알릴 때인가** — [nearbyPollStep] 과 같은 자리의 판정이다(순수 함수 한 곳에
+ * 갱신 실패를 **사용자에게 알릴 때인가** — [nearbyLoadTiming] 과 같은 자리의 판정이다(순수 함수 한 곳에
  * 모으고 루프는 결과만 따른다).
  *
  * 한 번의 실패는 알리지 않는다(지도 앱의 흔한 일시 끊김이다). 연속 [STALE_NOTICE_FAILURES] 회부터
- * 알린다 — 임계값의 근거는 그 상수에 적어 두었다. **성공 한 번이 카운터를 0 으로 돌린다**(호출부)
- * 이므로, 이 함수는 「지금까지 연속 몇 번 실패했는가」만 보면 된다.
+ * 알린다 — 무엇을 세는지와 임계값의 근거는 그 상수에 적어 두었다. **성공 한 번이 카운터를 0 으로
+ * 돌린다**(호출부)이므로, 이 함수는 「지금까지 연속 몇 번 실패했는가」만 보면 된다.
  *
- * @param consecutiveFailures 마지막 성공 이후 연속 실패 횟수(성공하면 0 으로 돌아간다)
+ * @param consecutiveFailures 마지막 성공 이후 연속 실패 횟수 — 자동 갱신·지도 이동·버튼 어느 조회든 센다
  */
 internal fun staleAfterPollFailures(consecutiveFailures: Int): Boolean =
     consecutiveFailures >= STALE_NOTICE_FAILURES

@@ -1,35 +1,35 @@
 package com.moyeota.presentation.core
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.component.MoyeotaBottomBar
 import com.moyeota.core.designsystem.component.MoyeotaTab
 import com.moyeota.core.designsystem.component.MoyeotaTopBar
+import com.moyeota.core.designsystem.component.SecondaryButton
 import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.core.designsystem.theme.MoyeotaType
 
 // 하단탭 화면(14 홈 · 17 합승 · 24 채팅 · 35 마이)의 로딩·에러 골격.
 //
 // LoadingBox/ErrorBox 는 fillMaxSize 라 화면 전체를 덮는다. 탭바를 각 화면이 직접 그리는 구조에서
 // 이걸 Route 최상단에 그대로 두면 로딩·에러 동안 탭바가 통째로 사라져 인앱 이동이 끊긴다(QA F-1).
 // 그래서 탭바는 항상 남기고 콘텐츠 영역만 상태에 따라 바꾼다.
+//
+// 바탕은 흰색이다 — 앱의 기본 화면 바탕(디자인 QA G2). 회색은 묶음 목록 화면만 쓴다.
 @Composable
 fun TabStateScaffold(
     selectedTab: MoyeotaTab,
@@ -37,7 +37,7 @@ fun TabStateScaffold(
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
-    Column(modifier = modifier.fillMaxSize().background(MoyeotaColor.SurfaceSoft)) {
+    Column(modifier = modifier.fillMaxSize().background(MoyeotaColor.SurfaceCanvas)) {
         StatusBarSpacer()
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             content()
@@ -55,7 +55,7 @@ fun BackStateScaffold(
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
-    Column(modifier = modifier.fillMaxSize().background(MoyeotaColor.SurfaceSoft)) {
+    Column(modifier = modifier.fillMaxSize().background(MoyeotaColor.SurfaceCanvas)) {
         Column(modifier = Modifier.fillMaxWidth().background(MoyeotaColor.SurfaceCanvas)) {
             StatusBarSpacer()
             MoyeotaTopBar(title = title, onBack = onBack)
@@ -87,33 +87,21 @@ fun ErrorBox(
      */
     actionLabel: String = "다시 시도",
 ) {
-    Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
+    // 34 지난 탑승 기록 · 38 노쇼 기록의 실패 상태와 같은 모양이다 — 가운데 회색 문장 + 테두리 알약 버튼.
+    // 예전엔 이 자리에만 r12 · 40dp 솔리드 파란 상자가 있어 앱의 CTA 모양이 하나 더 늘었다(디자인 QA G5).
+    Box(
+        modifier = modifier.fillMaxSize().padding(horizontal = 32.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
                 text = message,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Bold,
-                color = MoyeotaColor.InkPrimary,
+                style = MoyeotaType.BodyMd,
+                color = MoyeotaColor.TextMute,
+                textAlign = TextAlign.Center,
             )
-            Box(
-                modifier = Modifier
-                    .height(40.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(MoyeotaColor.Primary500)
-                    .clickable { onRetry() }
-                    .padding(horizontal = 20.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = actionLabel,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MoyeotaColor.TextOnDark,
-                )
-            }
+            Spacer(Modifier.height(16.dp))
+            SecondaryButton(text = actionLabel, onClick = onRetry)
         }
     }
 }

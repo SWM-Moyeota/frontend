@@ -4,7 +4,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -17,9 +16,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -29,7 +26,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -37,24 +33,21 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.moyeota.core.designsystem.component.BackArrowIcon
+import com.moyeota.core.designsystem.component.CheckIcon
+import com.moyeota.core.designsystem.component.IconStrokeWidth
+import com.moyeota.core.designsystem.component.MoyeotaIconSize
+import com.moyeota.core.designsystem.component.MoyeotaTopBar
 import com.moyeota.core.designsystem.component.NavigationBarSpacer
 import com.moyeota.core.designsystem.component.PrimaryCtaButton
 import com.moyeota.core.designsystem.component.StatusBarSpacer
+import com.moyeota.core.designsystem.component.TextLinkButton
 import com.moyeota.core.designsystem.theme.MoyeotaColor
-
-private val ScreenBackground = Color(0xFFF5F7FA)
-private val TextSlate = Color(0xFF4B5563)
-private val TextSoft = Color(0xFF8A93A0)
-private val TextFaint = Color(0xFF9AA1AC)
-private val IconBoxIdle = Color(0xFFF6F8FB)
-private val RadioIdleBorder = Color(0xFFD1D5DB)
-private val CardShadow = Color(0x0F1B2A4A)
+import com.moyeota.core.designsystem.theme.MoyeotaShape
+import com.moyeota.core.designsystem.theme.MoyeotaSpacing
+import com.moyeota.core.designsystem.theme.MoyeotaType
 
 // ⚠️ 05 는 현재 어떤 그래프에도 등록되어 있지 않다 — 가입 API 에 계정 유형 개념이 없어
 // 가입 필수 경로(09 → 10 → 11 → 12)에서 제외했다. 인증 기능을 마이페이지로 옮길 때
@@ -89,41 +82,34 @@ fun AccountTypeScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(ScreenBackground),
+            .background(MoyeotaColor.SurfaceCanvas),
     ) {
         StatusBarSpacer()
+        // 다른 가입 화면과 같은 상단 앱바 — 뒤로가기를 스크롤 안에 두면 내려갈 때 함께 사라진다
+        MoyeotaTopBar(title = "", onBack = onBack)
 
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp),
+                .padding(horizontal = MoyeotaSpacing.ScreenGutter),
         ) {
-            IconButton(onClick = onBack, modifier = Modifier.padding(top = 12.dp)) {
-                BackArrowIcon()
-            }
-
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(24.dp))
             Text(
                 text = "어떤 방법으로\n인증할까요?",
+                style = MoyeotaType.DisplayMd,
                 color = MoyeotaColor.InkPrimary,
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Bold,
-                lineHeight = 34.sp,
-                letterSpacing = (-0.48).sp,
             )
 
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(12.dp))
             Text(
                 text = "신분에 맞는 인증으로 신뢰를 확인해요",
+                style = MoyeotaType.BodySm,
                 color = MoyeotaColor.TextMute,
-                fontSize = 14.sp,
-                lineHeight = 20.sp,
-                letterSpacing = (-0.28).sp,
             )
 
-            Spacer(Modifier.height(34.dp))
+            Spacer(Modifier.height(32.dp))
             AccountTypeCard(
                 title = "학생",
                 subtitle = "학교 이메일로 인증해요",
@@ -133,7 +119,7 @@ fun AccountTypeScreen(
                 onClick = { selectedType = AccountType.STUDENT },
             )
 
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(12.dp))
             AccountTypeCard(
                 title = "직장인",
                 subtitle = "재직 정보로 인증해요",
@@ -143,7 +129,7 @@ fun AccountTypeScreen(
                 onClick = { selectedType = AccountType.WORKER },
             )
 
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(12.dp))
             AccountTypeCard(
                 title = "일반",
                 subtitle = "휴대폰 본인 인증으로 시작해요",
@@ -156,58 +142,43 @@ fun AccountTypeScreen(
             Spacer(Modifier.height(8.dp))
             Text(
                 text = "인증 사용자에게 마일리지를 적립해 신뢰를 쌓는 방식은 고도화 시 검토",
-                color = TextFaint,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                lineHeight = 17.sp,
-                letterSpacing = (-0.24).sp,
+                style = MoyeotaType.CaptionMd,
+                color = MoyeotaColor.TextMute,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth(),
             )
-            Spacer(Modifier.height(7.dp))
+            Spacer(Modifier.height(8.dp))
             Text(
                 text = "인증 유형은 마이페이지에서 추가할 수 있어요",
-                color = TextFaint,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                lineHeight = 17.sp,
-                letterSpacing = (-0.24).sp,
+                style = MoyeotaType.CaptionMd,
+                color = MoyeotaColor.TextMute,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth(),
             )
 
-            Spacer(Modifier.height(13.dp))
+            Spacer(Modifier.height(12.dp))
             PrimaryCtaButton(
                 text = "다음",
                 onClick = { selectedType?.let(onNext) },
                 enabled = selectedType != null,
             )
 
-            Spacer(Modifier.height(18.dp))
-            Text(
+            Spacer(Modifier.height(4.dp))
+            TextLinkButton(
                 text = "나중에 인증할게요",
+                onClick = onSkipVerification,
                 color = MoyeotaColor.TextMute,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Medium,
-                lineHeight = 19.sp,
-                letterSpacing = (-0.26).sp,
-                textAlign = TextAlign.Center,
-                modifier = Modifier
-                    .align(Alignment.CenterHorizontally)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = onSkipVerification,
-                    ),
+                modifier = Modifier.align(Alignment.CenterHorizontally),
             )
-            Spacer(Modifier.height(28.dp))
+            Spacer(Modifier.height(24.dp))
         }
 
         NavigationBarSpacer()
     }
 }
 
-// 인증 유형 선택 카드 — 선택 시 파란 테두리 + 파란 아이콘/라디오
+// 인증 유형 선택 카드 — 선택 시 파란 테두리 + 파란 아이콘/라디오.
+// 흰 화면 위라 미선택 카드는 그림자 대신 Border 선으로 모양을 낸다(디자인 QA G4).
 @Composable
 private fun AccountTypeCard(
     title: String,
@@ -218,60 +189,47 @@ private fun AccountTypeCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val shape = RoundedCornerShape(18.dp)
-    val cardModifier = if (selected) {
-        modifier
-            .fillMaxWidth()
-            .background(Color.White, shape)
-            .border(1.5.dp, MoyeotaColor.Primary500, shape)
-    } else {
-        modifier
-            .fillMaxWidth()
-            .shadow(3.dp, shape, ambientColor = CardShadow, spotColor = CardShadow)
-            .background(Color.White, shape)
-    }
+    val shape = MoyeotaShape.Card
+    val cardModifier = modifier
+        .fillMaxWidth()
+        .background(MoyeotaColor.SurfaceCanvas, shape)
+        .border(
+            width = if (selected) 1.5.dp else 1.dp,
+            color = if (selected) MoyeotaColor.Primary500 else MoyeotaColor.Border,
+            shape = shape,
+        )
     Row(
         modifier = cardModifier
             .clip(shape)
             .clickable(onClick = onClick)
-            .padding(horizontal = 20.dp, vertical = 20.dp),
+            .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
             modifier = Modifier
                 .size(48.dp)
-                .background(if (selected) MoyeotaColor.Primary50 else IconBoxIdle, RoundedCornerShape(14.dp)),
+                .background(if (selected) MoyeotaColor.Primary50 else MoyeotaColor.SurfaceSoft, MoyeotaShape.Card),
             contentAlignment = Alignment.Center,
         ) {
-            icon(if (selected) MoyeotaColor.Primary500 else TextSlate)
+            icon(if (selected) MoyeotaColor.Primary500 else MoyeotaColor.TextBody)
         }
         Spacer(Modifier.width(16.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = title,
+                style = MoyeotaType.HeadingLg,
                 color = MoyeotaColor.InkPrimary,
-                fontSize = 17.sp,
-                fontWeight = FontWeight.Bold,
-                lineHeight = 25.sp,
-                letterSpacing = (-0.34).sp,
             )
-            Spacer(Modifier.height(1.dp))
             Text(
                 text = subtitle,
-                color = TextSlate,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Medium,
-                lineHeight = 19.sp,
-                letterSpacing = (-0.26).sp,
+                style = MoyeotaType.BodySm,
+                color = MoyeotaColor.TextBody,
             )
-            Spacer(Modifier.height(3.dp))
+            Spacer(Modifier.height(4.dp))
             Text(
                 text = caption,
-                color = TextSoft,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                lineHeight = 17.sp,
-                letterSpacing = (-0.24).sp,
+                style = MoyeotaType.CaptionMd,
+                color = MoyeotaColor.TextMute,
             )
         }
         Spacer(Modifier.width(12.dp))
@@ -289,13 +247,13 @@ private fun RadioMark(selected: Boolean, modifier: Modifier = Modifier) {
                 .background(MoyeotaColor.Primary500, CircleShape),
             contentAlignment = Alignment.Center,
         ) {
-            CheckMarkIcon(iconSize = 12.dp, color = Color.White)
+            CheckIcon(size = MoyeotaIconSize.Sm, tint = MoyeotaColor.TextOnDark)
         }
     } else {
         Box(
             modifier = modifier
                 .size(24.dp)
-                .border(2.dp, RadioIdleBorder, CircleShape),
+                .border(2.dp, MoyeotaColor.BorderStrong, CircleShape),
         )
     }
 }
@@ -306,7 +264,7 @@ private fun GraduationCapIcon(color: Color, modifier: Modifier = Modifier) {
     Canvas(modifier = modifier.size(24.dp)) {
         val w = size.width
         val h = size.height
-        val stroke = Stroke(width = 1.8.dp.toPx(), cap = StrokeCap.Round)
+        val stroke = Stroke(width = IconStrokeWidth.toPx(), cap = StrokeCap.Round)
         // 모자 상판 (마름모)
         val board = Path().apply {
             moveTo(w * 0.5f, h * 0.14f)
@@ -325,7 +283,7 @@ private fun GraduationCapIcon(color: Color, modifier: Modifier = Modifier) {
         }
         drawPath(body, color, style = stroke)
         // 태슬
-        drawLine(color, Offset(w * 0.95f, h * 0.38f), Offset(w * 0.95f, h * 0.62f), 1.8.dp.toPx(), StrokeCap.Round)
+        drawLine(color, Offset(w * 0.95f, h * 0.38f), Offset(w * 0.95f, h * 0.62f), IconStrokeWidth.toPx(), StrokeCap.Round)
     }
 }
 
@@ -335,7 +293,7 @@ private fun BriefcaseIcon(color: Color, modifier: Modifier = Modifier) {
     Canvas(modifier = modifier.size(24.dp)) {
         val w = size.width
         val h = size.height
-        val strokePx = 1.8.dp.toPx()
+        val strokePx = IconStrokeWidth.toPx()
         val stroke = Stroke(width = strokePx, cap = StrokeCap.Round)
         // 가방 몸통
         drawRoundRect(
@@ -364,7 +322,7 @@ private fun IdCardIcon(color: Color, modifier: Modifier = Modifier) {
     Canvas(modifier = modifier.size(24.dp)) {
         val w = size.width
         val h = size.height
-        val strokePx = 1.8.dp.toPx()
+        val strokePx = IconStrokeWidth.toPx()
         val stroke = Stroke(width = strokePx, cap = StrokeCap.Round)
         // 카드 외곽
         drawRoundRect(

@@ -33,7 +33,7 @@ import kotlinx.coroutines.SupervisorJob
 import okhttp3.OkHttpClient
 
 // 수동 DI 컨테이너. 백엔드 연동 시 Hilt 로 교체 예정.
-// debugLogging: HTTP 본문 로깅 여부. 디버그 빌드에서만 켠다(호출자가 판단해 주입).
+// debugLogging: HTTP 기본 정보 로깅 여부. 디버그 빌드에서만 켠다(호출자가 판단해 주입).
 class AppContainer(context: Context, debugLogging: Boolean) {
 
     /**
@@ -133,11 +133,12 @@ class AppContainer(context: Context, debugLogging: Boolean) {
      */
     val noShowRepository: NoShowRepository = RemoteNoShowRepository(apis.matching)
     // 세션을 넘기는 건 메시지의 "내 것" 판정 때문이다(RemoteChatRepository KDoc).
-    // 채팅은 실시간(STOMP) + 폴링을 함께 쓴다 — 소켓이 앞서고, 끊긴 구간은 폴링이 메운다.
+    // 채팅 받기는 실시간(STOMP) + 폴링, 보내기·읽음은 REST 다(소켓 서버는 SEND 를 받지 않는다).
+    // 소켓의 TOKEN_EXPIRED 재발급은 HTTP 401 과 같은 잠금을 쓴다(apis.renewAccessToken).
     val chatRepository: ChatRepository = RemoteChatRepository(
         apis.chat,
         sessionManager,
-        ChatSocket(BuildConfig.BASE_URL, apis.socketClient, sessionManager),
+        ChatSocket(BuildConfig.BASE_URL, apis.socketClient, sessionManager, apis.renewAccessToken),
     )
 
     /**

@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
@@ -30,7 +29,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
@@ -38,13 +36,17 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import com.moyeota.core.designsystem.component.CheckIcon
+import com.moyeota.core.designsystem.component.IconStrokeWidth
+import com.moyeota.core.designsystem.component.MoyeotaIconSize
 import com.moyeota.core.designsystem.component.MoyeotaTextField
 import com.moyeota.core.designsystem.component.MoyeotaTopBar
 import com.moyeota.core.designsystem.component.NavigationBarSpacer
 import com.moyeota.core.designsystem.component.PrimaryCtaButton
+import com.moyeota.core.designsystem.component.SectionLabel
 import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.core.designsystem.theme.MoyeotaShape
 import com.moyeota.core.designsystem.theme.MoyeotaType
 
 // 08 · 직장인 재직 인증 [S26]
@@ -58,12 +60,6 @@ private val FreeMailDomains = setOf(
     "gmail.com", "naver.com", "daum.net", "hanmail.net", "kakao.com",
     "nate.com", "outlook.com", "hotmail.com", "yahoo.com", "icloud.com",
 )
-
-private val LabelGray = Color(0xFF8A93A0)
-private val SlateGray = Color(0xFF4B5563)
-private val FooterGray = Color(0xFF9AA1AC)
-private val InfoCardBlue = Color(0xFFF1F5FD)
-private val DocCardGray = Color(0xFFF6F8FB)
 
 @Composable
 fun WorkVerifyScreen(
@@ -86,14 +82,14 @@ fun WorkVerifyScreen(
     // 회사 메일과 재직 서류 중 최소 1개 필수 — 서류 업로드가 미연결이므로 회사 메일이 사실상 필수다
     val ctaEnabled = emailValid
 
-    Column(modifier = Modifier.fillMaxSize().imePadding().background(MoyeotaColor.SurfaceSoft)) {
+    Column(modifier = Modifier.fillMaxSize().imePadding().background(MoyeotaColor.SurfaceCanvas)) {
         StatusBarSpacer()
         MoyeotaTopBar(
             title = "",
             onBack = onBack,
             actions = {
                 // 08 은 학생 경로의 06·07 과 같은 「인증」 1단계다 — 09 가 2단계이므로 여기는 1/5
-                Text(text = "1 / 5", style = MoyeotaType.BodySm, color = LabelGray)
+                Text(text = "1 / 5", style = MoyeotaType.BodySm, color = MoyeotaColor.TextMute)
             },
         )
         WorkVerifyProgressBar(progress = 1f / 5f)
@@ -110,19 +106,19 @@ fun WorkVerifyScreen(
                 style = MoyeotaType.DisplayMd,
                 color = MoyeotaColor.InkPrimary,
             )
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(12.dp))
             Text(
                 text = "재직 정보로 직장인 인증을 진행해요",
-                style = MoyeotaType.BodySm.copy(fontSize = 14.sp),
+                style = MoyeotaType.BodySm,
                 color = MoyeotaColor.TextMute,
             )
             Spacer(Modifier.height(24.dp))
             Text(
                 text = "직장인 재직 인증 · 05 계정 유형 선택에서 선택함",
-                style = MoyeotaType.BodySm.copy(fontWeight = FontWeight.Bold),
-                color = MoyeotaColor.Primary500,
+                style = MoyeotaType.BodySm.copy(fontWeight = FontWeight.SemiBold),
+                color = MoyeotaColor.Primary600,
             )
-            Spacer(Modifier.height(28.dp))
+            Spacer(Modifier.height(24.dp))
 
             MoyeotaTextField(
                 value = email,
@@ -135,20 +131,22 @@ fun WorkVerifyScreen(
             )
 
             Spacer(Modifier.height(24.dp))
-            Text(text = "재직 서류 (선택)", style = MoyeotaType.BodySm, color = LabelGray)
+            // 필드 라벨은 MoyeotaTextField 의 라벨과 같은 모양(BodySm · TextBody)이어야 한 화면에서 같은 층으로 읽힌다
+            Text(text = "재직 서류 (선택)", style = MoyeotaType.BodySm, color = MoyeotaColor.TextBody)
             Spacer(Modifier.height(8.dp))
             // 미연결: 재직 서류 탭 → 파일/카메라 선택 시트 — 클릭해도 동작 없음
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(DocCardGray, RoundedCornerShape(16.dp))
-                    .padding(20.dp),
+                    .background(MoyeotaColor.SurfaceSoft, MoyeotaShape.Card)
+                    .padding(16.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                // 아이콘 바탕은 흰색 — 회색 면 위에 옅은 파랑을 또 깔면 면이 세 겹이 된다
                 Box(
                     modifier = Modifier
                         .size(44.dp)
-                        .background(MoyeotaColor.Primary50, RoundedCornerShape(12.dp)),
+                        .background(MoyeotaColor.SurfaceCanvas, MoyeotaShape.Card),
                     contentAlignment = Alignment.Center,
                 ) {
                     WorkVerifyCameraIcon()
@@ -157,35 +155,25 @@ fun WorkVerifyScreen(
                 Column {
                     Text(
                         text = "재직증명서 · 사원증 촬영",
-                        style = MoyeotaType.BodySm.copy(fontSize = 14.sp, fontWeight = FontWeight.Bold),
+                        style = MoyeotaType.BodyStrong,
                         color = MoyeotaColor.InkPrimary,
                     )
                     Spacer(Modifier.height(4.dp))
                     Text(
                         text = "회사 메일이 없으면 서류로 인증할 수 있어요",
-                        style = MoyeotaType.CaptionMd,
-                        color = LabelGray,
+                        style = MoyeotaType.BodySm,
+                        color = MoyeotaColor.TextMute,
                     )
                 }
             }
 
             Spacer(Modifier.height(24.dp))
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(InfoCardBlue, RoundedCornerShape(18.dp))
-                    .padding(20.dp),
-            ) {
-                Text(
-                    text = "이렇게 보호해요",
-                    style = MoyeotaType.BodySm.copy(fontSize = 14.sp, fontWeight = FontWeight.Bold),
-                    color = MoyeotaColor.InkPrimary,
-                )
-                Spacer(Modifier.height(13.dp))
+            // 이렇게 보호해요 — 파란 상자를 걷고 머리말 + 체크 목록으로 화면에 바로 놓는다(디자인 QA G8).
+            // 세 줄짜리라 한 문장용 NoticeBanner 에는 담기지 않고, 04 시작 화면의 신뢰 불릿(A1)과 같은 모양이다.
+            SectionLabel(text = "이렇게 보호해요")
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 WorkVerifyProtectRow(text = "회사명과 서류는 인증 후 즉시 삭제해요")
-                Spacer(Modifier.height(5.dp))
                 WorkVerifyProtectRow(text = "직업은 「직장인 인증」 배지로만 표시돼요")
-                Spacer(Modifier.height(5.dp))
                 WorkVerifyProtectRow(text = "동료에게 가입 사실이 알려지지 않아요")
             }
             Spacer(Modifier.height(24.dp))
@@ -201,11 +189,11 @@ fun WorkVerifyScreen(
                 enabled = ctaEnabled,
                 loading = submitting,
             )
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(12.dp))
             Text(
                 text = "재직 확인은 보통 1일 안에 끝나요",
                 style = MoyeotaType.CaptionMd,
-                color = FooterGray,
+                color = MoyeotaColor.TextMute,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -221,54 +209,35 @@ private fun WorkVerifyProgressBar(progress: Float, modifier: Modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp)
             .height(4.dp)
-            .background(Color(0xFFE6EAF0), RoundedCornerShape(2.dp)),
+            .background(MoyeotaColor.Hairline, MoyeotaShape.Small),
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth(progress)
                 .fillMaxHeight()
-                .background(MoyeotaColor.Primary500, RoundedCornerShape(2.dp)),
+                .background(MoyeotaColor.Primary500, MoyeotaShape.Small),
         )
     }
 }
 
+// 체크 + 안내 한 줄 — 체크는 「확인된 사실」 표시라 회색 선 아이콘이다(04 신뢰 불릿과 같은 모양)
 @Composable
 private fun WorkVerifyProtectRow(text: String) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        WorkVerifyCheckIcon()
-        Text(text = text, style = MoyeotaType.BodySm, color = SlateGray)
-    }
-}
-
-@Composable
-private fun WorkVerifyCheckIcon(modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier.size(14.dp)) {
-        val stroke = 2.dp.toPx()
-        drawLine(
-            color = MoyeotaColor.Primary500,
-            start = Offset(size.width * 0.1f, size.height * 0.55f),
-            end = Offset(size.width * 0.4f, size.height * 0.85f),
-            strokeWidth = stroke,
-            cap = StrokeCap.Round,
-        )
-        drawLine(
-            color = MoyeotaColor.Primary500,
-            start = Offset(size.width * 0.4f, size.height * 0.85f),
-            end = Offset(size.width * 0.9f, size.height * 0.2f),
-            strokeWidth = stroke,
-            cap = StrokeCap.Round,
-        )
+        CheckIcon(size = MoyeotaIconSize.Sm, tint = MoyeotaColor.TextMute)
+        Text(text = text, style = MoyeotaType.BodySm, color = MoyeotaColor.TextBody)
     }
 }
 
 @Composable
 private fun WorkVerifyCameraIcon(modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier.size(20.dp)) {
-        val stroke = 1.5.dp.toPx()
-        val color = MoyeotaColor.Primary500
+    Canvas(modifier = modifier.size(MoyeotaIconSize.Md)) {
+        // 공용 아이콘과 같은 선 굵기(24dp 기준 1.75dp 를 20dp 로 비례)
+        val stroke = IconStrokeWidth.toPx() * (MoyeotaIconSize.Md / MoyeotaIconSize.Lg)
+        val color = MoyeotaColor.TextBody
         val bodyTop = size.height * 0.25f
         drawRoundRect(
             color = color,

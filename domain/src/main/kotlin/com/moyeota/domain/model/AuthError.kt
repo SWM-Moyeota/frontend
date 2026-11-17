@@ -164,14 +164,142 @@ enum class AuthError {
     /**
      * 400 `USER111` PASSWORD_MISMATCH — 탈퇴 본인 확인 비밀번호가 틀렸다.
      *
-     * 서버는 비밀번호가 없는 계정(소셜)에도 같은 코드를 쓴다 — 지금은 로컬 가입만 있어 실제로는
-     * 오타뿐이다. 로그인 실패([LOGIN_FAILED], 401)와 달리 **세션은 그대로 살아 있다**:
+     * 소셜 회원에게는 나지 않는다 — 비밀번호가 없어 서버가 로그인 토큰만으로 본인 확인을 끝낸다
+     * ([AuthRepository.deleteSocialAccount][com.moyeota.domain.repository.AuthRepository.deleteSocialAccount]).
+     * 서버가 이 코드를 비밀번호 없이도 내는 경우가 하나 남아 있다: 로컬·소셜 로그인 수단이 **둘 다 없는**
+     * 계정(본인 확인을 할 방법이 없다)인데, 정상 가입 경로로는 생기지 않는다.
+     * 로그인 실패([LOGIN_FAILED], 401)와 달리 **세션은 그대로 살아 있다**:
      * [SESSION_EXPIRED] 로 뭉치면 멀쩡한 사용자를 로그인 화면으로 쫓아낸다.
      *
      * 화면은 이 하나만 **입력란 오류**로 그리고, 나머지 실패는 배너로 돌린다 — 고칠 곳이 입력란에 있는
      * 유일한 실패이기 때문이다.
      */
     PASSWORD_MISMATCH,
+
+    /**
+     * 400 `USER113` UNDER_MINIMUM_AGE — **만 14세 미만은 가입할 수 없다.**
+     *
+     * 앱도 같은 규칙으로 막으므로([AuthPolicy.isOldEnough]) 정상 경로에서는 뜨지 않는다. 그래도
+     * 가려내는 이유는 서버가 이 검사를 넣은 이유와 같다 — **앱이 유일한 방어선이 아니다.**
+     * 구버전 APK 와 API 직접 호출이 남아 있고, 그때 [INVALID_REQUEST] 로 뭉개지면 화면이
+     * 「입력한 정보를 다시 확인해 주세요」로 답한다. 생년월일은 고칠 수 있는 오타가 아니라
+     * **고칠 게 없는 사유**라, 그 둘을 같은 문구로 말하면 사용자가 날짜만 계속 고쳐 보게 된다.
+     *
+     * 서버 기준은 앱과 같다 — 만 나이, KST, 14번째 생일 당일은 통과.
+     */
+    UNDER_MINIMUM_AGE,
+
+    /**
+     * 404 `USER114` PHONE_NOT_REGISTERED — 이 번호로 가입한 계정이 없다(아이디 찾기).
+     *
+     * **발송 단계에서 난다** — 서버가 문자 비용을 쓰기 전에 끊는다. 가입 흐름의
+     * [PHONE_NUMBER_DUPLICATED] 와 뜻이 정반대라(그쪽은 「계정이 있다」) 합치면 안 된다:
+     * 여기서 사용자가 갈 곳은 로그인이 아니라 **가입**이다.
+     *
+     * 비밀번호 재설정에서는 **절대 오지 않는다** — 그쪽은 계정 존재 여부를 숨기려고 맞든 틀리든 같은 202 를 준다.
+     */
+    PHONE_NOT_REGISTERED,
+
+    /**
+     * 400 `USER301` PASSWORD_RESET_VERIFICATION_FAILED — 재설정 인증번호가 통과하지 못했다.
+     *
+     * **틀림·만료·없는 접수·아직 발송 전이 한 코드로 온다**(서버가 사유를 가르지 않는다).
+     * 그중 가장 헷갈리는 건 「아이디·번호가 가입 정보와 달라 문자가 애초에 안 나간」 경우다 —
+     * 발송 응답이 늘 같은 202 라 앱은 그 사실을 알 수 없고, 사용자는 오지 않는 문자를 기다린다.
+     * 그래서 화면은 「다시 입력」과 함께 「아이디·번호 확인」을 같이 말해야 한다.
+     *
+     * 틀려도 접수는 살아 있어 5번까지 다시 넣을 수 있다. 넘기면 [PASSWORD_RESET_RATE_LIMITED] 다.
+     */
+    PASSWORD_RESET_CODE_REJECTED,
+
+    /**
+     * 400 `USER302` PASSWORD_RESET_TOKEN_INVALID — 재설정 권한이 없다(만료 600초·이미 사용·무효화).
+     *
+     * 입력을 고쳐서 풀리지 않는다 — **인증부터 다시** 해야 한다.
+     */
+    PASSWORD_RESET_TOKEN_INVALID,
+
+    /**
+     * 400 `USER303` PASSWORD_CONFIRM_MISMATCH — 새 비밀번호와 확인 값이 다르다.
+     * 앱이 먼저 막으므로 정상 경로에서는 보이지 않는다. 토큰은 소진되지 않는다.
+     */
+    PASSWORD_CONFIRM_MISMATCH,
+
+    /**
+     * 400 `USER304` PASSWORD_POLICY_VIOLATION — 비밀번호 규칙 위반.
+     *
+     * 앱도 같은 규칙([AuthPolicy.isValidPassword])으로 먼저 막는다. 그래도 남는 경우가 하나 있다 —
+     * 서버는 **UTF-8 72바이트** 상한도 보는데(해시 함수의 한계) 앱 규칙에는 없다.
+     */
+    PASSWORD_POLICY_VIOLATION,
+
+    /** 400 `USER305` SAME_PASSWORD — 지금 쓰는 비밀번호와 같다. **앱이 미리 알 수 없는** 유일한 입력 오류다. */
+    SAME_PASSWORD,
+
+    /**
+     * 429 `USER306` PASSWORD_RESET_RATE_LIMITED — 재설정 요청 제한.
+     *
+     * 네 가지 제한이 한 코드로 온다: 문자 쿨다운(1분) · 하루 문자 횟수 · 계정당 시간당 10회 · IP 당 분당 30회.
+     * 서버가 `Retry-After` 로 남은 초를 주지만 사유는 주지 않으므로 문구에 숫자를 박지 않는다.
+     * 확인 단계에서는 「5번 틀렸다」는 뜻이다 — 그 접수로는 더 못 넣는다.
+     */
+    PASSWORD_RESET_RATE_LIMITED,
+
+    /**
+     * 401 `USER401` SOCIAL_TOKEN_INVALID — 서버가 구글 `idToken` 을 받아들이지 않았다.
+     *
+     * 위조·만료·**다른 앱용 토큰**(aud 불일치)·토큰에 email 이 없는 경우가 한 코드로 온다.
+     * 사용자가 고칠 입력이 없다 — 할 일은 「구글 로그인을 다시 누른다」 하나다.
+     *
+     * **세션 만료와 같은 401 이라 코드를 보지 않으면 구분되지 않는다.** 401 폴백이 [SESSION_EXPIRED] 라
+     * 놓치면 로그인도 안 한 사람에게 「다시 로그인해 주세요」가 뜬다. [LOGIN_FAILED] 와도 합치지 않는다 —
+     * 그쪽 문구는 「아이디 또는 비밀번호」를 말하는데 구글 로그인에는 둘 다 없다.
+     *
+     * 반복해서 난다면 사용자 탓이 아니라 **앱 설정 탓일 가능성이 높다**: idToken 을 요청할 때 넣는
+     * 서버용(웹) 클라이언트 ID 가 서버의 `GOOGLE_CLIENT_IDS` 에 없으면 모든 토큰이 이 코드로 거절된다.
+     */
+    SOCIAL_TOKEN_INVALID,
+
+    /**
+     * 401 `USER402` SOCIAL_SIGNUP_EXPIRED — 가입 대기표(`signupToken`)가 없거나 만료됐다
+     * ([AuthPolicy.SOCIAL_SIGNUP_TOKEN_TTL_SECONDS][com.moyeota.domain.model.AuthPolicy.SOCIAL_SIGNUP_TOKEN_TTL_SECONDS]초).
+     *
+     * 입력을 고쳐서 풀리지 않는다 — **구글 로그인부터 다시** 해야 한다. 문자 인증 단계로 되돌리는
+     * [PHONE_NOT_VERIFIED] 와 헷갈리지 말 것: 그쪽은 문자 인증만 다시 받으면 되지만 여기서는 그 앞 단계가
+     * 죽었다. 서버가 대기표를 문자 인증보다 **먼저** 확인하므로 둘 다 죽었으면 이 코드가 온다.
+     * 다시 받은 대기표로 가입할 때 문자 인증 토큰이 아직 살아 있으면(둘의 수명은 따로 센다) 그대로 쓸 수 있다.
+     *
+     * 이것도 401 이라 폴백에 맡기면 [SESSION_EXPIRED] 가 된다 — 가입 도중인 사람에게 세션 이야기가 뜬다.
+     */
+    SOCIAL_SIGNUP_EXPIRED,
+
+    /**
+     * 409 `USER403` SOCIAL_ALREADY_REGISTERED — 그 구글 계정은 이미 가입돼 있다.
+     *
+     * 대기표를 받은 뒤 가입을 끝내기 전에 **같은 구글 계정으로 다른 곳에서 먼저 가입을 마친** 경우다
+     * (기기 두 대, 또는 가입 제출이 성공했는데 응답을 못 받고 다시 누른 경우). 실패처럼 보이지만
+     * 사용자가 원한 상태에는 이미 와 있다 — **구글 로그인을 다시 부르면 이번에는 로그인된다**
+     * ([GoogleLoginResult.LoggedIn]).
+     *
+     * [PHONE_NUMBER_DUPLICATED] 와 합치지 않는다: 그쪽은 「그 번호를 쓰는 **다른** 계정이 있다」이고
+     * 여기는 「**이** 계정이 이미 있다」다. 409 폴백은 [LOGIN_ID_DUPLICATED] 라 놓치면 아이디가 없는
+     * 가입 화면에 「이미 사용 중인 아이디예요」가 뜬다.
+     */
+    SOCIAL_ALREADY_REGISTERED,
+
+    /**
+     * 503 `USER404` SOCIAL_UNAVAILABLE — 지금은 소셜 로그인·가입을 진행할 수 없다(가입 대기표 저장소 장애).
+     *
+     * 사용자 입력 문제가 아니고 잠시 뒤 재시도뿐이다. 대응은 [SMS_UNAVAILABLE] 과 같지만 **합치지 않는다** —
+     * 그쪽 문구는 「문자 인증이 안 된다」인데 이 코드는 구글 로그인 버튼을 누른 자리에서도 나므로,
+     * 문자를 요청한 적도 없는 사람에게 문자 이야기가 뜨게 된다.
+     *
+     * 번호가 404 처럼 생겼지만 **HTTP 404 가 아니라 503 이다**(`USER404` 는 코드 문자열일 뿐이다).
+     */
+    SOCIAL_UNAVAILABLE,
+    SOCIAL_LINK_CONFLICT,
+    SOCIAL_LINK_VERIFICATION_EXPIRED,
+    SOCIAL_CHALLENGE_INVALID,
 
     /**
      * 400 INVALID_REQUEST — 서버 검증 실패. 서버 message 가 "필드: 사유" 형태라
@@ -207,4 +335,12 @@ class AuthException(
     /** 서버가 준 원문 message. 없으면 null. */
     val serverMessage: String? = null,
     cause: Throwable? = null,
+    /**
+     * 서버가 `Retry-After` 로 알려 준 「다시 시도할 수 있을 때까지의 초」. 주지 않았으면 null.
+     *
+     * 지금 이 값을 주는 건 비밀번호 재설정의 429 `USER306` 뿐이다. 네 가지 제한(문자 쿨다운 60초 ·
+     * 하루 문자 횟수 · 계정당 시간당 · IP 당 분당)이 한 코드로 오는데, **사유는 없어도 남은 시간은 온다** —
+     * 화면은 이 값으로 「곧 풀린다」와 「한참 걸린다」를 가른다.
+     */
+    val retryAfterSeconds: Int? = null,
 ) : RuntimeException(serverMessage ?: error.name, cause)

@@ -15,6 +15,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.runtime.SideEffect
+import android.os.Build
+import android.view.View
+import android.view.WindowInsetsController
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.LifecycleStartEffect
@@ -40,9 +46,11 @@ import com.moyeota.domain.repository.PlaceRepository
 import com.moyeota.domain.repository.NoShowRepository
 import com.moyeota.domain.repository.RideRecordRepository
 import com.moyeota.domain.repository.RideRepository
+import com.moyeota.presentation.feature.auth.FindIdRoute
 import com.moyeota.presentation.feature.auth.LoginFormRoute
 import com.moyeota.presentation.feature.auth.LoginScreen
 import com.moyeota.presentation.feature.auth.MannerPledgeRoute
+import com.moyeota.presentation.feature.auth.PasswordResetRoute
 import com.moyeota.presentation.feature.auth.ProfileSetupRoute
 import com.moyeota.presentation.feature.auth.SignupCompleteScreen
 import com.moyeota.presentation.feature.auth.SignupDraft
@@ -80,6 +88,7 @@ import java.time.LocalDate
 @Composable
 fun MainNavGraph(
     authRepository: AuthRepository,
+    googleCredentialProvider: com.moyeota.domain.model.GoogleCredentialProvider,
     appConfigRepository: AppConfigRepository,
     rideRepository: RideRepository,
     placeRepository: PlaceRepository,
@@ -119,6 +128,7 @@ fun MainNavGraph(
     MainNavHost(
         loggedIn = authState is AuthState.Authenticated,
         authRepository = authRepository,
+        googleCredentialProvider = googleCredentialProvider,
         appConfigRepository = appConfigRepository,
         rideRepository = rideRepository,
         placeRepository = placeRepository,
@@ -142,6 +152,9 @@ private val TabRoutes = listOf(Routes.HOME, Routes.EXPLORE, Routes.CHAT, Routes.
 // 안내 문구 하나뿐이고(화면 이동은 어차피 일어난다), 실제로는 한두 프레임이면 결론이 난다.
 // 끝내 못 기다리면 「탈퇴됐다」도 「세션이 만료됐다」도 말하지 않는다(둘 중 하나는 거짓말이다).
 private const val ACCOUNT_DELETE_RESULT_WAIT_MS = 200L
+
+// 04c 를 마치고 04a 에 띄우는 안내. 로그아웃 상태의 재설정과 로그인 상태의 재설정이 같은 말을 한다.
+private const val PASSWORD_RESET_DONE_NOTICE = "비밀번호를 바꿨어요. 새 비밀번호로 로그인해 주세요"
 private const val ACCOUNT_DELETE_RESULT_POLL_MS = 16L
 
 // v15 와이어프레임 35화면 이동 규칙을 한곳에서 배선한다.
@@ -150,6 +163,7 @@ private const val ACCOUNT_DELETE_RESULT_POLL_MS = 16L
 private fun MainNavHost(
     loggedIn: Boolean,
     authRepository: AuthRepository,
+    googleCredentialProvider: com.moyeota.domain.model.GoogleCredentialProvider,
     appConfigRepository: AppConfigRepository,
     rideRepository: RideRepository,
     placeRepository: PlaceRepository,
@@ -250,6 +264,9 @@ private fun MainNavHost(
     // 같은 값을 `rememberSaveable` 로 들고 있어 새로 생기는 노출이 아니다(37 탈퇴의 비밀번호를
     // ViewModel 에 둔 이유와는 상황이 다르다 — 그쪽은 저장할 이유 자체가 없다).
     var signupDraft by rememberSaveable(stateSaver = SignupDraftSaver) { mutableStateOf(SignupDraft()) }
+    val socialSignup: com.moyeota.presentation.feature.auth.SocialSignupState = viewModel()
+    var socialFlow by rememberSaveable { mutableStateOf(false) }
+    var socialNotice by remember { mutableStateOf<String?>(null) }
     // 12 가 가입에서 PHONE_NOT_VERIFIED 를 받고 10 으로 되돌려 보낸 횟수.
     // 10 은 이 값이 바뀔 때마다 문자 인증 블록을 초기화한다 — 토큰이 서버에서 이미 죽었기 때문이다.
     // Boolean 이 아니라 카운터인 이유: 같은 일이 두 번 일어날 수 있고(새 토큰도 또 만료될 수 있다),
@@ -262,7 +279,36 @@ private fun MainNavHost(
     var reverifyPhoneRequest by rememberSaveable { mutableIntStateOf(0) }
     // 로그인 화면으로 돌아온 이유. 세션 만료일 때만 채워지고 사용자가 스스로 로그아웃하면 비운다.
     var signOutNotice by remember { mutableStateOf<String?>(null) }
+
+    // 04b 에서 찾았거나 04c 에서 비밀번호를 바꾼 아이디. 04a 로 돌아왔을 때 아이디 칸을 채우고,
+    // 04b → 04c 로 건너갈 때 04c 의 아이디 칸도 채운다. 로그인에 성공하면 버린다.
+    var recoveredLoginId by remember { mutableStateOf<String?>(null) }
+
+    // 04b·04c 를 끝내고 04a 로 돌아간다. 둘 다 04a 위에 쌓여 열리므로 그 엔트리로 되돌아가면 되고,
+    // 스택에 없으면(있을 수 없는 경로지만 화면 없는 그래프를 남기지 않으려고) 04a 로 새로 연다.
+    fun returnToLoginForm() {
+        if (!navController.popBackStack(Routes.LOGIN_FORM, inclusive = false)) {
+            navController.navigate(Routes.LOGIN_FORM) {
+                popUpTo(0) { inclusive = true }
+                launchSingleTop = true
+            }
+        }
+    }
     var logoutRequested by remember { mutableStateOf(false) }
+    // 로그인한 채로 04c 비밀번호 재설정을 마쳐 로그아웃시키는 중이다. 아래 전이가 「세션이 만료됐어요」나
+    // 무안내 대신 「새 비밀번호로 로그인」을 말하게 하는 근거다.
+    var passwordResetSignOut by remember { mutableStateOf(false) }
+
+    // 사용자가 일으킨 로그아웃의 한 길. logout() 은 실패하지 않는다(서버 호출이 실패해도 로컬 세션은 먼저
+    // 비운다) — 상태 전이는 아래 LaunchedEffect 가 받아 04a 로 보낸다.
+    // logoutRequested 를 먼저 세워 두면 그 전이를 세션 만료로 오해하지 않는다.
+    fun requestLogout() {
+        logoutRequested = true
+        scope.launch {
+            authRepository.logout()
+            runCatching { googleCredentialProvider.clearCredentialState() }
+        }
+    }
     // ── 37 탈퇴의 두 표시 ──
     //
     // 하나로 두면 안 된다. 예전에는 **요청을 보내기 직전에** 세우는 플래그 하나였는데, 그 값은
@@ -333,6 +379,20 @@ private fun MainNavHost(
     var selectedPartner by remember { mutableStateOf<User?>(null) }
     // 16 에서 만든 방 — 21 매칭 대기가 이 방을 조회한다. 위 selectedPartyId 와 같은 이유로 saveable
     var createdPartyId by rememberSaveable { mutableStateOf<Long?>(null) }
+
+    /**
+     * 16 도착지 확인을 **시간 정하기로 열까.** 17 탐색의 예약 탭에서 「새 동승 방 만들기」를 누른
+     * 경우에만 참이다.
+     *
+     * 깃발을 쓰는 이유: 15 → 16 은 두 걸음이고 그 사이에 출발지·도착지가 정해진다. 경로 인자로
+     * 실어 나르면 두 라우트의 주소가 모두 바뀌는데, 이 값은 **어디서 눌렀는지**일 뿐 화면의
+     * 정체성이 아니다. `selectedPartyId`·`createdPartyId` 와 같은 자리에 같은 이유로 둔다
+     * (구성 변경에서 살아남아야 하므로 saveable).
+     *
+     * **16 에 들어가지 않는 길에서는 반드시 내린다** — 홈 검색으로 들어온 사람이 직전에 예약 탭을
+     * 봤다는 이유로 시간 정하기 화면을 받으면 안 된다.
+     */
+    var createScheduled by rememberSaveable { mutableStateOf(false) }
     // 탐색용 selectedPartyId 와 진행용 createdPartyId 는 **일부러 둘이다** — 탐색 중 다른 방을 눌러도
     // 내가 들어 있는 방이 바뀌면 안 된다.
     //
@@ -479,6 +539,7 @@ private fun MainNavHost(
     var startupStageHandled by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(loggedIn) {
         if (wasLoggedIn && !loggedIn) {
+            socialSignup.clear(); socialFlow = false
             // 37 탈퇴 요청이 떠 있으면 **결과를 기다린다.** 세션이 사라진 이유가 탈퇴 성공(204)인지
             // 탈퇴 중 세션 만료(401 → 재발급 실패)인지를 가릴 수 있는 사실은 그 응답뿐인데, 두 경로가
             // 모두 메인 디스패처라 도착 순서가 보장되지 않는다. 기다리지 않고 「요청을 보냈다」만 보고
@@ -499,12 +560,15 @@ private fun MainNavHost(
                 // 요청은 보냈는데 결과를 끝내 못 봤다 — **아무 말도 하지 않는다.** 둘 중 하나는
                 // 거짓말이고(탈퇴됐는지 모른다), 사용자가 할 일은 어느 쪽이든 로그인 시도뿐이다.
                 accountDeleteRequested -> null
+                // 로그인한 채 비밀번호를 바꿨다 — 로그아웃 상태의 재설정과 같은 안내를 준다
+                passwordResetSignOut -> PASSWORD_RESET_DONE_NOTICE
                 logoutRequested -> null
                 else -> "세션이 만료됐어요. 다시 로그인해 주세요"
             }
             accountDeleted = false
             accountDeleteRequested = false
             logoutRequested = false
+            passwordResetSignOut = false
             // 로컬 기억은 남긴다(계정에 매인 값이라 같은 계정 재로그인 시 되살아나야 한다) —
             // 화면이 들고 있던 값만 버린다. 탈퇴는 예외로 디스크 기억까지 지우는데, 그건 여기가 아니라
             // AuthRepository.deleteAccount 가 세션을 비우면서 함께 한다(계정이 사라져 되살아날 길이 없다).
@@ -593,10 +657,22 @@ private fun MainNavHost(
 
         // B · 로그인 04 · 04a
         composable(Routes.LOGIN) {
-            LoginScreen(
-                // 「이메일로 시작하기」 = 가입 시작 → 10 프로필 설정. 소셜(카카오) 로그인은 백엔드에 없어 제공하지 않는다
+            LaunchedEffect(Unit) { socialSignup.clear(); socialFlow = false }
+            com.moyeota.presentation.feature.auth.LoginStartRoute(
+                repository = authRepository,
+                provider = googleCredentialProvider,
+                notice = socialNotice,
+                onLoggedIn = { socialSignup.clear(); socialFlow = false; resetTo(Routes.HOME) },
+                onSignupRequired = { ticket ->
+                    socialSignup.begin(ticket)
+                    socialFlow = true
+                    socialNotice = null
+                    reverifyPhoneRequest = 0
+                    navController.navigate(Routes.PROFILE_SETUP)
+                },
+                // 아이디 가입 → 기존 프로필·문자 인증 화면.
                 onEmailStart = {
-                    signupDraft = SignupDraft() // 새 가입은 빈 초안에서 시작
+                    socialSignup.clear(); socialFlow = false; signupDraft = SignupDraft() // 새 가입은 빈 초안에서 시작
                     // 지난 가입에서 인증 되돌림이 있었어도 새 폼에 그 안내가 남으면 안 된다
                     reverifyPhoneRequest = 0
                     navController.navigate(Routes.PROFILE_SETUP)
@@ -607,6 +683,15 @@ private fun MainNavHost(
         composable(Routes.LOGIN_FORM) {
             LoginFormRoute(
                 repository = authRepository,
+                googleProvider = googleCredentialProvider,
+                // 시작 화면의 Google 가입과 같은 진입 - 처음 온 계정이면 프로필·문자 인증으로 보낸다
+                onGoogleSignupRequired = { ticket ->
+                    socialSignup.begin(ticket)
+                    socialFlow = true
+                    socialNotice = null
+                    reverifyPhoneRequest = 0
+                    navController.navigate(Routes.PROFILE_SETUP)
+                },
                 onBack = {
                     // 세션 만료·로그아웃으로 스택이 비워진 채 들어왔으면 돌아갈 곳이 없다 — 04 로 보낸다.
                     // 그냥 popBackStack 하면 화면 없는 빈 그래프가 남는다.
@@ -614,14 +699,68 @@ private fun MainNavHost(
                 },
                 onLoggedIn = {
                     signOutNotice = null
+                    recoveredLoginId = null
                     resetTo(Routes.HOME)
                 },
                 onSignUp = {
-                    signupDraft = SignupDraft()
+                    socialSignup.clear(); socialFlow = false; signupDraft = SignupDraft()
                     reverifyPhoneRequest = 0
                     navController.navigate(Routes.PROFILE_SETUP)
                 },
+                onFindId = { navController.navigate(Routes.FIND_ID) },
+                onResetPassword = {
+                    // 직접 들어가는 재설정은 빈 아이디 칸에서 시작한다 — 지난번에 찾은 아이디를 끌고 가지 않는다
+                    recoveredLoginId = null
+                    navController.navigate(Routes.PASSWORD_RESET)
+                },
+                prefillLoginId = recoveredLoginId,
                 noticeMessage = signOutNotice,
+            )
+        }
+
+        // B · 계정 찾기 04b · 04c (2026-11 신규)
+        composable(Routes.FIND_ID) {
+            FindIdRoute(
+                repository = authRepository,
+                onBack = ::back,
+                // 가입되지 않은 번호 — 가입으로 보낸다. 04a 의 「가입하기」와 같은 시작이다.
+                onSignUp = {
+                    socialSignup.clear(); socialFlow = false; signupDraft = SignupDraft()
+                    reverifyPhoneRequest = 0
+                    navController.navigate(Routes.PROFILE_SETUP)
+                },
+                onLogin = { loginId ->
+                    recoveredLoginId = loginId
+                    returnToLoginForm()
+                },
+                onResetPassword = { loginId ->
+                    recoveredLoginId = loginId
+                    navController.navigate(Routes.PASSWORD_RESET)
+                },
+            )
+        }
+        composable(Routes.PASSWORD_RESET) {
+            PasswordResetRoute(
+                repository = authRepository,
+                initialLoginId = recoveredLoginId.orEmpty(),
+                onBack = ::back,
+                onFindId = { navController.navigate(Routes.FIND_ID) },
+                onCompleted = { loginId ->
+                    recoveredLoginId = loginId
+                    // 성공해도 서버는 토큰을 주지 않는다 — 새 비밀번호로 직접 로그인해야 한다는 걸 04a 에서 말한다.
+                    // 세션 만료 안내와 같은 자리(noticeMessage)라 로그인에 성공하면 함께 지워진다.
+                    if (loggedIn) {
+                        // 35 로그인 수단 관리에서 들어온 재설정. 서버가 이 회원의 리프레시 토큰을 전부
+                        // 취소했으므로 이 기기의 세션도 끝난 것이다 — 그대로 두면 저장 토큰과 Authenticated 가
+                        // 남은 채 로그인 폼에 서고, 다음 재발급에서 「세션이 만료됐어요」로 쫓겨난다.
+                        // 로그아웃 전이가 스택을 비우고 04a 로 보내며 안내도 거기서 세운다.
+                        passwordResetSignOut = true
+                        requestLogout()
+                    } else {
+                        signOutNotice = PASSWORD_RESET_DONE_NOTICE
+                        returnToLoginForm()
+                    }
+                },
             )
         }
 
@@ -633,14 +772,20 @@ private fun MainNavHost(
         // 서버로 가지도 않는 값을 묻는 화면이 된다(Routes.kt B' 절 참고).
         // 09 가 받던 실명·생년월일·성별·휴대폰은 10 의 「기본 정보」 절이 이어받았다.
         composable(Routes.PROFILE_SETUP) {
+            if (socialFlow && socialSignup.ticket == null) {
+                LaunchedEffect(Unit) { socialFlow = false; socialNotice = "가입 시간이 지났어요. 구글 로그인부터 다시 해 주세요"; resetTo(Routes.LOGIN) }
+                return@composable
+            }
             // Route 인 이유는 닉네임 중복 확인(POST /auth/nickname/check) 하나 때문이다 —
             // 입력값 자체는 여전히 화면이 들고 있다.
             ProfileSetupRoute(
+                social = socialFlow,
+                initialName = socialSignup.ticket?.name.orEmpty(),
                 repository = authRepository,
                 onBack = ::back,
                 onNext = { info ->
                     // 닉네임·문자 인증 토큰을 포함한 서버 가입 9개 값이 이 화면에서 한 번에 채워진다
-                    signupDraft = info
+                    if (socialFlow) socialSignup.draft = info else signupDraft = info
                     navController.navigate(Routes.MANNER_PLEDGE)
                 },
                 // 이미 가입된 번호(409)로 인증번호 발송이 끊겼을 때의 길 — 가입을 계속하게 두지 않고 로그인으로 보낸다.
@@ -650,12 +795,24 @@ private fun MainNavHost(
             )
         }
         composable(Routes.MANNER_PLEDGE) {
+            if (socialFlow && socialSignup.ticket == null) {
+                LaunchedEffect(Unit) { socialFlow = false; socialNotice = "구글 로그인부터 다시 해 주세요"; resetTo(Routes.LOGIN) }
+                return@composable
+            }
             // 여기서 회원가입 + 자동 로그인이 실행된다. 성공했을 때만 13 으로 넘어간다.
             MannerPledgeRoute(
                 repository = authRepository,
-                draft = signupDraft,
+                draft = if (socialFlow) socialSignup.draft else signupDraft,
+                signupToken = if (socialFlow) socialSignup.ticket?.signupToken else null,
+                // 문구는 실패 사유가 정한다 — 만료(USER402)면 「가입 시간이 지났어요」, 이미 가입(USER403)이면
+                // 「이미 가입된 구글 계정이에요」. 고정 문구를 쓰면 이미 가입된 사람에게 시간이 지났다고 말한다.
+                onRestartSocial = { message ->
+                    socialSignup.clear(); socialFlow = false
+                    socialNotice = message
+                    resetTo(Routes.LOGIN)
+                },
                 onBack = ::back,
-                onCompleted = { navController.navigate(Routes.SIGNUP_COMPLETE) },
+                onCompleted = { socialSignup.clear(); socialFlow = false; navController.navigate(Routes.SIGNUP_COMPLETE) },
                 // 409 닉네임 중복 — 10 으로 되돌린다. 스택에 남아 있는 그 엔트리로 pop 하므로
                 // 이미 채운 나머지 7개 필드는 그대로 있고 닉네임만 고치면 된다.
                 onEditNickname = { navController.popBackStack(Routes.PROFILE_SETUP, inclusive = false) },
@@ -686,15 +843,16 @@ private fun MainNavHost(
             LaunchedEffect(Unit) { activePartyViewModel.refresh() }
             HomeRoute(
                 repository = placeRepository,
-                userName = (userName as? UserNameState.Resolved)?.name,
                 activeRide = activeRide,
                 onActiveRideClick = { activeRide?.let(::navigateToStage) },
                 onSearchClick = {
                     searchInitialQuery = ""
+                    createScheduled = false
                     navController.navigate(Routes.DESTINATION)
                 },
                 onPlaceQuery = { query ->
                     searchInitialQuery = query
+                    createScheduled = false
                     navController.navigate(Routes.DESTINATION)
                 },
                 onTabSelect = ::navigateTab,
@@ -724,11 +882,16 @@ private fun MainNavHost(
                 },
             )
         }
-        // 16 은 15 위에 뜨는 모달 — 스크림 탭·닫기로만 닫힌다
+        // 16 은 15 위에 뜨는 모달 — 스크림 탭·닫기로만 닫힌다.
+        //
+        // decorFitsSystemWindows = false (디자인 QA S16-1): 기본값이면 다이얼로그 창이 상태바·제스처 바 **사이**에만
+        // 그려져, 두 바 자리에 다이얼로그의 어두운 딤(rgb 98,99,100)이 띠처럼 남았다. 창을 화면 끝까지 넓히면
+        // 16 의 StatusBarSpacer·NavigationBarSpacer 가 실제 인셋을 받아 그 자리를 흰색으로 칠한다.
         dialog(
             Routes.DESTINATION_CONFIRM,
-            dialogProperties = DialogProperties(usePlatformDefaultWidth = false),
+            dialogProperties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
         ) {
+            DialogLightSystemBars()
             DestinationConfirmRoute(
                 repository = rideRepository,
                 // 핀 조정·GPS 출발지의 좌표를 실주소로 되짚는다 (GET /places/reverse)
@@ -738,6 +901,8 @@ private fun MainNavHost(
                 onActivePartyRefresh = { activePartyViewModel.refresh() },
                 origin = confirmedOrigin,
                 destination = confirmedDestination,
+                // 17 예약 탭에서 눌러 온 길이면 시간 정하기로 연다 — 위 createScheduled 참고
+                initiallyScheduled = createScheduled,
                 onDismiss = ::back,
                 // 추천 방을 고르면 19 합류 확인으로 — 모달은 닫고 뒤로 눌러 돌아오지 않게 한다.
                 // 방을 만들지 않았으므로 createdPartyId 는 건드리지 않는다.
@@ -771,12 +936,17 @@ private fun MainNavHost(
                 },
                 // 배너는 **지금 단계 화면**으로 바로 간다
                 onOngoingRideClick = { activeRide?.let(::navigateToStage) },
-                onCreateRoomClick = { navController.navigate(Routes.DESTINATION) },
+                onCreateRoomClick = { scheduled ->
+                    createScheduled = scheduled
+                    navController.navigate(Routes.DESTINATION)
+                },
                 // 예약 날짜 검색의 도착지 필터 — 15 를 **고르기 전용**으로 열었다가 돌아온다.
                 searchDestination = reservationSearchDestination,
                 onPickSearchDestination = {
                     pickingSearchDestination = true
                     searchInitialQuery = ""
+                    // 필터만 고르러 가는 길이라 16 을 열지 않는다 — 깃발도 남기지 않는다
+                    createScheduled = false
                     navController.navigate(Routes.DESTINATION)
                 },
                 onClearSearchDestination = { reservationSearchDestination = null },
@@ -786,6 +956,9 @@ private fun MainNavHost(
         composable(Routes.JOIN_CONFIRM) {
             JoinConfirmRoute(
                 repository = rideRepository,
+                // 합류가 「다른 방에 참여 중」으로 막혔을 때 그 방이 확정된 방인지 알아내는 데 쓴다 —
+                // 확정된 방은 나갈 수가 없어서 안내할 행동이 달라진다(JoinConfirmRoute.alreadyInPartyMessage)
+                activePartyRepository = activePartyRepository,
                 partyId = selectedPartyId,
                 onDismiss = ::back,
                 // 합류가 끝나면 **방 id 만** 받아 21 매칭 대기로 넘긴다 — 합류 응답은 더 이상 방 상세가
@@ -887,7 +1060,8 @@ private fun MainNavHost(
         composable(Routes.CHAT) {
             ChatRoute(
                 repository = chatRepository,
-                // 열린 방이 진행 중인 그 방이면 헤더에 「매칭 화면으로 →」가 뜨고 「나가기」가 사라진다.
+                rideRepository = rideRepository,
+                // 열린 방이 진행 중인 그 방이면 헤더에 「매칭 화면으로」 줄이 뜨고 「나가기」가 사라진다.
                 // **판정의 1순위는 채팅방 id 다** — 이 경로의 방은 목록 응답(`GET /chat-rooms/me`)으로
                 // 만든 것이어서 partyId 가 0(모름)이고, 그걸로 비교하면 늘 "내 방이 아니다"가 됐다.
                 activeChatRoomId = activeChatRoomId,
@@ -897,6 +1071,20 @@ private fun MainNavHost(
                     // 나간 방 id 를 진행 화면이 들고 있으면 「채팅 열기」가 죽은 방으로 간다 — 캐시를 버린다
                     activePartyViewModel.forgetChatRoom()
                     navigateTab(MoyeotaTab.HOME)
+                },
+                // 목록 길게 누르기로 동승에서 나갔다 — 그 방이 진행 중인 방이면 기억을 지우고, 아니면(예약 방 등)
+                // 진행 중인 방을 다시 찾는다. 홈 배너와 「채팅 열기」가 나간 방을 붙들고 있지 않게 한다
+                // 방 id 는 숫자로 비교한다 — 문자열 표기(앞자리 0 등)가 달라도 같은 방이다(`needsDetailAfterRemember` 와 같은 이유)
+                onLeftParty = { partyId ->
+                    if (activeRide?.id?.toLongOrNull() == partyId) activePartyViewModel.clearParty()
+                    else activePartyViewModel.refresh()
+                },
+                // 채팅방만 나간 방은 끝난 방이다 — 그 채팅방을 들고 있었다면 버리고, 끝난 방 기억도 다시 확인해 지운다
+                onLeftChatRoom = { chatRoomId ->
+                    if (chatRoomId == activeChatRoomId) {
+                        activePartyViewModel.forgetChatRoom()
+                        activePartyViewModel.refresh()
+                    }
                 },
                 onNotParticipant = activePartyViewModel::forgetChatRoom,
                 onTabSelect = ::navigateTab,
@@ -942,12 +1130,8 @@ private fun MainNavHost(
                 onEditProfile = { navController.navigate(Routes.PROFILE_EDIT) },
                 onRideHistory = { navController.navigate(Routes.RIDE_HISTORY) },
                 onNoShowRecords = { navController.navigate(Routes.NO_SHOW_RECORDS) },
-                // logout() 은 실패하지 않는다 — 상태 전이는 위 LaunchedEffect 가 받아 04a 로 보낸다.
-                // logoutRequested 를 먼저 세워 두면 그 전이를 세션 만료로 오해하지 않는다.
-                onLogout = {
-                    logoutRequested = true
-                    scope.launch { authRepository.logout() }
-                },
+                onLogout = ::requestLogout,
+                onLoginMethods = { navController.navigate(Routes.LOGIN_METHODS) },
                 onDeleteAccount = { navController.navigate(Routes.ACCOUNT_DELETE) },
                 onTabSelect = ::navigateTab,
             )
@@ -994,6 +1178,12 @@ private fun MainNavHost(
             NoShowRecordsRoute(
                 repository = noShowRepository,
                 onBack = ::back,
+            )
+        }
+        composable(Routes.LOGIN_METHODS) {
+            com.moyeota.presentation.feature.mypage.LoginMethodsRoute(
+                repository = authRepository, provider = googleCredentialProvider,
+                onBack = ::back, onPasswordReset = { navController.navigate(Routes.PASSWORD_RESET) },
             )
         }
         composable(Routes.ACCOUNT_DELETE) {
@@ -1081,3 +1271,36 @@ private val SignupDraftSaver = listSaver<SignupDraft, Any>(
         )
     },
 )
+
+/**
+ * 지금 다이얼로그 창의 상태바·내비게이션바 아이콘을 **어두운 색**(light appearance)으로 맞춘다.
+ *
+ * 다이얼로그는 액티비티와 다른 창이라 액티비티의 시스템 바 설정을 물려받지 않는다. 16 처럼 창을 시스템 바
+ * 아래까지 넓혀 흰색으로 칠하면(decorFitsSystemWindows = false) 기본값인 흰 아이콘이 흰 바탕에 묻혀 시계·배터리가
+ * 사라진다. 그래서 그 창에서만 아이콘을 어둡게 바꾼다 — 창이 닫히면 설정도 함께 사라진다.
+ *
+ * androidx.core(`WindowCompat`)를 쓰지 않는 이유: presentation 모듈은 그 의존성을 직접 갖지 않는다.
+ * 플랫폼 API 로 충분하다(30+ 는 `insetsController`, 그 아래는 systemUiVisibility 플래그).
+ */
+@Composable
+private fun DialogLightSystemBars() {
+    val view = LocalView.current
+    SideEffect {
+        val window = (view.parent as? DialogWindowProvider)?.window ?: return@SideEffect
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val mask = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
+                WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+            window.insetsController?.setSystemBarsAppearance(mask, mask)
+        } else {
+            setLegacyLightSystemBars(window.decorView)
+        }
+    }
+}
+
+/** API 29 이하 — `insetsController` 가 없어 옛 systemUiVisibility 플래그로 같은 일을 한다 */
+@Suppress("DEPRECATION")
+private fun setLegacyLightSystemBars(decor: View) {
+    var flags = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) flags = flags or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+    decor.systemUiVisibility = decor.systemUiVisibility or flags
+}

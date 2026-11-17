@@ -89,6 +89,37 @@ class MeetingCopyTest {
         assertEquals(Instant.parse("2026-11-06T07:13:00Z"), meetingPresetAt(now, 60))
     }
 
+    /**
+     * **보여 준 시각이 그대로 보내진다** — 칩을 누르는 순간 한 번 만들어 [ConfirmingPreset] 에 담고,
+     * 다이얼로그 제목도 서버 요청도 그 값을 쓴다.
+     *
+     * 왜 테스트가 필요한가: 예전에는 제목과 요청이 시계를 **따로** 읽었다. 분으로 내림하는 값이라
+     * 「찰나뿐」이라고 적혀 있었지만, 다이얼로그를 몇 초 들여다보면 분은 쉽게 넘어간다 —
+     * 실측(2026-11-06)에서 「오전 10:59에 만날까요?」로 묻고 **11:00 으로 확정됐다.** 확정은
+     * 되돌릴 수 없고 어기면 노쇼가 되므로, 동의한 값과 보내는 값이 갈리면 안 된다.
+     *
+     * 아래 첫 단언이 그 갈림이 **실재함**을 고정하고(13초 뒤에 다시 만들면 값이 다르다),
+     * 둘째가 캡처하면 그 갈림이 **사라짐**을 고정한다.
+     */
+    @Test
+    fun `약속 시각은 칩을 누른 순간 한 번 만들어 제목과 요청이 함께 쓴다`() {
+        // 06:13:47 + 10분 = 06:23:xx → 내림 06:23. 13초 뒤에 다시 만들면 06:24 다 — 옛 버그의 씨앗.
+        val later = now.plusSeconds(13)
+        assertEquals(Instant.parse("2026-11-06T06:24:00Z"), meetingPresetAt(later, 10))
+
+        // 캡처하면 제출이 언제든 값은 하나다.
+        val picked = ConfirmingPreset(minutes = 10, departureAt = meetingPresetIso(now, 10))
+
+        assertEquals(meetingPresetIso(now, 10), picked.departureAt)
+        assertEquals(
+            "제목이 읽는 값과 서버로 가는 값은 같아야 한다",
+            meetingTimeLabel(picked.departureAt),
+            meetingTimeLabel(meetingPresetIso(now, 10)),
+        )
+        // 분이 넘어간 뒤에도 들고 있던 값은 그대로다.
+        assertEquals(meetingPresetIso(now, 10), picked.departureAt)
+    }
+
     /** 서버에 나가는 값은 ISO-8601 UTC 다. 초가 0 이면 `Instant.toString` 이 생략한다. */
     @Test
     fun `프리셋은 ISO-8601 문자열로 나간다`() {

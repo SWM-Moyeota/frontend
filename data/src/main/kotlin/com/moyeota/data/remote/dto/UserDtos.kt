@@ -4,7 +4,7 @@ import kotlinx.serialization.Serializable
 
 /**
  * GET /api/v1/local/users/info 의 200 응답.
- * 백엔드 `MyProfileResponse(UUID uuid, String name, String imageUrl, int noShowCount, Instant restrictedUntil)`
+ * 백엔드 `MyProfileResponse(UUID uuid, String name, String imageUrl, int noShowCount, Instant restrictedUntil, String loginId)`
  * 와 필드 1:1 (`user/local/dto/MyProfileResponse.java`).
  *
  * **서버 record 이름이 `UserResponse` 가 아니다.** `UserResponse` 는 **가입 응답**의 3필드 record
@@ -47,6 +47,15 @@ import kotlinx.serialization.Serializable
  * nullable 로 받는 이유 — 「0 은 서버가 만들 수 없는 값이라 모른다와 구별해야 한다」 — 가 여기엔
  * 없다: 노쇼 0회는 **정상이고 흔한 값**이며, 모른다와 0 의 화면 처리가 같다(횟수를 내세우지 않는다).
  * 서버 record 가 원시 `int` 라 명시적 null 이 올 일도 없다.
+ *
+ * ### [loginId] — 로그인 아이디(Backend PR #330, 2026-11)
+ * 아이디·비밀번호로 가입한 계정이면 그 **아이디**가, 로컬 로그인이 없는 계정(소셜 전용 등)이면
+ * **null** 이 온다. 36 프로필 수정이 「아이디」 행을 **읽기 전용**으로 보여 주는 데만 쓴다 —
+ * 아이디를 바꾸는 서버 경로는 없다.
+ *
+ * nullable + 기본값 null 인 이유는 둘이다. ① **서버 계약이 null 을 허용한다**(로컬 로그인이 없는
+ * 계정). ② **PR #330 이전 배포에는 키가 없다** — 논-널로 선언하면 그 서버를 붙인 순간 내 정보 조회가
+ * 통째로 터져 로그인 직후 화면이 열리지 않는다([imageUrl] 이 생길 때와 같은 판단).
  */
 @Serializable
 data class UserProfileResponse(
@@ -55,6 +64,7 @@ data class UserProfileResponse(
     val imageUrl: String? = null,
     val noShowCount: Int = 0,
     val restrictedUntil: String? = null,
+    val loginId: String? = null,
 )
 
 /**
@@ -96,8 +106,12 @@ data class UpdateProfileRequest(
 )
 
 /**
- * DELETE /api/v1/users/me 의 요청 본문 — 백엔드 `UserDeletionRequest(@NotBlank String password)`.
+ * DELETE /api/v1/users/me 의 요청 본문 — 백엔드 `UserDeletionRequest(String password)`.
  * 키 이름은 반드시 `password` 다.
+ *
+ * **아이디·비밀번호 회원 전용이다.** 소셜 회원은 비밀번호가 없어 이 본문 없이 같은 경로를 부른다
+ * ([com.moyeota.data.remote.UserApi.deleteSocialAccount]). 그 때문에 서버 필드에서 `@NotBlank` 가 빠졌고
+ * (컨트롤러도 `@RequestBody(required = false)` 다), 빈 값 검사는 서비스가 **로컬 회원일 때만** 한다.
  *
  * **DELETE 에 본문이 실린다는 게 이 DTO 의 전부다.** Retrofit 의 `@DELETE` 는 `hasBody = false` 라
  * [com.moyeota.data.remote.UserApi.deleteAccount] 는 `@HTTP(method = "DELETE", hasBody = true)` 를 쓴다
@@ -106,7 +120,8 @@ data class UpdateProfileRequest(
  * 누구를 지우는지는 싣지 않는다. 대상은 `@CurrentUser` 가 Bearer 에서 뽑는다
  * — 그래서 이 호출은 **반드시 인증 클라이언트**(`UserApi`)로 나가야 한다.
  *
- * 빈 문자열은 서버가 400 `INVALID_REQUEST` 로 튕긴다(`@NotBlank`). 화면이 빈 입력으로는 버튼을
+ * 빈 문자열은 서버가 400 `INVALID_REQUEST` 로 튕긴다(로컬 회원이면 서비스가 「비밀번호는 필수입니다.」로
+ * 끊는다). 화면이 빈 입력으로는 버튼을
  * 누를 수 없게 막으므로(`canSubmitAccountDeletion`) 실제로 나가지는 않는다.
  */
 @Serializable

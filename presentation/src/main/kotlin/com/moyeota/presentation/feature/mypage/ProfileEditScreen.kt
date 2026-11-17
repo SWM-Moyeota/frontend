@@ -2,7 +2,6 @@ package com.moyeota.presentation.feature.mypage
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,28 +11,26 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
-import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import com.moyeota.core.designsystem.component.MoyeotaTextField
 import com.moyeota.core.designsystem.component.MoyeotaTopBar
@@ -42,15 +39,14 @@ import com.moyeota.core.designsystem.component.NoticeBanner
 import com.moyeota.core.designsystem.component.NoticeKind
 import com.moyeota.core.designsystem.component.PrimaryCtaButton
 import com.moyeota.core.designsystem.component.StatusBarSpacer
+import com.moyeota.core.designsystem.component.TextLinkButton
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.core.designsystem.theme.MoyeotaShape
 import com.moyeota.core.designsystem.theme.MoyeotaTheme
 import com.moyeota.core.designsystem.theme.MoyeotaType
 import com.moyeota.domain.model.ProfileImage
 import com.moyeota.presentation.feature.auth.NicknameCheckState
 import com.moyeota.presentation.feature.auth.NicknamePolicy
-
-// 글자수 카운터 회색 (core token 미정의 — 10 프로필 만들기와 같은 값)
-private val CounterGray = Color(0xFF9AA1AC)
 
 /** 사진 격자의 열 수. 4 외에는 답이 없다 — 근거는 [ProfileImageGrid] KDoc. */
 private const val PROFILE_IMAGE_COLUMNS = 4
@@ -63,13 +59,23 @@ private val ProfileImageGap = 12.dp
  *
  * 진입: 35 마이페이지 프로필 카드 / 뒤로 → 35 / 「저장」 성공 → 35 (이름·사진 다시 조회)
  *
- * 구성: 상단바 「프로필 수정」 → 닉네임 입력(글자수 · 중복 확인) → 프로필 사진 격자 16장 +
- * 「기본 이미지로 되돌리기」 → 「저장」
+ * 구성: 상단바 「프로필 수정」 → (로컬 로그인 계정만) 「아이디」 읽기 전용 행 → 닉네임 입력
+ * (글자수 · 중복 확인) → 프로필 사진 격자 16장 + 「기본 이미지로 되돌리기」 → 「저장」
  *
  * 바꿀 수 있는 값이 **닉네임과 프로필 사진 둘**인 이유: `PATCH /api/v1/users/me` 가 받는 게 그 둘이고,
  * 사진은 서버가 준비한 16장 중에서 고르는 것뿐이다(업로드 경로가 서버에 없다). 실명 · 생년월일 ·
  * 성별 · 휴대폰 · 이메일은 서버에 수정 경로가 아예 없다. 그래서 「수정 불가」 행을 늘어놓는 대신
  * 바꿀 수 있는 것만 둔다(`docs/BACKEND-GAP-CLEANUP.md` 의 원칙).
+ *
+ * ### 「아이디」 행은 그 원칙의 **유일한 예외**다 (2026-11, 오너 승인)
+ * 바꿀 수 없는 값인데도 두는 이유는 쓰임이 다르기 때문이다: 실명·생년월일은 사용자가 이미 아는 값이지만,
+ * **로그인 아이디는 잊는 값**이고 「내 아이디가 뭐였지」를 확인하러 오는 자리가 바로 여기다. 서버가
+ * `GET /local/users/info` 에 `loginId` 를 실어 주면서(Backend PR #330) 보여 줄 근거가 생겼다.
+ *
+ * - **읽기 전용 행**이지 비활성 입력칸이 아니다([LoginIdRow]) — 흐린 입력칸은 「언젠가 눌러서 바꾼다」로
+ *   읽히는데 아이디는 바꾸는 서버 경로가 없다. 닉네임 필드와 같은 뼈대에 테두리 없는 채움 면이다.
+ * - 로컬 로그인이 없는 계정(서버가 null)·조회 실패·공백이면 **행을 통째로 숨긴다**([loginId] 가 null).
+ *   빈 값 행을 남기면 「아이디가 지워졌다」로 읽힌다.
  *
  * 규칙 · 문구 · 확인 방식은 10 프로필 만들기와 같은 것을 쓴다([NicknamePolicy], [NicknameCheckState],
  * 입력이 멈춘 뒤 자동 중복 확인) — 같은 값을 두 화면이 다른 기준으로 받으면 둘 중 하나는 거짓말이 된다.
@@ -99,11 +105,14 @@ private val ProfileImageGap = 12.dp
  * @param usingDefaultImage 진입 시점의 사진이 기본 이미지인가. 「되돌리기」를 보일지만 정한다.
  * @param errorMessage 저장 실패 사유. 중복 · 형식 오류는 필드가 말하므로 여기엔 오지 않는다.
  *   사진 키 오류(400 `USER112`)는 **여기로** 온다 — 닉네임 필드로 돌리면 거짓이다.
+ * @param loginId 보여 줄 로그인 아이디. **null 이면 「아이디」 행을 그리지 않는다**
+ *   (`profileLoginIdOrNull` 이 공백·미조회·로컬 로그인 없음을 모두 null 로 접어 준다).
  */
 @Composable
 fun ProfileEditScreen(
     nickname: String,
     modifier: Modifier = Modifier,
+    loginId: String? = null,
     currentNickname: String? = null,
     check: NicknameCheckState = NicknameCheckState.Idle,
     images: List<ProfileImage> = emptyList(),
@@ -125,7 +134,9 @@ fun ProfileEditScreen(
     val canSave = canSaveProfile(nickname, currentNickname, check, imageIntent, saving)
     val canResetImage = canResetProfileImage(usingDefaultImage, imageIntent)
 
-    Column(modifier = modifier.fillMaxSize().imePadding().background(MoyeotaColor.SurfaceSoft)) {
+    // 흰 바탕(디자인 QA G2·P1). 예전 SurfaceSoft 바탕 위에서는 비활성 「저장」이 바탕과 1.01:1 이라
+    // 버튼 모양이 사라졌고, 「아이디」 행의 SurfaceSoft 채움도 바탕에 묻혀 보이지 않았다.
+    Column(modifier = modifier.fillMaxSize().imePadding().background(MoyeotaColor.SurfaceCanvas)) {
         StatusBarSpacer()
         MoyeotaTopBar(title = "프로필 수정", onBack = onBack)
 
@@ -135,21 +146,23 @@ fun ProfileEditScreen(
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp),
         ) {
+            // 제목 줄(「닉네임과 프로필 사진을 바꿀 수 있어요」)은 두지 않는다 — 상단바 「프로필 수정」과
+            // 바로 아래 입력칸이 이미 말하는 것을 한 번 더 읽히는 문장이었다(디자인 QA P2).
             Spacer(Modifier.height(16.dp))
-            Text(
-                // 10 의 「닉네임은 나중에 바꿀 수 있어요」 가 가리키던 화면이 여기다
-                text = "닉네임과 프로필 사진을 바꿀 수 있어요",
-                style = MoyeotaType.HeadingLg,
-                color = MoyeotaColor.InkPrimary,
-            )
-            Spacer(Modifier.height(8.dp))
             Text(
                 // 실명이 공개되지 않는다는 사실을 한 번 더 말해 둔다 — 10 에서 이미 안내했지만,
                 // 이름을 바꾸러 들어온 순간이 그 사실을 가장 확인하고 싶을 때다
                 text = "탑승 상대에게 보이는 유일한 이름이에요. 실명은 공개되지 않아요",
-                style = MoyeotaType.BodySm.copy(fontSize = 14.sp),
+                style = MoyeotaType.BodySm,
                 color = MoyeotaColor.TextMute,
             )
+
+            // 「아이디」는 닉네임 **위**다 — 계정의 신원(바뀌지 않는 것)이 먼저, 꾸미는 값이 그다음이다.
+            // 공백·null 이면 행과 그 아래 간격까지 통째로 없다(빈 자리를 남기지 않는다).
+            if (!loginId.isNullOrBlank()) {
+                Spacer(Modifier.height(24.dp))
+                LoginIdRow(loginId = loginId)
+            }
 
             Spacer(Modifier.height(24.dp))
             MoyeotaTextField(
@@ -161,7 +174,8 @@ fun ProfileEditScreen(
                 helperText = when {
                     fieldError != null -> null
                     check == NicknameCheckState.Checking -> "사용할 수 있는지 확인하고 있어요"
-                    unchanged -> "지금 쓰고 있는 닉네임이에요"
+                    // 그대로인 닉네임에는 도움말을 달지 않는다 — 칸 안의 값이 이미 말하는 것이다(디자인 QA P2)
+                    unchanged -> null
                     nickname.isNotEmpty() -> "탑승 상대에게는 「$nickname」 으로 보여요"
                     else -> null
                 },
@@ -170,8 +184,7 @@ fun ProfileEditScreen(
                     Text(
                         text = "${nickname.length} / ${NicknamePolicy.MAX_LENGTH}",
                         style = MoyeotaType.CaptionMd,
-                        fontWeight = FontWeight.Medium,
-                        color = CounterGray,
+                        color = MoyeotaColor.TextMute,
                     )
                 },
             )
@@ -182,8 +195,8 @@ fun ProfileEditScreen(
                 Text(
                     text = "사용 가능한 닉네임이에요",
                     style = MoyeotaType.CaptionMd,
-                    fontWeight = FontWeight.Medium,
-                    color = MoyeotaColor.Success500,
+                    // Success500 은 흰 바탕 대비 2.5:1 — 12sp 글자에는 한 단계 진한 600(4.1:1)을 쓴다
+                    color = MoyeotaColor.Success600,
                 )
             }
 
@@ -191,8 +204,8 @@ fun ProfileEditScreen(
             // (360dp 기기에서 328dp) 닉네임 입력칸이 접힌선 아래로 밀려 360x640 화면에서 보이지
             // 않는다 — 이 화면에 들어오는 가장 흔한 이유가 닉네임 변경인데 그게 안 보이게 된다.
             //
-            // 목록도 없고 되돌릴 것도 없으면 섹션 자체를 접는다. 빈 자리에 「준비된 그림 중에서
-            // 고를 수 있어요」 만 남으면 그 문장이 거짓이 된다.
+            // 목록도 없고 되돌릴 것도 없으면 섹션 자체를 접는다. 빈 자리에 「프로필 사진」 머리말만
+            // 남으면 고를 것이 있는 것처럼 읽힌다.
             //
             // **단 「조회 실패」는 접지 않는다.** 접으면 사진을 바꾸러 들어온 사용자에게 섹션이
             // 흔적 없이 사라져 「이 앱에는 사진 기능이 없다」로 읽힌다 — 고장인지 아닌지도 알 수 없고
@@ -207,28 +220,17 @@ fun ProfileEditScreen(
                         style = MoyeotaType.BodySm,
                         color = MoyeotaColor.TextMute,
                     )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
+                    // 글자 앞 8dp 안쪽 여백만큼 밖으로 당겨 글자 시작을 화면 여백에 맞춘다
+                    TextLinkButton(
                         text = "다시 시도",
-                        style = MoyeotaType.BodySm.copy(fontWeight = FontWeight.Bold),
-                        color = MoyeotaColor.Primary500,
-                        modifier = Modifier
-                            .heightIn(min = 48.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .clickable(enabled = !saving) { onRetryImages() }
-                            .padding(horizontal = 12.dp)
-                            .wrapContentHeight(),
+                        onClick = onRetryImages,
+                        enabled = !saving,
+                        modifier = Modifier.offset(x = (-8).dp),
                     )
                 }
                 if (images.isNotEmpty()) {
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        // 왜 업로드 칸이 없는지 한 줄로 답한다. 10 프로필 만들기의 「사진은 올리지
-                        // 않아요」 와 모순되지 않는다 — 올리는 건 여전히 없고, 준비된 그림을 고른다.
-                        text = "준비된 그림 중에서 고를 수 있어요",
-                        style = MoyeotaType.BodySm,
-                        color = MoyeotaColor.TextMute,
-                    )
+                    // 「준비된 그림 중에서 고를 수 있어요」 한 줄은 두지 않는다 — 바로 아래 격자가 그 말을
+                    // 그림으로 보여 준다(디자인 QA P2). 업로드 칸이 없다는 것도 격자만 있는 모양이 말한다.
                     Spacer(Modifier.height(ProfileImageGap))
                     ProfileImageGrid(
                         images = images,
@@ -263,6 +265,53 @@ fun ProfileEditScreen(
         }
         Spacer(Modifier.height(16.dp))
         NavigationBarSpacer()
+    }
+}
+
+/**
+ * 「아이디」 읽기 전용 행 — 닉네임 필드와 **같은 뼈대**(라벨 위 · 8dp · 52dp 줄 · 안쪽 16dp)에
+ * **테두리 없는 `SurfaceSoft` 채움**을 얹는다(디자인 QA 4-1).
+ *
+ * ### 왜 비활성 [MoyeotaTextField] 가 아닌가
+ * 회색으로 죽은 입력칸(흐린 글자 + 테두리)은 「지금은 막혔지만 원래는 고치는 칸」으로 읽힌다 — 사용자는
+ * 어딘가에 잠금을 푸는 길이 있다고 생각하고 찾는다. 아이디는 바꾸는 서버 경로 자체가 없다. 그래서
+ * 이 행은 입력칸의 표지(테두리·포커스·커서)를 하나도 갖지 않고, 값은 **흐리게 하지 않는다**(`BodyMd`
+ * · `InkPrimary` — 비활성처럼 보이는 낮은 대비를 쓰지 않는다). 채움 면은 「값을 담은 칸」이라는 것만
+ * 말한다. 자물쇠·꺾쇠·도움말 글은 두지 않는다 — 누를 것이 없는 줄에 누를 것처럼 보이는 표지를 달지 않는다.
+ *
+ * 뼈대를 닉네임 필드와 맞추는 이유는 두 줄이 **같은 목록의 항목**으로 읽혀야 해서다(높이·여백이 다르면
+ * 서로 다른 종류의 요소로 보인다).
+ *
+ * 스크린리더에는 「아이디, hong123」 한 문장으로 읽힌다 — 따로 읽히면 라벨과 값이 무엇의 짝인지
+ * 끊긴다. 누를 수 있는 것이 없으므로 클릭 의미는 싣지 않는다.
+ * iOS 포팅: 같은 모양에 복사를 허용하려면 `.textSelection(.enabled)`.
+ */
+@Composable
+private fun LoginIdRow(loginId: String) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clearAndSetSemantics { contentDescription = "아이디, $loginId" },
+    ) {
+        Text(text = "아이디", style = MoyeotaType.BodySm, color = MoyeotaColor.TextMute)
+        Spacer(Modifier.height(8.dp))
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(52.dp)
+                .background(MoyeotaColor.SurfaceSoft, MoyeotaShape.Card)
+                .padding(horizontal = 16.dp),
+            contentAlignment = Alignment.CenterStart,
+        ) {
+            Text(
+                text = loginId,
+                style = MoyeotaType.BodyMd,
+                color = MoyeotaColor.InkPrimary,
+                // 아이디는 공백 없는 한 덩어리다 — 길면 줄을 바꾸기보다 끝을 줄인다(전체는 스크린리더가 읽는다)
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 
@@ -386,33 +435,22 @@ private fun ProfileImageCell(
 /**
  * 「기본 이미지로 되돌리기」.
  *
- * 이 앱은 화면 본문에 `TextButton` 을 쓰지 않는다 — 쓰인 11건이 전부 `AlertDialog` 안이다.
- * 그래서 같은 뜻을 파란 굵은 글씨 한 줄로 낸다.
- *
- * 높이를 [heightIn] 으로 48dp 이상 벌려 둔다. 14sp 글자 한 줄은 터치 영역이 25dp 도 안 되어
- * 「저장」 바로 위에서 오타처럼 눌린다. `clip` → `clickable` → `padding` 순서여야
- * 물결 효과가 모서리를 넘지 않고, 그 여백까지 눌린다.
+ * 화면 본문의 글자 행동은 디자인시스템 [TextLinkButton] 하나로 그린다(디자인 QA G12) — 보이는 건 글자
+ * 한 줄이지만 터치 영역이 48dp 다. 14sp 글자 한 줄은 터치 영역이 25dp 도 안 되어 「저장」 바로 위에서
+ * 오타처럼 눌린다.
  *
  * 누르면 **로컬 선택만 바뀐다.** 이 화면의 커밋 지점은 「저장」 하나다 — 되돌리기만 즉시 서버로
  * 나가면 「저장을 안 눌렀는데 사진이 바뀜」이 생긴다.
  */
 @Composable
 private fun ProfileImageResetAction(enabled: Boolean, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .heightIn(min = 48.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 4.dp),
-        contentAlignment = Alignment.CenterStart,
-    ) {
-        Text(
-            text = "기본 이미지로 되돌리기",
-            style = MoyeotaType.ButtonMd,
-            fontWeight = FontWeight.Bold,
-            color = MoyeotaColor.Primary500,
-        )
-    }
+    TextLinkButton(
+        text = "기본 이미지로 되돌리기",
+        onClick = onClick,
+        enabled = enabled,
+        // 글자 앞 8dp 안쪽 여백만큼 밖으로 당겨 글자 시작을 화면 여백에 맞춘다
+        modifier = Modifier.offset(x = (-8).dp),
+    )
 }
 
 /**
@@ -435,6 +473,15 @@ private val PreviewProfileImages: List<ProfileImage> = List(16) { index ->
 private fun ProfileEditScreenPreview() {
     MoyeotaTheme {
         ProfileEditScreen(nickname = "성윤", currentNickname = "성윤")
+    }
+}
+
+/** 로컬 로그인 계정 — 닉네임 위에 「아이디」 읽기 전용 행이 붙는다. 360dp 에서 입력칸처럼 보이지 않는지 본다. */
+@Preview(showBackground = true, widthDp = 360, heightDp = 780, name = "아이디 표시")
+@Composable
+private fun ProfileEditScreenLoginIdPreview() {
+    MoyeotaTheme {
+        ProfileEditScreen(nickname = "성윤", currentNickname = "성윤", loginId = "hong123")
     }
 }
 

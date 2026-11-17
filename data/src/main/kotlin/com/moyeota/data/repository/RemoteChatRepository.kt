@@ -26,6 +26,8 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import com.moyeota.data.remote.chat.ChatSocket
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.map
 import com.moyeota.domain.repository.ChatRepository
@@ -109,6 +111,7 @@ class RemoteChatRepository(
                 when (signal) {
                     ChatSocket.RoomSignal.Connected -> ChatRealtimeEvent.Connected
                     ChatSocket.RoomSignal.Disconnected -> ChatRealtimeEvent.Disconnected
+                    ChatSocket.RoomSignal.Stopped -> ChatRealtimeEvent.Stopped
                     is ChatSocket.RoomSignal.Message -> ChatRealtimeEvent.Message(
                         signal.response.toChatMessage(
                             resolveIdentity(chatRoomId, listOf(signal.response), priorRefresh = null),
@@ -137,6 +140,7 @@ class RemoteChatRepository(
         fetchMembers(chatRoomId)
     }
 
+    // 묶어 보내는 건 호출부(화면) 몫이다 — 여기는 한 번 부르면 한 번 나간다
     override suspend fun markAsRead(chatRoomId: Long, readMessageId: Long) = chatCall {
         api.readRoom(chatRoomId, readMessageId)
     }
@@ -154,19 +158,29 @@ class RemoteChatRepository(
         slice.toPage(resolveIdentity(chatRoomId, slice.messages, priorRefresh = null))
     }
 
-    // 소켓이 이 방에 붙어 있을 때만 참. 저장 결과는 응답이 아니라 observeRoom 으로 돌아온다.
-    override suspend fun trySendMessage(chatRoomId: Long, content: String): Boolean =
-        socket?.sendMessage(chatRoomId, content) ?: false
-
-    override suspend fun tryMarkAsRead(chatRoomId: Long, readMessageId: Long): Boolean =
-        socket?.markAsRead(chatRoomId, readMessageId) ?: false
-
-    // 전송 응답도 조회와 같은 shape 이라 발신자 publicId 가 들어 있다 — 방금 보낸 메시지가
-    // 그 자리에서 바로 내 것으로 판정된다(화면이 전송 결과를 그대로 목록에 붙이기 때문에 중요하다).
+    /**
+     * 방마다 하나씩 차례로 보낸다 — [sendLock] 을 잡은 채 응답(201 또는 실패)까지 기다린다.
+     *
+     * [Mutex] 는 **공정**하다(먼저 기다린 순서대로 잠금을 준다). 그래서 사용자가 누른 순서 = 잠금 순서 =
+     * 서버 도착 순서가 된다. 실패해도 잠금은 풀리고 예외만 올라간다 — 재전송은 하지 않는다(다음 메시지로 진행).
+     *
+     * 잠금은 화면(ViewModel)이 아니라 이 저장소(앱 수명)에 둔다 — 방을 나갔다 다시 들어와 새로 누른 메시지가
+     * 앞 화면에서 아직 응답을 기다리는 메시지를 앞지르지 않게.
+     *
+     * 전송 응답도 조회와 같은 shape 이라 발신자 publicId 가 들어 있다 — 방금 보낸 메시지가
+     * 그 자리에서 바로 내 것으로 판정된다.
+     */
     override suspend fun sendMessage(chatRoomId: Long, content: String): ChatMessage = chatCall {
-        val sent = api.sendMessage(chatRoomId, SendMessageRequestDto(content))
+        // 잠금은 **저장 요청 하나**에만 건다. 발신자 이름 풀기(참여자 재조회일 수 있다)는 순서와 무관해
+        // 잠금 밖에서 한다 — 안에 두면 다음 메시지가 그 조회까지 기다린다.
+        val sent = sendLock(chatRoomId).withLock { api.sendMessage(chatRoomId, SendMessageRequestDto(content)) }
         sent.toChatMessage(resolveIdentity(chatRoomId, listOf(sent), priorRefresh = null))
     }
+
+    // 방 id → 전송 잠금. 방이 수십 개를 넘을 일이 없어 지우지 않는다(잠금 하나는 객체 하나다).
+    private val sendLocks = ConcurrentHashMap<Long, Mutex>()
+
+    private fun sendLock(chatRoomId: Long): Mutex = sendLocks.computeIfAbsent(chatRoomId) { Mutex() }
 
     override suspend fun deleteMessage(chatRoomId: Long, messageId: Long) = chatCall {
         api.deleteMessage(chatRoomId, messageId)

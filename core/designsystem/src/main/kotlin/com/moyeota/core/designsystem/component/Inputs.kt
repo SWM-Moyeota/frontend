@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Box
@@ -21,10 +20,14 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.core.designsystem.theme.MoyeotaShape
 import com.moyeota.core.designsystem.theme.MoyeotaType
 
 // 텍스트 입력 — 토큰 text-input (h52, radius 12, 포커스 시 primary 테두리)
 // 공통 규칙: 필드 단위 오류는 필드 하단 danger 문구
+//
+// 쉬는 테두리는 BorderStrong(디자인 문서 text-input 의 ash-light), 자리표시자는 TextPlaceholder 다(디자인 QA P1).
+// 예전 Hairline 테두리(1.15:1)와 TextAsh 자리표시자(1.47:1)는 흰 화면에서 칸도 안내 글자도 거의 보이지 않았다.
 @Composable
 fun MoyeotaTextField(
     value: String,
@@ -44,7 +47,7 @@ fun MoyeotaTextField(
     val borderColor = when {
         errorText != null -> MoyeotaColor.Danger500
         focused -> MoyeotaColor.Primary500
-        else -> MoyeotaColor.Hairline
+        else -> MoyeotaColor.BorderStrong
     }
     Column(modifier = modifier.fillMaxWidth()) {
         if (label != null) {
@@ -55,7 +58,7 @@ fun MoyeotaTextField(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(52.dp)
-                .border(1.dp, borderColor, RoundedCornerShape(12.dp))
+                .border(1.dp, borderColor, MoyeotaShape.Card)
                 .padding(horizontal = 16.dp),
             contentAlignment = Alignment.CenterStart,
         ) {
@@ -72,7 +75,7 @@ fun MoyeotaTextField(
                     .onFocusChanged { focused = it.isFocused },
             )
             if (value.isEmpty()) {
-                Text(text = placeholder, style = MoyeotaType.BodyMd, color = MoyeotaColor.TextAsh)
+                Text(text = placeholder, style = MoyeotaType.BodyMd, color = MoyeotaColor.TextPlaceholder)
             }
             if (trailing != null) {
                 Box(modifier = Modifier.align(Alignment.CenterEnd)) { trailing() }

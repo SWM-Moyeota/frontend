@@ -11,12 +11,11 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.moyeota.core.designsystem.theme.MoyeotaColor
 import com.moyeota.core.designsystem.theme.MoyeotaTheme
+import com.moyeota.core.designsystem.theme.MoyeotaType
 
 /**
  * 세션 복원 중(=[com.moyeota.domain.model.AuthState.Unknown]) 화면.
@@ -28,19 +27,18 @@ import com.moyeota.core.designsystem.theme.MoyeotaTheme
 @Composable
 fun SplashScreen(modifier: Modifier = Modifier) {
     Box(
-        modifier = modifier.fillMaxSize().background(MoyeotaColor.SurfaceSoft),
+        // 흰 바탕 — 이어서 뜨는 첫 화면(온보딩·홈)과 같은 색이라 넘어갈 때 바탕이 깜빡이지 않는다(G2)
+        modifier = modifier.fillMaxSize().background(MoyeotaColor.SurfaceCanvas),
         contentAlignment = Alignment.Center,
     ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(20.dp),
+            verticalArrangement = Arrangement.spacedBy(24.dp),
         ) {
             Text(
                 text = "모여타",
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Bold,
+                style = MoyeotaType.DisplayMd,
                 color = MoyeotaColor.InkPrimary,
-                letterSpacing = (-0.48).sp,
             )
             CircularProgressIndicator(
                 color = MoyeotaColor.Primary500,

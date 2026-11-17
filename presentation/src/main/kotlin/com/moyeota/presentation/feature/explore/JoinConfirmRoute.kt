@@ -1,5 +1,6 @@
 package com.moyeota.presentation.feature.explore
 
+import com.naver.maps.geometry.LatLng
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -16,6 +17,7 @@ import com.moyeota.domain.analytics.MatchRequestMethod
 import com.moyeota.domain.model.PartyJoinException
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.User
+import com.moyeota.domain.repository.ActivePartyRepository
 import com.moyeota.domain.repository.RideRepository
 import com.moyeota.presentation.core.BackStateScaffold
 import com.moyeota.presentation.core.ErrorBox
@@ -34,6 +36,12 @@ private const val JOIN_FAILED_MESSAGE = "합류하지 못했어요. 잠시 후 �
 
 class JoinConfirmViewModel(
     private val repository: RideRepository,
+    /**
+     * 합류를 막은 **그 다른 방**이 어떤 방인지 알아내는 용도 하나로 쓴다([blockingPartyConfirmed]).
+     * 서버는 409 에 「어느 방인지」도 「확정됐는지」도 싣지 않으므로, 그걸 알려면 내 진행 중인 방을
+     * 따로 찾아야 한다. 실패 경로에서만 부르므로 평상시 왕복은 늘지 않는다.
+     */
+    private val activeParty: ActivePartyRepository,
     private val partyId: Long,
 ) : ViewModel() {
 
@@ -109,7 +117,12 @@ class JoinConfirmViewModel(
                     finishJoin()
                     return@launch
                 }
-                _joinState.update { it.copy(joining = false, errorMessage = joinFailureMessage(e)) }
+                // 「다른 방에 참여 중」일 때만 그 방의 사정을 확인한다 — 확정된 방이면 나갈 수가 없어서
+                // 안내할 행동이 완전히 달라진다([alreadyInPartyMessage]).
+                val blockingConfirmed = if (e.isAlreadyInAnotherParty) blockingPartyConfirmed() else null
+                _joinState.update {
+                    it.copy(joining = false, errorMessage = joinFailureMessage(e, blockingConfirmed))
+                }
                 Analytics.track(AnalyticsEvent.MatchRequestFailed(MatchRequestMethod.JOIN, joinFailureReason(e)))
                 if (e.isPartyFull || e.isPartyClosed) refreshQuietly()
             } catch (e: Exception) {
@@ -147,9 +160,27 @@ class JoinConfirmViewModel(
         _uiState.value = UiState.Success(ride)
     }
 
+    /**
+     * 합류를 막은 그 방이 **약속이 정해진 방인가.** 모르면 null.
+     *
+     * 실패했을 때만 부른다. 실패하거나 못 찾으면 null 로 떨어뜨려 **단정하지 않는 문구**로 가게 한다 —
+     * 안내 한 줄을 정확히 만들려다 안내 자체를 못 띄우면 더 나쁘다.
+     */
+    private suspend fun blockingPartyConfirmed(): Boolean? = try {
+        activeParty.resolve()?.isConfirmed
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Throwable) {
+        null
+    }
+
     companion object {
-        fun factory(repository: RideRepository, partyId: Long) = viewModelFactory {
-            initializer { JoinConfirmViewModel(repository, partyId) }
+        fun factory(
+            repository: RideRepository,
+            activeParty: ActivePartyRepository,
+            partyId: Long,
+        ) = viewModelFactory {
+            initializer { JoinConfirmViewModel(repository, activeParty, partyId) }
         }
     }
 }
@@ -182,14 +213,35 @@ internal fun joinFailureReason(e: PartyJoinException): String = when {
  * 다른 방 참여도 똑같이 `ALREADY_JOINED_OTHER_PARTY` 로 오고, 데이터 계층이 상세 조회로 가른다.
  * 그 조회까지 실패하면 「다른 방」으로 떨어지므로, 문구는 **그 방으로 가 보라는 쪽**으로 적는다.
  */
-internal fun joinFailureMessage(e: PartyJoinException): String = when {
+internal fun joinFailureMessage(
+    e: PartyJoinException,
+    /** 합류를 막은 그 방이 약속이 정해진 방인가. 모르면 null — [alreadyInPartyMessage] 참고. */
+    blockingConfirmed: Boolean? = null,
+): String = when {
     e.isPartyFull -> "방이 가득 찼어요. 다른 방을 찾아 주세요"
     e.isPartyClosed -> "모집이 끝난 방이에요. 다른 방을 찾아 주세요"
     e.isPartyNotFound -> "사라진 방이에요. 목록을 다시 불러와 주세요"
-    e.isAlreadyInAnotherParty -> "이미 참여 중인 방이 있어요. 그 방에서 나온 뒤 합류해 주세요"
+    e.isAlreadyInAnotherParty -> alreadyInPartyMessage(blockingConfirmed)
     e.isAlreadyJoined -> "이미 참여 중이에요. 홈에서 진행 중인 방을 확인해 주세요"
     e.isNetwork -> "네트워크가 불안정해요. 연결을 확인하고 다시 시도해 주세요"
     else -> JOIN_FAILED_MESSAGE
+}
+
+/**
+ * 「이미 참여 중인 방이 있다」를 **그 방의 사정에 맞춰** 말한다.
+ *
+ * 예전에는 한 문구였다 — 「그 방에서 나온 뒤 합류해 주세요」. 확정 전 방에서는 맞는 말이지만
+ * **약속이 정해진 방에서는 할 수 없는 일을 시킨다**: 나가기가 409 `CANNOT_LEAVE_CONFIRMED_PARTY` 로
+ * 막히고, 방 종료도 409 `USE_DEPART_FOR_CONFIRMED_PARTY` 로 막힌다. 끝내는 길은 **출발지에 가서
+ * 「출발」을 누르는 것 하나뿐**이라, 나가기 버튼을 찾아 헤매게 하지 않고 그 길을 말해 준다.
+ *
+ * null(모름)일 때 「나온 뒤」를 말하지 않는 이유도 같다 — 틀릴 수 있는 지시보다 **틀릴 수 없는 안내**가
+ * 낫다. 그 방으로 보내면 방 화면이 「약속을 정한 뒤에는 나갈 수 없어요」로 사실을 말해 준다.
+ */
+internal fun alreadyInPartyMessage(blockingConfirmed: Boolean?): String = when (blockingConfirmed) {
+    true -> "약속이 정해진 방에 참여 중이에요. 출발지에서 「출발」을 눌러 그 방을 끝낸 뒤에 합류할 수 있어요"
+    false -> "이미 참여 중인 방이 있어요. 그 방에서 나온 뒤 합류해 주세요"
+    null -> "이미 참여 중인 방이 있어요. 홈에서 진행 중인 방을 확인해 주세요"
 }
 
 /**
@@ -201,6 +253,7 @@ internal fun joinFailureMessage(e: PartyJoinException): String = when {
 @Composable
 fun JoinConfirmRoute(
     repository: RideRepository,
+    activePartyRepository: ActivePartyRepository,
     partyId: Long?,
     onDismiss: () -> Unit = {},
     /** 합류가 끝난(또는 **이미 돼 있던**) 방 id — 호출자는 21 매칭 대기로 넘긴다 */
@@ -218,7 +271,7 @@ fun JoinConfirmRoute(
 
     val viewModel: JoinConfirmViewModel = viewModel(
         key = "join-$partyId",
-        factory = JoinConfirmViewModel.factory(repository, partyId),
+        factory = JoinConfirmViewModel.factory(repository, activePartyRepository, partyId),
     )
     val state by viewModel.uiState.collectAsState()
     val join by viewModel.joinState.collectAsState()
@@ -242,6 +295,9 @@ fun JoinConfirmRoute(
         is JoinConfirmViewModel.UiState.Success -> JoinConfirmScreen(
             ride = current.ride,
             pickupDistanceMeters = pickupDistanceMeters(current.ride, myLocation.coordinates),
+            // 방 좌표를 하나도 못 쓸 때 지도가 보여 줄 「내 주변」. 권한이 없거나 fix 가 없으면 null 이고,
+            // 그때 지도는 앱 기본 카메라로 물러난다(SDK 기본값이 아니다 — [joinMapFallback]).
+            userPosition = myLocation.coordinates?.let { LatLng(it.latitude, it.longitude) },
             joining = join.joining,
             joinErrorMessage = join.errorMessage,
             onDismiss = onDismiss,

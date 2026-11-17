@@ -1,10 +1,16 @@
 package com.moyeota.domain.model
 
 /**
- * 즐겨찾기 삭제 실패를 화면이 다룰 수 있는 형태로 좁힌 예외.
+ * 즐겨찾기 등록·삭제 실패를 화면이 다룰 수 있는 형태로 좁힌 예외.
  *
  * presentation 은 retrofit 을 의존하지 않으므로(`presentation/build.gradle.kts` 에 domain 만 있다)
  * HTTP 상태를 그대로 올리면 화면이 404 와 500 을 구분할 수 없다. [ChatException] 과 같은 경계다.
+ *
+ * ### 상태 코드로는 안 갈린다 — 그래서 [code] 를 들고 다닌다
+ * 등록의 409 에는 [isDuplicated] 와 [isLimitExceeded] 가 함께 들어 있고, 삭제의 404 에는
+ * 「이미 지워졌다」·「없다」·「남의 것」이 함께 들어 있다. 앞의 둘은 사용자가 할 일이 반대라
+ * (하나를 빼면 담긴다 / 할 일이 없다) 반드시 가려야 하고, 뒤의 셋은 서버가 일부러 숨긴 것이라
+ * 가리지 않는다.
  *
  * ### 왜 404 를 성공으로 접지 않는가
  * 삭제는 **멱등이 아니다** — 같은 id 두 번째도, 없는 id 도, **남의 id 도 전부 같은
@@ -35,4 +41,22 @@ class FavoritePlaceException(
      */
     val isNotFound: Boolean
         get() = code == "FAVORITE_PLACE_NOT_FOUND" || (code == null && httpStatus == 404)
+
+    /**
+     * 409 `FAVORITE_PLACE_LIMIT_EXCEEDED` — **[FavoritePlacePolicy.MAX_COUNT] 개가 이미 찼다.**
+     * [isDuplicated] 와 같은 409 라서 상태만으로는 못 가린다 — 코드를 봐야 한다.
+     * 할 일이 분명한 실패다(하나를 빼면 담긴다). 그래서 상한을 문구에 적어 준다.
+     */
+    val isLimitExceeded: Boolean
+        get() = code == "FAVORITE_PLACE_LIMIT_EXCEEDED"
+
+    /**
+     * 409 `FAVORITE_PLACE_DUPLICATED` — **같은 장소가 이미 담겨 있다.**
+     *
+     * [isLimitExceeded] 와 **반대로 할 일이 없는 실패**다 — 원한 상태가 이미 참이다. 둘을 한 문구로
+     * 뭉개면(「중복이거나 10개를 넘었을 수 있어요」) 사용자가 둘 중 어느 쪽인지 몰라 목록을 열어
+     * 세어 보게 된다. 서버가 가려 주는 것을 화면도 가린다.
+     */
+    val isDuplicated: Boolean
+        get() = code == "FAVORITE_PLACE_DUPLICATED"
 }

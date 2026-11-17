@@ -7,6 +7,8 @@ import com.moyeota.data.remote.dto.FavoritePlaceListResponse
 import com.moyeota.data.remote.dto.FavoritePlaceRequestDto
 import com.moyeota.data.remote.dto.PlaceSearchListResponse
 import com.moyeota.domain.model.FavoritePlaceException
+import com.moyeota.domain.model.FavoritePlacePolicy
+import com.moyeota.domain.model.Place
 import kotlinx.coroutines.runBlocking
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.ResponseBody.Companion.toResponseBody
@@ -18,12 +20,13 @@ import retrofit2.HttpException
 import retrofit2.Response
 
 /**
- * 즐겨찾기 **삭제 3종의 실패 처리**를 못 박는다. 세 경로 모두 멱등이 아니라서(실측 2026-11-01,
- * 로컬 `:8080`) 「404 를 어떻게 다루는가」가 이 저장소의 유일한 판단이고, 그 판단이 두 갈래다:
+ * 즐겨찾기 **등록·삭제의 실패 처리**를 못 박는다. 서버가 **한 상태 코드에 여러 뜻을 담으므로**
+ * 「상태 코드만으로 다루지 않는다」가 이 저장소의 판단이고, 경로마다 갈린다:
  *
- * - 단건·다건의 404 → **올린다.** 서버가 「없는 것」과 「남의 것」을 같은 404 로 숨기므로
+ * - 삭제 단건·다건의 404 → **올린다.** 서버가 「없는 것」과 「남의 것」을 같은 404 로 숨기므로
  *   성공으로 접으면 남의 행을 지우려는 시도까지 성공으로 보이고, 화면은 서버와 어긋난 목록을 든다.
  * - `/all` 의 404 → **삼킨다.** 「이미 비어 있다」는 부른 쪽이 원한 상태가 이미 참이라는 뜻이다.
+ * - 등록의 409 → **코드를 실어 올린다.** 중복과 상한 초과가 같은 409 인데 사용자가 할 일이 반대다.
  */
 class RemotePlaceRepositoryTest {
 
@@ -129,6 +132,69 @@ class RemotePlaceRepositoryTest {
         assertEquals(null, e.code)
     }
 
+    /**
+     * ★ 못 박는 것: **등록 실패도 [FavoritePlaceException] 으로 좁혀진다.**
+     *
+     * 한동안 등록만 이 경계를 안 거쳐 raw [HttpException] 이 화면까지 올라갔다. presentation 은
+     * retrofit 을 의존하지 않으므로(`presentation/build.gradle.kts` 에 domain 만 있다) 화면이 할 수
+     * 있는 일은 `catch (Exception)` 뿐이었고, 실제로 두 409 를 「중복이거나 10개를 넘었을 수 있어요」
+     * 한 문구로 뭉갰다. 이 테스트가 그 되돌이를 막는다 — 코드가 실려 와야 화면이 가를 수 있다.
+     */
+    @Test
+    fun `등록 실패도 코드를 실은 FavoritePlaceException 으로 올린다`() {
+        val api = FakePlaceApi(addError = httpException(409, FAVORITE_PLACE_LIMIT_EXCEEDED_BODY))
+
+        val e = assertThrows(FavoritePlaceException::class.java) {
+            runBlocking { RemotePlaceRepository(api).addFavoritePlace(place()) }
+        }
+
+        assertEquals(409, e.httpStatus)
+        assertTrue("상한 초과를 가리지 못했다 — 화면이 「하나를 빼 주세요」를 말할 수 없다", e.isLimitExceeded)
+        assertTrue("상한 초과가 중복으로도 참이면 두 문구가 겹친다", !e.isDuplicated)
+        // 화면 문구가 이 상수로 「N개까지」를 만든다 — 서버 원문과 어긋나면 다른 수를 말하게 된다
+        assertTrue(
+            "서버 원문의 상한과 FavoritePlacePolicy.MAX_COUNT 가 어긋났다: ${e.serverMessage}",
+            e.serverMessage!!.contains("${FavoritePlacePolicy.MAX_COUNT}개"),
+        )
+    }
+
+    /**
+     * 같은 409 의 다른 뜻. **상태 코드로는 안 갈리므로** 코드로만 갈린다 —
+     * 상한은 하나를 빼면 담기고, 중복은 할 일이 없다.
+     */
+    @Test
+    fun `등록의 409 두 가지를 코드로 가른다`() {
+        val api = FakePlaceApi(addError = httpException(409, FAVORITE_PLACE_DUPLICATED_BODY))
+
+        val e = assertThrows(FavoritePlaceException::class.java) {
+            runBlocking { RemotePlaceRepository(api).addFavoritePlace(place()) }
+        }
+
+        assertTrue(e.isDuplicated)
+        assertTrue("중복이 상한 초과로도 참이면 「10개를 넘었어요」라고 거짓말한다", !e.isLimitExceeded)
+    }
+
+    /** 400 `INVALID_COORDINATES` 같은 다른 실패를 409 로 추측하지 않는다. */
+    @Test
+    fun `등록의 400 은 409 사유로 추측하지 않는다`() {
+        val body = """{"code":"INVALID_COORDINATES","message":"좌표가 올바르지 않습니다."}"""
+        val api = FakePlaceApi(addError = httpException(400, body))
+
+        val e = assertThrows(FavoritePlaceException::class.java) {
+            runBlocking { RemotePlaceRepository(api).addFavoritePlace(place()) }
+        }
+
+        assertEquals(400, e.httpStatus)
+        assertTrue(!e.isDuplicated && !e.isLimitExceeded && !e.isNotFound)
+    }
+
+    private fun place() = Place(
+        name = "판교역",
+        roadName = "경기 성남시 분당구 판교역로 160",
+        latitude = 37.3947,
+        longitude = 127.1112,
+    )
+
     private fun httpException(code: Int, body: String) = HttpException(
         Response.error<Unit>(code, body.toResponseBody("application/json".toMediaType())),
     )
@@ -137,6 +203,7 @@ class RemotePlaceRepositoryTest {
         private val singleDeleteError: Throwable? = null,
         private val batchDeleteError: Throwable? = null,
         private val allDeleteError: Throwable? = null,
+        private val addError: Throwable? = null,
     ) : PlaceApi {
         val singleDeleteCalls = mutableListOf<Long>()
         val batchDeleteCalls = mutableListOf<List<Long>>()
@@ -148,7 +215,9 @@ class RemotePlaceRepositoryTest {
         override suspend fun reverseGeocode(latitude: Double, longitude: Double) =
             Response.success(AddressResponseDto())
 
-        override suspend fun addFavoritePlace(request: FavoritePlaceRequestDto) = Unit
+        override suspend fun addFavoritePlace(request: FavoritePlaceRequestDto) {
+            addError?.let { throw it }
+        }
 
         override suspend fun getFavoritePlaces() = FavoritePlaceListResponse()
 
@@ -172,5 +241,12 @@ class RemotePlaceRepositoryTest {
         /** 실측 본문 그대로(2026-11-01, 로컬 `:8080`) — 없는 것·남의 것·두 번째 삭제가 모두 이것이다. */
         const val FAVORITE_PLACE_NOT_FOUND_BODY =
             """{"code":"FAVORITE_PLACE_NOT_FOUND","message":"등록되지 않은 즐겨찾기입니다."}"""
+
+        /** 서버 `PlaceErrorCode` 원문 그대로. 상한값이 [FavoritePlacePolicy.MAX_COUNT] 와 같아야 한다. */
+        const val FAVORITE_PLACE_LIMIT_EXCEEDED_BODY =
+            """{"code":"FAVORITE_PLACE_LIMIT_EXCEEDED","message":"자주가는 장소는 최대 10개까지만 등록할 수 있습니다."}"""
+
+        const val FAVORITE_PLACE_DUPLICATED_BODY =
+            """{"code":"FAVORITE_PLACE_DUPLICATED","message":"이미 등록된 장소입니다."}"""
     }
 }

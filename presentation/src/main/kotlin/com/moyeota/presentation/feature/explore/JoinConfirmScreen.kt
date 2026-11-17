@@ -1,6 +1,5 @@
 package com.moyeota.presentation.feature.explore
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -12,29 +11,29 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.PathEffect
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.moyeota.core.designsystem.component.BackArrowIcon
+import com.moyeota.core.designsystem.component.ChevronIcon
+import com.moyeota.core.designsystem.component.FareSummary
+import com.moyeota.core.designsystem.component.MapOverlayPill
+import com.moyeota.core.designsystem.component.MoyeotaDefaultCamera
+import com.moyeota.core.designsystem.component.MoyeotaTopBar
+import com.moyeota.core.designsystem.component.RouteSummary
+import com.moyeota.core.designsystem.component.SectionLabel
 import com.moyeota.core.designsystem.component.RouteStripMap
+import com.moyeota.core.designsystem.component.isUsableMapCoordinate
 import com.moyeota.core.designsystem.component.decodePolyline
 import com.moyeota.core.designsystem.component.latLngOrNull
 import com.moyeota.core.designsystem.component.polylineDistanceMeters
@@ -47,12 +46,17 @@ import com.moyeota.core.designsystem.component.SheetHandle
 import com.moyeota.core.designsystem.component.StatusBadge
 import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.core.designsystem.theme.MoyeotaShape
+import com.moyeota.core.designsystem.theme.MoyeotaSpacing
+import com.moyeota.core.designsystem.theme.MoyeotaType
+import com.moyeota.core.designsystem.theme.sheetShadow
 import com.moyeota.presentation.core.buildRouteChipLabel
 import com.moyeota.presentation.core.pickupDistanceLabel
 import com.moyeota.domain.model.Ride
 import com.moyeota.domain.model.RideStatus
 import com.moyeota.domain.model.RoomType
 import com.moyeota.domain.model.User
+import com.naver.maps.geometry.LatLng
 import java.time.Instant
 import com.moyeota.presentation.core.MeBadge
 import com.moyeota.presentation.core.MemberAvatar
@@ -61,17 +65,27 @@ import com.moyeota.presentation.core.isWithdrawn
 import com.moyeota.presentation.core.rideCountLabel
 import com.moyeota.presentation.feature.home.reservationCommitmentNotice
 
-// 와이어프레임 그레이·서페이스 (core token 미정의 색 — 화면 재현용)
-private val CanvasBg = Color(0xFFF5F7FA)
-private val GrayMute = Color(0xFF8A93A0)
-private val GrayAsh = Color(0xFF9AA1AC)
-private val GraySlateDeep = Color(0xFF54637D)
-private val TextMuteWarm = Color(0xFF6B7280)
-private val RouteCardBg = Color(0xFFF1F5FD)
-private val FareCardBg = Color(0xFFF6F8FB)
-private val PillBg = Color(0xFFF1F5FD)
-
 private fun won(amount: Int): String = "%,d원".format(amount)
+
+/** 지도 스트립 높이. */
+private val JoinMapHeight = 172.dp
+
+/** 시트가 시작하는 높이 — 지도 아래 12dp 를 덮는다(그 겹침이 카메라 여백에 더해진다). */
+private val JoinSheetTop = 160.dp
+
+/** 지도 위 소요 시간 칩의 바깥 여백과 높이 — 카메라 위쪽 여백이 이 둘을 더한 만큼 커진다. */
+private val EtaChipMargin = 16.dp
+private val EtaChipHeight = 30.dp
+
+/**
+ * 방 좌표를 하나도 못 쓸 때 20 의 지도가 보여 줄 곳 — **내 위치**, 없으면 **앱 기본 카메라**.
+ *
+ * 반드시 값을 준다(null 을 돌려주지 않는다): [RouteStripMap] 은 이 값이 null 이고 도착지도 없으면
+ * 자리표시자를 그리는데, 20 은 「어디서 타는 방인가」를 보는 화면이라 빈 회색 상자보다 지도가 낫다.
+ * 그리고 끝까지 물러나도 **SDK 기본 카메라(서울)가 아니다**.
+ */
+internal fun joinMapFallback(userPosition: LatLng?): LatLng =
+    userPosition?.takeIf { isUsableMapCoordinate(it.latitude, it.longitude) } ?: MoyeotaDefaultCamera
 
 /**
  * 20 · 합류 확인 [신규]
@@ -89,7 +103,7 @@ private fun won(amount: Int): String = "%,d원".format(amount)
  *
  * 검증·상태 — **판정은 [joinGate] 하나**이고 배지·배너·CTA 가 모두 그 결과를 따른다:
  * - 상태 배지는 [Ride.status] 를 그대로 읽는다([joinStatusBadge]) — 예전에는 문자열 리터럴이라
- *   **취소된 방에도 「모집 중」**이 떠 있었다. 17 목록은 4초 주기라 방을 고르는 사이에 마지막 멤버가
+ *   **취소된 방에도 「모집 중」**이 떠 있었다. 17 목록은 15초 주기라 방을 고르는 사이에 마지막 멤버가
  *   나가 방이 닫힐 수 있다(`Party.leave` → `members.isEmpty()` → `cancel()`)
  * - 모집 중이 아니거나 정원이 찼으면 CTA 비활성 + CTA 위 NoticeBanner(ERROR) **한 줄**
  *   (배너는 **하나만** 띄운다 — 예전에는 「방금 인원이 찼어요」와 서버 실패 문구가 거의 같은 말을
@@ -105,6 +119,11 @@ fun JoinConfirmScreen(
      * 「도보 N분」은 쓰지 않는다 — 보행 속도를 지어내야 하고, 거리와 달리 잰 값이 아니다.
      */
     pickupDistanceMeters: Double? = null,
+    /**
+     * 내 현재 위치. 지도가 방 좌표를 하나도 못 쓸 때(누락·(0,0)·NaN) 「내 주변」으로 물러나는 자리다.
+     * 모르면 null — 그때는 앱 기본 카메라다([joinMapFallback]).
+     */
+    userPosition: LatLng? = null,
     joining: Boolean = false,
     joinErrorMessage: String? = null,
     onDismiss: () -> Unit = {},
@@ -158,50 +177,43 @@ fun JoinConfirmScreen(
     }
     val etaLabel = buildRouteChipLabel(ride.estimatedMinutes, routeKm)
 
-    Column(modifier = Modifier.fillMaxSize().background(CanvasBg)) {
-        // 상단 헤더 (흰 배경)
-        Column(modifier = Modifier.fillMaxWidth().background(MoyeotaColor.SurfaceCanvas)) {
-            StatusBarSpacer()
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                BackArrowIcon(modifier = Modifier.clickable { onDismiss() })
-                Spacer(Modifier.width(10.dp))
-                Text(
-                    text = "합류할까요?",
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MoyeotaColor.InkPrimary,
-                )
-            }
-        }
+    Column(modifier = Modifier.fillMaxSize().background(MoyeotaColor.SurfaceCanvas)) {
+        // 상단 헤더 — 하위 화면 공용 앱바(디자인 QA G7·J3). 예전엔 왼쪽 정렬 18sp Bold 를 손으로 그렸고
+        // 뒤로가기는 화살표 그림만 눌렸다(48dp 가 안 됐다)
+        StatusBarSpacer()
+        MoyeotaTopBar(title = "합류할까요?", onBack = onDismiss)
 
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            // 경로 지도 스트립
-            Box(modifier = Modifier.fillMaxWidth().height(172.dp)) {
+            // 경로 지도 스트립 — 카메라는 출발·도착(+경로선)이 **가리지 않는 영역**에 다 들어오게 맞춘다
+            // (2026-11, 오너 UX 피드백: 「가끔 엉뚱한 곳, 심지어 해외가 보인다」). 원인은 둘이었다:
+            // ① (0,0) 같은 못 쓸 좌표가 카메라 범위에 섞여 바다 한가운데를 비췄고 ② 지도가 준비된 뒤에야
+            // 카메라를 옮겨 SDK 기본 카메라(서울)가 먼저 보였다. ①은 [routeCameraTarget] 이 좌표를 걸러
+            // 정해진 순서(출발지 → 도착지 → 내 주변 → 앱 기본)로 물러나 막고, ②는 [NaverMapView] 가 첫
+            // 카메라를 생성 옵션으로 걸어 막는다. 방을 다시 읽어 좌표가 바뀌면 그때 다시 맞춘다.
+            //
+            // 여백(디자인 QA 4-7): 좌우 48dp, 위는 소요 시간 칩(16 + 30dp)만큼 더(칩이 있을 때만),
+            // 아래는 시트가 덮는 12dp 만큼 더 — 마커 머리·캡션 높이는 [RouteStripMap] 이 얹는다. 최대 줌 16.
+            Box(modifier = Modifier.fillMaxWidth().height(JoinMapHeight)) {
                 RouteStripMap(
                     modifier = Modifier.fillMaxSize(),
                     originPosition = originPosition,
                     destinationPosition = destinationPosition,
                     routePath = routePath,
+                    fallbackPosition = joinMapFallback(userPosition),
+                    obscuredTop = if (etaLabel != null) EtaChipMargin + EtaChipHeight else 0.dp,
+                    obscuredBottom = JoinMapHeight - JoinSheetTop,
+                    sidePadding = 48.dp,
                 )
-                // 시간·거리 둘 다 없으면 칩을 통째로 감춘다 — 틀린 값보다 없는 편이 낫다
-                if (etaLabel != null) Box(
-                    modifier = Modifier
-                        .padding(16.dp)
-                        .height(30.dp)
-                        .shadow(4.dp, CircleShape, spotColor = Color(0x141B2A4A))
-                        .background(MoyeotaColor.SurfaceCanvas, CircleShape)
-                        .padding(horizontal = 16.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        text = etaLabel,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MoyeotaColor.InkPrimary,
-                    )
+                // 시간·거리 둘 다 없으면 칩을 통째로 감춘다 — 틀린 값보다 없는 편이 낫다.
+                // 지도 위 공용 흰 알약([MapOverlayPill], 30dp = [EtaChipHeight])이다 — 16·21 의 요약 칩과 같은 그림자·모양
+                if (etaLabel != null) {
+                    MapOverlayPill(modifier = Modifier.padding(EtaChipMargin)) {
+                        Text(
+                            text = etaLabel,
+                            style = MoyeotaType.BodySm.copy(fontWeight = FontWeight.SemiBold),
+                            color = MoyeotaColor.InkPrimary,
+                        )
+                    }
                 }
             }
 
@@ -209,12 +221,12 @@ fun JoinConfirmScreen(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(top = 160.dp)
-                    .shadow(14.dp, RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp), spotColor = Color(0x141B2A4A))
-                    .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
+                    .padding(top = JoinSheetTop)
+                    .sheetShadow(MoyeotaShape.Sheet)
+                    .clip(MoyeotaShape.Sheet)
                     .background(MoyeotaColor.SurfaceCanvas),
             ) {
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(12.dp))
                 Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                     SheetHandle()
                 }
@@ -225,37 +237,39 @@ fun JoinConfirmScreen(
                         .verticalScroll(rememberScrollState())
                         .padding(horizontal = 16.dp),
                 ) {
-                    Spacer(Modifier.height(14.dp))
+                    Spacer(Modifier.height(12.dp))
 
                     // 상태 행
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         StatusBadge(kind = badge.kind, text = badge.text)
-                        Spacer(Modifier.width(10.dp))
+                        Spacer(Modifier.width(8.dp))
                         Text(
                             text = joinHeadcountLine(
                                 joinedCount = joinedCount,
                                 capacity = ride.capacity,
                                 iAmMember = iAmMember,
                             ),
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = GrayMute,
+                            style = MoyeotaType.BodySm,
+                            color = MoyeotaColor.TextMute,
                             modifier = Modifier.weight(1f),
                         )
                     }
 
                     Spacer(Modifier.height(16.dp))
-                    RouteCard(
+                    // 경로·요금은 **판 없이** 시트 위에 바로 놓는다(디자인 QA J1) — 예전엔 옅은 파란 판(경로) 아래
+                    // 회색 판 안에 또 파란 판(1인 부담)이 있는 "카드 더미"였다. 22 탑승 상세와 같은 공용 조각이다.
+                    RouteSummary(
                         origin = ride.origin,
                         destination = ride.destination,
                         // 예약 방은 **언제 출발하는지가 합류 판단의 전부**다(사흘 뒤 오전 9시 방에
                         // 들어가는 일이다). 서버가 주는 `departureLabel` 이 비어 올 수 있어
                         // 약속 시각에서 직접 만든다 — 실시간 방은 예전 표기를 그대로 둔다
                         // (그쪽 라벨에는 거리가 함께 들어 있다).
-                        departureLabel = joinDepartureLabel(ride, now)
+                        originMeta = joinDepartureLabel(ride, now)
                             ?: ride.departureLabel.takeIf { it.isNotBlank() },
-                        pickupDistanceMeters = pickupDistanceMeters,
-                        durationLabel = ride.estimatedMinutes?.let { "약 ${it}분" },
+                        destinationMeta = ride.estimatedMinutes?.let { "약 ${it}분" },
+                        // 내 위치를 모르면 점선만 남는다 — 보행 시간 같은 지어낸 값을 채우지 않는다
+                        connectorNote = pickupDistanceMeters?.let { "내 위치에서 ${pickupDistanceLabel(it)}" },
                     )
 
                     Spacer(Modifier.height(16.dp))
@@ -263,32 +277,28 @@ fun JoinConfirmScreen(
                     // 예전에는 예약 방에서 「총 예상 요금 0원 · 합류 시 1인 부담 0원」을 그렸다.
                     val fare = joinFareOrNull(totalFare = ride.totalFare, farePerPerson = ride.farePerPerson)
                     if (fare != null) {
-                        FareCard(
-                            totalFare = fare.totalFare,
-                            farePerPerson = fare.farePerPerson,
+                        // 계산 근거 한 줄(「총 예상 요금을 정원 N명으로 나눈 금액이에요」)은 FareSummary 가 맡는다 —
+                        // 아래 안내 줄이 같은 말을 한 번 더 하던 것은 지웠다(디자인 QA J2)
+                        FareSummary(
+                            total = won(fare.totalFare),
+                            perPerson = won(fare.farePerPerson),
                             capacity = ride.capacity,
+                            perPersonLabel = "합류 시 1인 부담",
                         )
                     } else {
+                        // 요금 요약과 **같은 자리·같은 구분선** 아래 한 줄 — 회색 판을 깔지 않는다
+                        HorizontalDivider(color = MoyeotaColor.Hairline)
+                        Spacer(Modifier.height(16.dp))
                         Text(
                             text = joinFareAbsentNotice(ride.roomType),
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = GrayMute,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(FareCardBg, RoundedCornerShape(16.dp))
-                                .padding(horizontal = 20.dp, vertical = 18.dp),
+                            style = MoyeotaType.BodySm,
+                            color = MoyeotaColor.TextMute,
                         )
                     }
 
-                    Spacer(Modifier.height(16.dp))
-                    Text(
-                        text = "이미 참여한 사람 · ${joinedCount}명",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = GrayMute,
-                    )
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(MoyeotaSpacing.SectionGap))
+                    // 인원 수는 머리말에 다시 적지 않는다 — 맨 위 상태 행이 이미 「N명 참여」라고 말한다(디자인 QA J2)
+                    SectionLabel(text = "이미 참여한 사람")
                     // 대표로 한 명만 노출한다 — 첫 멤버라는 것 외에 특별한 지위는 없다.
                     // 탈퇴 회원이 앞에 있으면 볼 것도 눌러 볼 것도 없어 실재하는 멤버를 앞세운다.
                     val representative = ride.members.firstOrNull { !it.isWithdrawn }
@@ -306,36 +316,20 @@ fun JoinConfirmScreen(
                     // 실시간 방은 「그만 찾기」로 빠져나올 수 있어서 사용자는 합류를 되돌릴 수 있는
                     // 선택으로 배워 왔고, 이 버튼은 같은 모양으로 전혀 다른 약속을 하게 만든다.
                     //
-                    // 배너(NoticeBanner)로 띄우지 않는다 — 이 화면은 **배너를 하나만** 쓴다는 규칙이
-                    // 있고(막힌 사유·서버 실패가 그 자리다) 둘이 되면 어느 쪽이 지금 중요한지
-                    // 알 수 없게 된다. 오류가 아니므로 빨강도 쓰지 않는다.
+                    // 공용 안내 배너(INFO)다(디자인 QA G8·J3) — INFO 는 이제 **회색**이라, CTA 바로 위의 막힘·실패
+                    // 배너(빨강, 이 화면의 「배너 하나」 자리)와 색으로도 자리로도 갈린다. 이 줄은 스크롤 본문에 있고
+                    // 그 배너는 CTA 위에 고정이다. 오류가 아니므로 빨강을 쓰지 않는 것은 그대로다.
                     if (ride.roomType == RoomType.RESERVATION) {
                         Spacer(Modifier.height(12.dp))
-                        Text(
-                            text = reservationCommitmentNotice(joining = true),
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MoyeotaColor.InkPrimary,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(PillBg, RoundedCornerShape(12.dp))
-                                .padding(horizontal = 14.dp, vertical = 12.dp),
-                        )
+                        NoticeBanner(kind = NoticeKind.INFO, text = reservationCommitmentNotice(joining = true))
                     }
 
-                    Spacer(Modifier.height(14.dp))
+                    Spacer(Modifier.height(12.dp))
                     Text(
-                        // 요금이 없는 방에서는 **1인 부담금 절을 뺀다** — 없는 금액의 계산 방식을
-                        // 설명하는 문장이 되고, 바로 위에 「요금이 없다」고 적어 둔 것과 모순된다.
-                        text = if (fare != null) {
-                            "합류하면 바로 채팅방에 들어가요 · 1인 부담금은 정원 기준 예상 금액이에요"
-                        } else {
-                            "합류하면 바로 채팅방에 들어가요"
-                        },
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = GrayAsh,
-                        modifier = Modifier.padding(horizontal = 4.dp),
+                        // 1인 부담금의 계산 방식은 바로 위 요금 요약이 이미 말한다 — 여기서 다시 쓰지 않는다(디자인 QA J2)
+                        text = "합류하면 바로 채팅방에 들어가요",
+                        style = MoyeotaType.CaptionMd,
+                        color = MoyeotaColor.TextMute,
                     )
                     Spacer(Modifier.height(16.dp))
                 }
@@ -402,7 +396,7 @@ internal data class JoinStatusBadge(val kind: NoticeKind, val text: String)
  * 조용히 남는 일을 막아 주는 것이 여기 분기를 다 적어 둔 이유다.
  *
  * 20 은 모집 중인 방을 고르려고 여는 화면이라, 다른 단계는 모두 **들어갈 수 없는 방**이라는 뜻이다
- * (17 목록이 4초 주기라 고르는 사이에 바뀐다). 그래서 문구를 「… 방」으로 적었다 — 지금 내가 들어갈
+ * (17 목록이 15초 주기라 고르는 사이에 바뀐다). 그래서 문구를 「… 방」으로 적었다 — 지금 내가 들어갈
  * 수 있는 상황이 아니라는 사실이 배지에서 읽혀야 한다.
  */
 internal fun joinStatusBadge(status: RideStatus): JoinStatusBadge = when (status) {
@@ -535,166 +529,6 @@ internal fun joinDepartureLabel(ride: Ride, now: Instant): String? =
 // ─── 조각 ───────────────────────────────────────────────────────────────────
 
 @Composable
-private fun RouteCard(
-    origin: String,
-    destination: String,
-    /** 서버 출발 표기. 비어 있으면 null — 자리를 비워 둔다 */
-    departureLabel: String?,
-    pickupDistanceMeters: Double?,
-    /** 예상 소요 시간 「약 N분」. 서버 값이 없으면 null */
-    durationLabel: String?,
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(RouteCardBg, RoundedCornerShape(16.dp))
-            .padding(16.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            RouteDot(color = MoyeotaColor.MarkerOrigin)
-            Spacer(Modifier.width(12.dp))
-            Text(
-                text = origin,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Bold,
-                color = MoyeotaColor.InkPrimary,
-                modifier = Modifier.weight(1f),
-            )
-            if (departureLabel != null) {
-                Text(
-                    text = departureLabel,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MoyeotaColor.InkPrimary,
-                )
-            }
-        }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(modifier = Modifier.width(11.dp), contentAlignment = Alignment.Center) {
-                DashedVerticalLine()
-            }
-            Spacer(Modifier.width(12.dp))
-            // 내 위치를 모르면 점선만 남는다 — 보행 시간 같은 지어낸 값을 채우지 않는다
-            if (pickupDistanceMeters != null) {
-                Text(
-                    text = "내 위치에서 ${pickupDistanceLabel(pickupDistanceMeters)}",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = GrayMute,
-                )
-            }
-        }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            RouteDot(color = MoyeotaColor.MarkerDestination)
-            Spacer(Modifier.width(12.dp))
-            Text(
-                text = destination,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Bold,
-                color = MoyeotaColor.InkPrimary,
-                modifier = Modifier.weight(1f),
-            )
-            if (durationLabel != null) {
-                Text(
-                    text = durationLabel,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MoyeotaColor.InkPrimary,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun RouteDot(color: Color) {
-    Box(Modifier.size(11.dp).background(color, CircleShape))
-}
-
-@Composable
-private fun DashedVerticalLine() {
-    Canvas(modifier = Modifier.size(width = 3.dp, height = 26.dp)) {
-        drawLine(
-            color = Color(0xFFC3CCDA),
-            start = Offset(size.width / 2f, 0f),
-            end = Offset(size.width / 2f, size.height),
-            strokeWidth = size.width,
-            cap = StrokeCap.Round,
-            pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f)),
-        )
-    }
-}
-
-@Composable
-private fun FareCard(
-    totalFare: Int,
-    farePerPerson: Int,
-    capacity: Int,
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(FareCardBg, RoundedCornerShape(16.dp))
-            .padding(horizontal = 20.dp, vertical = 18.dp),
-    ) {
-        FareRow(label = "총 예상 요금", value = won(totalFare))
-        Spacer(Modifier.height(14.dp))
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(52.dp)
-                .background(MoyeotaColor.Primary50, RoundedCornerShape(14.dp))
-                .padding(horizontal = 16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = "합류 시 1인 부담",
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Bold,
-                color = MoyeotaColor.Primary600,
-            )
-            Spacer(Modifier.weight(1f))
-            Text(
-                text = won(farePerPerson),
-                fontSize = 19.sp,
-                fontWeight = FontWeight.Bold,
-                color = MoyeotaColor.Primary500,
-            )
-        }
-        Spacer(Modifier.height(6.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            CheckIcon(color = GrayMute)
-            Spacer(Modifier.width(6.dp))
-            Text(
-                text = "총 예상 요금을 정원 ${capacity}명으로 나눈 금액이에요",
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                color = GrayMute,
-            )
-        }
-    }
-}
-
-@Composable
-private fun FareRow(label: String, value: String) {
-    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            text = label,
-            fontSize = 15.sp,
-            fontWeight = FontWeight.Medium,
-            color = TextMuteWarm,
-        )
-        Spacer(Modifier.weight(1f))
-        Text(
-            text = value,
-            fontSize = 15.sp,
-            fontWeight = FontWeight.Bold,
-            color = MoyeotaColor.InkPrimary,
-        )
-    }
-}
-
-@Composable
 private fun MemberRow(
     member: User,
     othersCount: Int,
@@ -708,74 +542,52 @@ private fun MemberRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(MoyeotaShape.Card)
             .then(if (clickable) Modifier.clickable { onClick() } else Modifier)
             .padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         MemberAvatar(user = member, size = 40.dp)
-        Spacer(Modifier.width(10.dp))
+        Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = member.displayNickname,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = if (clickable) MoyeotaColor.InkPrimary else GrayMute,
+                    style = MoyeotaType.BodyStrong,
+                    color = if (clickable) MoyeotaColor.InkPrimary else MoyeotaColor.TextMute,
                 )
                 Spacer(Modifier.width(8.dp))
-                if (member.isMe) MeBadge() else GrayPill(text = "동승자")
+                if (member.isMe) MeBadge() else PartnerBadge()
             }
             Text(
                 text = if (clickable) "${member.rideCountLabel}$othersLabel" else "탈퇴한 회원$othersLabel",
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Medium,
-                color = GrayMute,
+                style = MoyeotaType.BodySm,
+                color = MoyeotaColor.TextMute,
             )
         }
         if (clickable) {
-            ChevronRightIcon(color = GrayAsh)
+            ChevronIcon()
         }
     }
 }
 
+/**
+ * 「동승자」 — 옆에 서는 「나」([MeBadge])·「방장」 배지와 **같은 크기**(CaptionSm 세미볼드 · 8/2dp)로 둔다.
+ * 예전엔 옅은 파란 바탕에 11sp Bold 로 혼자 컸다. 사실을 붙이는 것이라 회색이다.
+ */
 @Composable
-private fun GrayPill(text: String) {
+private fun PartnerBadge() {
     Box(
         modifier = Modifier
-            .background(PillBg, CircleShape)
-            .padding(horizontal = 10.dp, vertical = 4.dp),
+            .background(MoyeotaColor.SurfaceSoft, CircleShape)
+            .padding(horizontal = 8.dp, vertical = 2.dp),
     ) {
         Text(
-            text = text,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Bold,
-            color = GraySlateDeep,
+            text = "동승자",
+            style = MoyeotaType.CaptionSm,
+            fontWeight = FontWeight.SemiBold,
+            color = MoyeotaColor.TextBody,
         )
-    }
-}
-
-// ─── Canvas 아이콘·경로 (material-icons 미사용) ─────────────────────────────
-
-@Composable
-private fun CheckIcon(color: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier.size(14.dp)) {
-        val w = size.width
-        val h = size.height
-        val stroke = 1.8.dp.toPx()
-        drawLine(color, Offset(w * 0.15f, h * 0.55f), Offset(w * 0.42f, h * 0.8f), stroke, StrokeCap.Round)
-        drawLine(color, Offset(w * 0.42f, h * 0.8f), Offset(w * 0.85f, h * 0.25f), stroke, StrokeCap.Round)
-    }
-}
-
-@Composable
-private fun ChevronRightIcon(color: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier.size(16.dp)) {
-        val w = size.width
-        val h = size.height
-        val stroke = 1.8.dp.toPx()
-        drawLine(color, Offset(w * 0.38f, h * 0.22f), Offset(w * 0.66f, h * 0.5f), stroke, StrokeCap.Round)
-        drawLine(color, Offset(w * 0.38f, h * 0.78f), Offset(w * 0.66f, h * 0.5f), stroke, StrokeCap.Round)
     }
 }
 

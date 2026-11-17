@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
@@ -36,6 +35,7 @@ import com.moyeota.core.designsystem.component.MoyeotaTopBar
 import com.moyeota.core.designsystem.component.SecondaryButton
 import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.core.designsystem.theme.MoyeotaShape
 import com.moyeota.core.designsystem.theme.MoyeotaType
 import com.moyeota.domain.model.RideRecord
 import com.moyeota.domain.model.RideRecordMember
@@ -201,7 +201,7 @@ private fun RideHistoryCard(item: RideHistoryItem) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
+            .clip(MoyeotaShape.Card)
             .background(MoyeotaColor.SurfaceCard)
             .padding(16.dp),
     ) {
@@ -217,7 +217,7 @@ private fun RideHistoryCard(item: RideHistoryItem) {
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(12.dp))
         }
 
         if (item.members.isNotEmpty() || item.memberLabel != null) {
@@ -254,7 +254,7 @@ private fun RideHistoryCard(item: RideHistoryItem) {
                     Text(
                         text = " · ",
                         style = MoyeotaType.BodySm,
-                        color = MoyeotaColor.TextAsh,
+                        color = MoyeotaColor.TextPlaceholder,
                     )
                 }
                 if (fare.totalLabel != null) {

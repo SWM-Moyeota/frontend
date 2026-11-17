@@ -1,53 +1,37 @@
 package com.moyeota.presentation.feature.matching
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
-import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.moyeota.core.designsystem.component.BackArrowIcon
+import com.moyeota.core.designsystem.component.ChatBubbleIcon
+import com.moyeota.core.designsystem.component.CheckIcon
+import com.moyeota.core.designsystem.component.MoyeotaIconSize
+import com.moyeota.core.designsystem.component.MoyeotaTopBar
 import com.moyeota.core.designsystem.component.NavigationBarSpacer
+import com.moyeota.core.designsystem.component.PrimaryCtaButton
 import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.core.designsystem.theme.MoyeotaSpacing
+import com.moyeota.core.designsystem.theme.MoyeotaType
 import com.moyeota.domain.model.User
 import com.moyeota.presentation.core.MemberAvatar
 import com.moyeota.presentation.core.displayNickname
-
-// 와이어프레임 그레이 (core token 미정의 색 — 화면 재현용)
-private val CanvasBg = Color(0xFFF5F7FA)
-private val GrayMute = Color(0xFF8A93A0)
-private val GrayAsh = Color(0xFF9AA1AC)
 
 /**
  * 23 · 동승자 프로필 [S13]
@@ -57,9 +41,16 @@ private val GrayAsh = Color(0xFF9AA1AC)
  * - 「채팅으로 물어보기」 → 24 채팅 (onChatClick)
  *
  * 서버 계약(2026-09): 방 상세 `members[]` 가 주는 것은 닉네임·이미지·탑승 횟수뿐이다.
- * 그래서 이 화면은 그 값만 보여 준다 — 지표는 탑승 횟수 한 칸이고, 서버에 없는 평가·집계·검증
+ * 그래서 이 화면은 그 값만 보여 준다 — 지표는 탑승 횟수 하나이고, 서버에 없는 평가·집계·검증
  * 항목은 「준비 중」 자리표시도 두지 않고 요소째 뺐다. 프로필은 사람을 판단하는 화면이라
  * 지어낸 수치나 빈 칸 하나가 그대로 신뢰의 근거가 된다.
+ *
+ * ### 2026-11 디자인 QA (PP1)
+ * - 지표가 하나뿐인데 88dp 그림자 카드에 담겨 있었다 — 칸 하나짜리 표는 표가 아니라 장식이다.
+ *   이름 아래 한 줄 「탑승 횟수 · 12회」로 줄였다
+ * - CTA 는 앱 공용 [PrimaryCtaButton](알약 52dp)이다. 예전 r16 · 56dp · 파란 빛번짐 그림자 버튼은 이
+ *   화면에만 있는 모양이었다. 말풍선 아이콘은 `leadingIcon` 자리로 지켰다
+ * - 머리줄은 하위 화면 공용 [MoyeotaTopBar], 바탕은 흰색(G2)
  *
  * @param user 22·20 에서 탭한 그 멤버. 호출부가 반드시 넘긴다(기본값 없음).
  */
@@ -69,29 +60,16 @@ fun PartnerProfileScreen(
     onBack: () -> Unit = {},
     onChatClick: () -> Unit = {},
 ) {
-    Column(modifier = Modifier.fillMaxSize().background(CanvasBg)) {
+    Column(modifier = Modifier.fillMaxSize().background(MoyeotaColor.SurfaceCanvas)) {
         StatusBarSpacer()
-
-        // 헤더
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 24.dp, top = 8.dp, bottom = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconButton(onClick = onBack) { BackArrowIcon() }
-            Text(
-                text = "프로필",
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-                color = MoyeotaColor.InkPrimary,
-            )
-        }
+        MoyeotaTopBar(title = "프로필", onBack = onBack)
 
         Column(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp),
+                .padding(horizontal = MoyeotaSpacing.ScreenGutter),
         ) {
             Spacer(Modifier.height(16.dp))
 
@@ -107,15 +85,14 @@ fun PartnerProfileScreen(
                             .background(MoyeotaColor.Primary500, CircleShape),
                         contentAlignment = Alignment.Center,
                     ) {
-                        CheckSmallIcon(tint = MoyeotaColor.TextOnDark)
+                        CheckIcon(size = MoyeotaIconSize.Sm, tint = MoyeotaColor.TextOnDark)
                     }
                 }
             }
             Spacer(Modifier.height(12.dp))
             Text(
                 text = user.displayNickname,
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Bold,
+                style = MoyeotaType.DisplayMd,
                 color = MoyeotaColor.InkPrimary,
                 modifier = Modifier.align(Alignment.CenterHorizontally),
             )
@@ -124,39 +101,28 @@ fun PartnerProfileScreen(
                 Spacer(Modifier.height(4.dp))
                 Text(
                     text = user.verifiedLabel,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = GrayMute,
+                    style = MoyeotaType.BodySm,
+                    color = MoyeotaColor.TextMute,
                     modifier = Modifier.align(Alignment.CenterHorizontally),
                 )
             }
-            Spacer(Modifier.height(20.dp))
-
-            // 지표 카드 — 서버가 주는 지표는 탑승 횟수 하나뿐이다
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(88.dp)
-                    .shadow(4.dp, RoundedCornerShape(18.dp), spotColor = Color(0x0F1B2A4A))
-                    .clip(RoundedCornerShape(18.dp))
-                    .background(MoyeotaColor.SurfaceCanvas),
-                contentAlignment = Alignment.Center,
-            ) {
-                StatCell(
-                    value = if (user.rideCount <= 0) "첫 탑승" else "${user.rideCount}회",
-                    label = "탑승 횟수",
-                    valueFontSize = if (user.rideCount <= 0) 16.sp else 20.sp,
-                )
-            }
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(8.dp))
+            // 서버가 주는 지표는 탑승 횟수 하나뿐이다 — 카드 없이 이름 아래 한 줄로 둔다
+            Text(
+                text = "탑승 횟수 · ${if (user.rideCount <= 0) "첫 탑승" else "${user.rideCount}회"}",
+                style = MoyeotaType.BodyMd,
+                color = MoyeotaColor.TextBody,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(24.dp))
 
             Text(
                 // 「학번」은 지웠다 — 학교 인증(06·07)이 가입 경로에 없어 학번을 받은 적이 없다.
                 // 서버가 주는 멤버 정보는 publicId·닉네임·이미지·탑승 횟수뿐이다(2026-10-13).
                 text = "실명과 연락처는 서로에게 공개되지 않아요",
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                color = GrayAsh,
+                style = MoyeotaType.CaptionMd,
+                color = MoyeotaColor.TextMute,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -164,83 +130,14 @@ fun PartnerProfileScreen(
         }
 
         // CTA — 채팅으로 물어보기 → 24 채팅
-        Row(
-            modifier = Modifier
-                .padding(horizontal = 16.dp)
-                .fillMaxWidth()
-                .height(56.dp)
-                .shadow(10.dp, RoundedCornerShape(16.dp), spotColor = Color(0x42085AF5))
-                .clip(RoundedCornerShape(16.dp))
-                .background(MoyeotaColor.Primary500)
-                .clickable { onChatClick() },
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            ChatBubbleIcon()
-            Spacer(Modifier.width(9.dp))
-            Text(
-                text = "채팅으로 물어보기",
-                fontSize = 17.sp,
-                fontWeight = FontWeight.Bold,
-                color = MoyeotaColor.TextOnDark,
-            )
-        }
-        Spacer(Modifier.height(12.dp))
-        NavigationBarSpacer(Modifier.background(CanvasBg))
-    }
-}
-
-@Composable
-private fun StatCell(
-    value: String,
-    label: String,
-    modifier: Modifier = Modifier,
-    // 숫자 대신 「첫 탑승」 같은 문구가 들어가면 작게 줄인다
-    valueFontSize: TextUnit = 20.sp,
-) {
-    Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(
-            text = value,
-            fontSize = valueFontSize,
-            fontWeight = FontWeight.Bold,
-            color = MoyeotaColor.InkPrimary,
-            maxLines = 1,
-            textAlign = TextAlign.Center,
+        PrimaryCtaButton(
+            text = "채팅으로 물어보기",
+            onClick = onChatClick,
+            modifier = Modifier.padding(horizontal = MoyeotaSpacing.ScreenGutter),
+            leadingIcon = { ChatBubbleIcon(size = 18.dp, tint = MoyeotaColor.TextOnDark) },
         )
-        Spacer(Modifier.height(2.dp))
-        Text(text = label, fontSize = 11.sp, fontWeight = FontWeight.Medium, color = GrayMute)
-    }
-}
-
-// ─── 아이콘 (material-icons 미사용 — Canvas 직접 드로잉) ─────────────────────
-
-@Composable
-private fun CheckSmallIcon(tint: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier.size(14.dp)) {
-        val w = size.width
-        val h = size.height
-        val strokeWidth = 2.dp.toPx()
-        drawLine(tint, Offset(w * 0.12f, h * 0.55f), Offset(w * 0.42f, h * 0.82f), strokeWidth, StrokeCap.Round)
-        drawLine(tint, Offset(w * 0.42f, h * 0.82f), Offset(w * 0.88f, h * 0.2f), strokeWidth, StrokeCap.Round)
-    }
-}
-
-@Composable
-private fun ChatBubbleIcon(modifier: Modifier = Modifier, tint: Color = MoyeotaColor.TextOnDark) {
-    Canvas(modifier = modifier.size(19.dp)) {
-        val w = size.width
-        val h = size.height
-        val stroke = Stroke(width = 1.8.dp.toPx(), cap = StrokeCap.Round)
-        drawRoundRect(
-            color = tint,
-            topLeft = Offset(w * 0.08f, h * 0.12f),
-            size = Size(w * 0.84f, h * 0.6f),
-            cornerRadius = androidx.compose.ui.geometry.CornerRadius(4.dp.toPx()),
-            style = stroke,
-        )
-        // 말풍선 꼬리
-        drawLine(tint, Offset(w * 0.3f, h * 0.72f), Offset(w * 0.3f, h * 0.92f), stroke.width, StrokeCap.Round)
-        drawLine(tint, Offset(w * 0.3f, h * 0.92f), Offset(w * 0.5f, h * 0.72f), stroke.width, StrokeCap.Round)
+        Spacer(Modifier.height(16.dp))
+        NavigationBarSpacer()
     }
 }
 

@@ -18,8 +18,6 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -32,21 +30,25 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.moyeota.core.designsystem.component.BackArrowIcon
 import com.moyeota.core.designsystem.component.NavigationBarSpacer
 import com.moyeota.core.designsystem.component.PrimaryCtaButton
 import com.moyeota.core.designsystem.component.RouteMapView
 import com.moyeota.core.designsystem.component.StatusBarSpacer
 import com.moyeota.core.designsystem.component.latLngOrNull
 import com.moyeota.core.designsystem.theme.MoyeotaColor
+import com.moyeota.core.designsystem.theme.MoyeotaShape
+import com.moyeota.core.designsystem.theme.MoyeotaSpacing
+import com.moyeota.core.designsystem.theme.MoyeotaType
+import com.moyeota.core.designsystem.theme.sheetShadow
+import com.moyeota.core.designsystem.theme.tabularNums
+import com.moyeota.core.designsystem.component.MoyeotaChip
+import com.moyeota.core.designsystem.component.MoyeotaTopBar
+import androidx.compose.foundation.layout.width
 import com.moyeota.presentation.core.location.FormLocationIntervalMs
 import com.moyeota.presentation.core.location.rememberMyLocationState
 import com.naver.maps.geometry.LatLng
@@ -63,9 +65,6 @@ private val PinHeight = 34.dp
 
 // 카메라가 움직이는 동안 핀이 지면에서 떠오르는 높이 (카카오T 와 같은 「집어 든」 연출)
 private val PinLift = 8.dp
-
-private val GrayMute = Color(0xFF8A93A0)
-private val GrayAsh = Color(0xFF9AA1AC)
 
 /**
  * 출발지 · 도착지 좌표 미세조정 (16 모달 내부 확장 상태).
@@ -201,37 +200,28 @@ fun PinAdjustOverlay(
             // 헤더 + 대상 토글
             Column(modifier = Modifier.fillMaxWidth().background(MoyeotaColor.SurfaceCanvas)) {
                 StatusBarSpacer()
+                // 16 과 같은 가운데 제목 앱바(디자인 QA G7)
+                MoyeotaTopBar(title = "위치 조정", onBack = onCancel)
                 Row(
-                    modifier = Modifier.fillMaxWidth().height(56.dp).padding(start = 12.dp, end = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    IconButton(onClick = onCancel) { BackArrowIcon() }
-                    Text(
-                        text = "위치 조정",
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MoyeotaColor.InkPrimary,
-                    )
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = MoyeotaSpacing.ScreenGutter),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    // 좌표가 없는 대상은 조정할 것이 없으므로 칩 자체를 내지 않는다
+                    // 좌표가 없는 대상은 조정할 것이 없으므로 칩 자체를 내지 않는다.
+                    // 앱 공용 칩([MoyeotaChip])을 쓴다 — 둘뿐인 토글이라 글자 좌우를 넓혀(28dp) 누르기 쉽게 한다.
                     if (originPosition != null) {
-                        ConditionChip(
+                        MoyeotaChip(
                             text = "출발지",
                             selected = target == PinTarget.ORIGIN,
                             onClick = { target = PinTarget.ORIGIN },
-                            wide = true,
+                            horizontalPadding = 28.dp,
                         )
                     }
                     if (destinationPosition != null) {
-                        ConditionChip(
+                        MoyeotaChip(
                             text = "도착지",
                             selected = target == PinTarget.DESTINATION,
                             onClick = { target = PinTarget.DESTINATION },
-                            wide = true,
+                            horizontalPadding = 28.dp,
                         )
                     }
                 }
@@ -274,18 +264,19 @@ fun PinAdjustOverlay(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .shadow(14.dp, RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp), spotColor = Color(0x141B2A4A))
-                    .clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
+                    // 지도 위로 올라온 시트라 시트 가장자리 그림자 하나만 둔다(G4 — 8dp)
+                    .sheetShadow(MoyeotaShape.Sheet)
+                    .clip(MoyeotaShape.Sheet)
                     .background(MoyeotaColor.SurfaceCanvas)
-                    .padding(horizontal = 16.dp, vertical = 16.dp),
+                    .padding(horizontal = MoyeotaSpacing.ScreenGutter, vertical = 16.dp),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(11.dp).background(targetColor, CircleShape))
-                    Spacer(Modifier.size(10.dp))
+                    // 16 의 경로 요약(RouteSummary)과 같은 8dp 점 · 12dp 간격
+                    Box(Modifier.size(8.dp).background(targetColor, CircleShape))
+                    Spacer(Modifier.width(12.dp))
                     Text(
                         text = targetName,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
+                        style = MoyeotaType.HeadingMd,
                         color = MoyeotaColor.InkPrimary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -303,9 +294,8 @@ fun PinAdjustOverlay(
                 Text(
                     // 1줄에 맞춘 길이 — 「…갱신돼 / 요」처럼 마지막 글자만 떨어지면 지저분하다
                     text = "지도를 움직여 핀을 맞춰 주세요 · 설정하면 주소가 갱신돼요",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = GrayAsh,
+                    style = MoyeotaType.CaptionMd,
+                    color = MoyeotaColor.TextMute,
                 )
                 Spacer(Modifier.height(12.dp))
                 PrimaryCtaButton(
@@ -356,8 +346,8 @@ private fun CoordinateLabel(position: () -> LatLng?) {
     val value = position()
     Text(
         text = value?.let { "%.6f, %.6f".format(it.latitude, it.longitude) } ?: "좌표 없음",
-        fontSize = 13.sp,
-        fontWeight = FontWeight.Medium,
-        color = GrayMute,
+        // 팬 중에 숫자가 바뀌어도 글자 폭이 흔들리지 않게 고정폭 숫자
+        style = MoyeotaType.BodySm.tabularNums(),
+        color = MoyeotaColor.TextMute,
     )
 }

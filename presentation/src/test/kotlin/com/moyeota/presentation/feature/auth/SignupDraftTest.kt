@@ -2,8 +2,10 @@ package com.moyeota.presentation.feature.auth
 
 import com.moyeota.domain.model.AuthError
 import com.moyeota.domain.model.AuthException
+import com.moyeota.domain.model.AuthPolicy
 import com.moyeota.domain.model.Gender
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -119,6 +121,26 @@ class SignupDraftTest {
     fun `서버 제한값은 문구에 직접 적지 않고 도메인 상수를 쓴다`() {
         assertTrue(authErrorMessage(AuthError.SMS_DAILY_LIMIT_EXCEEDED).contains("하루 5번"))
         assertTrue(authErrorMessage(AuthError.SMS_TOO_MANY_ATTEMPTS).contains("5번"))
+        // 개인정보 처리방침의 고지와 어긋나면 안 되는 숫자다 — AuthPolicy.MIN_AGE 한 곳에서만 고친다
+        assertTrue(authErrorMessage(AuthError.UNDER_MINIMUM_AGE).contains("만 ${AuthPolicy.MIN_AGE}세"))
+    }
+
+    /**
+     * 못 박는 것: **나이 미달을 「다시 확인해 주세요」로 뭉개지 않는다.**
+     *
+     * 둘 다 400 이라 코드를 안 가리면 같은 문구로 떨어진다. 그런데 사용자가 할 일이 정반대다 —
+     * 검증 실패는 고칠 입력이 있고, 나이 미달은 **고칠 게 없다**
+     * ([AuthPolicy.isOldEnough] KDoc 의 「사용자가 할 일」 표). 뭉개면 날짜만 계속 고쳐 보게 된다.
+     *
+     * 앱이 `isOldEnough` 로 먼저 막으므로 정상 경로에서는 안 뜨지만, 구버전 APK 와 API 직접 호출이
+     * 남아 있어 **앱이 유일한 방어선이 아니다**.
+     */
+    @Test
+    fun `나이 미달은 일반 검증 실패와 다른 말을 한다`() {
+        assertNotEquals(
+            authErrorMessage(AuthError.INVALID_REQUEST),
+            authErrorMessage(AuthError.UNDER_MINIMUM_AGE),
+        )
     }
 
     @Test

@@ -154,6 +154,7 @@ data class RefreshTokenRequestDto(
 
 /**
  * **로그인과 재발급이 공유하는** 200 응답. 백엔드 `TokenResponse(accessToken, refreshToken)`.
+ * 소셜 회원가입(`POST /api/v1/auth/social/register`)의 **201** 도 같은 모양이다.
  *
  * 로그인 응답에 있던 `userId` 는 사라졌다 — 사용자 UUID 는 액세스 토큰의 `sub` 클레임에서 읽는다
  * ([com.moyeota.data.remote.auth.jwtSubject]).
@@ -165,4 +166,137 @@ data class RefreshTokenRequestDto(
 data class TokenResponse(
     val accessToken: String = "",
     val refreshToken: String = "",
+)
+
+/**
+ * POST /api/v1/auth/find-id/verify 의 응답 — 백엔드 `FindLoginIdResponse`.
+ *
+ * 요청 본문은 가입 인증과 같은 [SmsVerifyRequestDto] 를 그대로 쓴다(서버도 같은 record 다).
+ * `loginId` 는 가리지 않은 **전체 아이디**다 — 문자 인증을 통과한 사람에게만 돌려준다.
+ */
+@Serializable
+data class FindLoginIdResponse(
+    val loginId: String = "",
+)
+
+/**
+ * POST /api/v1/auth/password-reset/send 의 요청 본문 — 백엔드 `PasswordResetSendRequest`.
+ *
+ * 둘 다 `@Pattern` 이 걸려 있다 — `loginId` 는 가입 규칙과 같고 `phoneNumber` 는 발송 요청과 같다.
+ * 형식이 틀리면 접수 전에 400 `INVALID_REQUEST` 다.
+ */
+@Serializable
+data class PasswordResetSendRequestDto(
+    val loginId: String,
+    val phoneNumber: String,
+)
+
+/**
+ * POST /api/v1/auth/password-reset/send 의 202 응답 — 백엔드 `PasswordResetSendResponse`.
+ *
+ * `requestId` 는 확인 요청에 그대로 되돌려 보내는 접수번호(43자)다. `expiresIn`(180)·`resendAfter`(60)는 초 단위.
+ * `message` 는 서버 고정 문구다 — 앱은 자기 문구를 쓰므로 읽지 않는다.
+ */
+@Serializable
+data class PasswordResetSendResponse(
+    val requestId: String = "",
+    val expiresIn: Long = 0,
+    val resendAfter: Long = 0,
+    val message: String? = null,
+)
+
+/** POST /api/v1/auth/password-reset/verify 의 요청 본문 — 백엔드 `PasswordResetVerifyRequest`. */
+@Serializable
+data class PasswordResetVerifyRequestDto(
+    val requestId: String,
+    val code: String,
+)
+
+/**
+ * POST /api/v1/auth/password-reset/verify 의 200 응답 — 백엔드 `PasswordResetVerifyResponse`.
+ *
+ * `resetToken` 은 **한 번만 쓰는** 재설정 권한이다(`expiresIn` = 600초). 저장하지 않고 메모리에만 든다.
+ */
+@Serializable
+data class PasswordResetVerifyResponse(
+    val resetToken: String = "",
+    val expiresIn: Long = 0,
+)
+
+/**
+ * POST /api/v1/auth/password-reset/confirm 의 요청 본문 — 백엔드 `PasswordResetConfirmRequest`.
+ *
+ * 확인 값까지 서버로 보낸다 — 두 값이 같은지는 서버가 다시 본다(400 `USER303`).
+ */
+@Serializable
+data class PasswordResetConfirmRequestDto(
+    val resetToken: String,
+    val newPassword: String,
+    val newPasswordConfirm: String,
+)
+
+/**
+ * POST /api/v1/auth/login/google 의 요청 본문 — 백엔드 `GoogleLoginRequest(@NotBlank String idToken)`.
+ *
+ * [idToken] 은 구글 SDK 가 준 JWT 를 **받은 그대로** 싣는다. 서버가 서명·발급자·대상(aud)·만료를 검사하므로
+ * 앱이 열어 볼 이유도, 다듬을 이유도 없다. 빈 값은 서비스까지 가지 않고 400 `INVALID_REQUEST` 다.
+ */
+@Serializable
+data class GoogleLoginRequestDto(
+    val idToken: String,
+)
+
+/**
+ * POST /api/v1/auth/login/google 의 200 응답 — 백엔드 `SocialLoginResponse`.
+ *
+ * ### `status` 에 따라 채워지는 칸이 다르고, **안 쓰는 칸은 null 이 아니라 키 자체가 빠진다**
+ * 서버 record 에 `@JsonInclude(NON_NULL)` 이 걸려 있다(백엔드 `SocialAuthControllerUnitTest` 가
+ * `jsonPath(...).doesNotExist()` 로 못 박는다):
+ *
+ * - 가입한 회원: `{"status":"LOGIN","accessToken":"…","refreshToken":"…"}`
+ * - 처음 온 사람: `{"status":"SIGNUP_REQUIRED","signupToken":"<uuid>","email":"hong@gmail.com","name":"홍길동"}`
+ *   — [name] 은 구글 계정에 이름이 없으면 이 안에서도 빠진다.
+ *
+ * 그래서 **모든 칸이 nullable + 기본값 null 이다.** 하나라도 논-널로 선언하면 반대쪽 status 의 응답을
+ * 디코딩하다 `MissingFieldException` 이 나고, 그건 `authCall` 을 거쳐 [com.moyeota.domain.model.AuthError.UNKNOWN]
+ * 이 된다 — 즉 「가입한 회원은 되는데 처음 온 사람만 로그인이 안 된다」(또는 그 반대)는 반쪽짜리 결함이 된다.
+ * [TokenResponse] 처럼 빈 문자열 기본값을 쓰지 않는 것도 의도다: 여기서는 「빠졌다」가 정상 경우라
+ * 빈 문자열과 구별할 이유가 없고, null 하나로 두는 쪽이 매퍼가 단순하다.
+ *
+ * [status] 를 enum 이 아니라 문자열로 받는 이유: 서버가 값을 늘리면(예: 정지된 계정) enum 디코딩은
+ * 응답 전체를 터뜨린다. 문자열로 받아 매퍼가 「모르는 값」을 스스로 끊는다
+ * ([com.moyeota.data.remote.toOutcome]).
+ *
+ * 실서버 응답이 아니라 **백엔드 소스 기준**이다(`origin/develop` 의 `user/social/dto/SocialLoginResponse.java`).
+ */
+@Serializable
+data class SocialLoginResponse(
+    val status: String? = null,
+    val accessToken: String? = null,
+    val refreshToken: String? = null,
+    val signupToken: String? = null,
+    val email: String? = null,
+    val name: String? = null,
+)
+
+/**
+ * POST /api/v1/auth/social/register 의 요청 본문 — 백엔드 `SocialRegisterRequest` 와 필드 1:1.
+ *
+ * [RegisterRequestDto] 에서 `loginId`·`password`·`email` 이 빠지고 [signupToken] 이 들어간 모양이다.
+ * **`email` 키를 싣지 않는다** — 서버가 요청의 이메일을 받지 않고 가입 대기표에 들어 있는 구글 계정
+ * 이메일을 쓴다. [birthDate]·[gender]·[phoneNumber] 의 형식 규칙은 [RegisterRequestDto] 와 같다
+ * (Instant 문자열 / 서버 enum 이름 / `@Pattern` 이 걸린 번호).
+ *
+ * 응답은 **201 + [TokenResponse]** 다 — 로컬 가입의 [RegisterResponse](uuid 만)와 다르다. 서버가 같은
+ * `TokenResponse` record 를 돌려주므로 응답 DTO 를 따로 만들지 않는다.
+ */
+@Serializable
+data class SocialRegisterRequestDto(
+    val signupToken: String,
+    val verificationToken: String,
+    val phoneNumber: String,
+    val nickname: String,
+    val name: String,
+    val birthDate: String,
+    val gender: String,
 )

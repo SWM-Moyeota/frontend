@@ -2,6 +2,7 @@ package com.moyeota.presentation.feature.matching
 
 import com.moyeota.domain.model.PartyLeaveException
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Test
 
 /**
@@ -39,6 +40,27 @@ class LeaveFailureMessageTest {
         val message = leaveFailureMessage(failure(PartyLeaveException.PARTY_NOT_RECRUITING))
 
         assertEquals("이미 끝난 방이에요. 홈으로 돌아가 주세요", message)
+    }
+
+    /**
+     * 409 `CANNOT_LEAVE_CONFIRMED_PARTY` — 약속이 정해진 방이다. 예약 방은 합류 순간부터,
+     * 실시간 방은 방장이 약속 시간을 확정한 뒤부터 이 답이 온다.
+     *
+     * 못 박는 것: **[PartyLeaveException.PARTY_NOT_RECRUITING] 과 다른 말을 한다.** 같은 409 지만
+     * 그쪽은 이미 끝난 방이라 홈으로 보내는 게 맞고, 이쪽은 **아직 살아 있는 방**이다 — 홈으로
+     * 돌아가라고 하면 사용자는 끝났다고 믿고 안 가고, 그대로 노쇼로 남는다. 끝내는 길이 「출발」
+     * 하나뿐이므로 어디로 가야 하는지까지 말해 준다.
+     */
+    @Test
+    fun `약속이 정해진 방은 끝난 방과 다른 말을 한다`() {
+        val confirmed = leaveFailureMessage(failure(PartyLeaveException.CANNOT_LEAVE_CONFIRMED_PARTY))
+
+        assertEquals("약속이 정해진 방은 나갈 수 없어요. 약속 시간에 출발지에서 만나 주세요", confirmed)
+        assertNotEquals(
+            "끝난 방과 확정된 방을 같은 문구로 뭉갰다 — 전자는 홈, 후자는 약속 장소다",
+            leaveFailureMessage(failure(PartyLeaveException.PARTY_NOT_RECRUITING)),
+            confirmed,
+        )
     }
 
     @Test
@@ -79,6 +101,7 @@ class LeaveFailureMessageTest {
     fun `실패마다 다른 말을 한다`() {
         val messages = listOf(
             failure(PartyLeaveException.PARTY_NOT_RECRUITING),
+            failure(PartyLeaveException.CANNOT_LEAVE_CONFIRMED_PARTY),
             failure(PartyLeaveException.PARTY_NOT_FOUND, 404),
             failure(code = null, httpStatus = null),
         ).map(::leaveFailureMessage)
