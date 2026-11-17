@@ -50,7 +50,7 @@ class MeetingCopyTest {
         members = members,
         farePerPerson = 0,
         totalFare = 0,
-        status = RideStatus.MATCHED,
+        status = RideStatus.CONFIRMED,
         isConfirmed = isConfirmed,
     )
 
@@ -96,7 +96,8 @@ class MeetingCopyTest {
      * 왜 테스트가 필요한가: 예전에는 제목과 요청이 시계를 **따로** 읽었다. 분으로 내림하는 값이라
      * 「찰나뿐」이라고 적혀 있었지만, 다이얼로그를 몇 초 들여다보면 분은 쉽게 넘어간다 —
      * 실측(2026-11-06)에서 「오전 10:59에 만날까요?」로 묻고 **11:00 으로 확정됐다.** 확정은
-     * 되돌릴 수 없고 어기면 노쇼가 되므로, 동의한 값과 보내는 값이 갈리면 안 된다.
+     * 확정은 **한 번만** 할 수 있고(409 `ALREADY_CONFIRMED`) 그 시각에 사람들이 모이므로,
+     * 동의한 값과 보내는 값이 갈리면 안 된다.
      *
      * 아래 첫 단언이 그 갈림이 **실재함**을 고정하고(13초 뒤에 다시 만들면 값이 다르다),
      * 둘째가 캡처하면 그 갈림이 **사라짐**을 고정한다.
@@ -185,7 +186,7 @@ class MeetingCopyTest {
     /**
      * 이름을 쓸 수 있으면 이름으로 부르고, 못 쓰면 **조건**을 말한다 — 서버 `Party.hostId()` 가
      * 현재 멤버 중 `min(joinedAt, memberId)` 라 「가장 먼저 참여한 분」은 사실이다
-     * ([finishHostNotice] 와 같은 근거·같은 표현).
+     * ([departHostNotice] 와 같은 근거·같은 표현 — 그쪽은 옛 `finishHostNotice` 를 옮겨 온 것이다).
      */
     @Test
     fun `방장 안내는 이름을 쓸 수 있을 때만 이름으로 부른다`() {
@@ -211,41 +212,54 @@ class MeetingCopyTest {
     // ─────────────────────── 출발 확인 문구 ───────────────────────
 
     /**
-     * ★ **이 테스트가 이 파일에서 가장 중요하다.** 「출발」은 되돌릴 수 없고, 그 순간 도착하지 않은
-     * 사람에게 **실제 제재**가 붙는다(약속 시간부터 노쇼 횟수 × 24시간 동안 방 생성·참여 금지).
-     * 누르는 사람은 보통 **남의 제재**를 만들게 되므로, 숫자와 대가를 말하지 않으면 그 무게를 모른다.
+     * 🔴 ★ **이 테스트가 이 파일에서 가장 중요하고, 뜻이 바뀐 자리다.**
+     *
+     * 옛 문구: 「… 아직 도착하지 않은 2명은 **노쇼로 기록돼요** — 약속 시간부터 노쇼 횟수 × 24시간
+     * 동안 방·예약을 만들거나 참여할 수 없어요」. **서버가 노쇼 기능을 통째로 지웠다**
+     * (`b16551b7`, V37 이 테이블까지 떨어뜨린다) — 그 제재는 **존재하지 않는 일**이라, 남겨 두면
+     * 겁을 주고 그 겁이 거짓이다.
+     *
+     * **대가가 사라진 건 아니다.** 서버는 「도착을 누른 멤버 = 탑승자」로 세므로(`Party.riderIds`)
+     * 미도착자는 **탑승 기록 · 탑승 횟수 · 택시비 정산 대상**에서 함께 빠진다. 같이 탔는데도 정산
+     * 장부에 이름이 없는 것이 지금의 대가다. 그래서 **겁주지 않고 사실만** 적는다 — 처벌조
+     * (「제외됩니다」)가 아니라 「빠져요」로.
+     *
+     * 「출발」이 되돌릴 수 없고 누르는 사람이 보통 **남의 손해**를 만든다는 것은 그대로다. 그래서
+     * 숫자는 여전히 필수다.
      */
     @Test
-    fun `출발 확인 문구는 노쇼 인원과 그 대가를 말한다`() {
+    fun `출발 확인 문구는 빠지는 인원과 무엇에서 빠지는지를 말한다`() {
         val message = departConfirmMessage(2)
 
         assertEquals(
-            "같이 탄 사람 모두의 방이 끝나요. 아직 도착하지 않은 2명은 노쇼로 기록돼요 — " +
-                "약속 시간부터 노쇼 횟수 × 24시간 동안 방·예약을 만들거나 참여할 수 없어요",
+            "같이 탄 사람 모두의 방이 끝나요. 아직 도착하지 않은 2명은 탑승 기록과 택시비 정산에서 빠져요",
             message,
         )
-        assertTrue("몇 명이 노쇼가 되는지 말해야 한다", message.contains("2명"))
-        assertTrue("노쇼라는 말이 있어야 한다", message.contains("노쇼"))
-        assertTrue("제재 기간을 말해야 한다", message.contains("24시간"))
+        assertTrue("몇 명이 빠지는지 말해야 한다", message.contains("2명"))
+        assertTrue("탑승 기록에서 빠진다는 것을 말해야 한다", message.contains("탑승 기록"))
+        assertTrue("정산에서 빠지는 것이 실제 대가다", message.contains("정산"))
         assertTrue("모두의 방이 끝난다는 것을 말해야 한다", message.contains("모두의 방이 끝나요"))
+        // 🔴 사라진 제재로 겁을 주지 않는다
+        assertFalse("서버에 없는 제재를 말한다: $message", message.contains("노쇼"))
+        assertFalse("서버에 없는 제재 기간을 말한다: $message", message.contains("24시간"))
     }
 
     /**
-     * **아무도 기록되지 않으면 제재를 말하지 않는다.** 겁만 주고, 정말 노쇼가 생길 때 같은 문구가
-     * 무게를 잃는다.
+     * **아무도 빠지지 않으면 그 문장을 말하지 않는다.** 겁만 주고, 정말 미도착자가 있을 때 같은
+     * 문구가 무게를 잃는다.
      */
     @Test
-    fun `모두 도착했으면 노쇼를 말하지 않는다`() {
+    fun `모두 도착했으면 빠진다는 말을 하지 않는다`() {
         val message = departConfirmMessage(0)
 
         assertEquals("모두 도착했어요. 출발하면 같이 탄 사람 모두의 방이 끝나요", message)
-        assertFalse("없는 제재를 말한다: $message", message.contains("노쇼"))
-        assertFalse(message, message.contains("24시간"))
+        assertFalse("아무도 빠지지 않는데 빠진다고 말한다: $message", message.contains("빠져요"))
+        assertFalse(message, message.contains("노쇼"))
     }
 
-    /** 음수는 올 수 없지만(목록 개수다) 와도 「0명 노쇼」를 그리지 않는다. */
+    /** 음수는 올 수 없지만(목록 개수다) 와도 「0명이 빠진다」를 그리지 않는다. */
     @Test
-    fun `미도착 인원이 음수여도 노쇼를 말하지 않는다`() {
+    fun `미도착 인원이 음수여도 빠진다는 말을 하지 않는다`() {
         assertEquals(departConfirmMessage(0), departConfirmMessage(-1))
     }
 

@@ -79,17 +79,15 @@ data class PartyDetailResponse(
      * 번진다. (같은 판단: [MemberInfo] 의 문자열 필드들, [version].)
      */
     val currentMembers: Int? = null,
-    /**
-     * 서버가 방에 박아 둔 반경(m). **사용자가 고른 값이 아니다** — 요청에서 빠지고 서버 고정값
-     * (`Radius.DEFAULT` = 500m)이 됐다(Backend `a668aee`). 응답에는 남아 있어 서버 record 와 모양을
-     * 맞추려고 받아 두지만, **도메인 [com.moyeota.domain.model.Ride] 로는 옮기지 않는다.**
-     *
-     * 옮기지 않는 이유: 서버의 어떤 조회·판정도 이 값을 읽지 않는다 — 합류(`party.join`)에 거리 검사가
-     * 없고 목록은 지도 뷰포트만 본다. 화면에 띄우면 아무것도 걸러내지 않는 숫자를 「탐색 범위」로
-     * 약속하는 셈이고, 사용자가 바꿀 수도 없다. 경로 매칭이 실제로 이 값을 쓰기 시작하면 그때 태운다.
-     */
-    val departureRadius: Int = 0,
-    val destinationRadius: Int = 0,
+    // **`departureRadius`·`destinationRadius` 는 지웠다** — 서버가 응답에서도 두 키를 없앴다
+    // (`2732cc75`: 「응답의 호환용 키 삭제: taxiDriverId, departureRadius·destinationRadius,
+    // members[].badgeId, pickupTime」). 요청에서 빠진 지는 더 오래됐다(`a668aee`).
+    //
+    // 받아 두기만 하고 도메인으로 옮기지 않던 값이라 지워도 화면은 그대로다. 그래도 지우는 이유:
+    // 남겨 두면 `Int = 0` 기본값 때문에 **없는 키가 조용히 0** 이 되어, 누군가 「반경 0m」를 읽고
+    // 「탐색 범위가 0」이라는 화면을 만들 수 있다. 서버가 도착 판정에 쓰는 반경은 따로 있고
+    // (실시간 100m · 예약 400m, `Party.arrivalRadiusMeters`) **응답으로 내려오지 않는다** —
+    // 그 숫자가 필요하면 방 종류로 앱이 고른다.
     val status: String = "",
     val createdAt: String? = null,
     val members: List<MemberInfo> = emptyList(),
@@ -141,7 +139,7 @@ data class PartyDetailResponse(
 ) {
     /**
      * 서버 `PartyDetailResult.MemberInfo(UUID publicId, String nickname, String imageUrl,
-     * String badgeId, Integer rideCount, boolean host, boolean arrived)`.
+     * Integer rideCount, boolean host, boolean arrived)`.
      *
      * **내부 PK 였던 `memberId` 는 사라졌다.** 식별자는 [publicId] 하나이며 JWT `sub` 와 같은 값이라
      * "이 멤버가 나인가"를 앱이 직접 판정할 수 있다([com.moyeota.data.remote.toRide] 의 currentUuid).
@@ -174,12 +172,9 @@ data class PartyDetailResponse(
         val publicId: String? = null,
         val nickname: String? = null,
         val imageUrl: String? = null,
-        /**
-         * 인증 배지. **서버가 아직 항상 null 을 넣는다**(`toMemberInfo` 의 TODO).
-         * 타입도 어긋나 있다 — `MemberSummary.badgeId` 는 Long 인데 여기서는 String 이다.
-         * 서버가 실제 값을 채우기 시작하면 이 필드 타입부터 다시 확인할 것.
-         */
-        val badgeId: String? = null,
+        // **`badgeId` 는 지웠다** — 서버가 `MemberInfo` 에서 그 키를 없앴다(`2732cc75`).
+        // 오래 「항상 null 인 TODO」였고 이제는 아예 오지 않는다. 그래서 [User.verifiedLabel] 은
+        // 영원히 빈 값이다 — 인증 배지를 되살리려면 **서버에 필드부터 생겨야** 한다.
         /** 이 멤버가 끝낸(FINISHED) 파티 수. 서버가 없으면 0 을 채워 준다. */
         val rideCount: Int = 0,
         /**
@@ -269,36 +264,45 @@ data class MemberLeftPayload(
     val version: Long? = null,
 )
 
-/**
- * SSE `recruiting-closed` 이벤트의 data — 백엔드 `RecruitingClosed(String status, long version)`.
- *
- * 서버의 **모집 정리 스윕**이 시간이 다 된 방을 지금 인원(2명 이상)으로 마감할 때 보낸다.
- * 정원이 차서 마감되는 경우는 이게 아니라 [MemberJoinedPayload.status] 에 실려 온다 —
- * 그쪽은 마지막 자리를 채운 당사자의 신호라 같은 전이를 두 번 보내지 않는다.
- *
- * 두 필드 모두 서버 record 가 **원시/논-널**이지만 기본값을 둔다 — 키가 빠진 프레임 하나가
- * 스트림을 죽이지 않게 하려는 것이고, [MemberJoinedPayload] 와 같은 정책이다.
- */
-@Serializable
-data class RecruitingClosedPayload(
-    /** 마감 **뒤**의 방 상태. 서버는 `"COMPLETED"` 만 보낸다. */
-    val status: String = "",
-    /** 반영 **뒤**의 방 순번. 규칙은 [PartyDetailResponse.version]. */
-    val version: Long? = null,
-)
+// **SSE `recruiting-closed` 와 그 payload 는 지웠다** — 서버가 이벤트를 없앴다(`b16551b7` 이
+// `recruiting-closed` 를 지운다고 적고, `RedisPartyChangeNotifier` 에도 발행 자리가 없다).
+//
+// 그 이벤트가 뜻했던 「모집이 끝났다」가 사라진 게 아니라, **그런 전이 자체가 없어졌다**:
+// 정원이 차도 방은 ACTIVE 로 남고(참여만 `PARTY_FULL` 로 막힌다), 모집을 끝내는 건
+// **방장의 확정**뿐이다 — 그건 [PartyConfirmedPayload] 가 싣고 온다. 15분 모집 만료는
+// **혼자인 방만** 닫고, 그때는 `closed` 가 온다.
 
 /**
- * SSE `confirmed` 이벤트의 data — 백엔드 `PartyConfirmed(String status, Instant departureAt, long version)`.
+ * SSE `confirmed` 이벤트의 data — 백엔드
+ * `PartyConfirmed(String status, Instant departureAt, Double departureLat, Double departureLng, String departure, long version)`.
  *
  * [departureAt] 은 ISO-8601 문자열이다([PartyDetailResponse.departureAt] 과 같은 모양). **null 이면
  * 서버가 약속 시간을 말하지 않은 것**이고, 그때 화면은 「확정됐다」만 알고 「언제」를 모르므로 상세를
  * 다시 읽어야 한다 — 그 규칙은 [com.moyeota.domain.model.PartyEvent.Confirmed] KDoc 에 있다.
+ *
+ * ### 출발지 세 필드가 새로 실려 온다 — **무시하면 지도가 거짓말을 한다** ★
+ * 확정은 방의 출발지를 만남 장소로 **옮긴다**(`Party.confirm`). 서버 Swagger 가 그래서 못 박았다:
+ * 「출발지는 확정 때 만남 장소로 바뀌었을 수 있으니 셋을 방 상세의 출발지로 덮어쓴다」.
+ *
+ * 덮어쓰지 않으면 세 가지가 어긋난다: ① 지도가 옛 출발지에 핀을 찍고 ② 「○○에서 만나요」가 채팅으로
+ * 정한 곳과 다른 이름을 말하고 ③ **도착 버튼이 틀린 곳을 기준으로 판정**돼, 약속 장소에 서 있는
+ * 사람이 400 `TOO_FAR_FROM_DEPARTURE` 를 맞는다. 셋 중 ③ 은 사용자가 손쓸 길이 없다.
+ *
+ * 세 값은 nullable 이다 — 서버 record 는 박싱 타입이고, 키가 빠진 프레임 하나가 스트림을 죽이지
+ * 않게 하는 이 파일의 정책을 따른다. **셋이 다 있을 때만 덮어쓴다**: 좌표만 있고 이름이 없거나
+ * 그 반대면 화면이 반쯤 바뀐 출발지를 그리게 되므로, 그때는 상세를 다시 읽는 쪽이 맞다.
  */
 @Serializable
 data class PartyConfirmedPayload(
     /** 확정 **뒤**의 방 상태. 확정은 모집도 끝내므로 서버는 `"COMPLETED"` 를 보낸다. */
     val status: String = "",
     val departureAt: String? = null,
+    /** 바뀐 출발지(= 만남 장소) 위도. [departureLng]·[departure] 와 **함께** 써야 한다. */
+    val departureLat: Double? = null,
+    /** 바뀐 출발지(= 만남 장소) 경도. */
+    val departureLng: Double? = null,
+    /** 바뀐 출발지(= 만남 장소) 이름. */
+    val departure: String? = null,
     /** 반영 **뒤**의 방 순번. 규칙은 [PartyDetailResponse.version]. */
     val version: Long? = null,
 )
@@ -362,7 +366,7 @@ data class PartyStatusResponse(
  * **반경 필드도 없다**(Backend `a668aee`). `departureRadius`·`destinationRadius` 가 서버 record 에서
  * 빠지고 서버가 고정값(`Radius.DEFAULT` = 500m)을 쓴다. 계속 보내도 서버는 모르는 키로 흘려 버리므로
  * (Jackson 기본 동작) 되살리면 **사용자가 고른 값이 조용히 버려지는** 상태로 돌아간다.
- * 응답에는 반경이 남아 있지만 그건 서버가 정한 값이다([PartyDetailResponse.departureRadius]).
+ * 응답에서도 두 키가 사라졌다(`2732cc75`) — 요청·응답 어디에도 반경이 없다.
  */
 @Serializable
 data class OpenPartyRequestDto(
@@ -393,9 +397,6 @@ data class OpenPartyResponse(
      * 모르면 매퍼가 멤버를 **지어내지 않고** 빈 목록으로 남긴다([com.moyeota.data.remote.toRide]).
      */
     val currentMembers: Int? = null,
-    /** 서버 고정값(500m). 요청에 없는 값이고 도메인으로도 옮기지 않는다 — [PartyDetailResponse.departureRadius] 참고. */
-    val departureRadius: Int = 0,
-    val destinationRadius: Int = 0,
     val status: String = "",
     val createdAt: String? = null,
     val estimateFare: Int? = null,
@@ -425,17 +426,38 @@ data class OpenPartyResponse(
 /**
  * `POST /api/v1/matching/rooms/{partyId}/confirm` 요청 본문 (백엔드 `ConfirmPartyRequest`).
  *
- * **필드가 하나뿐이고, 장소는 없다** — 약속 장소는 늘 방의 출발지라 서버가 따로 받지 않는다.
+ * ### 필드가 하나에서 **넷**으로 늘었다 — 전부 필수다 ★
+ * 오래 `{"departureAt": "..."}` 하나였다. 약속 장소는 늘 방의 출발지라 서버가 받지 않았기 때문이다.
+ * `2732cc75` 가 그걸 바꿨다: 「약속 확정은 만남 장소(위도·경도·이름)를 늘 받는다. 바꾸지 않으면
+ * 앱이 지금 출발지를 그대로 보낸다」. 서버 record 의 네 필드가 모두 `@NotNull`/`@NotBlank` 라
+ * **옛 한 필드 본문을 보내면 400 `INVALID_REQUEST`** 이고, 그 코드는 `MatchingErrorCode` 에 없어서
+ * 화면에는 일반 문구로만 보인다 — **확정이 통째로 막히는데 원인을 짚을 단서가 없는** 실패다.
  *
- * [departureAt] 은 ISO-8601 **순간**이어야 한다(`"2026-11-03T08:30:00Z"`). 서버 record 가
- * `Instant` 이고 Jackson 이 `ISO_INSTANT` 로 읽으므로, **오프셋 없는 로컬 시각
- * (`"2026-11-03T17:30:00"`)은 역직렬화에서 터져 400 `INVALID_REQUEST`** 가 된다 —
- * `MatchingErrorCode` 의 어느 사유도 아니어서 화면에는 일반 문구로만 보인다.
- * `java.time.Instant.toString()` 결과를 그대로 넣으면 맞다.
+ * ### 왜 「바꾸지 않아도」 보내야 하는가
+ * 서버가 받은 장소로 **방의 출발지를 덮어쓴다**(`Party.confirm` 의
+ * `departureLocation = plan.departure()`). 도착 판정 반경이 실제 만나는 곳을 기준으로 돌게 하려는
+ * 것이다. 그래서 「그대로」는 **키를 빼는 것이 아니라 지금 값을 다시 싣는 것**이다 — 빈 문자열을
+ * 보내면 방 이름이 빈 값이 되고, 측위 실패를 `0.0` 으로 채우면 400 `OUT_OF_SERVICE_AREA` 다.
+ *
+ * ### [departureAt] 의 함정 둘
+ * 1. ISO-8601 **순간**이어야 한다(`"2026-11-03T08:30:00Z"`). 서버 record 가 `Instant` 이고 Jackson 이
+ *    `ISO_INSTANT` 로 읽으므로 **오프셋 없는 로컬 시각(`"2026-11-03T17:30:00"`)은 역직렬화에서
+ *    터져 400 `INVALID_REQUEST`** 다. `java.time.Instant.toString()` 결과를 그대로 넣으면 맞다.
+ * 2. 범위가 **지금부터 5분 뒤 ~ 1시간**이다(400 `INVALID_MEETING_TIME`). **하한이 새로 생겼으므로**
+ *    (`b16551b7`) 양쪽 경계가 다 위험하다 — 다이얼로그를 열어 둔 시간만큼 하한에 가까워진다.
  */
 @Serializable
 data class ConfirmMeetingRequestDto(
     val departureAt: String,
+    /** 만남 장소 위도. 바꾸지 않으면 **방의 지금 출발지 위도**를 그대로 싣는다(키를 빼면 400). */
+    val departureLat: Double,
+    /** 만남 장소 경도. 바꾸지 않으면 **방의 지금 출발지 경도**를 그대로 싣는다(키를 빼면 400). */
+    val departureLng: Double,
+    /**
+     * 만남 장소 이름(서버 `@Size(max = 100)`). 채팅으로 정한 그대로 보낸다.
+     * 바꾸지 않으면 **방의 지금 출발지 이름**이고, 빈 문자열은 `@NotBlank` 위반이라 400 이다.
+     */
+    val departure: String,
 )
 
 /**
@@ -443,7 +465,8 @@ data class ConfirmMeetingRequestDto(
  *
  * **지금 내 위치**다(방의 출발지 좌표가 아니다) — 서버가 그 둘 사이를 PostGIS 로 재서 100m 안인지
  * 본다. 방 좌표를 그대로 보내면 검사가 **늘 통과**해 「도착하지 않았는데 도착」이 되고, 그 상태로
- * 누군가 「출발」을 누르면 실제로 안 온 사람이 탄 사람으로 기록된다(노쇼가 안 찍힌다).
+ * 방장이 「출발」을 누르면 실제로 안 온 사람이 **탑승자로 기록된다** — 그 사람이 택시비 정산의
+ * 보내는 사람이 되고, 오지 않은 사람에게 요금을 청구하게 된다.
  *
  * 서버 record 는 `Double`(박싱) + `@NotNull` 이라 **키가 빠지면 400 `INVALID_REQUEST`** 이고,
  * 측위 실패를 `0.0` 으로 채워 보내면 400 `OUT_OF_SERVICE_AREA` 다 — (0,0) 은 서비스 지역 밖이다.

@@ -3,10 +3,11 @@ package com.moyeota.data.remote
 import com.moyeota.data.remote.dto.ArriveRequestDto
 import com.moyeota.data.remote.dto.ChatReportRequestDto
 import com.moyeota.data.remote.dto.ConfirmMeetingRequestDto
-import com.moyeota.data.remote.dto.NoShowObjectionRequestDto
 import com.moyeota.data.remote.dto.OpenReservationRequestDto
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -353,13 +354,9 @@ class AuthenticatedPathContractTest {
             )
         }
 
-        // 출발은 **합승 완료와 다른 엔드포인트**다. 같은 POST 라 경로만 베끼면 조용히 옛 경로로 가고,
-        // 확정된 방에서는 409 USE_DEPART_FOR_CONFIRMED_PARTY 로 거절당한다.
-        assertNotEquals(
-            "출발이 합승 완료와 같은 경로를 탄다 — 확정된 방을 끝낼 수 없다",
-            MatchingApi::class.java.path("finishParty"),
-            MatchingApi::class.java.path("departParty"),
-        )
+        // 옛 「합승 완료」(`/finish`)와 경로가 겹치는지 보던 단정은 **지웠다** — 서버가 그
+        // 엔드포인트를 없앴다(`b16551b7`). 지금 방을 끝내는 경로는 `departParty` 하나이고,
+        // 위에서 그 값을 그대로 못 박는다.
     }
 
     /**
@@ -367,10 +364,11 @@ class AuthenticatedPathContractTest {
      * 실패 모양이 `MatchingErrorCode` 밖의 400 `INVALID_REQUEST` 라 **화면에 일반 문구로만** 보인다
      * (어느 사유 프로퍼티도 참이 아니다) — 원인을 찾기 가장 어려운 실패다.
      *
-     * - 확정: `{"departureAt": "<ISO-8601 instant>"}`. 서버 record 가 `Instant` + `@NotNull` 이다.
+     * - 확정: `{"departureAt", "departureLat", "departureLng", "departure"}` — **넷 다 필수다.**
+     *   `2732cc75` 가 만남 장소를 필수로 만들기 전에는 `departureAt` 하나였다.
      * - 도착: `{"latitude": …, "longitude": …}`. 둘 다 `@NotNull` 이라 하나만 보내도 400 이다.
      * - 출발: **본문 없음.** `@Body` 를 붙이면 서버가 읽지 않는 값을 보내는 것이고, 이 호출은
-     *   되돌릴 수 없는 액션이라(노쇼 기록) "뭘 보냈는지"가 늘 명확해야 한다.
+     *   되돌릴 수 없는 액션이라(도착하지 않은 멤버가 탑승자에서 빠진다) "뭘 보냈는지"가 늘 명확해야 한다.
      */
     @Test
     fun `확정과 도착은 본문을 싣고 출발은 싣지 않는다`() {
@@ -384,49 +382,48 @@ class AuthenticatedPathContractTest {
     }
 
     /**
-     * **노쇼 두 개**(2026-11-06 신규). 서버 컨트롤러가 `PartyController` 가 **아니다**
-     * (`matching/noshow/NoShowController`, `@RequestMapping("/api/v1/matching")`) — 그런데 프리픽스
-     * 합산 결과가 같아 앱에서는 [MatchingApi] 에 함께 둔다. 즉 **경로만이 유일한 구분**이다.
+     * 못 박는 것: **확정 본문의 키 네 개가 서버가 요구하는 그 이름으로 직렬화된다.**
      *
-     * 이의 신청 경로가 `/rooms/{partyId}/…` 라 확정·도착·출발과 **같은 가지에 있다.** 오타는 404 가
-     * 아니라 **401** 로 떨어져 세션 만료로 오인하기 가장 쉬운 자리다(Security 가 미매핑 경로도
-     * 보호한다). 기록 조회 쪽은 `/rooms` 가 **없는** 것이 핵심이다 —
-     * `api/v1/matching/rooms/no-shows` 로 적으면 `{partyId}` 템플릿에 걸려 엉뚱한 404/400 이 된다.
+     * 타입만 보는 위 테스트로는 모자라다 — DTO 가 `ConfirmMeetingRequestDto` 이기만 하면 통과하므로
+     * 필드 이름이 서버와 어긋나도 잡히지 않는다. 그 어긋남의 증상이 특히 나쁘다: 키 이름이 틀리면
+     * 서버 쪽 `@NotNull` 이 걸려 **400 `INVALID_REQUEST`** 인데 그 코드는 `MatchingErrorCode` 에 없어
+     * [com.moyeota.domain.model.PartyConfirmException] 의 어느 사유도 아니다 — 화면에는 일반 문구만
+     * 뜨고 「약속 확정이 안 돼요」라는 신고에서 원인을 짚을 단서가 없다.
+     *
+     * 이름을 틀리기 쉬운 자리이기도 하다. 서버는 장소 이름 키를 **`departure`** 라 부르는데
+     * (`departureName`·`departurePlace` 가 아니다) 도메인 쪽은 `placeName` 이고,
+     * 좌표는 `departureLat`/`departureLng` 로 **줄여 쓰지 않는다**(예약 검색만 `depLat` 이다 —
+     * 아래 표 참고).
      */
     @Test
-    fun `노쇼 기록은 rooms 없는 경로이고 이의 신청은 rooms partyId 아래다`() {
-        assertEquals("api/v1/matching/no-shows", MatchingApi::class.java.path("getMyNoShows"))
+    fun `확정 본문은 약속 시간과 만남 장소 네 키로 직렬화된다`() {
+        val json = Json.encodeToString(
+            ConfirmMeetingRequestDto(
+                departureAt = "2026-11-03T08:30:00Z",
+                departureLat = 37.4985,
+                departureLng = 127.0290,
+                departure = "강남역 2번 출구",
+            ),
+        )
+
         assertEquals(
-            "api/v1/matching/rooms/{partyId}/no-show-objection",
-            MatchingApi::class.java.path("submitNoShowObjection"),
+            setOf("departureAt", "departureLat", "departureLng", "departure"),
+            Json.parseToJsonElement(json).jsonObject.keys,
         )
-
-        val records = MatchingApi::class.java.declaredMethods.single { it.name == "getMyNoShows" }
-        val objection = MatchingApi::class.java.declaredMethods.single { it.name == "submitNoShowObjection" }
-
-        assertTrue("노쇼 기록 조회가 GET 이 아니다", records.isAnnotationPresent(GET::class.java))
-        assertTrue("이의 신청이 POST 가 아니다", objection.isAnnotationPresent(POST::class.java))
-
-        // 기록 조회에는 **쿼리가 하나도 없다.** 커서·개수를 붙이는 실수가 특히 위험하다 — 서버에
-        // 그 파라미터가 없는데 400 이 아니라 200 + 조용히 무시라서(탑승 기록의 `status` 와 같은
-        // 함정) 「더 보기가 동작한다」고 착각하고 지나간다. 서버가 20건에서 자르는 게 전부다.
-        assertTrue(
-            "노쇼 기록 조회에 쿼리 파라미터가 생겼다 — 서버에 없는 값이고 조용히 무시된다",
-            records.parameterAnnotations.none { annotations -> annotations.any { it is Query } },
-        )
-
-        // 이의 신청은 경로에 partyId 하나 + 본문 하나다. 주체는 Bearer 토큰이 정한다.
-        assertEquals(
-            "이의 신청 경로에 담기는 건 partyId 하나여야 한다",
-            1,
-            objection.parameterAnnotations.count { annotations -> annotations.any { it is Path } },
-        )
-        assertEquals(
-            "이의 신청 본문이 NoShowObjectionRequestDto 가 아니다",
-            NoShowObjectionRequestDto::class.java,
-            objection.bodyType(),
-        )
+        assertTrue("장소 이름이 departure 키로 실리지 않았다", "\"departure\":\"강남역 2번 출구\"" in json)
     }
+
+    // **노쇼 두 개는 더 이상 없다** (2026-11-12). `GET /matching/no-shows` 와
+    // `POST /matching/rooms/{partyId}/no-show-objection` 을 서버가 지웠고(`b16551b7`, V37 이
+    // 테이블까지 DROP) [MatchingApi] 에서 두 메서드도 사라졌다 — 그래서 이 자리에 있던
+    // `노쇼 기록은 rooms 없는 경로이고 이의 신청은 rooms partyId 아래다` 테스트는 **통과할 수가
+    // 없다**(`declaredMethods.single { … }` 가 없는 메서드를 찾다 터진다).
+    //
+    // 그 테스트가 못 박고 있던 사실 — 「이의 신청 경로가 `/rooms/{partyId}/…` 라 확정·도착·출발과
+    // 같은 가지에 있고, 오타는 404 가 아니라 401 로 떨어진다」 — 는 **같은 가지의 다른 액션들에
+    // 그대로 남아 있다**(위의 `방 액션 네 개는…` 테스트가 네 경로를 값으로 고정한다). 노쇼만의
+    // 사실(`/rooms` 가 **없는** 조회 경로, 쿼리 파라미터 0개, 201 + 빈 본문)은 엔드포인트와 함께
+    // 사라졌으므로 옮길 자리가 없다.
 
     /**
      * **예약 네 개**(2026-11-06 신규). 넷 다 `PartyController`(`@RequestMapping("/api/v1")`) 아래의
@@ -434,13 +431,12 @@ class AuthenticatedPathContractTest {
      * 메서드로 가르고, 나머지 둘은 `/soon`·`/search` 가 붙는다. 그래서 이 넷은 서로를 베끼다
      * 어긋나기 쉽고, 틀리면 404 가 아니라 **401** 로 떨어진다.
      *
-     * 특히 **생성과 기간 목록이 같은 문자열**인 것을 값으로 못 박는다: 둘 중 하나에 `/soon` 같은
-     * 세그먼트가 붙으면 다른 하나는 멀쩡해 보이므로 증상이 한쪽에만 나타난다.
+     * 기간 목록(`GET /matching/reservations`, 생성과 **같은 문자열**이던 넷째 경로)은 서버가
+     * 없앴다(`2732cc75`) — 그래서 지금은 생성만 그 문자열을 쓴다.
      */
     @Test
-    fun `예약 네 경로는 matching reservations 아래이고 생성만 POST 다`() {
+    fun `예약 세 경로는 matching reservations 아래이고 생성만 POST 다`() {
         assertEquals("api/v1/matching/reservations", MatchingApi::class.java.path("createReservation"))
-        assertEquals("api/v1/matching/reservations", MatchingApi::class.java.path("getReservations"))
         assertEquals("api/v1/matching/reservations/soon", MatchingApi::class.java.path("getReservationsSoon"))
         assertEquals("api/v1/matching/reservations/search", MatchingApi::class.java.path("searchReservations"))
 
@@ -457,7 +453,7 @@ class AuthenticatedPathContractTest {
             create.parameterAnnotations.none { annotations -> annotations.any { it is Path } },
         )
 
-        listOf("getReservations", "getReservationsSoon", "searchReservations").forEach { name ->
+        listOf("getReservationsSoon", "searchReservations").forEach { name ->
             val method = MatchingApi::class.java.declaredMethods.single { it.name == name }
             assertTrue("$name 이 GET 이 아니다", method.isAnnotationPresent(GET::class.java))
             assertNull("$name 은 조회라 본문이 없다", method.bodyType())
@@ -465,7 +461,7 @@ class AuthenticatedPathContractTest {
     }
 
     /**
-     * **예약 세 조회의 쿼리 파라미터 이름**. 이 PR 에서 가장 틀리기 쉬운 자리라 이름을 값으로 고정한다.
+     * **예약 두 조회의 쿼리 파라미터 이름**. 이 PR 에서 가장 틀리기 쉬운 자리라 이름을 값으로 고정한다.
      *
      * | 자리 | 출발지 | 도착지 |
      * |---|---|---|
@@ -488,7 +484,6 @@ class AuthenticatedPathContractTest {
             .parameterAnnotations
             .flatMap { annotations -> annotations.filterIsInstance<Query>().map { it.value } }
 
-        assertEquals(listOf("from", "to"), queriesOf("getReservations"))
         assertEquals(listOf("swLat", "swLng", "neLat", "neLng"), queriesOf("getReservationsSoon"))
         // 뷰포트 이름·순서는 방 목록과 같아야 한다.
         assertEquals(queriesOf("getPartiesWithin"), queriesOf("getReservationsSoon"))

@@ -85,7 +85,13 @@ open class FakeRideRepository : RideRepository {
     var create: (NewParty) -> Ride = { error("createParty 미설정") }
     var join: (Long) -> PartyStatus = { error("joinParty 미설정") }
     var leave: (Long) -> Unit = {}
-    var finish: (Long) -> Unit = {}
+
+    /**
+     * 「출발」 — **방을 끝내는 유일한 길**이다. 옛 `finish`(「합승 완료」)가 서버에서 사라지면서
+     * (`b16551b7`) `finish_party` 분석 이벤트의 기록 지점이 이쪽으로 옮겨 왔다.
+     */
+    var depart: (Long) -> Unit = {}
+    var confirm: (Long) -> Unit = {}
     val events = MutableSharedFlow<PartyEvent>(extraBufferCapacity = 16)
 
     override suspend fun getPartyDetail(partyId: Long): Ride = detail()
@@ -93,11 +99,9 @@ open class FakeRideRepository : RideRepository {
     override suspend fun createParty(request: NewParty): Ride = create(request)
     override suspend fun joinParty(partyId: Long): PartyStatus = join(partyId)
     override suspend fun leaveParty(partyId: Long) = leave(partyId)
-    override suspend fun finishParty(partyId: Long) = finish(partyId)
     override fun observePartyEvents(partyId: Long): Flow<PartyEvent> = events
 
     override fun getNearbyParties(): List<Ride> = TODO()
-    override suspend fun getParties(): List<Ride> = TODO()
     override suspend fun getPartiesWithin(swLat: Double, swLng: Double, neLat: Double, neLng: Double): List<Ride> = TODO()
     override suspend fun findRealtimeCandidates(
         departureLat: Double,
@@ -114,7 +118,6 @@ open class FakeRideRepository : RideRepository {
 
     // 예약 방 — 이 지원 클래스가 보는 분석 이벤트는 아직 없다.
     override suspend fun createReservation(request: NewReservation): Ride = TODO()
-    override suspend fun getReservations(from: String, to: String): List<Ride> = TODO()
     override suspend fun getReservationsSoon(
         swLat: Double,
         swLng: Double,
@@ -128,11 +131,23 @@ open class FakeRideRepository : RideRepository {
         destination: ReservationDestination?,
     ): List<ReservationSearchResult> = TODO()
 
-    // 약속 확정·도착·출발 — 이 지원 클래스가 보는 분석 이벤트는 아직 없다. 기록 지점이 생기면
-    // leave/finish 처럼 람다로 바꿔 호출을 세면 된다.
-    override suspend fun confirmMeeting(partyId: Long, departureAt: String) = TODO()
+    /**
+     * 약속 확정 — 좌표·장소 이름이 **필수**로 늘었다(서버 `2732cc75`). 이 가짜는 값을 검사하지
+     * 않지만 **시그니처를 그대로 받아야** 한다: 넷 중 하나라도 빠뜨리면 서버가 400 `INVALID_REQUEST`
+     * 로 거절하고 그 400 은 어떤 사유 코드도 아니라, 호출부가 무엇을 넘기는지가 곧 계약이다.
+     */
+    override suspend fun confirmMeeting(
+        partyId: Long,
+        departureAt: String,
+        latitude: Double,
+        longitude: Double,
+        placeName: String,
+    ) = confirm(partyId)
+
     override suspend fun arriveAtDeparture(partyId: Long, latitude: Double, longitude: Double) = TODO()
-    override suspend fun departParty(partyId: Long) = TODO()
+
+    /** 「출발」 — `finish_party` 를 기록하는 자리다(`MatchWaitingViewModel.departParty`). */
+    override suspend fun departParty(partyId: Long) = depart(partyId)
 }
 
 class FakeAuthRepository : AuthRepository {

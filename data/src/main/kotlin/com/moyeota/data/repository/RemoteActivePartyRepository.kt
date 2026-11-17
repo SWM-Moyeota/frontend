@@ -215,7 +215,7 @@ class RemoteActivePartyRepository(
          * "진행 중"으로 볼 상태들. **둘뿐이다** — 기사·배차 단계(DISPATCHING·ONGOING)가 사라졌다
          * (서버가 `MATCHING`·`DRIVER_ASSIGNED`·`IN_RIDE` 를 보낼 수 없게 됐다).
          *
-         * [RideStatus.MATCHED] 가 들어 있는 게 중요하다 — 서버 `COMPLETED`(정원 충족)가 여기로
+         * [RideStatus.CONFIRMED] 가 들어 있는 게 중요하다 — 서버 `COMPLETED`(정원 충족)가 여기로
          * 매핑된다([com.moyeota.data.remote.partyStatusToRideStatus]). 이걸 빼면 정원이 막 찬 방,
          * 즉 사용자가 화면을 가장 보고 싶어 하는 그 순간의 방이 "끝난 방"으로 지워진다.
          *
@@ -225,7 +225,7 @@ class RemoteActivePartyRepository(
          */
         val ACTIVE_STATUSES = setOf(
             RideStatus.RECRUITING,
-            RideStatus.MATCHED,
+            RideStatus.CONFIRMED,
         )
     }
 }

@@ -109,7 +109,7 @@ internal fun FindIdScreen(
                         onPhoneDigitsChange(phoneDigits)
                     },
                     label = "휴대폰 번호",
-                    placeholder = "010-1234-5678",
+                    placeholder = "예: 010-1234-5678",
                     errorText = verify.phoneMessage,
                     // 문자를 보낸 번호를 고치면 인증번호가 무효가 된다 — 확인하는 동안만 잠근다
                     enabled = !verify.verifying,

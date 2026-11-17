@@ -37,7 +37,7 @@ class ChatRoomPollGateTest {
 
     @Test
     fun `보이고 진행 중 방이 있고 채팅방을 모르면 폴링한다`() {
-        assertTrue(shouldPollChatRoom(visible = true, ride = ride(RideStatus.MATCHED), chatRoomId = null))
+        assertTrue(shouldPollChatRoom(visible = true, ride = ride(RideStatus.CONFIRMED), chatRoomId = null))
     }
 
     /**
@@ -53,13 +53,13 @@ class ChatRoomPollGateTest {
     /** 기존 종료 조건 — 찾으면 멈춘다(흐름이 null 을 내보내 진행 중 패스가 취소된다). */
     @Test
     fun `채팅방을 찾으면 멈춘다`() {
-        assertFalse(shouldPollChatRoom(visible = true, ride = ride(RideStatus.MATCHED), chatRoomId = 7L))
+        assertFalse(shouldPollChatRoom(visible = true, ride = ride(RideStatus.CONFIRMED), chatRoomId = 7L))
     }
 
     /** 「채팅방 나가기」·403 으로 캐시를 버리면(`forgetChatRoom`) 다시 찾아야 한다. */
     @Test
     fun `채팅방 캐시를 버리면 다시 찾는다`() {
-        assertTrue(shouldPollChatRoom(visible = true, ride = ride(RideStatus.MATCHED), chatRoomId = null))
+        assertTrue(shouldPollChatRoom(visible = true, ride = ride(RideStatus.CONFIRMED), chatRoomId = null))
     }
 
     @Test

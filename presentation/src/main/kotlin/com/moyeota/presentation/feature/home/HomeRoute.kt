@@ -1,9 +1,12 @@
 package com.moyeota.presentation.feature.home
 
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -15,14 +18,17 @@ import com.moyeota.domain.diagnostics.FailureSite
 import com.moyeota.domain.model.FavoritePlace
 import com.moyeota.domain.model.FavoritePlaceException
 import com.moyeota.domain.model.Ride
+import com.moyeota.domain.repository.FareSplitRepository
 import com.moyeota.domain.repository.PlaceRepository
 import com.moyeota.presentation.core.location.rememberMyLocationState
+import com.moyeota.presentation.feature.faresplit.FareSplitBannerHost
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import com.moyeota.core.designsystem.theme.MoyeotaSpacing
 
 class HomeViewModel(
     private val repository: PlaceRepository,
@@ -205,6 +211,16 @@ fun HomeRoute(
     activeRide: Ride? = null,
     onSearchClick: () -> Unit = {},
     onActiveRideClick: () -> Unit = {},
+    /**
+     * 택시비 정산 저장소 — 홈의 「아직 보내지 않은 택시비」 배너가 쓴다.
+     *
+     * **null 이면 배너를 아예 꽂지 않는다.** 자리값 구현을 두지 않는 이유는 [HomeScreen] 의 슬롯과
+     * 같다: 배선을 빠뜨렸을 때 「보낼 돈이 없다」로 **조용히** 떨어지면, 사용자는 4시간마다 오는
+     * 재요청 알림과 앱 화면이 서로 다른 말을 하는 것을 보게 된다.
+     */
+    fareSplitRepository: FareSplitRepository? = null,
+    /** 배너 항목을 눌렀을 때 — 그 방의 39 정산 상세로 간다. */
+    onOpenFareSplit: (partyId: Long) -> Unit = {},
     onPlaceQuery: (String) -> Unit = {},
     onTabSelect: (MoyeotaTab) -> Unit = {},
 ) {
@@ -221,6 +237,15 @@ fun HomeRoute(
 
     HomeScreen(
         activeRide = activeRide,
+        fareSplitBanner = fareSplitRepository?.let { repo ->
+            {
+                FareSplitBannerHost(
+                    repository = repo,
+                    onOpen = onOpenFareSplit,
+                    modifier = Modifier.padding(horizontal = MoyeotaSpacing.ScreenGutter, vertical = MoyeotaSpacing.Xs),
+                )
+            }
+        },
         myLocation = myLocation.coordinates,
         favoritePlaces = favorites,
         editingFavorites = editState.editing,

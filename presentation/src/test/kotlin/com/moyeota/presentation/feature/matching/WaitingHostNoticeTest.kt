@@ -6,6 +6,7 @@ import com.moyeota.domain.model.User
 import com.moyeota.domain.model.WithdrawnMemberNames
 import com.moyeota.presentation.core.hostDisplayNameOrNull
 import com.moyeota.presentation.core.showsHostBadge
+import java.time.Instant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -13,12 +14,24 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 21 매칭 대기의 **방장 분기** — 「합승 완료」를 누구에게 보이고, 못 보는 사람에게 무엇을 말하고,
+ * 21 매칭 대기의 **방장 분기** — 방을 끝내는 버튼을 누구에게 보이고, 못 보는 사람에게 무엇을 말하고,
  * 멤버 목록에 배지를 누구에게 붙이는가.
  *
- * 서버가 이 API 를 방장 전용으로 좁히고(Backend #237) 그게 운영에 배포된 뒤, 앱은 한동안 **전원에게**
- * 버튼을 보여 주고 있었다 — 비방장은 확인 다이얼로그까지 거친 끝에 403 `NOT_PARTY_HOST` 를 맞았다.
- * 노출을 고칠 근거는 서버가 멤버마다 `host` 를 내려 주기 시작하며 생겼다(Backend #240).
+ * ### 🔴 가리키는 버튼이 바뀌었다 (2026-11-12) ★
+ * 이 파일은 「합승 완료」(`canFinishParty` · `finishHostNotice`)를 보고 있었다. 서버가 `/finish` 를
+ * 없애면서(`b16551b7`) 그 버튼과 두 함수가 사라졌다 — 그런데 **같은 커밋이 「출발」을 방장 전용으로
+ * 만들었다**(「출발은 도착한 방장만 누른다」). 그래서 이 파일이 지키던 세 가지가 **그대로 필요하다**:
+ *
+ * | 지키는 것 | 옛 자리 | 지금 자리 |
+ * |---|---|---|
+ * | 비방장에게 버튼을 주지 않는다 | `canFinishParty` | [canDepartParty] |
+ * | 못 보는 사람에게 누가 누르는지 말한다 | `finishHostNotice` | [departHostNotice] |
+ * | 배지는 서버 값만 본다 | `showsHostBadge` | 그대로 |
+ *
+ * 한동안 앱은 서버가 좁힌 버튼을 **전원에게** 보여 주고 있었고(「합승 완료」 때 Backend #237),
+ * 비방장은 확인을 거친 끝에 403 `NOT_PARTY_HOST` 를 맞았다. **같은 실수가 「출발」에서 다시
+ * 가능해졌다** — 옛 코드는 출발을 도착한 멤버 전원에게 열어 두었기 때문이다. 그래서 테스트를
+ * 지우지 않고 **새 버튼으로 옮겨 적는다.**
  *
  * **여기서 지키는 것은 「추정하지 않는다」다.** 2026-08-30 에 지운 방장 로직은 앱이 `joinedAt`
  * 최소값으로 방장을 **추정**하던 것이었고(`_workspace/33_api-integrator_no_host.md`), 되살린 지금은
@@ -28,11 +41,15 @@ import org.junit.Test
  */
 class WaitingHostNoticeTest {
 
+    /** 기준 시각. 약속 시각은 이 값보다 **앞**에 둔다 — 출발 단계에 닿아야 방장 분기가 보인다. */
+    private val now: Instant = Instant.parse("2026-11-06T06:00:00Z")
+
     private fun member(
         id: String,
         nickname: String = "승객$id",
         isMe: Boolean = false,
         isHost: Boolean = false,
+        arrived: Boolean = false,
     ) = User(
         id = id,
         nickname = nickname,
@@ -41,6 +58,7 @@ class WaitingHostNoticeTest {
         rideCount = 0,
         isMe = isMe,
         isHost = isHost,
+        hasArrived = arrived,
     )
 
     /**
@@ -59,38 +77,52 @@ class WaitingHostNoticeTest {
     private fun noSummary(isHost: Boolean = false) =
         member(id = "", nickname = WithdrawnMemberNames.NO_SUMMARY, isHost = isHost)
 
-    private fun fullParty(members: List<User>) = Ride(
+    /**
+     * **출발 직전의 방** — 확정됐고 · 약속 시간이 지났고 · **나는 도착했다**.
+     *
+     * 노출 조건을 보려면 이 네 가지가 다 서 있어야 한다([canDepartParty]). 예전 헬퍼는
+     * `status = CONFIRMED` 하나로 「손으로 닫는 단계」를 만들 수 있었는데, 그 status 의 뜻이
+     * 「정원 충족」에서 「확정」으로 바뀌면서(`b16551b7`) **status 만으로는 어떤 단계도 만들 수
+     * 없게 됐다** — 확정·도착·시각을 각각 세워야 한다.
+     *
+     * 나를 늘 도착으로 두는 이유: 미도착이면 방장이어도 [MeetingStage.ARRIVE_OPEN] 에 머물러
+     * 방장 분기가 아예 보이지 않는다(그 경계는 `MeetingStageTest` 가 맡는다).
+     */
+    private fun departableParty(members: List<User>) = Ride(
         id = "1",
         origin = "부산대",
         destination = "서면",
         departureLabel = "지금 출발",
         capacity = members.size,
-        members = members,
+        members = members.map { if (it.isMe) it.copy(hasArrived = true) else it },
         farePerPerson = 0,
         totalFare = 0,
-        status = RideStatus.MATCHED, // 서버 COMPLETED = 손으로 닫는 단계
+        status = RideStatus.CONFIRMED,
+        isConfirmed = true,
+        departureAt = now.minusSeconds(60).toString(),
     )
 
     // ─── 노출 조건 ───────────────────────────────────────────────────────────
 
     @Test
-    fun `방장에게는 합승 완료 버튼이 보인다`() {
-        val ride = fullParty(listOf(member("me", isMe = true, isHost = true), member("u2")))
+    fun `도착한 방장에게는 출발 버튼이 보인다`() {
+        val ride = departableParty(listOf(member("me", isMe = true, isHost = true), member("u2")))
 
-        assertTrue(canFinishParty(ride))
+        assertTrue(canDepartParty(ride, now))
+        assertEquals(MeetingStage.DEPART_BY_ME, meetingStage(ride, now))
     }
 
     /**
-     * **이 테스트가 이번 변경의 핵심이다.** 예전에는 여기서도 true 가 나와, 비방장이 확인
-     * 다이얼로그를 거친 뒤 403 을 맞았다.
+     * **이 테스트가 이번 변경의 핵심이다.** 옛 코드는 도착한 멤버 누구에게나 「출발」을 띄웠고,
+     * 서버가 방장 전용으로 좁힌 뒤로 그 버튼은 비방장에게 403 `NOT_PARTY_HOST` 로만 끝난다.
      */
     @Test
-    fun `비방장에게는 합승 완료 버튼을 보이지 않는다`() {
-        val ride = fullParty(listOf(member("me", isMe = true), member("u2", isHost = true)))
+    fun `비방장에게는 출발 버튼을 보이지 않는다`() {
+        val ride = departableParty(listOf(member("me", isMe = true), member("u2", isHost = true)))
 
-        assertFalse(canFinishParty(ride))
-        // 단계 자체는 그대로다 — 헤드라인·나가기 문구는 비방장에게도 「정원이 찼다」로 보여야 한다.
-        assertTrue(isFinishStage(ride.status))
+        assertFalse(canDepartParty(ride, now))
+        // 숨기기만 하면 「왜 나만 안 되지」에 답할 자리가 없다 — 그 자리가 DEPART_BY_HOST 다.
+        assertEquals(MeetingStage.DEPART_BY_HOST, meetingStage(ride, now))
     }
 
     /**
@@ -99,33 +131,37 @@ class WaitingHostNoticeTest {
      */
     @Test
     fun `내가 목록에 없으면 버튼을 주지 않는다`() {
-        val ride = fullParty(listOf(member("u1", isHost = true), member("u2")))
+        val ride = departableParty(listOf(member("u1", isHost = true), member("u2")))
 
-        assertFalse(canFinishParty(ride))
+        assertFalse(canDepartParty(ride, now))
     }
 
     /**
      * 매퍼의 fail-open 폴백(`host ?: isMe`)이 살아 있는 경로 — 옛 서버를 보고 있으면 내 줄만 true 다.
-     * 그때 **버튼은 보여야 한다**: 방장이 못 보면 방을 끝낼 길이 없어 30분 만료를 기다려야 하고,
+     * 그때 **버튼은 보여야 한다**: 방장이 못 보면 방을 끝낼 길이 없어 자동 정리를 기다려야 하고,
      * 아니었다면 서버 403 이 바로잡아 준다(`PartyMappers.toUser` 의 표).
      */
     @Test
     fun `서버가 host 를 안 줘도 내 줄의 폴백은 버튼으로 이어진다`() {
         // 폴백 결과와 같은 모양: 내 줄만 isHost = true
-        val ride = fullParty(listOf(member("me", isMe = true, isHost = true), member("u2"), member("u3")))
+        val ride = departableParty(
+            listOf(member("me", isMe = true, isHost = true), member("u2"), member("u3")),
+        )
 
-        assertTrue(canFinishParty(ride))
+        assertTrue(canDepartParty(ride, now))
     }
 
     // ─── 안내문 ──────────────────────────────────────────────────────────────
 
     @Test
     fun `방장을 알면 이름으로 부른다`() {
-        val ride = fullParty(listOf(member("me", isMe = true), member("u2", nickname = "부산가자", isHost = true)))
+        val ride = departableParty(
+            listOf(member("me", isMe = true), member("u2", nickname = "부산가자", isHost = true)),
+        )
 
         assertEquals(
-            "다 타면 방장 부산가자님이 「합승 완료」를 눌러 방을 끝내요",
-            finishHostNotice(ride.members.hostDisplayNameOrNull()),
+            "약속 시간이 됐어요. 도착한 방장 부산가자님이 「출발」을 눌러 방을 끝내요",
+            departHostNotice(ride.members.hostDisplayNameOrNull()),
         )
     }
 
@@ -134,17 +170,17 @@ class WaitingHostNoticeTest {
      *
      * 서버 탈퇴는 행을 지우지 않는다 — `publicId` 는 살아 있고 닉네임만 「탈퇴한 사용자」로 가려진다.
      * 그래서 빈 id 검사(`isWithdrawn`)로는 **걸러지지 않고**, 공백 검사로도 걸러지지 않는다(멀쩡한
-     * 문자열이다). 그대로 통과하면 안내문이 이렇게 된다 — 「다 타면 방장 **탈퇴한 사용자**님이
-     * 「합승 완료」를 눌러 방을 끝내요」. 그 사람은 **영원히 누를 수 없다**(방은 30분 만료로만 닫힌다).
+     * 문자열이다). 그대로 통과하면 안내문이 이렇게 된다 — 「도착한 방장 **탈퇴한 사용자**님이
+     * 「출발」을 눌러 방을 끝내요」. 그 사람은 **영원히 누를 수 없다**(방은 자동 정리로만 닫힌다).
      */
     @Test
     fun `방장이 탈퇴했으면 이름을 쓰지 않는다 - publicId 는 살아 있다`() {
-        val ride = fullParty(listOf(member("me", isMe = true), softDeleted(isHost = true)))
+        val ride = departableParty(listOf(member("me", isMe = true), softDeleted(isHost = true)))
 
-        val notice = finishHostNotice(ride.members.hostDisplayNameOrNull())
+        val notice = departHostNotice(ride.members.hostDisplayNameOrNull())
 
         assertFalse("사람 이름이 아니다", notice.contains("탈퇴한 사용자"))
-        assertEquals("다 타면 방장(가장 먼저 참여한 분)이 「합승 완료」를 눌러 방을 끝내요", notice)
+        assertEquals("약속 시간이 됐어요. 도착한 방장(가장 먼저 참여한 분)이 「출발」을 눌러 방을 끝내요", notice)
     }
 
     /**
@@ -169,47 +205,52 @@ class WaitingHostNoticeTest {
      */
     @Test
     fun `방장의 요약이 없으면 이름을 쓰지 않는다`() {
-        val ride = fullParty(listOf(member("me", isMe = true), noSummary(isHost = true)))
+        val ride = departableParty(listOf(member("me", isMe = true), noSummary(isHost = true)))
 
-        val notice = finishHostNotice(ride.members.hostDisplayNameOrNull())
+        val notice = departHostNotice(ride.members.hostDisplayNameOrNull())
 
         assertFalse("사람 이름이 아니다", notice.contains("탈퇴한 회원"))
-        assertEquals("다 타면 방장(가장 먼저 참여한 분)이 「합승 완료」를 눌러 방을 끝내요", notice)
+        assertEquals("약속 시간이 됐어요. 도착한 방장(가장 먼저 참여한 분)이 「출발」을 눌러 방을 끝내요", notice)
     }
 
     /** 아무도 방장으로 지목되지 않은 목록 — 지어내지 않고 조건을 말한다. */
     @Test
     fun `방장을 지목할 줄이 없으면 조건으로 말한다`() {
-        val ride = fullParty(listOf(member("me", isMe = true), member("u2")))
+        val ride = departableParty(listOf(member("me", isMe = true), member("u2")))
 
         assertNull(ride.members.hostDisplayNameOrNull())
         assertEquals(
-            "다 타면 방장(가장 먼저 참여한 분)이 「합승 완료」를 눌러 방을 끝내요",
-            finishHostNotice(ride.members.hostDisplayNameOrNull()),
+            "약속 시간이 됐어요. 도착한 방장(가장 먼저 참여한 분)이 「출발」을 눌러 방을 끝내요",
+            departHostNotice(ride.members.hostDisplayNameOrNull()),
         )
     }
 
     /**
-     * 안내문은 **두 가지를 말해야 한다**: 누가 끝내는지(방장), 그리고 그게 방을 끝내는 행동이라는 것.
-     * 하나라도 빠지면 버튼을 숨긴 자리가 「왜 내가 할 일이 없는지」를 설명하지 못한다.
+     * 안내문은 **세 가지를 말해야 한다**: 누가 끝내는지(방장), 어떤 버튼인지(「출발」), 그게 방을
+     * 끝내는 행동이라는 것. 하나라도 빠지면 버튼을 숨긴 자리가 「왜 내가 할 일이 없는지」를
+     * 설명하지 못한다.
+     *
+     * **「도착한」이 들어가는 것도 요점이다** — 서버 조건이 방장이기만 한 게 아니라 **도착한
+     * 방장**이다(409 `NOT_ARRIVED`). 그 말이 없으면 「방장은 왜 안 누르지」에 답하지 못한다.
      */
     @Test
-    fun `안내문은 누가 끝내는지와 방이 끝난다는 것을 말한다`() {
-        listOf(finishHostNotice("부산가자"), finishHostNotice(null)).forEach { notice ->
+    fun `안내문은 누가 어떤 버튼으로 방을 끝내는지 말한다`() {
+        listOf(departHostNotice("부산가자"), departHostNotice(null)).forEach { notice ->
             assertTrue(notice, notice.contains("방장"))
-            assertTrue(notice, notice.contains("합승 완료"))
+            assertTrue(notice, notice.contains("도착한"))
+            assertTrue(notice, notice.contains("출발"))
             assertTrue(notice, notice.contains("방을 끝내요"))
         }
     }
 
     /**
      * 지키지 못할 약속을 넣지 않는다(`ProductClaimsTest` KDoc — 거짓 문구 19건을 들어낸 이력).
-     * 여기서 특히 위험한 건 **기다리라는 말**이다: 기다려서 풀리는 일이 아니다. 방장이 누르거나,
-     * 방장이 나가 내게 승계되어야 바뀐다.
+     * 여기서 특히 위험한 건 **기다리라는 말**이다: 기다려서 풀리는 일이 아니다. 방장이 와서 도착을
+     * 누르고 출발하거나, 방장이 나가 내게 승계되어야 바뀐다.
      */
     @Test
     fun `안내문은 기다리거나 다시 시도하라고 말하지 않는다`() {
-        listOf(finishHostNotice("부산가자"), finishHostNotice(null)).forEach { notice ->
+        listOf(departHostNotice("부산가자"), departHostNotice(null)).forEach { notice ->
             listOf("잠시 후", "다시 시도", "다시 눌러", "기다려", "곧 ").forEach { forbidden ->
                 assertFalse("지키지 못할 약속이다: $notice", notice.contains(forbidden))
             }
@@ -219,7 +260,16 @@ class WaitingHostNoticeTest {
     /** 403 문구와 **같은 표현**을 쓴다 — 두 자리가 방장을 다르게 설명하면 사용자가 다른 사람을 찾는다. */
     @Test
     fun `이름을 모를 때의 표현은 403 안내와 같은 근거를 쓴다`() {
-        assertTrue(finishHostNotice(null).contains("가장 먼저 참여한"))
+        assertTrue(departHostNotice(null).contains("가장 먼저 참여한"))
+        assertTrue(
+            departFailureMessage(
+                com.moyeota.domain.model.PartyDepartException(
+                    code = com.moyeota.domain.model.PartyDepartException.NOT_PARTY_HOST,
+                    serverMessage = null,
+                    httpStatus = 403,
+                ),
+            ).contains("가장 먼저 참여한"),
+        )
     }
 
     // ─── 배지 ────────────────────────────────────────────────────────────────
@@ -234,7 +284,7 @@ class WaitingHostNoticeTest {
      * **폴백 비대칭 때문에 내 줄에는 붙이지 않는다.** 매퍼가 `host ?: isMe` 로 접으므로 옛 서버에서는
      * 내 줄만 true 가 되고, 그걸 그대로 그리면 비방장이 자기 줄에서 「방장」을 읽는다 — 버튼의 거짓은
      * 눌렀을 때 서버 403 이 바로잡지만 배지의 거짓은 **아무도 바로잡지 않는다.** 게다가 그 403 문구
-     * (「방장만 합승을 완료할 수 있어요」)와 정면으로 모순되는 화면이 된다.
+     * (「방장만 출발할 수 있어요」)와 정면으로 모순되는 화면이 된다.
      */
     @Test
     fun `내 줄에는 방장 배지를 붙이지 않는다 - 폴백이 만든 true 일 수 있다`() {

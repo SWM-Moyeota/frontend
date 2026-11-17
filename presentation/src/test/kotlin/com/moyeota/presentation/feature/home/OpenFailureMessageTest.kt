@@ -66,7 +66,7 @@ class OpenFailureMessageTest {
     @Test
     fun `정원이 범위를 벗어났다`() {
         assertEquals(
-            "인원은 1~3명까지만 정할 수 있어요",
+            "인원은 2~3명이어야 해요",
             openFailureMessage(failure(PartyOpenException.INVALID_CAPACITY)),
         )
     }

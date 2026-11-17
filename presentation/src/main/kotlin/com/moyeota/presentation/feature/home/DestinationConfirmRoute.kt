@@ -62,20 +62,20 @@ private const val OPEN_FAILED_MESSAGE = "동승 방을 만들지 못했어요. �
  * 다르다(「그 방에서 나온 뒤 합류해 주세요」 — 그쪽은 돌아갈 곳이 목록이라 할 일이 다르다).
  *
  * 돌아갈 곳을 **홈**으로 적는 이유: 진행 중인 방으로 들어가는 길은 홈 배너뿐이다(21 의
- * `finishFailureMessage` 가 멤버 아님에 쓰는 「홈에서 진행 중인 방을 확인해 주세요」와 같은 근거).
+ * `departFailureMessage` 가 멤버 아님에 쓰는 「홈에서 진행 중인 방을 확인해 주세요」와 같은 근거).
  */
 internal const val ALREADY_IN_PARTY_MESSAGE = "이미 참여 중인 방이 있어요. 홈에서 진행 중인 방을 확인해 주세요"
 
 /**
  * 방 생성 실패를 사용자 문구로 옮긴다 — 실패마다 **다음 행동이 다르다**
- * (20 합류의 `joinFailureMessage`·21 완료의 `finishFailureMessage` 와 같은 자리·같은 이유).
+ * (20 합류의 `joinFailureMessage`·21 출발의 `departFailureMessage` 와 같은 자리·같은 이유).
  *
  * | 사유 | 서버 코드(HTTP) | 사용자가 할 일 |
  * |---|---|---|
  * | 이미 참여 중인 방 | `ALREADY_JOINED_OTHER_PARTY` (409) | 홈 배너로 그 방에 들어가 정리한다 |
  * | 출발지 = 도착지 | `SAME_DEPARTURE_DESTINATION` (400) | **핀을 옮긴다** |
  * | 서비스 지역 밖 | `OUT_OF_SERVICE_AREA` (400) | 다른 장소를 고른다 |
- * | 정원이 1~3 아님 | `INVALID_CAPACITY` (400) | 인원을 다시 고른다(사실상 앱 버그다) |
+ * | 정원이 2~3 아님 | `INVALID_CAPACITY` (400) | 인원을 다시 고른다(사실상 앱 버그다) |
  * | 경로를 못 받음 | `ROUTE_SEARCH_FAILED` (502) · `INVALID_ROUTE_ESTIMATE`·`ROUTE_NOT_FOUND` (400) | 잠시 뒤 다시, 또는 핀을 조금 옮긴다 |
  * | 그 밖·네트워크 | 코드 없음 | [OPEN_FAILED_MESSAGE] |
  *
@@ -91,7 +91,7 @@ internal fun openFailureMessage(e: PartyOpenException): String = when {
     e.isAlreadyInAnotherParty -> ALREADY_IN_PARTY_MESSAGE
     e.isSameDepartureDestination -> "출발지와 도착지가 같아요. 핀을 옮겨 조금 떨어뜨려 주세요"
     e.isOutOfServiceArea -> "서비스 지역을 벗어난 위치예요. 출발지와 도착지를 다시 골라 주세요"
-    e.isInvalidCapacity -> "인원은 1~3명까지만 정할 수 있어요"
+    e.isInvalidCapacity -> "인원은 2~3명이어야 해요"
     e.isRouteUnavailable -> "경로를 찾지 못했어요. 잠시 후 다시 시도하거나 출발·도착지를 조금 옮겨 주세요"
     else -> OPEN_FAILED_MESSAGE
 }
@@ -157,7 +157,7 @@ class CreatePartyViewModel(private val repository: RideRepository) : ViewModel()
         if (_uiState.value.creating) return // 중복 제출 차단
         // **이 한 값이 엔드포인트를 가른다**([MatchConditions.departureAt]) — null 이면 실시간 방
         // (`POST /matching/rooms`), 값이 있으면 예약 방(`POST /matching/reservations`).
-        // 정원 범위·실패 문구도 함께 갈린다(예약은 2~3, 실시간은 1~3).
+        // 실패 문구도 함께 갈린다(정원 범위는 2026-11-17 부터 둘 다 2~3).
         val departureAt = conditions.departureAt
         val mode = if (departureAt == null) DepartureMode.NOW else DepartureMode.SCHEDULED
         // 모달이 이미 접어서 보내지만 계약을 여기서 한 번 더 못박는다 — 벗어나면 400
@@ -226,10 +226,12 @@ class CreatePartyViewModel(private val repository: RideRepository) : ViewModel()
                 _uiState.update {
                     it.copy(
                         creating = false,
-                        // **같은 예외, 다른 표.** 예약에만 오는 세 코드(403 `NO_SHOW_RESTRICTED` ·
-                        // 409 `PARTY_TIME_CONFLICT` · 400 `INVALID_DEPARTURE_TIME`)가 실시간 표에
-                        // 없어서, 한 함수로 뭉개면 그 셋이 전부 「잠시 후 다시 시도해 주세요」가 된다
-                        // — 세 가지 모두 기다려서 풀리지 않는다([reservationOpenFailureMessage]).
+                        // **같은 예외, 다른 표.** 예약에만 오는 두 코드(409 `PARTY_TIME_CONFLICT` ·
+                        // 400 `INVALID_DEPARTURE_TIME`)가 실시간 표에 없어서, 한 함수로 뭉개면 둘이
+                        // 전부 「잠시 후 다시 시도해 주세요」가 된다 — 둘 다 기다려서 풀리지 않고
+                        // **다른 시간을 골라야** 풀린다([reservationOpenFailureMessage]).
+                        // (셋째였던 403 `NO_SHOW_RESTRICTED` 는 서버가 노쇼 기능을 통째로 지워
+                        // 사라졌다 — `b16551b7`, V37.)
                         errorMessage = if (departureAt != null) {
                             reservationOpenFailureMessage(e)
                         } else {
@@ -252,12 +254,11 @@ class CreatePartyViewModel(private val repository: RideRepository) : ViewModel()
 
     companion object {
         /**
-         * 백엔드 검증 상한(서버 `Capacity` record = 1~3). 넘기면 400 `INVALID_CAPACITY` 가 오고
+         * 백엔드 검증 상한(서버 `Capacity` = 2~3 — 실시간 하한 2 는 백엔드 `80957504`). 넘기면 400 `INVALID_CAPACITY` 가 오고
          * 화면은 사유별 문구로 안내한다([openFailureMessage]) — 예전에는 모든 실패가 한 문구라
          * 「에러 바디 없는 500」과 구별되지 않았다.
          *
-         * 접는 일은 [capacityFor] 가 한다 — **하한이 모드에 따라 다르기 때문**이다(실시간 1,
-         * 예약 2). 상한은 둘 다 3 이라 이 상수가 그 함수의 선택지 표와 같은 값을 가리킨다
+         * 접는 일은 [capacityFor] 가 한다 — 예전에는 하한이 모드에 따라 달랐고(실시간 1, 예약 2) 지금은 둘 다 2 다. 상한은 둘 다 3 이라 이 상수가 그 함수의 선택지 표와 같은 값을 가리킨다
          * ([capacityChoices]); 둘이 어긋나면 예약에서 4 가 전송될 수 있으니 한쪽을 고칠 때
          * 다른 쪽을 함께 본다.
          */

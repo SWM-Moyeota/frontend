@@ -85,6 +85,8 @@ fun RideDetailRoute(
     onBack: () -> Unit = {},
     onPartnerClick: (User) -> Unit = {},
     onLeave: () -> Unit = {},
+    /** 끝난 방의 택시비 정산으로 — 화면이 버튼을 띄울지는 `fareSplitEntryLabel` 이 정한다. */
+    onFareSplit: () -> Unit = {},
 ) {
     // 방 id 없이 닿을 길은 없다. 그래도 null 이면 예시 방을 그리는 대신 사실대로 말하고 되돌린다.
     if (partyId == null) {
@@ -122,6 +124,7 @@ fun RideDetailRoute(
             onBack = onBack,
             onPartnerClick = onPartnerClick,
             onLeave = viewModel::leave, // 나가기 성공 후 onLeave 로 화면 전환
+            onFareSplit = onFareSplit,
         )
     }
 }
