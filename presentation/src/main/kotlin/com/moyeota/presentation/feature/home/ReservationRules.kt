@@ -81,7 +81,7 @@ internal const val RESERVATION_TIME_STEP_MINUTES = 10
  * [reservationTimeRange]).
  *
  * 세 가지를 산다. ① 왕복 시간과 시계 스큐: 「1분 뒤」는 요청이 서버에 닿는 사이 과거가 되어
- * 400 `INVALID_DEPARTURE_TIME` 이 된다(`meetingPresetAt` 이 분 단위로 내림해 여유를 버는 것과 같은
+ * 400 `INVALID_DEPARTURE_TIME` 이 된다(`meetingTimeOptions` 가 1시간 뒤를 내림해 여유를 버는 것과 같은
  * 자리다). ② **모달에 머무는 시간**: 16 은 기준 시각을 열 때 한 번만 읽으므로(`DestinationConfirmModal`
  * 의 `now`) 사용자가 몇 분 고민하는 사이 그 여유가 줄어든다 — 10분이면 그래도 서버 창 안이다.
  * ③ 뜻: 5분 뒤에 타려는 사람에게 필요한 것은 예약 방이 아니라 **지금 출발**이고, 그쪽은
@@ -578,7 +578,7 @@ internal fun reservationDateCellDescription(date: LocalDate, today: LocalDate): 
  * `RideRepository.confirmMeeting` KDoc 의 ★ 참고).
  *
  * [Instant.toString] 은 초가 0 이면 `:00` 을 생략하므로 실제 값은 `...T09:30Z` 다 — 둘 다
- * ISO-8601 이고 서버(Jackson `Instant`)가 같게 읽는다(`meetingPresetIso` 와 같은 판단).
+ * ISO-8601 이고 서버(Jackson `Instant`)가 같게 읽는다(약속 시간 휠과 같은 판단).
  */
 internal fun reservationDepartureIso(
     date: LocalDate,
@@ -643,7 +643,7 @@ internal fun reservationTimeLabel(time: LocalTime): String {
  * 고른 출발 시각을 CTA 앞에서 **되읽어 준다** — `오늘 오후 6:30` · `11월 9일 (일) 오후 6:30`.
  *
  * 날짜 띠와 시각 휠이 각각 떨어진 줄에 있어서, 두 선택이 합쳐져 무엇이 되는지 확인할 기회가 누르기
- * 직전의 이 한 줄뿐이다(`meetingConfirmTitle` 이 프리셋 「10분」을 시각으로 되읽어 주는 것과 같은
+ * 직전의 이 한 줄뿐이다(`meetingConfirmButtonText` 가 고른 약속 시각을 버튼에 되읽어 주는 것과 같은
  * 이유). 예약 방은 만든 뒤 시간을 바꿀 수 없으므로 더 그렇다.
  */
 internal fun reservationDepartureSummary(date: LocalDate, time: LocalTime, today: LocalDate): String =
