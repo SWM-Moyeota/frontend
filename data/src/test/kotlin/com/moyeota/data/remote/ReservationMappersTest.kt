@@ -201,7 +201,7 @@ class ReservationMappersTest {
                 .list.single().toRide().status
 
         assertEquals(RideStatus.RECRUITING, statusOf("ACTIVE"))
-        assertEquals(RideStatus.MATCHED, statusOf("COMPLETED"))
+        assertEquals(RideStatus.CONFIRMED, statusOf("COMPLETED"))
         assertEquals(RideStatus.COMPLETED, statusOf("FINISHED"))
         assertEquals(RideStatus.CANCELED, statusOf("CANCELED"))
     }

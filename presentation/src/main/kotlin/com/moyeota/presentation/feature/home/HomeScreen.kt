@@ -132,6 +132,17 @@ fun HomeScreen(
     onRetryFavorites: () -> Unit = {},
     onSearchClick: () -> Unit = {},
     onActiveRideClick: () -> Unit = {},
+    /**
+     * 14 홈의 **「아직 보내지 않은 택시비」 배너** — 꽂지 않으면 아무것도 그리지 않는다.
+     *
+     * 슬롯으로 받는 이유: 이 화면이 정산을 **알 필요가 없다.** 목록 조회·복귀 재조회·「비면 그리지
+     * 않기」를 전부 `FareSplitBannerHost` 가 안에서 끝내므로, 여기에 저장소를 들이면 홈이 정산의
+     * 상태를 한 겹 더 들고 다니게 된다(그리고 그 상태는 진행 중 방과 아무 관계가 없다).
+     *
+     * **진행 중 방 배너와 독립이다.** 끝난 방의 정산이라 `activeRide` 가 null 인 사람에게도 떠야 한다 —
+     * 실제로 그게 흔한 경우다(동승이 끝나면 진행 중 방이 사라진다).
+     */
+    fareSplitBanner: (@Composable () -> Unit)? = null,
     onFavoritePlaceClick: (FavoritePlace) -> Unit = {},
     onEditFavoritesToggle: () -> Unit = {},
     onFavoriteSelectToggle: (FavoritePlace) -> Unit = {},
@@ -197,8 +208,12 @@ fun HomeScreen(
                         bearingDegrees = myLocation?.bearingDegrees,
                     )
                 }
-                // 진행 중인 방이 있으면 지도 위에 복귀 배너 하나만 얹는다 — 배너 밖은 여전히 지도의 것이다
-                if (activeRide != null) {
+                // 지도 위에 얹는 배너 둘 — 진행 중인 방 복귀, 그리고 아직 보내지 않은 택시비.
+                // **둘은 서로 독립이다**: 동승이 끝나면 진행 중 방이 사라지므로 정산 배너만 뜨는
+                // 경우가 오히려 흔하다. 그래서 바깥 조건이 「둘 중 하나라도 있으면」이고,
+                // StatusBarSpacer 도 그 안에 있다 — `activeRide != null` 에 묶어 두면 정산 배너만
+                // 있을 때 상태바에 파고든다.
+                if (activeRide != null || fareSplitBanner != null) {
                     Column(
                         modifier = Modifier
                             .align(Alignment.TopCenter)
@@ -206,11 +221,16 @@ fun HomeScreen(
                             .onSizeChanged { bannerHeightPx = it.height },
                     ) {
                         StatusBarSpacer()
-                        ActiveRideBanner(
-                            ride = activeRide,
-                            onClick = onActiveRideClick,
-                            modifier = Modifier.padding(horizontal = MoyeotaSpacing.ScreenGutter, vertical = 8.dp),
-                        )
+                        if (activeRide != null) {
+                            ActiveRideBanner(
+                                ride = activeRide,
+                                onClick = onActiveRideClick,
+                                modifier = Modifier.padding(horizontal = MoyeotaSpacing.ScreenGutter, vertical = 8.dp),
+                            )
+                        }
+                        // 보낼 정산이 없으면 이 호출이 **아무것도 그리지 않는다**(빈 목록 판정은
+                        // FareSplitBannerHost 안에 있다) — 여기에 if 를 하나 더 두지 않는 이유다.
+                        fareSplitBanner?.invoke()
                     }
                 }
             },

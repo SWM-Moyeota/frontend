@@ -4,11 +4,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -53,7 +54,7 @@ import com.moyeota.domain.model.RideRecordMember
  *   10월 31일 오후 4:15
  *   강남역 → 판교역
  *   (아바타들)  나 포함 1명
- *   1인 16,500원 · 총 16,500원     ← 요금이 없는 기록은 이 줄이 없다
+ *   내 몫 16,500원 · 총 16,500원   ← 택시비 정산이 없는 기록은 이 줄이 없다
  * ```
  *
  * ### 그리지 않는 것과 그 이유
@@ -83,6 +84,8 @@ fun RideHistoryScreen(
     onLoadMore: () -> Unit = {},
     onRetry: () -> Unit = {},
     onBack: () -> Unit = {},
+    /** 그 방의 **택시비 정산**으로 간다. 요금 줄이 있는 카드에만 길이 열린다 — 아래 KDoc 참고. */
+    onFareSplit: (partyId: Long) -> Unit = {},
 ) {
     val items = remember(records) { records.map { it.toHistoryItem() } }
     val listState = rememberLazyListState()
@@ -142,7 +145,9 @@ fun RideHistoryScreen(
             ) {
                 // partyId 로 키를 준다 — 커서 페이징으로 뒤에 붙는 목록이라 위치 기반 재사용이
                 // 일어나면 아바타 이미지가 다른 카드에 남는다(MemberDisplay KDoc 의 그 사고).
-                items(items = items, key = { it.partyId }) { item -> RideHistoryCard(item) }
+                items(items = items, key = { it.partyId }) { item ->
+                RideHistoryCard(item, onFareSplit = { onFareSplit(item.partyId) })
+            }
 
                 if (loadingMore) {
                     item {
@@ -197,7 +202,7 @@ private fun CenteredBox(content: @Composable () -> Unit) {
  * 갈 곳이 없는데 꺾쇠를 달면 「눌러서 갈 곳이 있다」는 이 앱의 기호 규칙이 거짓이 된다.
  */
 @Composable
-private fun RideHistoryCard(item: RideHistoryItem) {
+private fun RideHistoryCard(item: RideHistoryItem, onFareSplit: () -> Unit = {}) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -265,6 +270,28 @@ private fun RideHistoryCard(item: RideHistoryItem) {
                     )
                 }
             }
+
+        }
+
+        // 택시비 정산으로 가는 **유일한 길**이다 — 끝난 방의 22 상세에는 닿을 수 없다
+        // ([RideHistoryItem.canOpenFareSplit] KDoc). 그래서 요금 줄 블록 **밖**에 둔다:
+        // 아직 정산이 없는 방(요금 줄이 없다)에서 방장이 시작할 수 있어야 한다.
+        //
+        // 글자가 **중립인 이유**: 이 카드는 정산이 있는지, 내가 시작하는 쪽인지 모른다.
+        // 「보내기」로 적으면 이미 다 보낸 사람에게 할 일이 남은 것처럼 보이고,
+        // 「시작하기」로 적으면 비방장에게 할 수 없는 일을 시킨다. 그 판정은 39 화면이 한다.
+        if (item.canOpenFareSplit) {
+            Spacer(Modifier.height(4.dp))
+            TextButton(
+                onClick = onFareSplit,
+                contentPadding = PaddingValues(horizontal = 0.dp, vertical = 4.dp),
+            ) {
+                Text(
+                    text = "택시비 정산",
+                    style = MoyeotaType.BodySm,
+                    color = MoyeotaColor.Primary500,
+                )
+            }
         }
     }
 }
@@ -296,21 +323,22 @@ private fun RideHistoryScreenPreview() {
                 departure = "강남역",
                 destination = "판교역",
                 pickupTime = "2026-10-31T19:15:17.550211Z",
-                dropoffTime = "2026-10-31T19:15:17.571486Z",
                 totalFare = 16500,
+                // 내 몫이 총액과 같은 기록 — 혼자 탄 방이다. 2명 이상인 방이라면 방장이 적어 넣은
+                // 금액이라 사람마다 다르다(`fe6ba35a`) — 총액 ÷ 인원이 아니다.
                 farePerPerson = 16500,
                 memberCount = 1,
                 members = listOf(
                     RideRecordMember(id = "u1", nickname = "프로브9911", imageUrl = null, isMe = true),
                 ),
             ),
-            // 1차 모드 기록 — 요금 줄이 없는 것이 정상이다
+            // **택시비 정산이 없는 기록** — 요금 줄이 없는 것이 정상이다(옛 주석의 「1차 모드」).
+            // `pickupTime` 까지 null 이면 날짜 줄도 없다 — 두 빈칸을 한 그림에서 본다.
             RideRecord(
                 partyId = 67,
                 departure = "부산대 정문",
                 destination = "서면역 1번 출구",
                 pickupTime = null,
-                dropoffTime = "2026-10-20T09:03:00Z",
                 totalFare = null,
                 farePerPerson = null,
                 memberCount = 3,

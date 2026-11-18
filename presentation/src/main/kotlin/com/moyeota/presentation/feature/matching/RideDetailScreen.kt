@@ -32,10 +32,11 @@ import com.moyeota.core.designsystem.component.NavigationBarSpacer
 import com.moyeota.core.designsystem.component.RouteSummary
 import com.moyeota.core.designsystem.component.SectionLabel
 import com.moyeota.core.designsystem.component.NoticeKind
+import com.moyeota.core.designsystem.component.PrimaryCtaButton
+import com.moyeota.core.designsystem.component.RouteStripMap
 import com.moyeota.core.designsystem.component.SheetHandle
 import com.moyeota.core.designsystem.component.StatusBadge
 import com.moyeota.core.designsystem.component.StatusBarSpacer
-import com.moyeota.core.designsystem.component.RouteStripMap
 import com.moyeota.core.designsystem.component.decodePolyline
 import com.moyeota.core.designsystem.component.latLngOrNull
 import com.moyeota.core.designsystem.component.polylineDistanceMeters
@@ -52,10 +53,13 @@ import com.moyeota.domain.model.User
 import com.moyeota.presentation.core.HostBadge
 import com.moyeota.presentation.core.MeBadge
 import com.moyeota.presentation.core.MemberAvatar
+import com.moyeota.presentation.core.buildRouteChipLabel
 import com.moyeota.presentation.core.displayNickname
 import com.moyeota.presentation.core.isWithdrawn
+import com.moyeota.presentation.core.pickupDistanceLabel
 import com.moyeota.presentation.core.rideCountLabel
 import com.moyeota.presentation.core.showsHostBadge
+import com.moyeota.presentation.feature.faresplit.fareSplitEntryLabel
 
 /**
  * 22 · 탑승 상세 — 모집 중 [S12]
@@ -66,12 +70,13 @@ import com.moyeota.presentation.core.showsHostBadge
  * - 「나가기」 → 14 홈, 탑승 이탈 (onLeave). **모집 중([RideStatus.RECRUITING])일 때만 보인다.**
  *   그 밖의 단계에서는 버튼 대신 지금 어떤 방인지를 한 줄로 적는다([stageNotice]).
  *
- *   ⚠️ 서버는 정원이 찬 방([RideStatus.MATCHED] = 서버 COMPLETED)에서도 나가기를 **허용한다**
- *   (`ensureRecruiting()` 이 ACTIVE·COMPLETED 를 통과시킨다) — 21 매칭 대기는 거기서 「방 나가기」를
- *   보여 준다([canLeaveParty][com.moyeota.presentation.feature.matching.canLeaveParty]). 이 화면만
+ *   ⚠️ 서버는 **약속이 확정된 방에서도** 나가기를 허용한다(`b16551b7` 이 「확정 방은 나갈 수 없다」를
+ *   지웠다) — 21 매칭 대기는 거기서 「방 나가기」를 보여 준다
+ *   ([canLeaveParty][com.moyeota.presentation.feature.matching.canLeaveParty]). 서버가 막는 유일한
+ *   사유는 **내가 출발지 도착을 눌렀는가**다(409 `ARRIVED_MEMBER_CANNOT_LEAVE`). 이 화면만
  *   RECRUITING 으로 좁혀 둔 것은 기사 모드 시절의 기준이 남은 것이고, 지금은 두 화면이 같은 방에 대해
  *   다른 말을 한다. 의도된 차이가 아니므로 둘 중 하나로 모아야 한다 — 다만 그건 문구 정리가 아니라
- *   **동작 변경**이라 이 작업(택시 코드 제거)에서 하지 않았다.
+ *   **동작 변경**이라 이 작업에서 하지 않았다.
  * - [미연결] 없음
  *
  * 도메인 변경(2026-08-30 → 현재): 백엔드에서 **수동 출발**이 사라졌다 — 「이 인원으로 출발」이라는
@@ -106,6 +111,8 @@ fun RideDetailScreen(
     onBack: () -> Unit = {},
     onPartnerClick: (User) -> Unit = {},
     onLeave: () -> Unit = {},
+    /** 끝난 방의 **택시비 정산**으로 간다. 버튼이 뜨는 조건은 [fareSplitEntryLabel] 이 정한다. */
+    onFareSplit: () -> Unit = {},
 ) {
     // 지도 값 — 방 상세에서 나온다. 못 쓸 좌표면 latLngOrNull 이 null 을 돌려 자리표시자로 떨어진다
     val originPosition = latLngOrNull(ride.originLat, ride.originLng)
@@ -271,6 +278,19 @@ fun RideDetailScreen(
                 Spacer(Modifier.height(12.dp))
             }
 
+            // 끝난 방 + 내가 도착을 눌렀다 → 택시비 정산. **나가기 분기보다 앞**에 둔다:
+            // 끝난 방에서는 나가기가 없고(아래 else 로 떨어진다) 사용자가 여기서 할 수 있는 일이
+            // 정산 하나뿐이라, 그 하나를 단계 안내문 아래가 아니라 **버튼 자리**에 놓는다.
+            // 글자는 방장/동승자로 갈린다(「택시비 정산하기」/「내 택시비 보내기」).
+            fareSplitEntryLabel(ride)?.let { label ->
+                PrimaryCtaButton(
+                    text = label,
+                    onClick = onFareSplit,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                )
+                Spacer(Modifier.height(8.dp))
+            }
+
             // 남은 액션은 나가기 하나뿐 — 수동 출발 버튼은 도메인에서 사라졌다.
             // 매칭이 시작된 뒤에는 서버가 나가기를 막으므로 버튼 대신 현재 단계를 적는다.
             //
@@ -330,17 +350,27 @@ private fun RideDetailScreenPreview() {
  * 기사·배차를 걷어내면서 `DISPATCHING`(「기사님을 찾는 중이라 나갈 수 없어요」)·`ONGOING`
  * (「운행 중이에요」) 두 줄이 사라졌다 — 서버가 그 status 를 보낼 수 없다.
  *
- * [RideStatus.MATCHED] 는 **「나갈 수 없다」고 말하지 않는다.** 서버는 정원이 찬 방에서도 나가기를
- * 허용하고(`ensureRecruiting` = ACTIVE·COMPLETED), 21 매칭 대기가 실제로 그 버튼을 띄운다 — 여기서
- * 못 나간다고 적으면 거짓이 된다. 이 화면이 그 길을 갖지 않는 것은 사실이므로, 그 사실만 적어
- * **나갈 수 있는 곳을 가리킨다**(이 화면은 21 의 조건 카드에서 한 번 탭으로 들어온 자리라
+ * [RideStatus.CONFIRMED] 는 **「나갈 수 없다」고 말하지 않는다.** 서버는 **약속이 확정된 방에서도**
+ * 나가기를 허용하고(`b16551b7` 이 그 금지를 지웠다), 21 매칭 대기가 실제로 그 버튼을 띄운다 —
+ * 여기서 못 나간다고 적으면 거짓이 된다. 이 화면이 그 길을 갖지 않는 것은 사실이므로, 그 사실만
+ * 적어 **나갈 수 있는 곳을 가리킨다**(이 화면은 21 의 조건 카드에서 한 번 탭으로 들어온 자리라
  * 「매칭 대기 화면」은 뒤로 한 번이다).
+ *
+ * ### 🔴 「정원이 다 찼어요」가 거짓이 됐다 (2026-11-12) ★
+ * 이 status 를 「정원 충족」으로 읽던 문구였다. 서버가 COMPLETED 의 뜻을 **「방장이 약속을
+ * 확정했다」**로 바꿨고(`b16551b7`), **정원이 차도 status 는 ACTIVE** 다 — 그러니 이 문구는
+ * 3인 방에 2명 모인 확정 방에 「정원이 다 찼어요」를 그린다. **정원 판정의 유일한 참은
+ * `members.size >= capacity` 이고 이 함수는 status 하나만 받으므로, 정원을 말할 수 없다.**
+ * 그래서 status 로 참인 것만 말한다 — 「약속이 정해졌다」다.
+ *
+ * 옛 KDoc 에 있던 `ensureRecruiting` 설명도 지웠다 — 서버가 `Party` 의 단계 검사를
+ * `validateOpen()` 하나로 묶으면서 그 이름의 메서드가 없어졌다(같은 커밋).
  *
  * `when` 에 `else` 를 두지 않는다 — 단계가 늘면 여기서 컴파일이 막혀야 한다. RECRUITING 은
  * 버튼이 보이는 경로라 호출부가 부르지 않지만, 분기를 빼면 그 보장을 잃으므로 함께 적어 둔다.
  */
 private fun stageNotice(status: RideStatus): String = when (status) {
-    RideStatus.MATCHED -> "정원이 다 찼어요. 나가려면 매칭 대기 화면에서 「방 나가기」를 눌러 주세요"
+    RideStatus.CONFIRMED -> "약속이 정해졌어요. 나가려면 매칭 대기 화면에서 「방 나가기」를 눌러 주세요"
     RideStatus.CANCELED -> "취소된 탑승이에요"
     RideStatus.COMPLETED -> "완료된 탑승이에요"
     // 호출부가 RECRUITING 에서는 나가기 버튼을 그리므로 여기 오지 않는다

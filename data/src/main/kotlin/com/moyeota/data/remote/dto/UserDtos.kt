@@ -4,12 +4,11 @@ import kotlinx.serialization.Serializable
 
 /**
  * GET /api/v1/local/users/info 의 200 응답.
- * 백엔드 `MyProfileResponse(UUID uuid, String name, String imageUrl, int noShowCount, Instant restrictedUntil, String loginId)`
- * 와 필드 1:1 (`user/local/dto/MyProfileResponse.java`).
+ * 백엔드 `MyProfileResponse` 의 **네 필드만**(uuid·name·imageUrl·loginId) 받는다 (`user/local/dto/MyProfileResponse.java`).
  *
  * **서버 record 이름이 `UserResponse` 가 아니다.** `UserResponse` 는 **가입 응답**의 3필드 record
- * (`uuid`·`name`·`imageUrl`)이고 제재 필드가 없다 — 이 KDoc 이 오래 그 이름을 적고 있었고, 그 말을
- * 믿으면 「서버가 노쇼 필드를 안 준다」는 결론으로 간다. 두 record 는 **다른 파일**이다.
+ * (`uuid`·`name`·`imageUrl`)다 — 이 KDoc 이 오래 그 이름을 적고 있었다. 두 record 는 **다른 파일**이고,
+ * 지금은 받는 필드가 우연히 같다.
  *
  * 실측(2026-11-01, localhost:8080, `moyeota1` — 사진을 고른 적 없는 사용자):
  * `{"uuid":"01a187cc-3d2f-74c3-94d5-b0d8657088ac","name":"모여타일","imageUrl":"https://cdn.moyeota.co.kr/profile/presets/default.png"}`
@@ -30,23 +29,20 @@ import kotlinx.serialization.Serializable
  * 고른 적 없는 사용자에게는 기본 이미지의 전체 주소를 준다(`ProfileImages.toUrl` 이 key 가 null 이면
  * `default-key` 를 붙인다). 기본값 null 은 구버전 서버 대비용이다.
  *
- * ### [noShowCount]·[restrictedUntil] — **앱이 제재를 보여 줄 수 있는 유일한 자리** ★
- * 노쇼 제한에 걸린 사용자는 방 만들기·합류·예약 생성·실시간 후보가 전부 403 `NO_SHOW_RESTRICTED`
- * 로 막히는데, 그 403 본문은 **기한을 주지 않는다.** 즉 두 필드가 이 DTO 에 없는 동안 앱은
- * 「왜 막혔는지」도 「언제 풀리는지」도 말할 수 없었다 — 이 응답에 **키는 내려오고 있었는데**
- * 받는 자리가 없어 `ignoreUnknownKeys` 가 조용히 버리던 값이다(그래서 증상이 「서버가 안 준다」로
- * 보이지 않고 「앱이 아무 말도 못 한다」로 보였다).
+ * ### `noShowCount`·`restrictedUntil` 을 **일부러 받지 않는다** (2026-11-12) ★
+ * 서버는 이 응답에 두 키를 **아직 싣는다.** 받지 않으므로 `ignoreUnknownKeys`(`NetworkModule`)가
+ * 흘려보내고, 그래서 여기에 자리를 두지 않아도 파싱은 깨지지 않는다
+ * (`UserMappersTest` 가 실제 키가 실린 본문으로 못 박는다).
  *
- * [restrictedUntil] 은 서버 record 가 `Instant` 이고 Spring 기본 설정이 ISO-8601 **문자열**로
- * 직렬화한다(같은 응답의 다른 `Instant` 들과 같다 — `PartyDetailResponse.createdAt`·`departureAt`
- * 이 그 모양으로 실측됐다: `"2026-08-30T09:00:00Z"`). 그래서 `String?` 으로 받는다 —
- * 이 계층에서 `Instant` 로 바꾸지 않는 이유는 도메인 관례와 같다
- * ([com.moyeota.domain.model.UserProfileInfo.restrictedUntil]).
+ * 자리를 **되살리면 안 되는 이유**는 「서버가 안 준다」가 아니라 **「값이 영원히 고정이다」**다.
+ * 백엔드가 노쇼 기능을 통째로 지우면서(`b16551b7`, V37 이 기록·제재·이의 테이블을 DROP) 두 필드를
+ * 늘 0·null 로 박아 두었고, 서버 주석이 그 사정을 적어 두었다: 「늘 0. 노쇼 기능이 없어져 쓰지
+ * 않는다(출시 앱 호환용으로 키만 남김)」 — 11-03 출시 앱이 읽고 있어 남겼을 뿐이고, 앱이 필드를
+ * 빼고 강제 업데이트되면 서버에서도 지운다고 했다.
  *
- * **[noShowCount] 는 non-null `Int = 0` 이어도 된다.** 다른 DTO 의 인원수(`currentMembers`)를
- * nullable 로 받는 이유 — 「0 은 서버가 만들 수 없는 값이라 모른다와 구별해야 한다」 — 가 여기엔
- * 없다: 노쇼 0회는 **정상이고 흔한 값**이며, 모른다와 0 의 화면 처리가 같다(횟수를 내세우지 않는다).
- * 서버 record 가 원시 `int` 라 명시적 null 이 올 일도 없다.
+ * 즉 받아 올리면 도메인·화면에는 **분기가 있는 척하는 한 갈래**가 생긴다(「제재 없음」만 영원히
+ * 참인 if). 그게 가장 비싼 종류의 죽은 코드다 — 지워지지 않고 남아, 다음 사람에게 「앱이 제재를
+ * 다룬다」고 거짓으로 말한다.
  *
  * ### [loginId] — 로그인 아이디(Backend PR #330, 2026-11)
  * 아이디·비밀번호로 가입한 계정이면 그 **아이디**가, 로컬 로그인이 없는 계정(소셜 전용 등)이면
@@ -62,8 +58,6 @@ data class UserProfileResponse(
     val uuid: String = "",
     val name: String? = null,
     val imageUrl: String? = null,
-    val noShowCount: Int = 0,
-    val restrictedUntil: String? = null,
     val loginId: String? = null,
 )
 

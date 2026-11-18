@@ -4,6 +4,7 @@ import com.moyeota.data.remote.dto.ApiErrorDto
 import com.moyeota.data.remote.dto.MatchCandidateResponse
 import com.moyeota.data.remote.dto.OpenPartyRequestDto
 import com.moyeota.data.remote.dto.OpenPartyResponse
+import com.moyeota.data.remote.dto.PartyConfirmedPayload
 import com.moyeota.data.remote.dto.PartyDetailResponse
 import com.moyeota.data.remote.dto.PartyListResponse
 import com.moyeota.data.remote.dto.PartyStatusResponse
@@ -16,7 +17,6 @@ import com.moyeota.domain.model.PartyArriveException
 import com.moyeota.domain.model.PartyConfirmException
 import com.moyeota.domain.model.PartyDepartException
 import com.moyeota.domain.model.PartyEvent
-import com.moyeota.domain.model.PartyFinishException
 import com.moyeota.domain.model.PartyJoinException
 import com.moyeota.domain.model.PartyStatus
 import com.moyeota.domain.model.Ride
@@ -44,7 +44,7 @@ import retrofit2.HttpException
  */
 fun partyStatusToRideStatus(status: String): RideStatus = when (status) {
     "ACTIVE" -> RideStatus.RECRUITING
-    "COMPLETED" -> RideStatus.MATCHED
+    "COMPLETED" -> RideStatus.CONFIRMED
     "FINISHED" -> RideStatus.COMPLETED
     // 정상 종료(FINISHED)와 갈라 둔다 — 아무도 출발지에 오지 않아 서버가 자동 정리한 방이 여기로
     // 떨어지는데, 「탄 적 없이 닫힌 방」을 완료와 같은 값으로 접으면 둘을 구분할 수 없다.
@@ -191,8 +191,6 @@ fun PartyDetailResponse.toRide(currentUuid: String? = null): Ride {
         estimatedFare = estimateFare,
         estimatedMinutes = estimateTime,
         routePolyline = route,
-        // 응답의 departureRadius/destinationRadius 는 **옮기지 않는다** — 서버 고정값이고
-        // 아무 조회·판정도 읽지 않는다([PartyDetailResponse.departureRadius] KDoc).
         departureAt = departureAt,
         // 서버가 confirmed 를 말하지 않았으면(옛 배포·누락) **서버와 같은 식으로 셈한다** —
         // 서버 `Party.isConfirmed()` 도 `isReservation() || departureAt != null` 이고, 예약 방은
@@ -247,18 +245,20 @@ fun PartySseEvent.toPartyEvent(currentUuid: String? = null): PartyEvent = when (
         hostPublicId = payload.hostPublicId?.takeIf { it.isNotBlank() },
         version = payload.version,
     )
-    is PartySseEvent.RecruitingClosed -> PartyEvent.RecruitingClosed(
-        // 상태 문자열을 **그대로** 올린다 — 도메인 계약이 String 이다(RideStatus 가 아니다).
-        // 두 신호의 status 는 지금 늘 "COMPLETED" 이고, 화면은 「모집이 끝났다」·「확정됐다」는
-        // 사실로 쓴다. 단계 판정의 단일 창구는 여전히 Snapshot/상세의 RideStatus 다.
-        status = payload.status,
-        version = payload.version,
-    )
     is PartySseEvent.Confirmed -> PartyEvent.Confirmed(
+        // 상태 문자열을 **그대로** 올린다 — 도메인 계약이 String 이다(RideStatus 가 아니다).
+        // 지금 이 자리의 status 는 늘 "COMPLETED" 이고, 화면은 「확정됐다」는 사실로 쓴다.
+        // 단계 판정의 단일 창구는 여전히 Snapshot/상세의 RideStatus 다.
         status = payload.status,
         // 빈 문자열은 null 로 접는다 — 화면이 「약속 시간을 모른다」를 한 가지 모양으로만 보게 한다
         // (member-left 의 publicId 와 같은 정책). null 이면 상세를 다시 읽어야 한다.
         departureAt = payload.departureAt?.takeIf { it.isNotBlank() },
+        // 바뀐 출발지는 **셋이 다 왔을 때만** 올린다. 일부만 올리면 화면이 좌표와 이름이 어긋난
+        // 출발지를 그리게 되고, 그 어긋남은 도착 판정(반경)까지 번진다 — 셋 중 하나라도 비면
+        // 전부 null 로 두어 화면이 「모른다 → 상세를 다시 읽는다」로 가게 한다.
+        departureLat = payload.meetingPlaceOrNull()?.first,
+        departureLng = payload.meetingPlaceOrNull()?.second,
+        departurePlace = payload.meetingPlaceOrNull()?.third,
         version = payload.version,
     )
     // publicId 가 없는 프레임은 여기까지 오지 않는다 — 수신기가 버린다(PartySseEvent.MemberArrived KDoc).
@@ -287,7 +287,6 @@ fun OpenPartyResponse.toRide(): Ride = Ride(
     estimatedFare = estimateFare,
     estimatedMinutes = estimateTime,
     routePolyline = route,
-    // 반경은 상세 매퍼와 같은 이유로 옮기지 않는다([PartyDetailResponse.departureRadius] KDoc).
     departureAt = departureAt,
     // 생성 응답에는 confirmed 가 **없다** — 상세의 누락 경로와 같은 식으로 셈한다(서버 `isConfirmed()`).
     // 실시간 방을 막 만든 직후라 실제로는 늘 false 다.
@@ -338,6 +337,24 @@ private val errorJson = Json { ignoreUnknownKeys = true }
  * **본문은 한 번만 읽을 수 있다** — `ResponseBody.string()` 이 스트림을 닫으므로 두 번째 호출은 실패한다.
  * 그래서 호출부가 결과를 **들고 다니며** 쓴다(두 번 읽는 코드를 만들지 말 것).
  */
+/**
+ * `confirmed` 프레임이 싣고 온 **바뀐 출발지**를 셋이 다 있을 때만 돌려준다(위도, 경도, 이름).
+ *
+ * 셋 중 하나라도 비면 null 이다. 「일부만 반영」을 만들지 않으려는 것이다 — 좌표만 덮어쓰면 화면이
+ * 옛 이름으로 새 지점을 말하고, 이름만 덮어쓰면 **도착 판정이 옛 좌표를 기준으로 돈다**. 둘 다
+ * 사용자가 알아챌 수 없는 어긋남이라, 모르면 모른다고 두고 상세를 다시 읽게 하는 쪽이 맞다.
+ *
+ * 이름의 공백은 비어 있는 것으로 본다 — 서버 `@NotBlank` 를 통과한 값이라 평소에는 오지 않지만,
+ * 빈 이름으로 방 제목을 바꿔 버리면 되돌릴 길이 없다.
+ */
+private fun PartyConfirmedPayload.meetingPlaceOrNull(): Triple<Double, Double, String>? {
+    val latitude = departureLat ?: return null
+    val longitude = departureLng ?: return null
+    val name = departure?.takeIf { it.isNotBlank() } ?: return null
+
+    return Triple(latitude, longitude, name)
+}
+
 internal fun Throwable.readApiError(): ApiErrorDto? = (this as? HttpException)?.let { http ->
     runCatching {
         http.response()?.errorBody()?.string()
@@ -379,40 +396,16 @@ internal fun partyJoinException(
     else -> PartyJoinException(code = null, serverMessage = null, cause = failure)
 }
 
-/**
- * 「합승 완료」 실패 → [PartyFinishException]. 합류([partyJoinException])와 같은 자리·같은 이유의 경계다
- * — presentation 이 `HttpException` 을 보지 않게 하고, 화면 문구는 도메인 프로퍼티로만 갈린다.
- *
- * [error] 는 이미 읽어 둔 본문([readApiError])이다 — **본문은 한 번만 읽을 수 있으므로** 여기서 다시
- * 읽지 않는다.
- *
- * 합류와 달리 `isNetwork` 를 두지 않는다: 이 액션은 응답을 못 받은 실패와 모르는 코드의 **대응이 같다**
- * (일반 문구). 쓰지 않을 구분을 노출하면 나중에 네트워크 실패에 방장 안내가 붙는 식으로 어긋난다.
- */
-internal fun partyFinishException(
-    failure: Throwable,
-    error: ApiErrorDto?,
-): PartyFinishException = when (failure) {
-    is PartyFinishException -> failure
+// **`partyFinishException` 은 지웠다** — 「합승 완료」(`/finish`)가 서버에서 사라져
+// `PartyFinishException` 자체가 없어졌다. 방을 끝내는 실패는 [partyDepartException] 하나로 모였다.
 
-    is HttpException -> PartyFinishException(
-        code = error?.code,
-        serverMessage = error?.message,
-        httpStatus = failure.code(),
-        cause = failure,
-    )
-
-    // 응답 자체를 못 받았다(연결 거부·타임아웃·DNS) 또는 그 밖의 실패. 서버가 말해 준 사유가 없으므로
-    // code 는 null 이고, 화면은 일반 문구로 안내한다.
-    else -> PartyFinishException(code = null, serverMessage = null, cause = failure)
-}
 
 /**
  * 약속 확정·도착·출발 실패 → 액션마다 다른 예외. **셋을 한 함수로 합치지 않는 이유**는 예외를 셋으로
  * 나눈 이유와 같다([PartyConfirmException] KDoc 의 표): 같은 서버 코드가 액션에 따라 다른 문장을
  * 요구하므로, 「어느 버튼이었나」를 타입이 들고 있어야 한다.
  *
- * 세 함수의 모양은 [partyFinishException] 과 같다 — [error] 는 이미 읽어 둔 본문([readApiError])이고
+ * 세 함수의 모양이 같다 — [error] 는 이미 읽어 둔 본문([readApiError])이고
  * (**본문은 한 번만 읽을 수 있다**), 응답을 못 받은 실패와 모르는 코드는 둘 다 code = null 로
  * 떨어져 화면이 일반 문구를 쓴다. `isNetwork` 같은 구분은 두지 않는다: 이 셋은 그 두 경우의 **대응이
  * 같다**(다시 시도). 쓰지 않을 구분을 노출하면 나중에 네트워크 실패에 「더 가까이 가 주세요」가 붙는다.

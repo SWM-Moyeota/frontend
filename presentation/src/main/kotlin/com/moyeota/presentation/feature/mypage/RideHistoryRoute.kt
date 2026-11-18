@@ -103,7 +103,8 @@ class RideHistoryViewModel(private val repository: RideRecordRepository) : ViewM
                     _uiState.update { prev ->
                         val known = prev.records.mapTo(mutableSetOf()) { it.partyId }
                         prev.copy(
-                            // 서버 정렬이 `dropoffTime desc, matchId desc` 라 뒤에 붙이면 된다.
+                            // 서버 정렬이 **승차 시각 내림차순** + matchId 내림차순이라 뒤에 붙이면 된다
+                            // (`dropoffTime` 이었다 — 서버가 그 필드를 지웠다, 백엔드 `135df701`).
                             // 같은 방이 두 번 들어오는 것만 막는다 — LazyColumn 의 key 가
                             // partyId 라 중복 키가 들어오면 그 자리에서 터진다.
                             records = prev.records + page.records.filterNot { it.partyId in known },
@@ -141,6 +142,8 @@ class RideHistoryViewModel(private val repository: RideRecordRepository) : ViewM
 fun RideHistoryRoute(
     repository: RideRecordRepository,
     onBack: () -> Unit = {},
+    /** 그 방의 택시비 정산으로. 요금 줄이 있는 카드에만 길이 열린다([RideHistoryScreen] KDoc). */
+    onFareSplit: (partyId: Long) -> Unit = {},
 ) {
     val viewModel: RideHistoryViewModel =
         viewModel(factory = RideHistoryViewModel.factory(repository))
@@ -155,5 +158,6 @@ fun RideHistoryRoute(
         onLoadMore = viewModel::loadMore,
         onRetry = viewModel::refresh,
         onBack = onBack,
+        onFareSplit = onFareSplit,
     )
 }

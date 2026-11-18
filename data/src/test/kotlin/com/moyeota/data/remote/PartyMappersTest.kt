@@ -28,7 +28,7 @@ class PartyMappersTest {
     @Test
     fun `백엔드 PartyStatus 를 RideStatus 로 매핑한다`() {
         assertEquals(RideStatus.RECRUITING, partyStatusToRideStatus("ACTIVE"))
-        assertEquals(RideStatus.MATCHED, partyStatusToRideStatus("COMPLETED"))
+        assertEquals(RideStatus.CONFIRMED, partyStatusToRideStatus("COMPLETED"))
         assertEquals(RideStatus.COMPLETED, partyStatusToRideStatus("FINISHED"))
         assertEquals(RideStatus.CANCELED, partyStatusToRideStatus("CANCELED"))
     }
@@ -137,7 +137,7 @@ class PartyMappersTest {
         assertEquals("7", ride.id)
         assertEquals("서울시청", ride.origin)
         assertEquals("강남역", ride.destination)
-        assertEquals(RideStatus.MATCHED, ride.status)
+        assertEquals(RideStatus.CONFIRMED, ride.status)
         assertEquals(2, ride.members.size)
         assertEquals(37.5665, ride.originLat!!, 0.0001)
         assertEquals(127.0276, ride.destinationLng!!, 0.0001)
@@ -500,8 +500,6 @@ class PartyMappersTest {
             destination = "강남역",
             capacity = 3,
             currentMembers = 1,
-            departureRadius = 500,
-            destinationRadius = 500,
             status = "ACTIVE",
             createdAt = "2026-08-24T09:00:00Z",
             estimateFare = 9600,
@@ -628,11 +626,11 @@ class PartyMappersTest {
         val decoded = json.decodeFromString<PartyDetailResponse>(body)
         val ride = decoded.toRide(currentUuid = UUID_ME)
 
-        // 서버는 아직 반경을 내려보낸다(고정 500m) — DTO 는 그 모양대로 받는다.
-        assertEquals(500, decoded.departureRadius)
-        assertEquals(500, decoded.destinationRadius)
+        // 반경 두 키는 서버 응답에서 사라졌고(`2732cc75`) DTO 에서도 지웠다 — 본문에 남아 있어도
+        // `ignoreUnknownKeys` 가 흘린다(이 본문이 그걸 함께 증명한다: 반경·badgeId·taxiDriverId 를
+        // 모두 실어 두었는데 파싱이 깨지지 않는다).
         assertEquals("7", ride.id)
-        assertEquals(RideStatus.MATCHED, ride.status)
+        assertEquals(RideStatus.CONFIRMED, ride.status)
         assertEquals(listOf(UUID_ME, ""), ride.members.map { it.id })
         assertEquals(listOf("성윤", "탈퇴한 회원"), ride.members.map { it.nickname })
         assertEquals(listOf(4, 0), ride.members.map { it.rideCount })
@@ -750,7 +748,7 @@ class PartyMappersTest {
 
         val status = json.decodeFromString<PartyStatusResponse>(body).toPartyStatus()
 
-        assertEquals(RideStatus.MATCHED, status.status)
+        assertEquals(RideStatus.CONFIRMED, status.status)
         assertEquals(3, status.currentMembers)
     }
 
@@ -812,7 +810,7 @@ class PartyMappersTest {
         val ride = json.decodeFromString<PartyDetailResponse>(body).toRide()
 
         assertEquals("7", ride.id)
-        assertEquals(RideStatus.MATCHED, ride.status)
+        assertEquals(RideStatus.CONFIRMED, ride.status)
     }
 
     /**
@@ -1072,8 +1070,6 @@ class PartyMappersTest {
         destination = "강남역",
         capacity = 3,
         currentMembers = members.size,
-        departureRadius = 500,
-        destinationRadius = 500,
         status = "COMPLETED",
         createdAt = "2026-08-17T09:00:00Z",
         members = members,
@@ -1100,7 +1096,6 @@ class PartyMappersTest {
         publicId = publicId,
         nickname = nickname,
         imageUrl = imageUrl,
-        badgeId = null,
         rideCount = rideCount,
         host = host,
         arrived = arrived,

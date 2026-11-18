@@ -58,6 +58,7 @@ import com.moyeota.domain.model.RoomType
 import com.moyeota.domain.model.User
 import com.naver.maps.geometry.LatLng
 import java.time.Instant
+import com.moyeota.presentation.core.HostBadge
 import com.moyeota.presentation.core.MeBadge
 import com.moyeota.presentation.core.MemberAvatar
 import com.moyeota.presentation.core.displayNickname
@@ -401,7 +402,7 @@ internal data class JoinStatusBadge(val kind: NoticeKind, val text: String)
  */
 internal fun joinStatusBadge(status: RideStatus): JoinStatusBadge = when (status) {
     RideStatus.RECRUITING -> JoinStatusBadge(NoticeKind.SUCCESS, "모집 중")
-    RideStatus.MATCHED -> JoinStatusBadge(NoticeKind.WAITING, "모집 마감된 방")
+    RideStatus.CONFIRMED -> JoinStatusBadge(NoticeKind.WAITING, "약속이 정해진 방")
     RideStatus.COMPLETED -> JoinStatusBadge(NoticeKind.INFO, "합승이 끝난 방")
     RideStatus.CANCELED -> JoinStatusBadge(NoticeKind.ERROR, "취소된 방")
 }
@@ -557,7 +558,12 @@ private fun MemberRow(
                     color = if (clickable) MoyeotaColor.InkPrimary else MoyeotaColor.TextMute,
                 )
                 Spacer(Modifier.width(8.dp))
-                if (member.isMe) MeBadge() else PartnerBadge()
+                // 방을 만든 사람이 「동승자」로만 보이면 누구에게 약속을 물어야 할지 알 수 없다(2026-11-17 QA)
+                when {
+                    member.isMe -> MeBadge()
+                    member.isHost -> HostBadge()
+                    else -> PartnerBadge()
+                }
             }
             Text(
                 text = if (clickable) "${member.rideCountLabel}$othersLabel" else "탈퇴한 회원$othersLabel",

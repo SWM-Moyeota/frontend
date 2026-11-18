@@ -27,24 +27,23 @@ class ReservationRulesTest {
 
     // ─────────────────────────── 정원 ───────────────────────────
 
-    /** 서버 계약: 실시간 `Capacity` 는 1~3, **예약은 2~3**. 벗어나면 400 `INVALID_CAPACITY`. */
+    /**
+     * 서버 계약: 실시간·예약 모두 **2~3**(실시간 최소 2 는 백엔드 `80957504`). 1 을 보내면 400 이고, 앱은 그
+     * 400 을 「잠시 후 다시 시도」로 보여 줬다 — 영원히 실패하는 선택지를 띄우지 않는다.
+     */
     @Test
-    fun `정원 선택지는 모드마다 다르다 - 예약은 1 을 지운다`() {
-        assertEquals(listOf(1, 2, 3), capacityChoices(DepartureMode.NOW))
+    fun `정원 선택지는 두 모드 모두 2~3명이다`() {
+        assertEquals(listOf(2, 3), capacityChoices(DepartureMode.NOW))
         assertEquals(listOf(2, 3), capacityChoices(DepartureMode.SCHEDULED))
     }
 
-    /**
-     * **1 을 고른 채 「시간 정하기」로 바꾸는 길이 있다** — 그 상태는 보낼 수 없으므로 접는다.
-     * 고른 값 자체는 화면이 그대로 들고 있어서 모드를 되돌리면 1 이 살아 있다(여기서는 변환만 본다).
-     */
+    /** 저장된 옛 상태의 1(예전 「혼자 출발」)이 남아 있어도 보내는 값은 2 다. */
     @Test
-    fun `예약으로 바꾸면 1명은 2명으로 접힌다`() {
+    fun `예전에 고른 1명은 어느 모드든 2명으로 접힌다`() {
         assertEquals(2, capacityFor(DepartureMode.SCHEDULED, 1))
-        assertEquals(2, capacityFor(DepartureMode.SCHEDULED, 2))
+        assertEquals(2, capacityFor(DepartureMode.NOW, 1))
+        assertEquals(2, capacityFor(DepartureMode.NOW, 2))
         assertEquals(3, capacityFor(DepartureMode.SCHEDULED, 3))
-        // 실시간에서는 1 이 유효한 선택이다 — 접지 않는다(혼자 타기를 상품으로 인정한 결정)
-        assertEquals(1, capacityFor(DepartureMode.NOW, 1))
     }
 
     /** 화면에 없는 값이 들어와도 **가장 가까운 유효값**이다 — 서버가 막아 주는 것과 앱이 보내지 않는 것은 다른 보호막이다. */
@@ -52,7 +51,7 @@ class ReservationRulesTest {
     fun `범위 밖 정원은 가장 가까운 유효값이 된다`() {
         assertEquals(3, capacityFor(DepartureMode.NOW, 9))
         assertEquals(3, capacityFor(DepartureMode.SCHEDULED, 9))
-        assertEquals(1, capacityFor(DepartureMode.NOW, 0))
+        assertEquals(2, capacityFor(DepartureMode.NOW, 0))
         assertEquals(2, capacityFor(DepartureMode.SCHEDULED, 0))
     }
 
@@ -451,7 +450,10 @@ class ReservationRulesTest {
     private fun failure(code: String?, httpStatus: Int? = 400) =
         PartyOpenException(code = code, serverMessage = null, httpStatus = httpStatus)
 
-    /** 「다시 시도」류를 403·409 에 붙이지 않는다 — `FinishFailureMessageTest` 가 세운 규칙이다. */
+    /**
+     * 「다시 시도」류를 403·409 에 붙이지 않는다 — 옛 `FinishFailureMessageTest` 가 세운 규칙이고
+     * (그 파일은 「합승 완료」와 함께 사라졌다) 지금은 `MeetingFailureMessageTest` 가 이어 받았다.
+     */
     private fun assertNoRetryPromise(message: String) {
         listOf("다시 시도", "잠시 후", "잠시만", "재시도").forEach { forbidden ->
             assertFalse("재시도를 약속한다: $message", message.contains(forbidden))
@@ -459,22 +461,32 @@ class ReservationRulesTest {
     }
 
     /**
-     * ★ 403 `NO_SHOW_RESTRICTED` — **재시도할 수 없는 실패**다. 끝나는 시각이 서버에 있고
-     * 그때까지는 몇 번 눌러도 같은 403 이다.
+     * 🔴 **노쇼 제재는 사라졌다** — 「노쇼 제재는 왜 막혔는지만 말하고 재시도를 약속하지 않는다」를
+     * 이 테스트로 **대체했다**.
      *
-     * 그 시각(`restrictedUntil`)을 **여기서 말하지 않는다**: 이 화면은 그 값을 읽지 않으므로
-     * 숫자를 적으면 지어내는 것이고, 「마이페이지에서 보세요」는 이 화면이 확인할 수 없는 약속이다.
+     * 옛 테스트는 403 `NO_SHOW_RESTRICTED` 가 「노쇼 제재 중에는 방을 만들 수 없어요」로 떨어지는
+     * 것을 못 박았고, **「재시도할 수 없는 실패」의 표본**이었다. 서버가 노쇼 기능을 통째로 지웠다
+     * (`b16551b7`, V37 이 테이블까지 떨어뜨린다) — `PartyOpenException.isNoShowRestricted` 가 함께
+     * 사라져 컴파일로 잡혔다.
+     *
+     * **그 테스트가 못 박던 두 사실의 운명이 다르다:**
+     *
+     * | 사실 | 지금 |
+     * |---|---|
+     * | 「403·409 에 재시도를 약속하지 않는다」 | **여전히 유효하다** → [assertNoRetryPromise] 가 남은 사유 전체를 훑는다(아래 테스트) |
+     * | 「노쇼 제재 중이라고 말한다」 | **거짓이 됐다** → 그 문구가 모르는 코드로 떨어지는지를 이 테스트가 본다 |
+     *
+     * 모르는 코드로 떨어뜨리는 것이 맞는 처방이다: 서버가 다시 비슷한 제재를 만들어도 앱은
+     * **지어내지 않는다.** 올 수 없는 사유에 문구를 두면 그 자리가 영영 검증되지 않고, 그 문구를
+     * 읽은 개발자는 아직 제재가 있는 줄로 읽는다.
      */
     @Test
-    fun `노쇼 제재는 왜 막혔는지만 말하고 재시도를 약속하지 않는다`() {
-        val message = reservationOpenFailureMessage(failure(PartyOpenException.NO_SHOW_RESTRICTED, httpStatus = 403))
+    fun `사라진 노쇼 제재는 문구를 갖지 않는다`() {
+        val message = reservationOpenFailureMessage(failure("NO_SHOW_RESTRICTED", httpStatus = 403))
 
-        assertEquals("노쇼 제재 중에는 방을 만들 수 없어요. 제재가 끝나면 다시 만들 수 있어요", message)
-        assertNoRetryPromise(message)
-        assertTrue("왜 막혔는지 말해야 한다", message.contains("노쇼"))
-        // 모르는 숫자·다른 화면을 가리키지 않는다
-        assertFalse(message, message.contains("시까지"))
-        assertFalse(message, message.contains("마이페이지"))
+        assertEquals(RESERVATION_OPEN_FAILED_MESSAGE, message)
+        assertFalse("서버에 없는 제재를 말한다: $message", message.contains("노쇼"))
+        assertFalse("서버에 없는 제재를 말한다: $message", message.contains("제재"))
     }
 
     /**
@@ -515,7 +527,7 @@ class ReservationRulesTest {
         assertFalse("실시간 범위를 말하면 고를 수 없는 값을 고르라고 하게 된다", message.contains("1~3"))
         // 실시간 쪽은 그대로다 — 두 문구가 서로를 덮지 않는다
         assertEquals(
-            "인원은 1~3명까지만 정할 수 있어요",
+            "인원은 2~3명이어야 해요",
             openFailureMessage(failure(PartyOpenException.INVALID_CAPACITY)),
         )
     }
@@ -580,7 +592,7 @@ class ReservationRulesTest {
         // 「계산 중」처럼 곧 나올 것처럼 말하지 않는다 — 서버가 끝까지 주지 않는다
         assertFalse(RESERVATION_NO_ESTIMATE_NOTICE, RESERVATION_NO_ESTIMATE_NOTICE.contains("계산"))
         // 서버가 보내는 알림(예약 리마인더)을 **약속하지 않는다** — 앱이 확인할 수 없는 말이다
-        listOf(RESERVATION_NO_ESTIMATE_NOTICE, RESERVATION_CAPACITY_NOTICE, RESERVATION_NEEDS_TIME_NOTICE)
+        listOf(RESERVATION_NO_ESTIMATE_NOTICE, RESERVATION_NEEDS_TIME_NOTICE)
             .forEach { copy ->
                 assertFalse("없는 알림을 약속한다: $copy", copy.contains("알림"))
                 assertFalse("없는 알림을 약속한다: $copy", copy.contains("알려 드려요"))
@@ -588,35 +600,45 @@ class ReservationRulesTest {
     }
 
     /**
-     * ★ **나갈 수 없다는 사실을 두 자리가 같은 문장으로 말한다.**
+     * 🔴 ★ **「나갈 수 없다」가 「시각을 바꿀 수 없다」로 바뀌었다** — 뒤집힌 자리다.
      *
-     * 예약 방은 만들어진 순간부터 확정이라 나가기가 **언제나** 409
-     * `CANNOT_LEAVE_CONFIRMED_PARTY` 다(서버 소스 실측). 실시간 방은 「그만 찾기」로 빠져나올 수
-     * 있어서, 이 말을 빼면 사용자는 **되돌릴 수 있다고 배운 동작**으로 되돌릴 수 없는 약속을 한다.
+     * 옛 문장: 「예약 방은 합류하면 **나갈 수 없어요**. 출발 시각에 안 가면 **노쇼로 기록돼요**」.
+     * 근거는 「예약 방은 만들어진 순간부터 확정이라 나가기가 언제나 409
+     * `CANNOT_LEAVE_CONFIRMED_PARTY` 다」였다. **서버가 그 규칙과 그 코드, 그리고 노쇼 기능까지
+     * 함께 지웠다**(`b16551b7` · V37) — 두 문장이 **다 거짓**이 됐다.
+     *
+     * 단순한 오타가 아니다: 이 문구는 21 대기 화면이 예약 방에서 **나가기를 숨기던 전제의 얼굴**
+     * 이었고(`canLeaveParty` 의 `!ride.isConfirmed`), 그 전제를 믿은 사용자는 들어간 예약 방을
+     * **벗어날 수 없다고 생각한 채 머문다.** 서버가 허용하는 일을 앱이 말로 막는 쪽이라 사용자가
+     * 복구할 수 없다.
+     *
+     * ### 그래도 이 자리가 남는 이유 — **바꿀 수 없는 것이 남아 있다**
+     * 예약 방의 출발 시각은 **처음부터 확정**이고 다시 정할 수 없다(409 `NOT_REALTIME_PARTY`).
+     * 실시간 방은 들어간 뒤 방장이 시간을 정하므로 사용자는 **시간을 나중에 맞출 수 있는 것으로
+     * 배워 왔다** — 그 차이를 누르기 전에 말해야 한다. 「되돌릴 수 없는 것」이 「나가기」에서
+     * **「시간」**으로 옮겨 간 것이다.
      */
     @Test
-    fun `예약은 나갈 수 없다는 사실을 만들기와 합류 양쪽에서 같은 말로 알린다`() {
+    fun `예약은 시각을 바꿀 수 없다는 사실을 만들기와 합류 양쪽에서 같은 말로 알린다`() {
         val creating = reservationCommitmentNotice(joining = false)
         val joining = reservationCommitmentNotice(joining = true)
 
-        assertEquals("예약 방은 만들면 나갈 수 없어요. 출발 시각에 안 가면 노쇼로 기록돼요", creating)
-        assertEquals("예약 방은 합류하면 나갈 수 없어요. 출발 시각에 안 가면 노쇼로 기록돼요", joining)
-        // 두 문장의 **뒷문장이 같다** — 같은 대가를 두 화면이 다른 무게로 말하지 않는다
-        val consequence = "출발 시각에 안 가면 노쇼로 기록돼요"
+        assertEquals("예약 방은 만든 뒤에 출발 시각을 바꿀 수 없어요. 못 가게 되면 미리 나와 주세요", creating)
+        assertEquals("예약 방은 합류한 뒤에 출발 시각을 바꿀 수 없어요. 못 가게 되면 미리 나와 주세요", joining)
+        // 두 문장의 **뒷문장이 같다** — 같은 사실을 두 화면이 다른 무게로 말하지 않는다
+        val consequence = "출발 시각을 바꿀 수 없어요. 못 가게 되면 미리 나와 주세요"
         assertTrue(creating, creating.endsWith(consequence))
         assertTrue(joining, joining.endsWith(consequence))
+        // 🔴 **서버가 버린 두 사실을 말하지 않는다** — 둘 다 사용자를 가두는 쪽의 거짓이다
+        listOf(creating, joining).forEach { copy ->
+            assertFalse("서버가 허용하는 일을 못 한다고 말한다: $copy", copy.contains("나갈 수 없"))
+            assertFalse("서버에 없는 제재로 겁을 준다: $copy", copy.contains("노쇼"))
+        }
         // 확인할 수 없는 알림을 약속하지 않는다(서버에 예약 리마인더가 있지만 앱이 발송을 모른다)
         listOf(creating, joining).forEach { copy ->
             assertFalse(copy, copy.contains("알림"))
             assertFalse(copy, copy.contains("알려 드려요"))
         }
-    }
-
-    @Test
-    fun `예약 정원 안내는 2명부터라는 사실만 말한다`() {
-        assertEquals("예약 방은 2명부터 만들 수 있어요", RESERVATION_CAPACITY_NOTICE)
-        // 혼자 출발 안내와 **함께 뜨지 않는다** — 예약에서 정원은 1 이 될 수 없다
-        assertNull(soloCapacityNotice(capacityFor(DepartureMode.SCHEDULED, 1)))
     }
 
     @Test

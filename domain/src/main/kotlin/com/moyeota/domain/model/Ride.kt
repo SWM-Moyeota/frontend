@@ -2,7 +2,19 @@ package com.moyeota.domain.model
 
 /**
  * 방의 진행 단계. 서버 `PartyStatus` 의 네 값과 하나씩 짝이다 —
- * `ACTIVE`→[RECRUITING] · `COMPLETED`→[MATCHED] · `FINISHED`→[COMPLETED] · `CANCELED`→[CANCELED].
+ * `ACTIVE`→[RECRUITING] · `COMPLETED`→[CONFIRMED] · `FINISHED`→[COMPLETED] · `CANCELED`→[CANCELED].
+ *
+ * ### ⚠️ 이 enum 의 어느 값도 「정원이 찼다」를 뜻하지 않는다 ★
+ * 오래 그렇지 **않았다**. 서버 `COMPLETED` 는 「정원 충족」이었고 이 enum 의 그 자리는
+ * `MATCHED` 라는 이름이었다. `b16551b7` 이 정의를 바꿨다:
+ *
+ * > COMPLETED 는 **방장이 약속을 확정한 실시간 방**만 뜻한다. 정원이 차도 ACTIVE 이고
+ * > 참여만 PARTY_FULL 로 막는다.
+ *
+ * 그래서 이름을 [CONFIRMED] 로 바꿨다. 값을 그대로 두면 **옛 이름이 틀린 사실을 계속 주장**해,
+ * 읽는 사람이 2/3 짜리 확정 방에 「다 모였어요」를 그리는 코드를 또 쓴다(실제로 그랬다).
+ *
+ * **정원 판정의 유일한 참은 `members.size >= capacity` 다.** 상태값으로는 알 수 없다.
  *
  * [CANCELED] 를 [COMPLETED] 와 갈라 두는 이유: 서버는 아무도 출발지에 도착하지 않은 방을 자동
  * 정리할 때 CANCELED 로 닫는다. 그걸 「완료」와 같은 값으로 접으면 **탄 적 없이 닫힌 방**을
@@ -12,7 +24,28 @@ package com.moyeota.domain.model
  * `MATCHING`·`DRIVER_ASSIGNED`·`IN_RIDE` 를 **보낼 수 없게** 됐다(서버 `PartyStatus` 에서 삭제).
  * 모르는 문자열은 매퍼가 [RECRUITING] 으로 떨어뜨리므로 옛 값이 와도 파싱은 깨지지 않는다.
  */
-enum class RideStatus { RECRUITING, MATCHED, COMPLETED, CANCELED }
+enum class RideStatus {
+    /**
+     * 서버 `ACTIVE` — **모집 중**. 정원이 찬 방도 여기다(참여만 막힌다).
+     * **예약 방은 출발 시각까지 계속 이 상태다** — 확정이지만 ACTIVE 다([Ride.isConfirmed] 참고).
+     */
+    RECRUITING,
+
+    /**
+     * 서버 `COMPLETED` — **실시간 방의 방장이 약속을 확정했다**. 옛 이름은 `MATCHED` 였다.
+     *
+     * 이 값은 [Ride.isConfirmed] 보다 **좁다**: 예약 방은 확정이지만 [RECRUITING] 이다.
+     * 그래서 「확정됐나」를 묻는 자리는 이 값이 아니라 [Ride.isConfirmed] 를 봐야 한다 —
+     * 이 값으로 물으면 예약 방이 전부 빠진다.
+     */
+    CONFIRMED,
+
+    /** 서버 `FINISHED` — 출발을 눌러 끝난 방. 택시비 정산을 시작할 수 있는 유일한 상태다. */
+    COMPLETED,
+
+    /** 서버 `CANCELED` — 탄 적 없이 닫힌 방(모집 만료·전원 이탈·도착자 없는 자동 정리). */
+    CANCELED,
+}
 
 /**
  * 방의 종류. 서버 `RoomType` 과 짝이지만 **이름이 한쪽만 다르다** — 서버는 `REALTIME`·`RESERVED` 이고
@@ -92,9 +125,16 @@ data class Ride(
      * 그 식이 **서버 것**이기 때문이다: 확정 취소 같은 게 생겨 서버가 판정을 바꾸면 앱이 베낀 식만 뒤처진다.
      * (서버가 말해 주지 않은 옛 배포에서만 매퍼가 같은 식으로 셈해 채운다 — `PartyMappers.toRide`.)
      *
-     * 확정되면 방이 **닫히는 방식이 바뀐다**: 모집이 끝나고(ACTIVE→COMPLETED) 아무도 나갈 수 없으며
-     * (409 `CANNOT_LEAVE_CONFIRMED_PARTY`), 「합승 완료」도 막힌다(409 `USE_DEPART_FOR_CONFIRMED_PARTY`).
-     * 끝내는 길은 「출발」 하나뿐이다([com.moyeota.domain.repository.RideRepository.departParty]).
+     * ### 「확정됐나」를 묻는 **단일 창구**가 이 값이다 — [RideStatus] 로 묻지 말 것 ★
+     * 실시간 방이 확정되면 상태가 [RideStatus.CONFIRMED] 로 가지만 **예약 방은 확정인데도
+     * [RideStatus.RECRUITING]** 이다(서버가 출발 시각까지 ACTIVE 로 둔다). 상태값으로 물으면
+     * 예약 방이 통째로 빠져, 예약 방 사용자에게 도착·출발 버튼이 영원히 안 뜬다.
+     *
+     * 확정되면 바뀌는 것: 모집이 끝나 **참여가 막히고**(실시간 방은 ACTIVE→COMPLETED), 도착·출발이
+     * 열린다. **나가기는 여전히 된다** — 확정을 이유로 막던 규칙은 서버에서 사라졌고(`b16551b7`),
+     * 지금 나가기를 막는 건 **도착을 누른 사람**뿐이다(409 `ARRIVED_MEMBER_CANNOT_LEAVE`).
+     * 끝내는 길은 **도착한 방장의 「출발」** 하나뿐이다
+     * ([com.moyeota.domain.repository.RideRepository.departParty]).
      */
     val isConfirmed: Boolean = false,
     /**
@@ -108,7 +148,7 @@ data class Ride(
 )
 
 /**
- * 내가 이 방의 방장인가 — 화면이 방장 전용 동작(「합승 완료」)을 가릴 때 보는 **단일 창구**다.
+ * 내가 이 방의 방장인가 — 화면이 방장 전용 동작(**약속 확정 · 출발**)을 가릴 때 보는 **단일 창구**다.
  *
  * 멤버 목록에서 나를 찾아 그 한 명의 [User.isHost] 만 본다. 목록 첫째 원소나 입장 순서로 흉내 내지
  * 말 것 — 서버의 방장은 현재 멤버 중 `min(joinedAt, memberId)` 라는 **파생값**이라([User.isHost])
@@ -146,7 +186,20 @@ val Ride.isHostedByMe: Boolean
  * 그 엔드포인트는 사라졌다(Backend `04f6be7`). 그래서 지문 필드도, 상세와 비교하던 `isSameAs` 도 없다.
  */
 data class PartyStatus(
-    /** 합류 **직후**의 상태. 내가 마지막 자리를 채웠으면 [RideStatus.MATCHED] 로 온다. */
+    /**
+     * 합류 **직후**의 방 상태.
+     *
+     * ### ⚠️ 이 값으로 「내가 마지막 자리를 채웠는지」를 알 수 없다 ★
+     * 오래 알 수 있었다. 마지막 자리를 채우면 서버가 그 자리에서 `COMPLETED` 로 넘겼고, 이 KDoc 도
+     * 「내가 마지막 자리를 채웠으면 MATCHED 로 온다」고 적혀 있었다. `b16551b7` 이 그걸 바꿨다 —
+     * **정원이 차도 ACTIVE** 이고(참여만 `PARTY_FULL` 로 막는다) `COMPLETED` 는 「방장이 약속을
+     * 확정한 실시간 방」만 뜻한다. 그래서 합류 응답에 `COMPLETED` 가 올 일이 **없다**(실측:
+     * 2/2 를 채운 합류도 `{"status":"ACTIVE","currentMembers":2}` 였다).
+     *
+     * 정원이 찼는지가 필요하면 [currentMembers] 와 **그 방의 정원을 직접 비교**해야 한다.
+     * 이 응답에는 정원이 없으므로, 호출부가 들고 있던 값(목록·추천 카드의 capacity)을 써야 한다 —
+     * 상태값에서 꺼낼 길은 없다. 윗줄 [RideStatus] KDoc 이 같은 함정을 더 길게 적어 두었다.
+     */
     val status: RideStatus,
     val currentMembers: Int,
 )

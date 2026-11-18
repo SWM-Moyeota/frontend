@@ -50,94 +50,80 @@ class MeetingCopyTest {
         members = members,
         farePerPerson = 0,
         totalFare = 0,
-        status = RideStatus.MATCHED,
+        status = RideStatus.CONFIRMED,
         isConfirmed = isConfirmed,
     )
 
-    // ─────────────────────── 프리셋 ───────────────────────
-
-    /** 리더가 정한 다섯 개. 늘리거나 줄이면 서버 한도·문구와 함께 다시 봐야 한다. */
-    @Test
-    fun `프리셋은 10 20 30 45 60분이다`() {
-        assertEquals(listOf(10, 20, 30, 45, 60), MEETING_PRESET_MINUTES)
-    }
+    // ─────────────────────── 약속 시간 휠 ───────────────────────
 
     /**
-     * **어느 프리셋도 서버의 「1시간 안」을 넘지 않는다.** 60분 프리셋이 경계에 걸려 있어
-     * 분 단위 내림이 돌려주는 여유(최대 59초)가 실제로 필요하다 — 기기 시계가 서버보다 앞서 있으면
-     * 그 여유가 400 을 막아 준다.
+     * 휠에는 **서버가 받는 시각만** 있다 — 지금부터 10분 뒤(올림) ~ 1시간 뒤(내림), 5분 정각.
+     * 06:13:47 이면 06:23:47 을 올린 **06:25** 부터 07:13:47 을 내린 **07:10** 까지 열 칸이다.
      */
     @Test
-    fun `모든 프리셋은 지금부터 1시간 안이다`() {
-        val limit = now.plusSeconds(3600)
-        MEETING_PRESET_MINUTES.forEach { minutes ->
-            val at = meetingPresetAt(now, minutes)
-            assertTrue("${minutes}분 프리셋이 지금보다 과거다", at.isAfter(now))
-            assertTrue("${minutes}분 프리셋이 1시간을 넘는다: $at", !at.isAfter(limit))
+    fun `휠은 10분 뒤부터 1시간 뒤까지 5분 정각만 담는다`() {
+        val options = meetingTimeOptions(now)
+
+        assertEquals(Instant.parse("2026-11-06T06:25:00Z"), options.first())
+        assertEquals(Instant.parse("2026-11-06T07:10:00Z"), options.last())
+        assertEquals(10, options.size)
+        options.forEach { at ->
+            assertEquals("5분 정각이 아니다: $at", 0L, at.epochSecond % 300)
+            assertTrue("10분이 안 된다: $at", !at.isBefore(now.plusSeconds(600)))
+            assertTrue("1시간을 넘는다: $at", !at.isAfter(now.plusSeconds(3600)))
         }
+        assertEquals(options.sorted(), options)
+    }
+
+    /** 10분 뒤가 마침 5분 정각이면 그 칸부터다 — 올림이 한 칸을 더 건너뛰지 않는다. */
+    @Test
+    fun `정각에 맞으면 그 칸부터 시작한다`() {
+        val options = meetingTimeOptions(Instant.parse("2026-11-06T06:15:00Z"))
+
+        assertEquals(Instant.parse("2026-11-06T06:25:00Z"), options.first())
+        assertEquals(Instant.parse("2026-11-06T07:15:00Z"), options.last())
+    }
+
+    /** 자정을 넘는 범위도 시각 순서 그대로다 — 시·분 휠이었다면 고를 수 없는 조합이 생기는 자리다. */
+    @Test
+    fun `자정을 넘어도 이른 순서로 이어진다`() {
+        // KST 23:40
+        val options = meetingTimeOptions(Instant.parse("2026-11-06T14:40:00Z"))
+        val labels = options.map { meetingTimeLabel(it.toString(), kst) }
+
+        assertEquals("오후 11:50", labels.first())
+        assertEquals("오전 12:40", labels.last())
+        assertTrue(labels.toString(), labels.contains("오전 12:00"))
+    }
+
+    /** 시간이 흘러 고른 시각이 목록에서 빠지면 가장 이른 시각을 가리킨다 — 빠진 값으로 확정하지 않는다. */
+    @Test
+    fun `고른 시각이 목록에서 빠지면 가장 이른 시각으로 옮긴다`() {
+        val options = meetingTimeOptions(now)
+
+        assertEquals(options.first(), meetingSelectedTime(options, null))
+        assertEquals(options[3], meetingSelectedTime(options, options[3]))
+        assertEquals(options.first(), meetingSelectedTime(options, Instant.parse("2026-11-06T06:20:00Z")))
     }
 
     /**
-     * **분 단위로 내림한다** — 표시(「오후 3:23」)와 실제 경계가 어긋나지 않게. 06:13:47 + 10분은
-     * 06:23:47 이지만 보내는 값은 06:23:00 이다.
-     *
-     * 내림해도 지난 시각이 될 수 없다(최소 프리셋이 10분이다) — 위 테스트가 그것도 함께 본다.
+     * **버튼이 말하는 시각이 그대로 보내진다** — 휠이 가리키는 값 하나를 버튼 글자와 요청이 함께 쓴다
+     * (실측 2026-11-06: 제목과 요청이 시계를 따로 읽어 「오전 10:59에 만날까요?」로 묻고 11:00 으로 확정됐다).
      */
     @Test
-    fun `프리셋은 분 단위로 내림한다`() {
-        assertEquals(Instant.parse("2026-11-06T06:23:00Z"), meetingPresetAt(now, 10))
-        assertEquals(Instant.parse("2026-11-06T07:13:00Z"), meetingPresetAt(now, 60))
+    fun `버튼이 말하는 시각이 실제로 보내는 시각이다`() {
+        val picked = meetingTimeOptions(now).first()
+
+        assertEquals("2026-11-06T06:25:00Z", picked.toString())
+        assertEquals("오후 3:25", meetingTimeLabel(picked.toString(), kst))
+        assertEquals("오후 3:25에 만나기", meetingConfirmButtonText(meetingTimeLabel(picked.toString(), kst)))
     }
 
-    /**
-     * **보여 준 시각이 그대로 보내진다** — 칩을 누르는 순간 한 번 만들어 [ConfirmingPreset] 에 담고,
-     * 다이얼로그 제목도 서버 요청도 그 값을 쓴다.
-     *
-     * 왜 테스트가 필요한가: 예전에는 제목과 요청이 시계를 **따로** 읽었다. 분으로 내림하는 값이라
-     * 「찰나뿐」이라고 적혀 있었지만, 다이얼로그를 몇 초 들여다보면 분은 쉽게 넘어간다 —
-     * 실측(2026-11-06)에서 「오전 10:59에 만날까요?」로 묻고 **11:00 으로 확정됐다.** 확정은
-     * 되돌릴 수 없고 어기면 노쇼가 되므로, 동의한 값과 보내는 값이 갈리면 안 된다.
-     *
-     * 아래 첫 단언이 그 갈림이 **실재함**을 고정하고(13초 뒤에 다시 만들면 값이 다르다),
-     * 둘째가 캡처하면 그 갈림이 **사라짐**을 고정한다.
-     */
+    /** 휠 아래 되읽기는 남은 분을 **올림**한다 — 11분 13초 남았으면 「12분 뒤」가 아니라 거짓이 되지 않게. */
     @Test
-    fun `약속 시각은 칩을 누른 순간 한 번 만들어 제목과 요청이 함께 쓴다`() {
-        // 06:13:47 + 10분 = 06:23:xx → 내림 06:23. 13초 뒤에 다시 만들면 06:24 다 — 옛 버그의 씨앗.
-        val later = now.plusSeconds(13)
-        assertEquals(Instant.parse("2026-11-06T06:24:00Z"), meetingPresetAt(later, 10))
-
-        // 캡처하면 제출이 언제든 값은 하나다.
-        val picked = ConfirmingPreset(minutes = 10, departureAt = meetingPresetIso(now, 10))
-
-        assertEquals(meetingPresetIso(now, 10), picked.departureAt)
-        assertEquals(
-            "제목이 읽는 값과 서버로 가는 값은 같아야 한다",
-            meetingTimeLabel(picked.departureAt),
-            meetingTimeLabel(meetingPresetIso(now, 10)),
-        )
-        // 분이 넘어간 뒤에도 들고 있던 값은 그대로다.
-        assertEquals(meetingPresetIso(now, 10), picked.departureAt)
-    }
-
-    /** 서버에 나가는 값은 ISO-8601 UTC 다. 초가 0 이면 `Instant.toString` 이 생략한다. */
-    @Test
-    fun `프리셋은 ISO-8601 문자열로 나간다`() {
-        assertEquals("2026-11-06T06:23:00Z", meetingPresetIso(now, 10))
-        // 왕복: 보낸 문자열을 그대로 다시 읽어도 같은 시각이다(화면이 이 값을 되읽어 표기한다)
-        assertEquals(meetingPresetAt(now, 30), Instant.parse(meetingPresetIso(now, 30)))
-    }
-
-    /**
-     * **보낸 값과 보여 준 값이 같다.** 다이얼로그 제목이 말하는 시각은 실제로 확정되는 시각이어야
-     * 한다 — 이 왕복이 깨지면 「오후 3:23 로 정할까요?」가 거짓이 된다.
-     */
-    @Test
-    fun `다이얼로그가 말하는 시각이 실제로 보내는 시각이다`() {
-        val iso = meetingPresetIso(now, 10)
-
-        assertEquals("오후 3:23", meetingTimeLabel(iso, kst))
-        assertEquals("오후 3:23에 만날까요?", meetingConfirmTitle(meetingTimeLabel(iso, kst)))
+    fun `휠 아래에 지금부터 몇 분 뒤인지 적는다`() {
+        assertEquals("지금부터 12분 뒤", meetingMinutesFromNowLabel(now, Instant.parse("2026-11-06T06:25:00Z")))
+        assertEquals("지금부터 57분 뒤", meetingMinutesFromNowLabel(now, Instant.parse("2026-11-06T07:10:00Z")))
     }
 
     // ─────────────────────── 시각 표기 ───────────────────────
@@ -176,8 +162,8 @@ class MeetingCopyTest {
     }
 
     @Test
-    fun `프리셋 확인 제목은 시각을 못 읽으면 숫자를 빼고 묻는다`() {
-        assertEquals("약속 시간을 정할까요?", meetingConfirmTitle(null))
+    fun `확정 버튼은 시각을 못 읽으면 숫자를 빼고 적는다`() {
+        assertEquals("이 시간으로 정하기", meetingConfirmButtonText(null))
     }
 
     // ─────────────────────── 방장 안내 ───────────────────────
@@ -185,7 +171,7 @@ class MeetingCopyTest {
     /**
      * 이름을 쓸 수 있으면 이름으로 부르고, 못 쓰면 **조건**을 말한다 — 서버 `Party.hostId()` 가
      * 현재 멤버 중 `min(joinedAt, memberId)` 라 「가장 먼저 참여한 분」은 사실이다
-     * ([finishHostNotice] 와 같은 근거·같은 표현).
+     * ([departHostNotice] 와 같은 근거·같은 표현 — 그쪽은 옛 `finishHostNotice` 를 옮겨 온 것이다).
      */
     @Test
     fun `방장 안내는 이름을 쓸 수 있을 때만 이름으로 부른다`() {
@@ -211,41 +197,54 @@ class MeetingCopyTest {
     // ─────────────────────── 출발 확인 문구 ───────────────────────
 
     /**
-     * ★ **이 테스트가 이 파일에서 가장 중요하다.** 「출발」은 되돌릴 수 없고, 그 순간 도착하지 않은
-     * 사람에게 **실제 제재**가 붙는다(약속 시간부터 노쇼 횟수 × 24시간 동안 방 생성·참여 금지).
-     * 누르는 사람은 보통 **남의 제재**를 만들게 되므로, 숫자와 대가를 말하지 않으면 그 무게를 모른다.
+     * 🔴 ★ **이 테스트가 이 파일에서 가장 중요하고, 뜻이 바뀐 자리다.**
+     *
+     * 옛 문구: 「… 아직 도착하지 않은 2명은 **노쇼로 기록돼요** — 약속 시간부터 노쇼 횟수 × 24시간
+     * 동안 방·예약을 만들거나 참여할 수 없어요」. **서버가 노쇼 기능을 통째로 지웠다**
+     * (`b16551b7`, V37 이 테이블까지 떨어뜨린다) — 그 제재는 **존재하지 않는 일**이라, 남겨 두면
+     * 겁을 주고 그 겁이 거짓이다.
+     *
+     * **대가가 사라진 건 아니다.** 서버는 「도착을 누른 멤버 = 탑승자」로 세므로(`Party.riderIds`)
+     * 미도착자는 **탑승 기록 · 탑승 횟수 · 택시비 정산 대상**에서 함께 빠진다. 같이 탔는데도 정산
+     * 장부에 이름이 없는 것이 지금의 대가다. 그래서 **겁주지 않고 사실만** 적는다 — 처벌조
+     * (「제외됩니다」)가 아니라 「빠져요」로.
+     *
+     * 「출발」이 되돌릴 수 없고 누르는 사람이 보통 **남의 손해**를 만든다는 것은 그대로다. 그래서
+     * 숫자는 여전히 필수다.
      */
     @Test
-    fun `출발 확인 문구는 노쇼 인원과 그 대가를 말한다`() {
+    fun `출발 확인 문구는 빠지는 인원과 무엇에서 빠지는지를 말한다`() {
         val message = departConfirmMessage(2)
 
         assertEquals(
-            "같이 탄 사람 모두의 방이 끝나요. 아직 도착하지 않은 2명은 노쇼로 기록돼요 — " +
-                "약속 시간부터 노쇼 횟수 × 24시간 동안 방·예약을 만들거나 참여할 수 없어요",
+            "같이 탄 사람 모두의 방이 끝나요. 아직 도착하지 않은 2명은 탑승 기록과 택시비 정산에서 빠져요",
             message,
         )
-        assertTrue("몇 명이 노쇼가 되는지 말해야 한다", message.contains("2명"))
-        assertTrue("노쇼라는 말이 있어야 한다", message.contains("노쇼"))
-        assertTrue("제재 기간을 말해야 한다", message.contains("24시간"))
+        assertTrue("몇 명이 빠지는지 말해야 한다", message.contains("2명"))
+        assertTrue("탑승 기록에서 빠진다는 것을 말해야 한다", message.contains("탑승 기록"))
+        assertTrue("정산에서 빠지는 것이 실제 대가다", message.contains("정산"))
         assertTrue("모두의 방이 끝난다는 것을 말해야 한다", message.contains("모두의 방이 끝나요"))
+        // 🔴 사라진 제재로 겁을 주지 않는다
+        assertFalse("서버에 없는 제재를 말한다: $message", message.contains("노쇼"))
+        assertFalse("서버에 없는 제재 기간을 말한다: $message", message.contains("24시간"))
     }
 
     /**
-     * **아무도 기록되지 않으면 제재를 말하지 않는다.** 겁만 주고, 정말 노쇼가 생길 때 같은 문구가
-     * 무게를 잃는다.
+     * **아무도 빠지지 않으면 그 문장을 말하지 않는다.** 겁만 주고, 정말 미도착자가 있을 때 같은
+     * 문구가 무게를 잃는다.
      */
     @Test
-    fun `모두 도착했으면 노쇼를 말하지 않는다`() {
+    fun `모두 도착했으면 빠진다는 말을 하지 않는다`() {
         val message = departConfirmMessage(0)
 
         assertEquals("모두 도착했어요. 출발하면 같이 탄 사람 모두의 방이 끝나요", message)
-        assertFalse("없는 제재를 말한다: $message", message.contains("노쇼"))
-        assertFalse(message, message.contains("24시간"))
+        assertFalse("아무도 빠지지 않는데 빠진다고 말한다: $message", message.contains("빠져요"))
+        assertFalse(message, message.contains("노쇼"))
     }
 
-    /** 음수는 올 수 없지만(목록 개수다) 와도 「0명 노쇼」를 그리지 않는다. */
+    /** 음수는 올 수 없지만(목록 개수다) 와도 「0명이 빠진다」를 그리지 않는다. */
     @Test
-    fun `미도착 인원이 음수여도 노쇼를 말하지 않는다`() {
+    fun `미도착 인원이 음수여도 빠진다는 말을 하지 않는다`() {
         assertEquals(departConfirmMessage(0), departConfirmMessage(-1))
     }
 
