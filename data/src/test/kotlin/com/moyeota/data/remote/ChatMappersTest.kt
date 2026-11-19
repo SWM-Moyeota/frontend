@@ -49,6 +49,13 @@ class ChatMappersTest {
         assertEquals("2026-08-24T09:00:00Z", room.createdAt)
     }
 
+    /** 합승이 끝난 방(Backend #360) — 예전엔 모르는 값으로 흡수돼 ACTIVE 가 됐고, 목록에 「종료」가 붙지 않았다. */
+    @Test
+    fun `합승이 끝난 방 상태를 그대로 읽는다`() {
+        assertEquals(ChatRoomStatus.FINISHED, chatRoomStatusOf("FINISHED"))
+        assertEquals(ChatRoomStatus.CANCELED, chatRoomStatusOf("CANCELED"))
+    }
+
     @Test
     fun `알 수 없는 방 상태와 메시지 타입은 기본값으로 흡수한다`() {
         assertEquals(ChatRoomStatus.ACTIVE, chatRoomStatusOf("SOMETHING_NEW"))

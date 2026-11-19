@@ -127,7 +127,7 @@ data class MatchConditions(
  *   휠은 늘 값을 보여 주므로 **기본 선택은 그 날의 가장 이른 시각**이고 CTA 는 켜져 있다
  *   ([reservationSelectedTime] — 칩 시절의 「기본 선택 없음」 규칙을 바꾼 근거가 거기 있다)
  * - 인원(나 포함) → 예상 1인 요금 재계산 ([RoutePreviewUi.estimatedFare] ÷ 인원, [farePerPersonWon]).
- *   기본값 3명. 범위는 **실시간·예약 모두 2~3**이다([capacityChoices]) — 서버가 실시간 방도 2명부터
+ *   기본값 3명. 범위는 **실시간·예약 모두 2~4**다([capacityChoices]) — 서버가 실시간 방도 2명부터
  *   받는다(백엔드 `80957504`). 예전의 「1명(혼자 출발)」과 그 안내 두 줄은 2026-11-17 에 지웠다
  * - **예약에서는 경로 요약 칩과 예상 요금을 감춘다**([RESERVATION_NO_ESTIMATE_NOTICE]) — 서버가
  *   예약 방에 요금·경로·소요 시간을 넣지 않아서, 추정치를 그대로 보여 주면 **방에는 없는 숫자**를

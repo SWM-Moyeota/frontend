@@ -26,6 +26,8 @@ private val errorJson = Json { ignoreUnknownKeys = true }
 // 서버가 enum 을 새로 추가해도 앱이 죽지 않도록 알 수 없는 값은 기본값으로 흡수한다.
 fun chatRoomStatusOf(raw: String): ChatRoomStatus = when (raw) {
     "ACTIVE" -> ChatRoomStatus.ACTIVE
+    "FINISHED" -> ChatRoomStatus.FINISHED
+    "CANCELED" -> ChatRoomStatus.CANCELED
     "CLOSED" -> ChatRoomStatus.CLOSED
     "ARCHIVED" -> ChatRoomStatus.ARCHIVED
     else -> ChatRoomStatus.ACTIVE
