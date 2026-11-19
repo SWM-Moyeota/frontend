@@ -28,13 +28,13 @@ class ReservationRulesTest {
     // ─────────────────────────── 정원 ───────────────────────────
 
     /**
-     * 서버 계약: 실시간·예약 모두 **2~3**(실시간 최소 2 는 백엔드 `80957504`). 1 을 보내면 400 이고, 앱은 그
+     * 서버 계약: 실시간·예약 모두 **2~4**(실시간 최소 2 는 백엔드 `80957504`, 상한 4 는 `Capacity`). 1 을 보내면 400 이고, 앱은 그
      * 400 을 「잠시 후 다시 시도」로 보여 줬다 — 영원히 실패하는 선택지를 띄우지 않는다.
      */
     @Test
-    fun `정원 선택지는 두 모드 모두 2~3명이다`() {
-        assertEquals(listOf(2, 3), capacityChoices(DepartureMode.NOW))
-        assertEquals(listOf(2, 3), capacityChoices(DepartureMode.SCHEDULED))
+    fun `정원 선택지는 두 모드 모두 2~4명이다`() {
+        assertEquals(listOf(2, 3, 4), capacityChoices(DepartureMode.NOW))
+        assertEquals(listOf(2, 3, 4), capacityChoices(DepartureMode.SCHEDULED))
     }
 
     /** 저장된 옛 상태의 1(예전 「혼자 출발」)이 남아 있어도 보내는 값은 2 다. */
@@ -44,13 +44,15 @@ class ReservationRulesTest {
         assertEquals(2, capacityFor(DepartureMode.NOW, 1))
         assertEquals(2, capacityFor(DepartureMode.NOW, 2))
         assertEquals(3, capacityFor(DepartureMode.SCHEDULED, 3))
+        assertEquals(4, capacityFor(DepartureMode.NOW, 4))
+        assertEquals(4, capacityFor(DepartureMode.SCHEDULED, 4))
     }
 
     /** 화면에 없는 값이 들어와도 **가장 가까운 유효값**이다 — 서버가 막아 주는 것과 앱이 보내지 않는 것은 다른 보호막이다. */
     @Test
     fun `범위 밖 정원은 가장 가까운 유효값이 된다`() {
-        assertEquals(3, capacityFor(DepartureMode.NOW, 9))
-        assertEquals(3, capacityFor(DepartureMode.SCHEDULED, 9))
+        assertEquals(4, capacityFor(DepartureMode.NOW, 9))
+        assertEquals(4, capacityFor(DepartureMode.SCHEDULED, 9))
         assertEquals(2, capacityFor(DepartureMode.NOW, 0))
         assertEquals(2, capacityFor(DepartureMode.SCHEDULED, 0))
     }
@@ -520,14 +522,14 @@ class ReservationRulesTest {
      * ([capacityChoices]·[capacityFor]) 이 문구는 상한을 어긴 요청 같은 나머지를 받는다.
      */
     @Test
-    fun `예약 정원 실패는 2에서 3이라고 말한다`() {
+    fun `예약 정원 실패는 2에서 4라고 말한다`() {
         val message = reservationOpenFailureMessage(failure(PartyOpenException.INVALID_CAPACITY))
 
-        assertEquals("예약 방 인원은 2~3명이어야 해요", message)
+        assertEquals("예약 방 인원은 2~4명이어야 해요", message)
         assertFalse("실시간 범위를 말하면 고를 수 없는 값을 고르라고 하게 된다", message.contains("1~3"))
         // 실시간 쪽은 그대로다 — 두 문구가 서로를 덮지 않는다
         assertEquals(
-            "인원은 2~3명이어야 해요",
+            "인원은 2~4명이어야 해요",
             openFailureMessage(failure(PartyOpenException.INVALID_CAPACITY)),
         )
     }
