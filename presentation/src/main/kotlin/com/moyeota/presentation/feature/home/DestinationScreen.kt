@@ -25,6 +25,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
@@ -81,6 +85,9 @@ internal fun List<SavedPlace>.savedFavoriteIdFor(place: Place): Long? =
         saved.name == place.name &&
             (saved.roadName.isBlank() || saved.roadName == place.roadName)
     }?.id
+
+/** 스크롤 영역 바닥을 흐리는 높이 — 목록 끝 여백과 같은 값이라 끝까지 내리면 마지막 행이 흐림 위에 선다 */
+private val ScrollBottomFade = 24.dp
 
 /** 출발지와 도착지가 사실상 같은 자리로 볼 반경 — 합승이 성립하지 않는 거리 */
 private const val SameSpotRadiusM = 50f
@@ -179,6 +186,22 @@ fun DestinationScreen(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
+                // 검색 결과가 아래 안내 줄에 칼로 자른 듯 붙어 끊기지 않게 스크롤 영역 바닥을 흰색으로 흐린다 —
+                // 「아래에 더 있다」가 보인다. 끝까지 내리면 마지막 행은 바닥 여백(24) 위에 서서 흐림에 가리지 않는다.
+                // `verticalScroll` 앞에 둬야 내용이 아니라 보이는 창의 바닥에 그려진다.
+                .drawWithContent {
+                    drawContent()
+                    val fade = ScrollBottomFade.toPx()
+                    drawRect(
+                        brush = Brush.verticalGradient(
+                            colors = listOf(MoyeotaColor.SurfaceCanvas.copy(alpha = 0f), MoyeotaColor.SurfaceCanvas),
+                            startY = size.height - fade,
+                            endY = size.height,
+                        ),
+                        topLeft = Offset(0f, size.height - fade),
+                        size = Size(size.width, fade),
+                    )
+                }
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = MoyeotaSpacing.ScreenGutter),
         ) {
@@ -430,11 +453,12 @@ fun DestinationScreen(
                 }
             }
 
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(ScrollBottomFade))
         }
 
-        // 하단 — 안내 · 오류 · CTA
+        // 하단 — 안내 · 오류 · CTA. 위 8 은 흐려지는 목록과 안내 줄 사이의 숨 쉴 틈이다
         Column(modifier = Modifier.fillMaxWidth().padding(horizontal = MoyeotaSpacing.ScreenGutter)) {
+            Spacer(Modifier.height(8.dp))
             Text(
                 // 「같은 방향 사람만 보여드려요」는 지웠다 — 17 탐색 목록은 **지도 영역**으로만 거른다
                 // (`getPartiesWithin`, 서버도 "출발지가 영역 안인 ACTIVE 방"). 도착지로 거르는 길이 없다.

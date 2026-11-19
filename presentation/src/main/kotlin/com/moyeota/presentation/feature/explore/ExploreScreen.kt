@@ -1203,7 +1203,7 @@ private fun ReservationCard(
                     maxLines = 1,
                 )
             }
-            // 제목이 시각이라 장소는 부제 모양(24 채팅 목록과 같은 조각, emphasizePlace = false)
+            // 제목이 시각이라 장소는 부제 모양(emphasizePlace = false)
             RoutePlaceLine(place = RoutePlace(label = "출발지", place = ride.origin))
             RoutePlaceLine(place = RoutePlace(label = "목적지", place = ride.destination))
             val headcount = headcountLabel(joined = ride.members.size, capacity = ride.capacity)

@@ -114,14 +114,17 @@ private const val PEER_FALLBACK_NAME = "동승자"
  *
  * @param peerTitle 나를 뺀 참여자 닉네임으로 지은 제목. **참여자 조회에 실패하면 null** —
  *   그때 화면은 예전처럼 「출발지 → 도착지」를 제목으로 쓴다(방 한 칸이 통째로 깨지지 않게).
- * @param peerImageUrl [peerTitle] 이 **맨 앞에 부르는 사람**의 프로필 사진([chatRoomPeerImageUrl]).
+ * @param peerImageUrls [peerTitle] 이 부르는 사람들의 프로필 사진, **제목 순서대로**([chatRoomPeerImageUrls]).
  *   제목과 **같은 멤버 목록**에서 뽑아 여기 실어 보낸다 — 행이 `membership.members` 를 보고 따로
  *   고르면, 참여자를 방별로 따로 조회하는 구버전 서버 경로에서 제목은 이름인데 얼굴만 비게 된다.
+ * @param memberCount 방에 지금 있는 사람 수(나 포함, [chatRoomMemberCount]). 참여자를 못 받았으면 null —
+ *   모르는 수를 지어내지 않고 행에서 숫자를 뺀다.
  */
 data class ChatRoomListItem(
     val room: MyChatRoom,
     val peerTitle: String?,
-    val peerImageUrl: String? = null,
+    val peerImageUrls: List<String?> = emptyList(),
+    val memberCount: Int? = null,
 )
 
 /**
@@ -137,18 +140,16 @@ data class ChatRoomListItem(
  */
 internal fun chatRoomPeerTitle(members: List<ChatMember>): String {
     val names = chatRoomPeerMembers(members).map { it.nickname.ifBlank { PEER_FALLBACK_NAME } }
-    return when {
-        names.isEmpty() -> "동승자 없음"
-        names.size <= 2 -> names.joinToString(" · ")
-        // 셋 이상은 다 적으면 한 줄을 넘긴다 — 첫 사람 + 나머지 수
-        else -> "${names.first()} 외 ${names.size - 1}명"
-    }
+    // 여럿이면 이름을 쉼표로 다 잇는다 — 한 줄을 넘으면 행이 끝을 「…」로 줄인다(카카오톡 단체방과 같다).
+    // 예전엔 셋부터 「첫 사람 외 N명」으로 줄였는데, 제목 옆 인원(「4명」)과 함께 「외 2명 4명」으로 읽혔다
+    // (2026-11 오너 피드백). 둘일 때의 가운뎃점도 쉼표로 맞췄다 — 인원 수에 따라 구분자가 달라 보이지 않게.
+    return if (names.isEmpty()) "동승자 없음" else names.joinToString(", ")
 }
 
 /**
  * 제목이 부르는 참여자 — **이름과 얼굴이 함께 쓰는 유일한 출처**다. 순서는 서버가 준 순서 그대로다.
  *
- * [chatRoomPeerTitle] 과 [chatRoomPeerImageUrl] 이 각자 멤버를 고르면 한쪽에만 규칙이 빠지는 순간
+ * [chatRoomPeerTitle] 과 [chatRoomPeerImageUrls] 가 각자 멤버를 고르면 한쪽에만 규칙이 빠지는 순간
  * 「A 이름 + B 얼굴」이 된다(나간 사람 제외가 대표적이다) — 고르는 일을 이 한 곳에만 둔다.
  */
 internal fun chatRoomPeerMembers(members: List<ChatMember>): List<ChatMember> {
@@ -157,14 +158,37 @@ internal fun chatRoomPeerMembers(members: List<ChatMember>): List<ChatMember> {
 }
 
 /**
- * 목록 행 아바타에 그릴 사진 — [chatRoomPeerTitle] 이 **맨 앞에 적는 사람**의 것.
+ * 방에 **지금 있는** 사람 수 — 나 포함, 방을 나간 사람(active=false)은 세지 않는다.
  *
- * 여럿인 방도 얼굴 자리는 하나뿐이라 제목의 첫 사람으로 맞춘다(「스모크일 외 2명」이면 스모크일).
- * 사진을 고른 적 없는 사람에게도 서버는 기본 이미지 URL 을 주므로(백엔드 소스 기준) 여기서 null 이
- * 되는 건 참여자를 못 받은 방과 빈 문자열 응답뿐이고, 그때 아바타는 회색 원으로 떨어진다.
+ * 셋 이상인 방의 목록 제목 옆에 「3명」으로 붙는다([chatRoomMemberCountLabel], 2026-11 오너 피드백) —
+ * 이름만으로는 셋이 탄 방인지 넷이 탄 방인지 알 수 없었다. 제목은 남은 사람이 없으면 나간 사람이라도 부르지만([chatRoomPeerMembers]) 수는 그러지
+ * 않는다 — 「나간사람」 방에 「2명」이 붙으면 아무도 없는 방에 둘이 있다고 말하게 된다.
+ * 아무도 남지 않은 응답(나까지 빠진 깨진 응답)은 null 이라 숫자를 그리지 않는다.
  */
-internal fun chatRoomPeerImageUrl(members: List<ChatMember>): String? =
-    chatRoomPeerMembers(members).firstOrNull()?.imageUrl?.takeIf { it.isNotBlank() }
+internal fun chatRoomMemberCount(members: List<ChatMember>): Int? =
+    members.count { it.active }.takeIf { it > 0 }
+
+/**
+ * 목록 제목 옆 인원 표기 — **셋 이상인 방에만** 「4명」(나 포함). 1:1 방은 null 이라 숫자를 그리지 않는다.
+ *
+ * 카카오톡과 같다: 얼굴은 상대만 그리므로(나 빼고) 1:1 방에 「2명」을 붙이면 얼굴 하나 옆에 2 가 서서
+ * 숫자와 얼굴이 어긋나 보였다(2026-11 오너 피드백). 1:1 은 얼굴 하나·이름 하나로 이미 둘이 탄 방이다.
+ */
+internal fun chatRoomMemberCountLabel(count: Int?): String? = count?.takeIf { it >= 3 }?.let { "${it}명" }
+
+/** 목록 행 묶음 아바타에 그리는 얼굴 수 상한 — 정원이 나 포함 4명이라 상대는 많아야 3명이지만 2×2 까지 그린다. */
+internal const val MAX_PEER_FACES = 4
+
+/**
+ * 목록 행 아바타에 그릴 사진들 — [chatRoomPeerTitle] 이 **부르는 순서 그대로**, 많아야 [MAX_PEER_FACES] 명.
+ *
+ * 여럿인 방은 얼굴을 모아 그린다(`PeerAvatarGroup`, 2026-11 오너 피드백) — 예전엔 제목의 첫 사람 얼굴
+ * 하나뿐이라 셋·넷이 탄 방도 1:1 방처럼 보였다. 사진이 없는 사람도 **자리는 남긴다**(null) — 얼굴 수가
+ * 곧 사람 수라 회색 원으로라도 그린다. 서버는 사진을 고른 적 없는 사람에게도 기본 이미지 URL 을 주므로
+ * (백엔드 소스 기준) null 은 빈 문자열 같은 깨진 응답뿐이다. 나 혼자이거나 참여자를 못 받은 방은 빈 목록이다.
+ */
+internal fun chatRoomPeerImageUrls(members: List<ChatMember>): List<String?> =
+    chatRoomPeerMembers(members).take(MAX_PEER_FACES).map { member -> member.imageUrl?.takeIf { it.isNotBlank() } }
 
 /**
  * 말풍선용 `publicId → 프로필 사진` 사전.
@@ -441,7 +465,8 @@ class ChatListViewModel(
                 ChatRoomListItem(
                     room = it,
                     peerTitle = chatRoomPeerTitle(it.membership.members),
-                    peerImageUrl = chatRoomPeerImageUrl(it.membership.members),
+                    peerImageUrls = chatRoomPeerImageUrls(it.membership.members),
+                    memberCount = chatRoomMemberCount(it.membership.members),
                 )
             }
         }
@@ -457,7 +482,8 @@ class ChatListViewModel(
                     ChatRoomListItem(
                         room = room,
                         peerTitle = members?.let(::chatRoomPeerTitle),
-                        peerImageUrl = members?.let(::chatRoomPeerImageUrl),
+                        peerImageUrls = members?.let(::chatRoomPeerImageUrls).orEmpty(),
+                        memberCount = members?.let(::chatRoomMemberCount),
                     )
                 }
             }.awaitAll()

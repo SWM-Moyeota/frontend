@@ -1,7 +1,8 @@
 package com.moyeota.domain.model
 
 // 백엔드 chat 도메인 enum 과 1:1. 알 수 없는 값은 매퍼에서 ACTIVE/TEXT 로 방어한다.
-enum class ChatRoomStatus { ACTIVE, CLOSED, ARCHIVED }
+// FINISHED(같이 타고 끝남)·CANCELED(같이 타지 못하고 끝남)는 Backend #360 부터 온다 — 합승이 끝난 방이고 대화는 계속된다.
+enum class ChatRoomStatus { ACTIVE, FINISHED, CANCELED, CLOSED, ARCHIVED }
 
 enum class ChatMessageType { TEXT, LOCATION }
 
